@@ -1,0 +1,569 @@
+{
+  "name": "Newsletter Auto-Pilot",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "path": "workflow/newsletter",
+        "options": {}
+      },
+      "webhookId": "newsletter-auto"
+    },
+    {
+      "id": "checkCredits",
+      "name": "Check Credits & Auth",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        450,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/credits/balance",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "checkBalance",
+      "name": "Sufficient Credits?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        650,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "balance-check",
+              "leftValue": "={{ $json.balance }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "deductCredit",
+      "name": "Deduct Credit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        850,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/credits/deduct",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "workflow_type",
+              "value": "newsletter"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "fetchRSS",
+      "name": "Fetch RSS/Local News",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1,
+      "position": [
+        850,
+        400
+      ],
+      "parameters": {
+        "url": "={{ $json.body.rss_url || 'https://news.google.com/rss/search?q=local+business+news&hl=en-US&gl=US&ceid=US:en' }}"
+      }
+    },
+    {
+      "id": "fetchContent",
+      "name": "Scrape Recent Articles",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1050,
+        400
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.link }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "branchRSS",
+      "name": "Has RSS Content?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1250,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "rss-check",
+              "leftValue": "={{ $items(\"Fetch RSS/Local News\").length }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "setContent",
+      "name": "Format Newsletter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1450,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Format newsletter content\nconst items = $input.all();\nconst body = $json.headers.body;\nconst newsletterName = body.brand || 'Newsletter';\nconst articles = items.map(item => ({\n  title: item.json.title || 'Untitled',\n  link: item.json.link || '#',\n  snippet: item.json.description ? item.json.description.substring(0, 200) : ''\n}));\n\nconst html = `\n<h1>${newsletterName} Weekly Update</h1>\n<p>Here's what's happening this week:</p>\n${articles.slice(0, 5).map(a => \n  `<h3><a href=\"${a.link}\">${a.title}</a></h3>`\n).join('')}\n<p>See you next week!</p>\n`;\n\nreturn [{\n  subject: `${newsletterName} Weekly - ${new Date().toLocaleDateString()}`,\n  html: html,\n  articles: articles.slice(0, 5)\n}];"
+      }
+    },
+    {
+      "id": "checkHexomatic",
+      "name": "Check Hexomatic Key",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1650,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/tenants/hexomatic-key",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "branchHexomatic",
+      "name": "Has Hexomatic?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1850,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "hex-check",
+              "leftValue": "={{ $json.key.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "hexomaticEnrich",
+      "name": "Hexomatic - Enrich Content",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2050,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hexomatic.com/v1/recipes/content-enrich/runs",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $json.key }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "content",
+              "value": "={{ $items(\"Format Newsletter\").first().json.html }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "lookupIntegrations",
+      "name": "Lookup User's Integrations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2050,
+        400
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/integration-targets",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "routeDelivery",
+      "name": "Route to Connected Integrations",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2250,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Route newsletter delivery through WorkflowSwift dispatch endpoint\n// API keys stay server-side \u2014 n8n never touches them.\nconst integrations = $input.first().json.integration_targets || [];\nconst newsletterContent = $items(\"Format Newsletter\").first().json;\nconst body = $json.body;\nconst recipients = body.recipients || body.to || '';\n\nconst results = [];\n\nfor (const target of integrations) {\n  if (!target.is_active) continue;\n\n  // Send through WorkflowSwift dispatch \u2014 it appends stored API keys\n  results.push({\n    target_id: target.id,\n    payload: {\n      to: recipients,\n      subject: newsletterContent.subject,\n      html: newsletterContent.html,\n      source: 'newsletter-auto-pilot',\n      path: '/messages'\n    },\n    headers: {\n      authorization: $json.headers.authorization\n    }\n  });\n}\n\n// Fallback: if no integrations found, return content for manual handling\nif (results.length === 0) {\n  return [{ content: newsletterContent, status: 'no_integrations', recipients: recipients }];\n}\n\nreturn results;"
+      }
+    },
+    {
+      "id": "splitDelivery",
+      "name": "Split by Integration",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 2,
+      "position": [
+        2450,
+        300
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "deliverToProvider",
+      "name": "Deliver via WorkflowSwift Dispatch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2650,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://workflowswift:8085/api/integration-dispatch?target_id=' + $json.target_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2850,
+        300
+      ],
+      "parameters": {
+        "options": {}
+      }
+    },
+    {
+      "id": "errorHandler",
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        650,
+        500
+      ],
+      "parameters": {},
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "webhook": {
+      "main": [
+        [
+          {
+            "node": "checkCredits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "checkCredits": {
+      "main": [
+        [
+          {
+            "node": "checkBalance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "checkBalance": {
+      "main": [
+        [
+          {
+            "node": "deductCredit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "fetchRSS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "deductCredit": {
+      "main": [
+        [
+          {
+            "node": "fetchRSS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fetchRSS": {
+      "main": [
+        [
+          {
+            "node": "fetchContent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fetchContent": {
+      "main": [
+        [
+          {
+            "node": "branchRSS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "branchRSS": {
+      "main": [
+        [
+          {
+            "node": "setContent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "checkHexomatic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "setContent": {
+      "main": [
+        [
+          {
+            "node": "lookupIntegrations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "checkHexomatic": {
+      "main": [
+        [
+          {
+            "node": "branchHexomatic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "branchHexomatic": {
+      "main": [
+        [
+          {
+            "node": "hexomaticEnrich",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "lookupIntegrations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "hexomaticEnrich": {
+      "main": [
+        [
+          {
+            "node": "lookupIntegrations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "lookupIntegrations": {
+      "main": [
+        [
+          {
+            "node": "routeDelivery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "routeDelivery": {
+      "main": [
+        [
+          {
+            "node": "splitDelivery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "splitDelivery": {
+      "main": [
+        [
+          {
+            "node": "deliverToProvider",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "deliverToProvider": {
+      "main": [
+        [
+          {
+            "node": "respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "active": false
+}

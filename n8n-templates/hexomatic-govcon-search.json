@@ -1,0 +1,327 @@
+{
+  "name": "Hexomatic GovCon Search",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "path": "workflow/govcon-search",
+        "options": {}
+      },
+      "webhookId": "govcon-search"
+    },
+    {
+      "id": "checkKey",
+      "name": "Check Hexomatic Key",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        450,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/tenants/hexomatic-key",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "branchRoute",
+      "name": "Has Hexomatic Key?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        650,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-key",
+              "leftValue": "={{ $json.key.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "hexomaticPath",
+      "name": "Hexomatic API - Trigger GovCon Recipe",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        850,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.headers['x-hexomatic-recipe-id'] || 'https://api.hexomatic.com/v1/recipes/govcon-search/runs' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $json.key }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "search_term",
+              "value": "={{ $json.body.search_term }}"
+            },
+            {
+              "name": "agency",
+              "value": "={{ $json.body.agency }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "pollHexomatic",
+      "name": "Poll Hexomatic Results",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        1050,
+        200
+      ],
+      "parameters": {
+        "resume": "webhook",
+        "options": {
+          "webhookSuffix": "govcon-result"
+        },
+        "limitWaitTime": 120
+      }
+    },
+    {
+      "id": "checkHexResult",
+      "name": "Check Hexomatic Result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1250,
+        200
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.body.poll_url || $json.run_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $json.headers['x-api-key'] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "playwrightPath",
+      "name": "Playwright Fallback - Scrape SAM.gov",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        850,
+        400
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://sam.gov/api/opportunities/v1/search?q=' + encodeURIComponent($json.body.search_term) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "deductCredits",
+      "name": "Deduct Credit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1450,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/credits/deduct",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "workflow_type",
+              "value": "sam_solicitations"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "response",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1650,
+        300
+      ],
+      "parameters": {
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "trigger": {
+      "main": [
+        [
+          {
+            "node": "checkKey",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "checkKey": {
+      "main": [
+        [
+          {
+            "node": "branchRoute",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "branchRoute": {
+      "main": [
+        [
+          {
+            "node": "hexomaticPath",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "playwrightPath",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "hexomaticPath": {
+      "main": [
+        [
+          {
+            "node": "pollHexomatic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pollHexomatic": {
+      "main": [
+        [
+          {
+            "node": "checkHexResult",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "checkHexResult": {
+      "main": [
+        [
+          {
+            "node": "deductCredits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "playwrightPath": {
+      "main": [
+        [
+          {
+            "node": "deductCredits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "deductCredits": {
+      "main": [
+        [
+          {
+            "node": "response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "active": false
+}

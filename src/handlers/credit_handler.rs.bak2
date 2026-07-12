@@ -1,0 +1,90 @@
+use axum::{
+    extract::{State, Json},
+    http::StatusCode,
+    response::IntoResponse,
+    Extension,
+};
+use serde_json::json;
+use uuid::Uuid;
+
+use crate::features;
+use crate::AppState;
+use crate::error::{AppError, ApiResult};
+use crate::auth::models::Claims;
+
+pub async fn credit_balance(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+
+    let balance = sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE tenant_id = $1",
+    )
+    .bind(tenant_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0);
+
+    Ok(Json(json!({"balance": balance})))
+}
+
+pub async fn create_credit_package(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    features::enforce_feature_limit(&state.db, Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?, "max_credit_packages", "Credit Packages").await?;
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<impl IntoResponse> {
+    let tenant_id = Uuid::parse_str(&claims.tid).map_err(|_| AppError::Unauthorized)?;
+
+    if claims.role != "admin" {
+        return Err(AppError::Forbidden("Only admins can purchase credits".to_string()));
+    }
+
+    let package_id = req.get("package_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .ok_or(AppError::Validation("Valid package_id is required".to_string()))?;
+
+    // Get the package
+    let row = sqlx::query(
+        "SELECT id::text, name, credits, price::text FROM credit_packages WHERE id = $1 AND is_active = true",
+    )
+    .bind(package_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(AppError::NotFound("Credit package not found".to_string()))?;
+
+    use sqlx::Row;
+    let credits: i32 = row.try_get("credits").unwrap_or(0);
+    let name: &str = row.try_get("name").unwrap_or("Credit Package");
+
+    // Add transaction
+    sqlx::query(
+        r#"INSERT INTO credit_transactions (id, tenant_id, amount, transaction_type, description)
+           VALUES ($1, $2, $3, 'purchase', $4)"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(tenant_id)
+    .bind(credits)
+    .bind(format!("Purchased: {}", name))
+    .execute(&state.db)
+    .await?;
+
+    let balance = sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE tenant_id = $1",
+    )
+    .bind(tenant_id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0);
+
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "message": "Credits added successfully",
+            "credits_added": credits,
+            "balance": balance,
+        })),
+    ))
+}

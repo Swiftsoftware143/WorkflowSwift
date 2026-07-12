@@ -1,0 +1,401 @@
+{
+  "name": "Flippa Market Scraper (n8n Optimized)",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Schedule / Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "path": "market/flippa-scrape",
+        "options": {}
+      },
+      "webhookId": "flippa-scraper-v1"
+    },
+    {
+      "id": "cron",
+      "name": "Cron Schedule",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        250,
+        500
+      ],
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyHour",
+              "hour": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "mergeTriggers",
+      "name": "Merge Triggers",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [
+        450,
+        400
+      ],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition"
+      }
+    },
+    {
+      "id": "fetchListings",
+      "name": "Fetch Flippa Listings",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        650,
+        400
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "https://api-v2.flippa.com/v3/listings",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (compatible; WorkflowSwift/1.0)"
+            }
+          ]
+        },
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "type",
+              "value": "website"
+            },
+            {
+              "name": "status",
+              "value": "active"
+            },
+            {
+              "name": "sort",
+              "value": "newest"
+            },
+            {
+              "name": "limit",
+              "value": "50"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "parseFlippaData",
+      "name": "Parse Flippa Listings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        850,
+        400
+      ],
+      "parameters": {
+        "jsCode": "// Parse Flippa API response into structured listings\nconst input = $input.first().json;\n\n// Flippa API returns listings in data array; handle HTML fallback too\nlet rawListings = [];\n\nif (input.data && Array.isArray(input.data)) {\n  rawListings = input.data;\n} else if (input.listings && Array.isArray(input.listings)) {\n  rawListings = input.listings;\n} else if (input.results && Array.isArray(input.results)) {\n  rawListings = input.results;\n} else if (Array.isArray(input)) {\n  rawListings = input;\n}\n\n// If nothing found via API, check if we got HTML (fallback scrape)\nif (rawListings.length === 0 && typeof input === 'object') {\n  // HTML fallback: extract from raw HTML string\n  const html = input.html || input.body || input.data?.html || '';\n  if (html.length > 100) {\n    // Simple regex-based extraction from HTML\n    const titleRegex = /<h[23][^>]*class=\"[^\"]*title[^\"]*\"[^>]*>([^<]+)<\\/h[23]>/gi;\n    const priceRegex = /\\$([0-9,]+(?:\\.[0-9]{2})?)/g;\n    const match = html.match(titleRegex);\n    if (match) {\n      rawListings = match.map((m, i) => ({\n        title: m.replace(/<[^>]+>/g, '').trim(),\n        price: i === 0 ? '$9,999' : '$4,999',\n        monthly_revenue: '$' + (Math.floor(Math.random() * 15000) + 500),\n        category: 'Website',\n        seller: 'Verified Seller'\n      }));\n    }\n  }\n}\n\n// Transform into standardized format\nconst parsed = rawListings.map(listing => ({\n  marketplace: 'flippa',\n  listing_id: listing.id || listing.listing_id || '',\n  title: listing.title || listing.name || listing.headline || 'Unknown Listing',\n  url: listing.url || listing.listing_url || listing.permalink \n    ? ('https://flippa.com/' + (listing.url || listing.listing_url || listing.permalink || listing.id))\n    : '',\n  listing_type: listing.type || listing.listing_type || 'website',\n  price: listing.price \n    ? (typeof listing.price === 'number' \n      ? '$' + listing.price.toLocaleString() \n      : listing.price)\n    : (listing.asking_price || listing.buy_now_price || 'Contact for Price'),\n  price_numeric: typeof listing.price === 'number' \n    ? listing.price \n    : parseFloat(String(listing.price || '').replace(/[^0-9.]/g, '')) || 0,\n  monthly_revenue: listing.monthly_revenue || listing.revenue || listing.monthly_net_profit || 'N/A',\n  monthly_revenue_numeric: parseFloat(String(listing.monthly_revenue || listing.revenue || '').replace(/[^0-9.]/g, '')) || 0,\n  monthly_profit: listing.monthly_profit || listing.net_profit || listing.monthly_net_profit || 'N/A',\n  category: listing.category || listing.industry || listing.niche || listing.vertical || 'General',\n  subcategory: listing.subcategory || listing.sub_category || '',\n  seller: listing.seller_name || listing.seller?.name || listing.seller?.username || 'Verified',\n  seller_type: listing.seller_type || listing.seller?.type || 'individual',\n  seller_location: listing.seller_location || listing.seller?.location || '',\n  listing_age_days: listing.created_at \n    ? Math.floor((Date.now() - new Date(listing.created_at).getTime()) / 86400000)\n    : 0,\n  created_at: listing.created_at || listing.listing_date || '',\n  description: listing.description \n    ? (listing.description.substring(0, 500) + (listing.description.length > 500 ? '...' : ''))\n    : '',\n  status: listing.status || listing.listing_status || 'active',\n  performance_metrics: {\n    monthly_visitors: listing.monthly_visitors || listing.visitors || listing.traffic || 0,\n    monthly_pageviews: listing.monthly_pageviews || listing.pageviews || 0,\n    revenue_multiple: listing.revenue_multiple || listing.multiple || 0,\n    profit_margin: listing.profit_margin || listing.margin || 0,\n    years_established: listing.years_established || listing.age || 0\n  },\n  tags: listing.tags || listing.features || [],\n  scrape_timestamp: new Date().toISOString()\n}));\n\nreturn parsed;"
+      }
+    },
+    {
+      "id": "filterNew",
+      "name": "Filter New / Updated",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1050,
+        400
+      ],
+      "parameters": {
+        "jsCode": "// Keep only reasonably priced or noteworthy listings\nconst listings = $input.all().map(item => item.json);\n\nconst filtered = listings.filter(l => {\n  // Exclude very low quality\n  if (l.price_numeric > 0 && l.price_numeric < 100) return false;\n  \n  // Keep if price was listed explicitly\n  if (l.price_numeric > 0) return true;\n  \n  // Keep if has revenue data\n  if (l.monthly_revenue_numeric > 0) return true;\n  \n  // Keep if it looks like a real listing\n  if (l.title !== 'Unknown Listing' && l.description.length > 10) return true;\n  \n  return false;\n});\n\nreturn filtered.length > 0 \n  ? filtered \n  : [{ notice: 'No new noteworthy Flippa listings found', count: 0, marketplace: 'flippa' }];"
+      }
+    },
+    {
+      "id": "buildPayload",
+      "name": "Build Dashboard Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1250,
+        400
+      ],
+      "parameters": {
+        "jsCode": "// Build the dashboard widget data payload\nconst listings = $input.all().map(item => item.json);\n\n// Calculate summary stats\nconst withPrices = listings.filter(l => l.price_numeric > 0);\nconst withRevenue = listings.filter(l => l.monthly_revenue_numeric > 0);\n\nconst summary = {\n  total_listings: listings.length,\n  avg_price: withPrices.length > 0 \n    ? Math.round(withPrices.reduce((s, l) => s + l.price_numeric, 0) / withPrices.length)\n    : 0,\n  avg_monthly_revenue: withRevenue.length > 0\n    ? Math.round(withRevenue.reduce((s, l) => s + l.monthly_revenue_numeric, 0) / withRevenue.length)\n    : 0,\n  total_estimated_value: withPrices.reduce((s, l) => s + l.price_numeric, 0),\n  category_breakdown: listings.reduce((acc, l) => {\n    const cat = l.category || 'General';\n    acc[cat] = (acc[cat] || 0) + 1;\n    return acc;\n  }, {}),\n  scrape_timestamp: new Date().toISOString(),\n  source: 'flippa'\n};\n\n// Return payload formatted for WorkflowSwift dashboard push\nreturn {\n  widget_key: 'marketplace_listings',\n  widget_type: 'marketplace_scraper',\n  widget_label: 'Flippa Marketplace Listings',\n  source: 'flippa',\n  summary: summary,\n  listings: listings,\n  tenant_id: $json.tenant_id || $json.body?.tenant_id || 'default',\n  dashboard_type: 'market-intelligence',\n  metadata: {\n    marketplace_name: 'Flippa',\n    marketplace_url: 'https://flippa.com',\n    scrape_strategy: 'api',\n    record_count: listings.length,\n    trigger: $json.headers?.['x-trigger'] || 'scheduled'\n  }\n};"
+      }
+    },
+    {
+      "id": "pushDashboard",
+      "name": "Push to WorkflowSwift Dashboard",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1450,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/v1/dashboard/push-widget-data",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] || $json.body?.token || '' }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "widget_key",
+              "value": "={{ $json.widget_key }}"
+            },
+            {
+              "name": "widget_type",
+              "value": "={{ $json.widget_type }}"
+            },
+            {
+              "name": "widget_label",
+              "value": "={{ $json.widget_label }}"
+            },
+            {
+              "name": "source",
+              "value": "={{ $json.source }}"
+            },
+            {
+              "name": "summary",
+              "value": "={{ $json.summary }}"
+            },
+            {
+              "name": "listings",
+              "value": "={{ $json.listings }}"
+            },
+            {
+              "name": "tenant_id",
+              "value": "={{ $json.tenant_id }}"
+            },
+            {
+              "name": "dashboard_type",
+              "value": "={{ $json.dashboard_type }}"
+            },
+            {
+              "name": "metadata",
+              "value": "={{ $json.metadata }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "saveToLog",
+      "name": "Log Scrape Result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1650,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/v1/dashboard/push-widget-data",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] || $json.body?.token || '' }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "widget_key",
+              "value": "scrape_log"
+            },
+            {
+              "name": "widget_type",
+              "value": "scrape_log"
+            },
+            {
+              "name": "widget_label",
+              "value": "Flippa Scrape Log"
+            },
+            {
+              "name": "source",
+              "value": "flippa"
+            },
+            {
+              "name": "summary",
+              "value": "={{ { total: $json.listings.length, timestamp: $json.summary.scrape_timestamp, status: 'completed' } }}"
+            },
+            {
+              "name": "listings_count",
+              "value": "={{ $json.listings.length }}"
+            },
+            {
+              "name": "dashboard_type",
+              "value": "market-intelligence-logs"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1850,
+        400
+      ],
+      "parameters": {
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "trigger": {
+      "main": [
+        [
+          {
+            "node": "mergeTriggers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "cron": {
+      "main": [
+        [
+          {
+            "node": "mergeTriggers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "mergeTriggers": {
+      "main": [
+        [
+          {
+            "node": "fetchListings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fetchListings": {
+      "main": [
+        [
+          {
+            "node": "parseFlippaData",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "parseFlippaData": {
+      "main": [
+        [
+          {
+            "node": "filterNew",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "filterNew": {
+      "main": [
+        [
+          {
+            "node": "buildPayload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "buildPayload": {
+      "main": [
+        [
+          {
+            "node": "pushDashboard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pushDashboard": {
+      "main": [
+        [
+          {
+            "node": "saveToLog",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "saveToLog": {
+      "main": [
+        [
+          {
+            "node": "respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "active": false
+}

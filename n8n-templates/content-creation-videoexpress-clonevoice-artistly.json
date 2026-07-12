@@ -1,0 +1,634 @@
+{
+  "name": "AI Content Creation — VideoExpress + Artistly + CloneVoice",
+  "nodes": [
+    {
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "parameters": {
+        "path": "workflow/content-creation",
+        "options": {}
+      },
+      "webhookId": "content-creation"
+    },
+    {
+      "id": "auth-credits",
+      "name": "Auth & Credits Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [450, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/credits/balance",
+        "authentication": "none",
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "clientId",
+              "value": "={{ $json.body.clientId }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "deduct-credits",
+      "name": "Deduct Credits (1)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [450, 500],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/credits/deduct",
+        "authentication": "none",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "clientId",
+              "value": "={{ $json.body.clientId }}"
+            },
+            {
+              "name": "amount",
+              "value": 1
+            },
+            {
+              "name": "workflow",
+              "value": "content-creation"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "switch-creator",
+      "name": "Choose Creator Tool",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 2,
+      "position": [650, 300],
+      "parameters": {
+        "dataType": "string",
+        "value1": "={{ $json.body.creator.toLowerCase() }}",
+        "routing": {
+          "rules": [
+            {
+              "output": 1,
+              "value": "videocxpress"
+            },
+            {
+              "output": 2,
+              "value": "clonevoice"
+            },
+            {
+              "output": 3,
+              "value": "artistly"
+            },
+            {
+              "output": 4,
+              "value": "full_pipeline"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "videoexpress-talking-photo",
+      "name": "VideoExpress — Talking Photo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [850, 200],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $credentials.videocxpress_url || 'https://api.videoexpress.ai/v2/talking-photo' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "image_url",
+              "value": "={{ $json.body.image_url || $json.body.photo_url }}"
+            },
+            {
+              "name": "audio_url",
+              "value": "={{ $json.body.voice_over_audio_url || '' }}"
+            },
+            {
+              "name": "script",
+              "value": "={{ $json.body.script || '' }}"
+            },
+            {
+              "name": "voice_id",
+              "value": "={{ $json.body.clonevoice_voice_id || '' }}"
+            },
+            {
+              "name": "language",
+              "value": "={{ $json.body.language || 'en' }}"
+            },
+            {
+              "name": "background_music",
+              "value": "={{ $json.body.background_music || '' }}"
+            },
+            {
+              "name": "output_format",
+              "value": "={{ $json.body.output_format || 'mp4' }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "videoexpress-check-status",
+      "name": "Poll VideoExpress Status",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [850, 350],
+      "parameters": {
+        "amount": 10,
+        "unit": "seconds",
+        "resume": "webhook"
+      }
+    },
+    {
+      "id": "videoexpress-get-result",
+      "name": "Get Generated Video URL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [850, 500],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $node['VideoExpress — Talking Photo'].json.job_id ? 'https://api.videoexpress.ai/v2/jobs/' + $node['VideoExpress — Talking Photo'].json.job_id : '' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth"
+      }
+    },
+    {
+      "id": "clonevoice-generate",
+      "name": "CloneVoice — Generate Voiceover",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [850, 200],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $credentials.clonevoice_url || 'https://api.clonevoice.ai/v1/tts' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ $json.body.script || $json.body.text }}"
+            },
+            {
+              "name": "voice_id",
+              "value": "={{ $json.body.clonevoice_voice_id || '' }}"
+            },
+            {
+              "name": "voice_prompt",
+              "value": "={{ $json.body.voice_prompt || '' }}"
+            },
+            {
+              "name": "language",
+              "value": "={{ $json.body.language || 'en' }}"
+            },
+            {
+              "name": "emotion",
+              "value": "={{ $json.body.emotion || '' }}"
+            },
+            {
+              "name": "speed",
+              "value": "={{ $json.body.speed || '1.0' }}"
+            },
+            {
+              "name": "output_format",
+              "value": "={{ $json.body.audio_format || 'mp3' }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "clonevoice-clone",
+      "name": "CloneVoice — Clone Voice",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [850, 350],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $credentials.clonevoice_url || 'https://api.clonevoice.ai/v1/clone' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "audio_sample_url",
+              "value": "={{ $json.body.voice_sample_url || $json.body.audio_url }}"
+            },
+            {
+              "name": "voice_name",
+              "value": "={{ $json.body.voice_name || $json.body.clientId + '_cloned_voice' }}"
+            },
+            {
+              "name": "language",
+              "value": "={{ $json.body.language || 'en' }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "artistly-generate",
+      "name": "Artistly — Generate Image",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [850, 200],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $credentials.artistly_url || 'https://api.artistly.ai/v1/generate' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "prompt",
+              "value": "={{ $json.body.prompt }}"
+            },
+            {
+              "name": "style",
+              "value": "={{ $json.body.style || 'photorealistic' }}"
+            },
+            {
+              "name": "aspect_ratio",
+              "value": "={{ $json.body.aspect_ratio || '16:9' }}"
+            },
+            {
+              "name": "negative_prompt",
+              "value": "={{ $json.body.negative_prompt || '' }}"
+            },
+            {
+              "name": "model",
+              "value": "={{ $json.body.model || 'v3' }}"
+            },
+            {
+              "name": "output_format",
+              "value": "={{ $json.body.output_format || 'png' }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "artistly-check-status",
+      "name": "Poll Artistly Status",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [850, 350],
+      "parameters": {
+        "amount": 5,
+        "unit": "seconds",
+        "resume": "webhook"
+      }
+    },
+    {
+      "id": "artistly-get-result",
+      "name": "Get Generated Image URL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [850, 500],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $node['Artistly — Generate Image'].json.job_id ? 'https://api.artistly.ai/v1/jobs/' + $node['Artistly — Generate Image'].json.job_id : '' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth"
+      }
+    },
+    {
+      "id": "full-pipeline",
+      "name": "Full Pipeline — Image → Voice → Talking Photo",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [850, 200]
+    },
+    {
+      "id": "pipeline-step1-generate-image",
+      "name": "Step 1: Generate Image (Artistly)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1050, 200],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $credentials.artistly_url || 'https://api.artistly.ai/v1/generate' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "prompt",
+              "value": "={{ $json.body.prompt || $json.body.scene_description }}"
+            },
+            {
+              "name": "style",
+              "value": "={{ $json.body.image_style || 'photorealistic' }}"
+            },
+            {
+              "name": "aspect_ratio",
+              "value": "={{ $json.body.aspect_ratio || '16:9' }}"
+            },
+            {
+              "name": "model",
+              "value": "={{ $json.body.model || 'v3' }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "pipeline-step2-wait-artistly",
+      "name": "Poll Artistly Image",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [1050, 350],
+      "parameters": {
+        "amount": 5,
+        "unit": "seconds",
+        "resume": "webhook"
+      }
+    },
+    {
+      "id": "pipeline-step3-get-image",
+      "name": "Get Generated Image URL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1050, 500],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $node['Step 1: Generate Image (Artistly)'].json.job_id ? 'https://api.artistly.ai/v1/jobs/' + $node['Step 1: Generate Image (Artistly)'].json.job_id : '' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth"
+      }
+    },
+    {
+      "id": "pipeline-step4-generate-voice",
+      "name": "Step 2: Generate Voice (CloneVoice)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1250, 200],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $credentials.clonevoice_url || 'https://api.clonevoice.ai/v1/tts' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ $json.body.script || $json.body.voiceover_text }}"
+            },
+            {
+              "name": "voice_id",
+              "value": "={{ $json.body.clonevoice_voice_id || $json.body.voice_id }}"
+            },
+            {
+              "name": "voice_prompt",
+              "value": "={{ $json.body.voice_prompt || '' }}"
+            },
+            {
+              "name": "language",
+              "value": "={{ $json.body.language || 'en' }}"
+            },
+            {
+              "name": "emotion",
+              "value": "={{ $json.body.emotion || 'happy' }}"
+            },
+            {
+              "name": "speed",
+              "value": "={{ $json.body.speed || '1.0' }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "pipeline-step5-create-talking-photo",
+      "name": "Step 3: Create Talking Photo (VideoExpress)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1450, 200],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $credentials.videoexpress_url || 'https://api.videoexpress.ai/v2/talking-photo' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "image_url",
+              "value": "={{ $node['Get Generated Image URL'].json.output_url || $node['Get Generated Image URL'].json.image_url }}"
+            },
+            {
+              "name": "audio_url",
+              "value": "={{ $node['Step 2: Generate Voice (CloneVoice)'].json.audio_url || $node['Step 2: Generate Voice (CloneVoice)'].json.output_url }}"
+            },
+            {
+              "name": "script",
+              "value": "={{ $json.body.script || $json.body.voiceover_text }}"
+            },
+            {
+              "name": "language",
+              "value": "={{ $json.body.language || 'en' }}"
+            },
+            {
+              "name": "output_format",
+              "value": "mp4"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "pipeline-step6-poll-talking-photo",
+      "name": "Poll Talking Photo Status",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [1450, 350],
+      "parameters": {
+        "amount": 10,
+        "unit": "seconds",
+        "resume": "webhook"
+      }
+    },
+    {
+      "id": "pipeline-step7-get-video",
+      "name": "Get Final Video URL",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1450, 500],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $node['Step 3: Create Talking Photo (VideoExpress)'].json.job_id ? 'https://api.videoexpress.ai/v2/jobs/' + $node['Step 3: Create Talking Photo (VideoExpress)'].json.job_id : '' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth"
+      }
+    },
+    {
+      "id": "return-result",
+      "name": "Return Final Output",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1650, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.body.callback_url || 'http://workflowswift:8085/api/workflows/callback' }}",
+        "authentication": "none",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "clientId",
+              "value": "={{ $json.body.clientId }}"
+            },
+            {
+              "name": "workflow",
+              "value": "content-creation"
+            },
+            {
+              "name": "status",
+              "value": "completed"
+            },
+            {
+              "name": "output",
+              "value": "={{ { video_url: $node['Get Final Video URL'].json.output_url || $node['Get Final Video URL'].json.video_url, image_url: $node['Get Generated Image URL'].json.output_url || $node['Get Generated Image URL'].json.image_url, audio_url: $node['Step 2: Generate Voice (CloneVoice)'].json.audio_url || $node['Step 2: Generate Voice (CloneVoice)'].json.output_url } }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [{ "node": "Auth & Credits Check", "type": "main", "index": 0 }]
+      ]
+    },
+    "Auth & Credits Check": {
+      "main": [
+        [{ "node": "Deduct Credits (1)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Deduct Credits (1)": {
+      "main": [
+        [{ "node": "Choose Creator Tool", "type": "main", "index": 0 }]
+      ]
+    },
+    "Choose Creator Tool": {
+      "main": [
+        [{ "node": "VideoExpress — Talking Photo", "type": "main", "index": 0 }],
+        [{ "node": "CloneVoice — Generate Voiceover", "type": "main", "index": 0 }],
+        [{ "node": "Artistly — Generate Image", "type": "main", "index": 0 }],
+        [{ "node": "Full Pipeline — Image → Voice → Talking Photo", "type": "main", "index": 0 }]
+      ]
+    },
+    "Full Pipeline — Image → Voice → Talking Photo": {
+      "main": [
+        [{ "node": "Step 1: Generate Image (Artistly)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Step 1: Generate Image (Artistly)": {
+      "main": [
+        [{ "node": "Poll Artistly Image", "type": "main", "index": 0 }]
+      ]
+    },
+    "Poll Artistly Image": {
+      "main": [
+        [{ "node": "Get Generated Image URL", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Generated Image URL": {
+      "main": [
+        [{ "node": "Step 2: Generate Voice (CloneVoice)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Step 2: Generate Voice (CloneVoice)": {
+      "main": [
+        [{ "node": "Step 3: Create Talking Photo (VideoExpress)", "type": "main", "index": 0 }]
+      ]
+    },
+    "Step 3: Create Talking Photo (VideoExpress)": {
+      "main": [
+        [{ "node": "Poll Talking Photo Status", "type": "main", "index": 0 }]
+      ]
+    },
+    "Poll Talking Photo Status": {
+      "main": [
+        [{ "node": "Get Final Video URL", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Final Video URL": {
+      "main": [
+        [{ "node": "Return Final Output", "type": "main", "index": 0 }]
+      ]
+    },
+    "VideoExpress — Talking Photo": {
+      "main": [
+        [{ "node": "Poll VideoExpress Status", "type": "main", "index": 0 }]
+      ]
+    },
+    "Poll VideoExpress Status": {
+      "main": [
+        [{ "node": "Get Generated Video URL", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Generated Video URL": {
+      "main": [
+        [{ "node": "Return Final Output", "type": "main", "index": 0 }]
+      ]
+    },
+    "CloneVoice — Generate Voiceover": {
+      "main": [
+        [{ "node": "Return Final Output", "type": "main", "index": 0 }]
+      ]
+    },
+    "CloneVoice — Clone Voice": {
+      "main": [
+        [{ "node": "Return Final Output", "type": "main", "index": 0 }]
+      ]
+    },
+    "Artistly — Generate Image": {
+      "main": [
+        [{ "node": "Poll Artistly Status", "type": "main", "index": 0 }]
+      ]
+    },
+    "Poll Artistly Status": {
+      "main": [
+        [{ "node": "Get Generated Image URL", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Generated Image URL": {
+      "main": [
+        [{ "node": "Return Final Output", "type": "main", "index": 0 }]
+      ]
+    },
+    "Return Final Output": {
+      "main": []
+    }
+  },
+  "tags": ["content-creation", "video", "ai-generation", "voice-clone"],
+  "lifecycle": "Generate → Create → Produce"
+}

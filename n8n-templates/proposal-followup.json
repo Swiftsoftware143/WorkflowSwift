@@ -1,0 +1,463 @@
+{
+  "name": "Proposal Thank You & Follow-up (n8n)",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "path": "workflow/proposal-followup",
+        "options": {}
+      },
+      "webhookId": "workflow-proposal-followup"
+    },
+    {
+      "id": "auth",
+      "name": "Auth & Credit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        450,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/credits/balance",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "balance",
+      "name": "Balance OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        650,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "bal",
+              "leftValue": "={{ $json.balance }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "deduct",
+      "name": "Deduct Credit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        850,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/credits/deduct",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "workflow_type",
+              "value": "proposal_followup"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "step_0_send_thank_you",
+      "name": "Send Thank You",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1050,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/notifications/send",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "notification_type",
+              "value": "thank_you"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "step_1_track_evaluation_period",
+      "name": "Track Evaluation Period",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1250,
+        200
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/govcon/evaluation",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "step_2_protest_period_monitor",
+      "name": "Protest Period Monitor",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1450,
+        200
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/govcon/monitor",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "step_3_win_loss_analysis",
+      "name": "Win/Loss Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1650,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/reports/generate",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "report_type",
+              "value": "win_loss"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "fetchIntegrations",
+      "name": "Get Connected Integrations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1850,
+        200
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/integration-targets",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "routeResults",
+      "name": "Route Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2050,
+        200
+      ],
+      "parameters": {
+        "jsCode": "// Route results through dispatch\nconst integrations = $json.integration_targets || [];\nconst deliveries = [];\n\ndeliveries.push({\n  target_id: 'workflowswift_dashboard',\n  url: 'http://workflowswift:8085/api/dashboard/data',\n  payload: { data: $json, dashboard_type: 'proposal_thank_you___follow_up' }\n});\n\nfor (const target of integrations) {\n  if (!target.is_active) continue;\n  deliveries.push({ target_id: target.id, payload: { data: $json } });\n}\n\nif (deliveries.length === 0) deliveries.push({ status: 'no_integrations' });\nreturn deliveries;"
+      }
+    },
+    {
+      "id": "split",
+      "name": "Deliver",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 2,
+      "position": [
+        2250,
+        200
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "deliver",
+      "name": "Dispatch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2450,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url || ('http://workflowswift:8085/api/integration-dispatch?target_id=' + $json.target_id) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2650,
+        300
+      ],
+      "parameters": {
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "webhook": {
+      "main": [
+        [
+          {
+            "node": "auth",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "auth": {
+      "main": [
+        [
+          {
+            "node": "balance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "balance": {
+      "main": [
+        [
+          {
+            "node": "deduct",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "step_0_send_thank_you",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "deduct": {
+      "main": [
+        [
+          {
+            "node": "step_0_send_thank_you",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "step_0_send_thank_you": {
+      "main": [
+        [
+          {
+            "node": "step_1_track_evaluation_period",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "step_1_track_evaluation_period": {
+      "main": [
+        [
+          {
+            "node": "step_2_protest_period_monitor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "step_2_protest_period_monitor": {
+      "main": [
+        [
+          {
+            "node": "step_3_win_loss_analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "step_3_win_loss_analysis": {
+      "main": [
+        [
+          {
+            "node": "fetchIntegrations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fetchIntegrations": {
+      "main": [
+        [
+          {
+            "node": "routeResults",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "routeResults": {
+      "main": [
+        [
+          {
+            "node": "split",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "split": {
+      "main": [
+        [
+          {
+            "node": "deliver",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "deliver": {
+      "main": [
+        [
+          {
+            "node": "respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "active": false
+}

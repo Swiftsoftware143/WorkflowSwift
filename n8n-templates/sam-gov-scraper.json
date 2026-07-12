@@ -1,0 +1,92 @@
+{
+  "name": "SAM.gov Scraper",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Start",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://api.sam.gov/opportunities/v2/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "api_key",
+              "value": "={{ $node[\"Get Provider Key\"].json.api_key }}"
+            },
+            {
+              "name": "limit",
+              "value": "={{ $json.payload.limit || 50 }}"
+            },
+            {
+              "name": "postedFrom",
+              "value": "={{ $json.payload.posted_from || $node[\"Start\"].json.query?.posted_from }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Fetch SAM.gov",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.WORKFLOWSWIFT_API_URL || 'http://localhost:8085' }}/api/v1/provider-keys",
+        "options": {
+          "headers": {
+            "Authorization": "Bearer {{ $env.WORKFLOWSWIFT_API_KEY }}"
+          }
+        }
+      },
+      "name": "Get Provider Key",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [450, 450]
+    },
+    {
+      "parameters": {
+        "operation": "respondToWebhook",
+        "responseMode": "lastNode",
+        "responseBody": "={{ $json }}"
+      },
+      "name": "Respond",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [650, 300]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Fetch SAM.gov",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch SAM.gov": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
+

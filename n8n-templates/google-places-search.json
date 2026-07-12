@@ -1,0 +1,88 @@
+{
+  "name": "Google Places Search",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Start",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://maps.googleapis.com/maps/api/place/textsearch/json",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ $json.payload.query }}"
+            },
+            {
+              "name": "key",
+              "value": "={{ $node[\"Get Provider Key\"].json.api_key }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Google Places API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.WORKFLOWSWIFT_API_URL || 'http://localhost:8085' }}/api/v1/provider-keys",
+        "options": {
+          "headers": {
+            "Authorization": "Bearer {{ $env.WORKFLOWSWIFT_API_KEY }}"
+          }
+        }
+      },
+      "name": "Get Provider Key",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [450, 450]
+    },
+    {
+      "parameters": {
+        "operation": "respondToWebhook",
+        "responseMode": "lastNode",
+        "responseBody": "={{ $json.results }}"
+      },
+      "name": "Respond",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [650, 300]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Google Places API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Places API": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
+

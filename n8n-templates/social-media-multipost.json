@@ -1,0 +1,358 @@
+{
+  "name": "Social Media Auto-Poster (n8n Optimized)",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "path": "workflow/social-poster",
+        "options": {}
+      },
+      "webhookId": "social-poster"
+    },
+    {
+      "id": "authCredits",
+      "name": "Auth & Credits",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        450,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/credits/balance",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "balanceCheck",
+      "name": "Balance OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        650,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "bal",
+              "leftValue": "={{ $json.balance }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "deductCredit",
+      "name": "Deduct Credit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        850,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/credits/deduct",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "workflow_type",
+              "value": "social"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "generateVariations",
+      "name": "Generate Platform Variations",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1050,
+        200
+      ],
+      "parameters": {
+        "jsCode": "// Generate platform-specific variations from the input\nconst body = $json.body;\nconst baseContent = body.content || body.text || body.post || '';\n\nconst variations = {\n  twitter: (baseContent.length > 280 ? baseContent.substring(0, 277) + '...' : baseContent) + ' ' + (body.hashtags || '#automation'),\n  linkedin: baseContent + '\\n\\n#BusinessAutomation #Growth' + (body.link ? '\\n' + body.link : ''),\n  facebook: baseContent + (body.image ? '\\n\ud83d\udcf8 ' + body.image : '') + (body.link ? '\\n\ud83d\udd17 ' + body.link : ''),\n  instagram: body.image ? (body.caption || baseContent) + '\\n\\n' + (body.hashtags || '#business') : baseContent\n};\n\nreturn [variations];"
+      }
+    },
+    {
+      "id": "postTwitter",
+      "name": "Post to Twitter/X",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1250,
+        100
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.body.twitter_api_url || 'https://api.twitter.com/2/tweets' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.body.twitter_token || '' }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ $items('Generate Platform Variations').first().json.twitter }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "postLinkedIn",
+      "name": "Post to LinkedIn",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1250,
+        250
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.body.linkedin_api_url || 'https://api.linkedin.com/v2/ugcPosts' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.body.linkedin_token || '' }}"
+            }
+          ]
+        },
+        "sendBody": true
+      }
+    },
+    {
+      "id": "postFacebook",
+      "name": "Post to Facebook",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1250,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://graph.facebook.com/v18.0/' + ($json.body.facebook_page_id || 'me') + '/feed' }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "message",
+              "value": "={{ $items('Generate Platform Variations').first().json.facebook }}"
+            },
+            {
+              "name": "access_token",
+              "value": "={{ $json.body.facebook_token || '' }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "mergeResults",
+      "name": "Merge Results",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        300
+      ],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition"
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1700,
+        300
+      ],
+      "parameters": {
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "webhook": {
+      "main": [
+        [
+          {
+            "node": "authCredits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "authCredits": {
+      "main": [
+        [
+          {
+            "node": "balanceCheck",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "balanceCheck": {
+      "main": [
+        [
+          {
+            "node": "deductCredit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "generateVariations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "deductCredit": {
+      "main": [
+        [
+          {
+            "node": "generateVariations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "generateVariations": {
+      "main": [
+        [
+          {
+            "node": "postTwitter",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "postLinkedIn",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "postFacebook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "postTwitter": {
+      "main": [
+        [
+          {
+            "node": "mergeResults",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "postLinkedIn": {
+      "main": [
+        [
+          {
+            "node": "mergeResults",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "postFacebook": {
+      "main": [
+        [
+          {
+            "node": "mergeResults",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "mergeResults": {
+      "main": [
+        [
+          {
+            "node": "respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "active": false
+}

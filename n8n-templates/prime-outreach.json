@@ -1,0 +1,463 @@
+{
+  "name": "Prime Contractor Outreach (n8n)",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "path": "workflow/prime-outreach",
+        "options": {}
+      },
+      "webhookId": "workflow-prime-outreach"
+    },
+    {
+      "id": "auth",
+      "name": "Auth & Credit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        450,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/credits/balance",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "balance",
+      "name": "Balance OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        650,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "bal",
+              "leftValue": "={{ $json.balance }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "deduct",
+      "name": "Deduct Credit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        850,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/credits/deduct",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "workflow_type",
+              "value": "prime_outreach"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "step_0_research_prime_contractor",
+      "name": "Research Prime Contractor",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1050,
+        200
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/govcon/research?type=prime",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "step_1_generate_teaming_proposal",
+      "name": "Generate Teaming Proposal",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1250,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/reports/generate",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "report_type",
+              "value": "teaming_proposal"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "step_2_track_response_status",
+      "name": "Track Response Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1450,
+        200
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/govcon/status",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "step_3_negotiate_terms_summary",
+      "name": "Negotiate Terms Summary",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1650,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/reports/generate",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "report_type",
+              "value": "negotiation_summary"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "fetchIntegrations",
+      "name": "Get Connected Integrations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1850,
+        200
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/integration-targets",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "routeResults",
+      "name": "Route Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2050,
+        200
+      ],
+      "parameters": {
+        "jsCode": "// Route results through dispatch\nconst integrations = $json.integration_targets || [];\nconst deliveries = [];\n\ndeliveries.push({\n  target_id: 'workflowswift_dashboard',\n  url: 'http://workflowswift:8085/api/dashboard/data',\n  payload: { data: $json, dashboard_type: 'prime_contractor_outreach' }\n});\n\nfor (const target of integrations) {\n  if (!target.is_active) continue;\n  deliveries.push({ target_id: target.id, payload: { data: $json } });\n}\n\nif (deliveries.length === 0) deliveries.push({ status: 'no_integrations' });\nreturn deliveries;"
+      }
+    },
+    {
+      "id": "split",
+      "name": "Deliver",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 2,
+      "position": [
+        2250,
+        200
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "deliver",
+      "name": "Dispatch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2450,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url || ('http://workflowswift:8085/api/integration-dispatch?target_id=' + $json.target_id) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2650,
+        300
+      ],
+      "parameters": {
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "webhook": {
+      "main": [
+        [
+          {
+            "node": "auth",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "auth": {
+      "main": [
+        [
+          {
+            "node": "balance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "balance": {
+      "main": [
+        [
+          {
+            "node": "deduct",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "step_0_research_prime_contractor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "deduct": {
+      "main": [
+        [
+          {
+            "node": "step_0_research_prime_contractor",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "step_0_research_prime_contractor": {
+      "main": [
+        [
+          {
+            "node": "step_1_generate_teaming_proposal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "step_1_generate_teaming_proposal": {
+      "main": [
+        [
+          {
+            "node": "step_2_track_response_status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "step_2_track_response_status": {
+      "main": [
+        [
+          {
+            "node": "step_3_negotiate_terms_summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "step_3_negotiate_terms_summary": {
+      "main": [
+        [
+          {
+            "node": "fetchIntegrations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fetchIntegrations": {
+      "main": [
+        [
+          {
+            "node": "routeResults",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "routeResults": {
+      "main": [
+        [
+          {
+            "node": "split",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "split": {
+      "main": [
+        [
+          {
+            "node": "deliver",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "deliver": {
+      "main": [
+        [
+          {
+            "node": "respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "active": false
+}

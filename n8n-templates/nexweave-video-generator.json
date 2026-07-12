@@ -1,0 +1,95 @@
+{
+  "name": "Nexweave Video Generator",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Start",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $node[\"Get Provider Key\"].json.base_url || 'https://api.nexweave.com' }}/api/v1/video/generate",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{ $node[\"Get Provider Key\"].json.api_key }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "template_id",
+              "value": "={{ $json.payload.template_id }}"
+            },
+            {
+              "name": "recipient_name",
+              "value": "={{ $json.payload.recipient_name }}"
+            },
+            {
+              "name": "recipient_email",
+              "value": "={{ $json.payload.recipient_email }}"
+            },
+            {
+              "name": "personalization",
+              "value": "={{ $json.payload.personalization }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Nexweave API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "operation": "respondToWebhook",
+        "responseMode": "lastNode",
+        "responseBody": "={{ $json }}"
+      },
+      "name": "Respond",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [650, 300]
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Nexweave API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nexweave API": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
+

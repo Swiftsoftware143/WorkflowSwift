@@ -1,0 +1,479 @@
+{
+  "name": "Client Onboarding (n8n Optimized)",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "path": "workflow/onboarding",
+        "options": {}
+      },
+      "webhookId": "onboarding-flow"
+    },
+    {
+      "id": "authCredits",
+      "name": "Auth & Credits",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        450,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/credits/balance",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "balanceCheck",
+      "name": "Balance OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        650,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "bal",
+              "leftValue": "={{ $json.balance }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "deductCredit",
+      "name": "Deduct Credit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        850,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/credits/deduct",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "workflow_type",
+              "value": "onboarding"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "createClient",
+      "name": "Create Client Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1050,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/clients",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "name",
+              "value": "={{ $json.body.client_name }}"
+            },
+            {
+              "name": "email",
+              "value": "={{ $json.body.client_email }}"
+            },
+            {
+              "name": "phone",
+              "value": "={{ $json.body.client_phone || '' }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "fetchIntegrationTargets",
+      "name": "Lookup User's Integrations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1250,
+        100
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/integration-targets",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "routeOnboarding",
+      "name": "Route by Integration",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1450,
+        200
+      ],
+      "parameters": {
+        "jsCode": "// Route via WorkflowSwift dispatch \u2014 API keys stay server-side\nconst integrations = $json.integration_targets || [];\nconst body = $json.body;\nconst client = $items(\"Create Client Record\").first().json;\n\nconst messages = [];\n\nconst welcomeHtml = `<h1>Welcome!</h1><p>We are excited to have you onboard.</p><p>Your account is ready.</p>`;\n\nfor (const target of integrations) {\n  if (!target.is_active) continue;\n  messages.push({\n    target_id: target.id,\n    payload: {\n      to: body.client_email,\n      subject: 'Welcome to ' + (body.brand || 'our platform'),\n      html: welcomeHtml,\n      name: body.client_name,\n      path: '/contacts'\n    }\n  });\n}\n\nif (messages.length === 0) {\n  return [{ event: 'no_integrations', client: client }];\n}\n\nreturn messages;"
+      }
+    },
+    {
+      "id": "splitBatches",
+      "name": "Deliver to Each Integration",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 2,
+      "position": [
+        1650,
+        200
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "executeDelivery",
+      "name": "Deliver via WorkflowSwift Dispatch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1850,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://workflowswift:8085/api/integration-dispatch?target_id=' + $json.target_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true
+      }
+    },
+    {
+      "id": "scheduleFollowup",
+      "name": "Schedule Follow-up Call",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        2050,
+        300
+      ],
+      "parameters": {
+        "resume": "webhook",
+        "options": {
+          "webhookSuffix": "onboarding-followup"
+        },
+        "limitWaitTime": 604800
+      }
+    },
+    {
+      "id": "fetchIntegrationsFollowup",
+      "name": "Lookup Integrations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2250,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/integration-targets",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "sendFollowupReminder",
+      "name": "Send Follow-up Reminder",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2450,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Route follow-up reminder via dispatch\nconst integrations = $json.integration_targets || [];\nconst body = $json.body;\n\n// Find first active email integration\nconst adminTarget = integrations.find(t => t.is_active);\n\nif (adminTarget) {\n  return [{\n    target_id: adminTarget.id,\n    payload: {\n      to: body.admin_email || 'swiftsoftware143@yahoo.com',\n      subject: 'Client Onboarding Follow-up Needed',\n      html: '<p>Follow-up call needed for: ' + (body.client_name || 'Unknown') + '</p>',\n      path: '/messages'\n    },\n    headers: { authorization: $json.headers.authorization }\n  }];\n}\n\nreturn [{ status: 'no_integrations', message: 'No email integration found for follow-up' }];"
+      }
+    },
+    {
+      "id": "deliverFollowup",
+      "name": "Deliver via Dispatch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2650,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://workflowswift:8085/api/integration-dispatch?target_id=' + $json.target_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2850,
+        300
+      ],
+      "parameters": {
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "webhook": {
+      "main": [
+        [
+          {
+            "node": "authCredits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "authCredits": {
+      "main": [
+        [
+          {
+            "node": "balanceCheck",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "balanceCheck": {
+      "main": [
+        [
+          {
+            "node": "deductCredit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "createClient",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "deductCredit": {
+      "main": [
+        [
+          {
+            "node": "createClient",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "createClient": {
+      "main": [
+        [
+          {
+            "node": "fetchIntegrationTargets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fetchIntegrationTargets": {
+      "main": [
+        [
+          {
+            "node": "routeOnboarding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "routeOnboarding": {
+      "main": [
+        [
+          {
+            "node": "splitBatches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "splitBatches": {
+      "main": [
+        [
+          {
+            "node": "executeDelivery",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "executeDelivery": {
+      "main": [
+        [
+          {
+            "node": "scheduleFollowup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "scheduleFollowup": {
+      "main": [
+        [
+          {
+            "node": "fetchIntegrationsFollowup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fetchIntegrationsFollowup": {
+      "main": [
+        [
+          {
+            "node": "sendFollowupReminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "sendFollowupReminder": {
+      "main": [
+        [
+          {
+            "node": "deliverFollowup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "deliverFollowup": {
+      "main": [
+        [
+          {
+            "node": "respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "active": false
+}

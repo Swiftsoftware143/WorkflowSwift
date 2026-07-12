@@ -1,0 +1,423 @@
+{
+  "name": "Employee Onboarding (n8n)",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "path": "workflow/employee-onboarding",
+        "options": {}
+      },
+      "webhookId": "employee-onboarding"
+    },
+    {
+      "id": "auth",
+      "name": "Auth & Credit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        450,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/credits/balance",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "balance",
+      "name": "Balance OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        650,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "bal",
+              "leftValue": "={{ $json.balance }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "deduct",
+      "name": "Deduct Credit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        850,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/credits/deduct",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "workflow_type",
+              "value": "onboarding"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "createHRRecord",
+      "name": "Create HR Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1050,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/employees",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "name",
+              "value": "={{ $json.body.employee_name }}"
+            },
+            {
+              "name": "email",
+              "value": "={{ $json.body.employee_email }}"
+            },
+            {
+              "name": "role",
+              "value": "={{ $json.body.role || '' }}"
+            },
+            {
+              "name": "start_date",
+              "value": "={{ $json.body.start_date || '' }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "fetchIntegrations",
+      "name": "Get Connected Integrations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1250,
+        200
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/integration-targets",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "routeOnboarding",
+      "name": "Route Onboarding Tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1450,
+        200
+      ],
+      "parameters": {
+        "jsCode": "// Route employee onboarding to connected integrations\nconst integrations = $json.integration_targets || [];\nconst body = $json.body;\n\n// Standard onboarding sequence\nconst tasks = [\n  { type: 'welcome_email', sort: 1 },\n  { type: 'it_access', sort: 2 },\n  { type: 'hr_docs', sort: 3 },\n  { type: 'team_intro', sort: 4 },\n  { type: 'training_plan', sort: 5 }\n];\n\nconst deliveries = [];\n\n// Always save to WorkflowSwift dashboard\ndeliveries.push({\n  target_id: 'workflowswift_dashboard',\n  url: 'http://workflowswift:8085/api/dashboard/data',\n  payload: { data: { name: body.employee_name, email: body.employee_email, role: body.role, status: 'onboarding', tasks: tasks }, dashboard_type: 'employee-onboarding' }\n});\n\nfor (const target of integrations) {\n  if (!target.is_active) continue;\n  deliveries.push({\n    target_id: target.id,\n    payload: { name: body.employee_name, email: body.employee_email, role: body.role, tasks: tasks, action: 'employee_onboarding' }\n  });\n}\n\nif (deliveries.length === 0) deliveries.push({ status: 'no_integrations', tasks: tasks });\nreturn deliveries;"
+      }
+    },
+    {
+      "id": "split",
+      "name": "Deliver",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 2,
+      "position": [
+        1650,
+        200
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "deliver",
+      "name": "Dispatch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1850,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url || ('http://workflowswift:8085/api/integration-dispatch?target_id=' + $json.target_id) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true
+      }
+    },
+    {
+      "id": "wait",
+      "name": "Wait 7 Days for Review",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        2050,
+        300
+      ],
+      "parameters": {
+        "resume": "webhook",
+        "options": {
+          "webhookSuffix": "emp-review"
+        },
+        "limitWaitTime": 604800
+      }
+    },
+    {
+      "id": "review",
+      "name": "Send Review Reminder",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2250,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/integration-dispatch?target_id={{ $json.target_id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2450,
+        300
+      ],
+      "parameters": {
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "webhook": {
+      "main": [
+        [
+          {
+            "node": "auth",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "auth": {
+      "main": [
+        [
+          {
+            "node": "balance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "balance": {
+      "main": [
+        [
+          {
+            "node": "deduct",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "createHRRecord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "deduct": {
+      "main": [
+        [
+          {
+            "node": "createHRRecord",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "createHRRecord": {
+      "main": [
+        [
+          {
+            "node": "fetchIntegrations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fetchIntegrations": {
+      "main": [
+        [
+          {
+            "node": "routeOnboarding",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "routeOnboarding": {
+      "main": [
+        [
+          {
+            "node": "split",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "split": {
+      "main": [
+        [
+          {
+            "node": "deliver",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "deliver": {
+      "main": [
+        [
+          {
+            "node": "wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "wait": {
+      "main": [
+        [
+          {
+            "node": "review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "review": {
+      "main": [
+        [
+          {
+            "node": "respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "active": false
+}
