@@ -1,0 +1,566 @@
+{
+  "name": "Government Contracting Lifecycle (n8n Optimized)",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "path": "workflow/govcon-lifecycle",
+        "options": {}
+      },
+      "webhookId": "govcon-lifecycle"
+    },
+    {
+      "id": "authCheck",
+      "name": "Authenticate & Check Credits",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        450,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/credits/balance",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "balanceCheck",
+      "name": "Sufficient Balance?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        650,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "balance-ok",
+              "leftValue": "={{ $json.balance }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "deduct",
+      "name": "Deduct 1 Credit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        850,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/credits/deduct",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "workflow_type",
+              "value": "complex"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "checkHexomatic",
+      "name": "Check Hexomatic Key",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        850,
+        400
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/tenants/hexomatic-key",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "branchHexomatic",
+      "name": "Use Hexomatic or Internal?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1050,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "hex-avail",
+              "leftValue": "={{ $json.key.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "hexomaticSearch",
+      "name": "Hexomatic - SAM.gov Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1250,
+        150
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.body.recipe_url || 'https://api.hexomatic.com/v1/recipes/govcon-search/runs' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $json.key }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "naics_code",
+              "value": "={{ $json.body.naics_code || '' }}"
+            },
+            {
+              "name": "search_term",
+              "value": "={{ $json.body.search_term || 'government contracting' }}"
+            },
+            {
+              "name": "agency",
+              "value": "={{ $json.body.agency || '' }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "hexomaticPoll",
+      "name": "Wait for Hexomatic Result",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        1450,
+        150
+      ],
+      "parameters": {
+        "resume": "webhook",
+        "options": {
+          "webhookSuffix": "govcon-result"
+        },
+        "limitWaitTime": 120
+      }
+    },
+    {
+      "id": "hexomaticResults",
+      "name": "Fetch Hexomatic Results",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1650,
+        150
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.poll_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $json.headers['x-api-key'] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "internalAPI",
+      "name": "Internal API - SAM.gov Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1250,
+        450
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://api.sam.gov/opportunities/v1/search?limit=10&q=' + encodeURIComponent($json.body.search_term || 'contracting') }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "enrichData",
+      "name": "Enrich with AI",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1850,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Enrich and structure the data for the GovCon dashboard\nconst input = $input.first().json;\nconst opportunities = input.opportunities || input.data || input.results || [input].filter(i => i.title || i.name);\n\nconst now = new Date();\nconst enriched = (Array.isArray(opportunities) ? opportunities : [input]).map(opp => ({\n  title: opp.title || opp.name || opp.opportunityTitle || 'Untitled',\n  agency: opp.agency || opp.department || opp.organization || 'Unknown',\n  postedDate: opp.postedDate || opp.date || opp.created_at || now.toISOString(),\n  responseDue: opp.responseDeadline || opp.dueDate || opp.closingDate || null,\n  setAside: opp.setAside || opp.type || opp.classification || 'Unrestricted',\n  naicsCode: opp.naicsCode || opp.naics || opp.code || '',\n  solNumber: opp.solicitationNumber || opp.solicitation || opp.id || '',\n  description: (opp.description || opp.abstract || opp.summary || '').substring(0, 500),\n  url: opp.url || opp.link || opp.permalink || '',\n  source: opp.source || 'sam.gov'\n}));\n\nreturn enriched;</"
+      }
+    },
+    {
+      "id": "fetchDashboardIntegrations",
+      "name": "Lookup Connected Dashboards",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2050,
+        200
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/integration-targets",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "routeGovConData",
+      "name": "Route Data to Integrations",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2250,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Route GovCon data via dispatch + always save to WorkflowSwift dashboard\nconst enrichedData = $json;\nconst integrations = $json.integration_targets || [];\n\nconst deliveries = [];\n\n// Always save to WorkflowSwift dashboard directly\ndeliveries.push({\n  target_id: 'workflowswift_dashboard',\n  payload: { data: enrichedData, dashboard_type: 'government-contracting' },\n  url: 'http://workflowswift:8085/api/dashboard/data'\n});\n\n// Route to connected integrations via dispatch\nfor (const target of integrations) {\n  if (!target.is_active) continue;\n  deliveries.push({\n    target_id: target.id,\n    payload: { data: enrichedData, opportunity_type: 'government-contracting' }\n  });\n}\n\nreturn deliveries;"
+      }
+    },
+    {
+      "id": "splitDeliveries",
+      "name": "Deliver to Each",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 2,
+      "position": [
+        2450,
+        300
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "saveToDashboard",
+      "name": "Save to Dashboard",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2650,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url || ('http://workflowswift:8085/api/integration-dispatch?target_id=' + $json.target_id) }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "data",
+              "value": "={{ $json.data }}"
+            },
+            {
+              "name": "dashboard_type",
+              "value": "={{ $json.dashboard_type || 'government-contracting' }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2850,
+        300
+      ],
+      "parameters": {
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "webhook": {
+      "main": [
+        [
+          {
+            "node": "authCheck",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "authCheck": {
+      "main": [
+        [
+          {
+            "node": "balanceCheck",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "balanceCheck": {
+      "main": [
+        [
+          {
+            "node": "deduct",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "checkHexomatic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "deduct": {
+      "main": [
+        [
+          {
+            "node": "checkHexomatic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "checkHexomatic": {
+      "main": [
+        [
+          {
+            "node": "branchHexomatic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "branchHexomatic": {
+      "main": [
+        [
+          {
+            "node": "hexomaticSearch",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "internalAPI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "hexomaticSearch": {
+      "main": [
+        [
+          {
+            "node": "hexomaticPoll",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "hexomaticPoll": {
+      "main": [
+        [
+          {
+            "node": "hexomaticResults",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "hexomaticResults": {
+      "main": [
+        [
+          {
+            "node": "enrichData",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "internalAPI": {
+      "main": [
+        [
+          {
+            "node": "enrichData",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "enrichData": {
+      "main": [
+        [
+          {
+            "node": "fetchDashboardIntegrations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fetchDashboardIntegrations": {
+      "main": [
+        [
+          {
+            "node": "routeGovConData",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "routeGovConData": {
+      "main": [
+        [
+          {
+            "node": "splitDeliveries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "splitDeliveries": {
+      "main": [
+        [
+          {
+            "node": "saveToDashboard",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "saveToDashboard": {
+      "main": [
+        [
+          {
+            "node": "respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "active": false
+}

@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Swift Market Intel</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 380px;
+      min-height: 480px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      overflow-x: hidden;
+    }
+
+    /* Header */
+    .header {
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      padding: 16px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .header-left { display: flex; align-items: center; gap: 10px; }
+    .header-icon {
+      width: 32px; height: 32px; background: rgba(255,255,255,0.2);
+      border-radius: 8px; display: flex; align-items: center; justify-content: center;
+      font-size: 16px;
+    }
+    .header-text h1 { font-size: 15px; font-weight: 600; }
+    .header-text p { font-size: 10px; opacity: 0.8; }
+    .header-badge {
+      font-size: 10px; padding: 3px 8px; border-radius: 10px;
+      background: rgba(255,255,255,0.2); color: white;
+    }
+
+    /* Content */
+    .content { padding: 14px; }
+
+    /* Status Card */
+    .status-card {
+      background: #1e293b; border-radius: 10px; padding: 12px 14px; margin-bottom: 10px;
+      border: 1px solid #334155;
+    }
+    .status-row {
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .status-label { font-size: 12px; font-weight: 500; display: flex; align-items: center; gap: 6px; }
+    .status-dot {
+      width: 8px; height: 8px; border-radius: 50%; display: inline-block;
+    }
+    .status-dot.online { background: #10b981; box-shadow: 0 0 6px #10b98180; }
+    .status-dot.offline { background: #64748b; }
+    .status-badge {
+      padding: 3px 10px; border-radius: 10px; font-size: 10px; font-weight: 600;
+    }
+    .status-badge.connected { background: #10b981; color: white; }
+    .status-badge.disconnected { background: #475569; color: #94a3b8; }
+
+    /* Platform Card */
+    .platform-card {
+      background: #1e293b; border-radius: 10px; padding: 14px; margin-bottom: 10px;
+      border: 1px solid #334155;
+    }
+    .platform-card.hidden { display: none; }
+    .platform-header {
+      display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+    }
+    .platform-icon {
+      width: 28px; height: 28px; border-radius: 6px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; flex-shrink: 0;
+    }
+    .platform-icon.etsy { background: #f1641e; }
+    .platform-icon.pinterest { background: #e60023; }
+    .platform-icon.tiktok { background: #000; border: 1px solid #333; }
+    .platform-icon.yelp { background: #d32323; }
+    .platform-icon.google_maps { background: #4285F4; }
+    .platform-icon.instagram { background: linear-gradient(45deg, #f09433, #e6683c, #dc2743, #cc2366, #bc1888); }
+    .platform-icon.amazon { background: #FF9900; }
+    .platform-icon.ebay { background: #E53238; }
+    .platform-icon.general { background: #6366f1; }
+    .platform-name { font-size: 14px; font-weight: 600; }
+    .platform-detail { font-size: 11px; color: #64748b; }
+    .platform-info { font-size: 11px; color: #64748b; margin-bottom: 10px; }
+
+    /* Buttons */
+    .btn {
+      width: 100%; padding: 11px; border: none; border-radius: 8px;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+      transition: all 0.2s;
+    }
+    .btn:hover { opacity: 0.9; transform: translateY(-1px); }
+    .btn:active { transform: translateY(0); }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+    .btn-primary {
+      background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white;
+      box-shadow: 0 2px 8px #6366f140;
+    }
+    .btn-secondary {
+      background: #1e293b; color: #e2e8f0; border: 1px solid #334155;
+    }
+    .btn-outline {
+      background: transparent; border: 1px solid #334155; color: #94a3b8;
+    }
+    .btn-success {
+      background: #10b981; color: white;
+    }
+    .btn.scanning { animation: pulse 1.5s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
+
+    /* Button row for quick actions */
+    .btn-row { display: flex; gap: 8px; margin-bottom: 10px; }
+    .btn-row .btn { flex: 1; }
+
+    /* Prompt section */
+    .prompt-box { margin-bottom: 10px; }
+    .prompt-box.hidden { display: none; }
+    .prompt-label {
+      font-size: 10px; color: #64748b; margin-bottom: 4px;
+      font-weight: 500; text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .prompt-row { display: flex; gap: 6px; }
+    .prompt-row input {
+      flex: 1; padding: 9px 12px; background: #0f172a; border: 1px solid #334155;
+      border-radius: 8px; color: #e2e8f0; font-size: 12px; outline: none;
+    }
+    .prompt-row input:focus { border-color: #6366f1; }
+    .prompt-row input::placeholder { color: #475569; }
+    .prompt-row .btn { width: auto; padding: 9px 14px; white-space: nowrap; }
+
+    /* Spinner */
+    .spinner {
+      width: 14px; height: 14px; border: 2px solid transparent;
+      border-top-color: white; border-radius: 50%;
+      animation: spin 1s linear infinite; display: inline-block;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Recent section */
+    .recent-section { margin-top: 8px; }
+    .recent-header {
+      display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;
+    }
+    .recent-header h3 {
+      font-size: 11px; font-weight: 600; color: #64748b;
+      text-transform: uppercase; letter-spacing: 0.5px;
+    }
+    .recent-header button {
+      background: none; border: none; color: #475569; font-size: 10px;
+      cursor: pointer; padding: 2px 6px; border-radius: 4px;
+    }
+    .recent-header button:hover { background: #1e293b; color: #94a3b8; }
+    .scan-item {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 0; border-bottom: 1px solid #1e293b;
+    }
+    .scan-item:last-child { border-bottom: none; }
+    .scan-info { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+    .scan-dot {
+      width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0;
+    }
+    .scan-dot.etsy { background: #f1641e; }
+    .scan-dot.pinterest { background: #e60023; }
+    .scan-dot.tiktok { background: #00f2ea; }
+    .scan-dot.yelp { background: #d32323; }
+    .scan-dot.google_maps { background: #4285F4; }
+    .scan-dot.instagram { background: #E4405F; }
+    .scan-dot.amazon { background: #FF9900; }
+    .scan-dot.ebay { background: #E53238; }
+    .scan-dot.general { background: #6366f1; }
+    .scan-name { font-size: 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .scan-time { font-size: 10px; color: #64748b; flex-shrink: 0; }
+    .scan-status {
+      font-size: 10px; padding: 2px 6px; border-radius: 6px;
+      background: #10b98120; color: #10b981; flex-shrink: 0;
+    }
+    .scan-status.failed { background: #ef444420; color: #ef4444; }
+    .empty-state {
+      font-size: 12px; color: #64748b; text-align: center; padding: 20px 10px;
+      line-height: 1.6;
+    }
+
+    /* Footer */
+    .footer-links {
+      margin-top: 10px; padding-top: 10px; border-top: 1px solid #1e293b;
+      display: flex; justify-content: center; gap: 16px;
+    }
+    .footer-links a {
+      color: #6366f1; text-decoration: none; font-size: 11px; font-weight: 500;
+      display: flex; align-items: center; gap: 4px;
+    }
+    .footer-links a:hover { text-decoration: underline; }
+    .footer-links a.secondary { color: #64748b; }
+
+    /* Toast */
+    .toast {
+      position: fixed; bottom: 12px; left: 12px; right: 12px;
+      padding: 10px 14px; background: #10b981; color: white;
+      border-radius: 8px; font-size: 12px; font-weight: 500;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+      transform: translateY(60px); opacity: 0;
+      transition: all 0.3s; z-index: 100;
+    }
+    .toast.show { transform: translateY(0); opacity: 1; }
+    .toast.error { background: #ef4444; }
+    .toast.info { background: #6366f1; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-left">
+      <div class="header-icon">📊</div>
+      <div class="header-text">
+        <h1>Swift Market Intel</h1>
+        <p>Data collector for WorkflowSwift</p>
+      </div>
+    </div>
+    <span class="header-badge">v1.0</span>
+  </div>
+
+  <div class="content">
+    <!-- Connection Status -->
+    <div class="status-card">
+      <div class="status-row">
+        <span class="status-label">
+          <span id="statusDot" class="status-dot offline"></span>
+          WorkflowSwift
+        </span>
+        <span id="connectionStatus" class="status-badge disconnected">Disconnected</span>
+      </div>
+    </div>
+
+    <!-- Platform Detection -->
+    <div id="platformCard" class="platform-card hidden">
+      <div class="platform-header">
+        <div id="platformIcon" class="platform-icon general">🌐</div>
+        <div>
+          <div id="platformName" class="platform-name">General Web</div>
+          <div id="platformUrl" class="platform-detail"></div>
+        </div>
+      </div>
+      <div id="platformInfo" class="platform-info">Ready to collect data from this page.</div>
+
+      <!-- Primary Scrape Button -->
+      <button id="scrapeButton" class="btn btn-primary">
+        <span id="scrapeButtonText">📥 Scrape Current Page</span>
+      </button>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="btn-row">
+      <button id="sendButton" class="btn btn-secondary" disabled>
+        <span>📤 Send to WorkflowSwift</span>
+      </button>
+      <button id="viewHistoryButton" class="btn btn-outline" title="Refresh history">
+        🔄
+      </button>
+    </div>
+
+    <!-- Prompt Section -->
+    <div id="promptSection" class="prompt-box hidden">
+      <div class="prompt-label">Ask for specific data</div>
+      <div class="prompt-row">
+        <input id="promptInput" type="text" placeholder='e.g. "Find Etsy shops selling candles"' />
+        <button id="promptSendButton" class="btn btn-outline">🔍</button>
+      </div>
+    </div>
+
+    <!-- Recent Scrapes -->
+    <div class="recent-section">
+      <div class="recent-header">
+        <h3>Recent Scrapes</h3>
+        <button id="clearHistoryButton">Clear</button>
+      </div>
+      <div id="recentScansList">
+        <div class="empty-state">
+          No data scraped yet.<br>
+          Navigate to a supported page and click "Scrape Current Page".
+        </div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <div class="footer-links">
+      <a href="#" id="dashboardLink">📊 Dashboard</a>
+      <a href="#" id="settingsLink">⚙️ Settings</a>
+      <a href="#" id="helpLink" class="secondary">❓ Help</a>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

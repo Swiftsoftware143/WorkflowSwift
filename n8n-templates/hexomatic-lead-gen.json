@@ -1,0 +1,367 @@
+{
+  "name": "Hexomatic Lead Generation",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "path": "workflow/lead-gen",
+        "options": {}
+      },
+      "webhookId": "lead-gen"
+    },
+    {
+      "id": "checkKey",
+      "name": "Check Hexomatic Key",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        450,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/tenants/hexomatic-key",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "branchRoute",
+      "name": "Has Hexomatic Key?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        650,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "has-key",
+              "leftValue": "={{ $json.key.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "hexomaticPath",
+      "name": "Hexomatic - Lead Gen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        850,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.body.recipe_url || 'https://api.hexomatic.com/v1/recipes/lead-gen/runs' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $json.key }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ $json.body.query }}"
+            },
+            {
+              "name": "location",
+              "value": "={{ $json.body.location || '' }}"
+            },
+            {
+              "name": "source",
+              "value": "={{ $json.body.source || 'google_maps' }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "waitHex",
+      "name": "Wait for Hexomatic Result",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        1050,
+        200
+      ],
+      "parameters": {
+        "resume": "webhook",
+        "options": {
+          "webhookSuffix": "leadgen-result"
+        },
+        "limitWaitTime": 120
+      }
+    },
+    {
+      "id": "fetchHexResult",
+      "name": "Fetch Hexomatic Result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1250,
+        200
+      ],
+      "parameters": {
+        "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $json.headers['x-api-key'] }}"
+            }
+          ]
+        },
+        "url": "={{ $json.poll_url }}",
+        "options": {
+          "timeout": 30000
+        }
+      }
+    },
+    {
+      "id": "playwrightFallback",
+      "name": "Playwright Fallback - Search Google",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        850,
+        400
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://www.google.com/search?q=' + encodeURIComponent($json.body.query + ' ' + ($json.body.location || '')) }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "responseFormat": "html"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "extractLeads",
+      "name": "Extract Lead Info (HTML)",
+      "type": "n8n-nodes-base.htmlExtract",
+      "typeVersion": 1,
+      "position": [
+        1050,
+        400
+      ],
+      "parameters": {
+        "extractionValues": {
+          "values": [
+            {
+              "key": "business_name",
+              "cssSelector": "div.g div[data-hveid] h3",
+              "returnValue": "text"
+            },
+            {
+              "key": "snippet",
+              "cssSelector": "div.g div[data-sncf]",
+              "returnValue": "text"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "deductCredits",
+      "name": "Deduct Credit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1450,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/credits/deduct",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "workflow_type",
+              "value": "lead_gen"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1650,
+        300
+      ],
+      "parameters": {
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "trigger": {
+      "main": [
+        [
+          {
+            "node": "checkKey",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "checkKey": {
+      "main": [
+        [
+          {
+            "node": "branchRoute",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "branchRoute": {
+      "main": [
+        [
+          {
+            "node": "hexomaticPath",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "playwrightFallback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "hexomaticPath": {
+      "main": [
+        [
+          {
+            "node": "waitHex",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "waitHex": {
+      "main": [
+        [
+          {
+            "node": "fetchHexResult",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fetchHexResult": {
+      "main": [
+        [
+          {
+            "node": "deductCredits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "playwrightFallback": {
+      "main": [
+        [
+          {
+            "node": "extractLeads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "extractLeads": {
+      "main": [
+        [
+          {
+            "node": "deductCredits",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "deductCredits": {
+      "main": [
+        [
+          {
+            "node": "respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "active": false
+}

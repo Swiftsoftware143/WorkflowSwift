@@ -1,0 +1,131 @@
+{
+  "name": "Mintbird Tenant Onboarding",
+  "id": "51e48b7b-ad11-4609-bd11-8ad8f147c7ee",
+  "nodes": [
+    {
+      "id": "ae3e77a1-76aa-40c1-8e5f-7a5fec3ec08f",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ],
+      "webhookId": "mintbird",
+      "parameters": {
+        "path": "mintbird",
+        "httpMethod": "POST",
+        "responseMode": "onReceived",
+        "options": {}
+      }
+    },
+    {
+      "id": "08781219-2e52-4785-bfca-8c9553565743",
+      "name": "Extract Fields",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        450,
+        300
+      ],
+      "parameters": {
+        "mode": "manual",
+        "values": {
+          "string": [
+            {
+              "name": "customer_name",
+              "value": "={{ $json.body.data.customer_name || $json.body.data.customer_email }}"
+            },
+            {
+              "name": "customer_email",
+              "value": "={{ $json.body.data.customer_email }}"
+            },
+            {
+              "name": "plan_slug",
+              "value": "={{ $json.body.data.plan_slug }}"
+            },
+            {
+              "name": "customer_slug",
+              "value": "={{ ($json.body.data.customer_name || $json.body.data.customer_email).toLowerCase().replace(/[^a-z0-9]/g,'-').substring(0,32) }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "910f6b06-9342-4875-968f-1c82144b05cf",
+      "name": "Execute All",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [
+        650,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "\nWITH new_tenant AS (\n    INSERT INTO tenants (id, name, slug)\n    VALUES (gen_random_uuid(), '{{ $json.customer_name }}', '{{ $json.customer_slug }}')\n    RETURNING id AS tenant_id\n),\nplan_info AS (\n    SELECT id AS plan_id FROM plans WHERE slug = '{{ $json.plan_slug }}' LIMIT 1\n),\nnew_user AS (\n    INSERT INTO users (id, email, name, password_hash, tenant_id)\n    VALUES (gen_random_uuid(), '{{ $json.customer_email }}', '{{ $json.customer_name }}', 'mintbird_placeholder', (SELECT tenant_id FROM new_tenant))\n    RETURNING id AS user_id\n)\nINSERT INTO tenant_plan_subscriptions (id, tenant_id, plan_id, status)\nSELECT gen_random_uuid(), (SELECT tenant_id FROM new_tenant), (SELECT plan_id FROM plan_info), 'active'\nRETURNING id AS subscription_id, (SELECT tenant_id FROM new_tenant) AS tenant_id, (SELECT user_id FROM new_user) AS user_id\n",
+        "options": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "main-pg",
+          "name": "Swift Postgres"
+        }
+      }
+    },
+    {
+      "id": "94542a7a-1f46-40d0-a3a6-410d615d6ff9",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        900,
+        300
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Extract Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Fields": {
+      "main": [
+        [
+          {
+            "node": "Execute All",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute All": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "staticData": null,
+  "tags": []
+}

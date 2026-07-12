@@ -1,0 +1,562 @@
+{
+  "name": "Multi-Marketplace Aggregator (n8n Optimized)",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "path": "market/aggregator",
+        "options": {}
+      },
+      "webhookId": "market-aggregator-v1"
+    },
+    {
+      "id": "cron",
+      "name": "Cron Schedule (Daily)",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        250,
+        500
+      ],
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyHour",
+              "hour": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "mergeTriggers",
+      "name": "Merge Triggers",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [
+        450,
+        400
+      ],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition"
+      }
+    },
+    {
+      "id": "manualDataEntry",
+      "name": "Manual Data Entry (Widget Push)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        700
+      ],
+      "parameters": {
+        "path": "market/aggregator/manual-entry",
+        "options": {}
+      },
+      "webhookId": "market-aggregator-manual-v1"
+    },
+    {
+      "id": "classifyEntry",
+      "name": "Classify Entry Type",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        550,
+        700
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "isManual",
+              "leftValue": "={{ $json.body?.source || $json.source || 'manual' }}",
+              "rightValue": "manual",
+              "operator": {
+                "type": "string",
+                "operation": "notEqual"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "routeToWidgetDirect",
+      "name": "Route Direct to Dashboard",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        750,
+        600
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/v1/dashboard/push-widget-data",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] || $json.body?.token || '' }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "widget_key",
+              "value": "={{ $json.body?.widget_key || $json.widget_key || 'manual_entry' }}"
+            },
+            {
+              "name": "widget_type",
+              "value": "={{ $json.body?.widget_type || $json.widget_type || 'marketplace_manual' }}"
+            },
+            {
+              "name": "widget_label",
+              "value": "={{ $json.body?.widget_label || $json.widget_label || 'Manual Entry' }}"
+            },
+            {
+              "name": "source",
+              "value": "={{ $json.body?.source || $json.source || 'manual' }}"
+            },
+            {
+              "name": "entries",
+              "value": "={{ ($json.body?.entries || $json.entries || [$json]).map(e => ({ ...e, scrape_timestamp: new Date().toISOString() })) }}"
+            },
+            {
+              "name": "summary",
+              "value": "={{ $json.body?.summary || $json.summary || {} }}"
+            },
+            {
+              "name": "tenant_id",
+              "value": "={{ $json.body?.tenant_id || $json.tenant_id || 'default' }}"
+            },
+            {
+              "name": "dashboard_type",
+              "value": "={{ $json.body?.dashboard_type || $json.dashboard_type || 'market-intelligence' }}"
+            },
+            {
+              "name": "metadata",
+              "value": "={{ { ...($json.body?.metadata || $json.metadata || {}), entry_mode: 'manual_direct' } }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "respondManual",
+      "name": "Respond Manual Entry",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        950,
+        600
+      ],
+      "parameters": {
+        "options": {}
+      }
+    },
+    {
+      "id": "fetchFlippaData",
+      "name": "Fetch Flippa Listings",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        650,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://localhost:8085/api/v1/dashboard/widget-data?widget_key=marketplace_listings&latest=true",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] || $json.body?.token || '' }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        }
+      }
+    },
+    {
+      "id": "fetchAcquireData",
+      "name": "Fetch Acquire.com Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        650,
+        500
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://localhost:8085/api/v1/dashboard/widget-data?widget_key=marketplace_sold_listings&latest=true",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] || $json.body?.token || '' }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 15000
+        }
+      }
+    },
+    {
+      "id": "aggregateData",
+      "name": "Aggregate Marketplace Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        850,
+        400
+      ],
+      "parameters": {
+        "jsCode": "// Aggregate data from all marketplaces into unified format\nconst inputs = $input.all();\n\nlet flippaData = [];\nlet acquireData = [];\n\n// Extract data from available inputs\nfor (const item of inputs) {\n  const json = item.json;\n  if (json.source === 'flippa' || json.widget_key === 'marketplace_listings') {\n    flippaData = json.listings || json.data || [];\n  }\n  if (json.source === 'acquire.com' || json.widget_key === 'marketplace_sold_listings') {\n    acquireData = json.listings || json.data || [];\n  }\n}\n\n// Build unified listing format for dashboard widgets\nconst unifiedListings = [\n  ...flippaData.map(l => ({\n    source: 'flippa',\n    marketplace_url: 'https://flippa.com',\n    listing_type: 'for_sale',\n    name: l.title || l.name || 'Unknown',\n    price: l.price || l.sold_price || '$0',\n    price_numeric: l.price_numeric || l.sold_price_numeric || 0,\n    monthly_revenue: l.monthly_revenue || l.monthly_revenue_numeric || 0,\n    category: l.category || l.industry || 'General',\n    url: l.url || '',\n    metrics: l.performance_metrics || l.metrics || {},\n    scraped_at: l.scrape_timestamp || new Date().toISOString()\n  })),\n  ...acquireData.map(l => ({\n    source: 'acquire.com',\n    marketplace_url: 'https://acquire.com',\n    listing_type: 'sold',\n    name: l.business_name || l.name || 'Unknown',\n    price: l.sold_price || l.price || '$0',\n    price_numeric: l.sold_price_numeric || l.price_numeric || 0,\n    monthly_revenue: l.monthly_revenue || l.monthly_revenue_numeric || 0,\n    category: l.industry || l.category || 'SaaS',\n    url: l.url || '',\n    metrics: l.metrics || {},\n    revenue_multiple: l.revenue_multiple || l.revenue_multiple_numeric || 0,\n    sold_date: l.sold_date || '',\n    scraped_at: l.scrape_timestamp || new Date().toISOString()\n  }))\n];\n\n// Compute aggregate stats\nconst withPrices = unifiedListings.filter(l => l.price_numeric > 0);\nconst withRevenue = unifiedListings.filter(l => l.monthly_revenue > 0);\n\nconst sourceBreakdown = unifiedListings.reduce((acc, l) => {\n  acc[l.source] = (acc[l.source] || 0) + 1;\n  return acc;\n}, {});\n\nconst categoryBreakdown = unifiedListings.reduce((acc, l) => {\n  const cat = l.category || 'Other';\n  acc[cat] = (acc[cat] || 0) + 1;\n  return acc;\n}, {});\n\nconst aggregateSummary = {\n  total_listings: unifiedListings.length,\n  sources: Object.keys(sourceBreakdown).length,\n  source_breakdown: sourceBreakdown,\n  category_breakdown: categoryBreakdown,\n  avg_price: withPrices.length > 0\n    ? Math.round(withPrices.reduce((s, l) => s + l.price_numeric, 0) / withPrices.length)\n    : 0,\n  avg_monthly_revenue: withRevenue.length > 0\n    ? Math.round(withRevenue.reduce((s, l) => s + l.monthly_revenue, 0) / withRevenue.length)\n    : 0,\n  total_market_value: withPrices.reduce((s, l) => s + l.price_numeric, 0),\n  flippa_active: flippaData.length,\n  acquire_sold: acquireData.length,\n  scrape_timestamp: new Date().toISOString()\n};\n\n// Multiple dashboard widgets to update\nreturn [\n  {\n    // Widget 1: Aggregated stats overview\n    widget_key: 'marketplace_aggregate',\n    widget_type: 'marketplace_aggregator',\n    widget_label: 'Marketplace Intelligence Overview',\n    source: 'aggregator',\n    summary: aggregateSummary,\n    listings: unifiedListings,\n    tenant_id: $json.tenant_id || $json.body?.tenant_id || 'default',\n    dashboard_type: 'market-intelligence',\n    metadata: {\n      aggregate_timestamp: new Date().toISOString(),\n      sources_queried: ['flippa', 'acquire.com'],\n      total_entries: unifiedListings.length\n    }\n  },\n  {\n    // Widget 2: Category heat map data\n    widget_key: 'marketplace_categories',\n    widget_type: 'marketplace_category_breakdown',\n    widget_label: 'Market Categories',\n    source: 'aggregator',\n    summary: {\n      categories: Object.entries(categoryBreakdown).map(([name, count]) => ({ name, count })),\n      total_categories: Object.keys(categoryBreakdown).length,\n      scrape_timestamp: new Date().toISOString()\n    },\n    categories: Object.entries(categoryBreakdown).map(([name, count]) => ({ name, count })),\n    tenant_id: $json.tenant_id || $json.body?.tenant_id || 'default',\n    dashboard_type: 'market-intelligence',\n    metadata: {\n      aggregate_timestamp: new Date().toISOString()\n    }\n  }\n];"
+      }
+    },
+    {
+      "id": "splitWidgets",
+      "name": "Split for Dashboard Push",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 2,
+      "position": [
+        1050,
+        400
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "pushWidget",
+      "name": "Push Widget to Dashboard",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1250,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/v1/dashboard/push-widget-data",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] || $json.body?.token || '' }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "widget_key",
+              "value": "={{ $json.widget_key }}"
+            },
+            {
+              "name": "widget_type",
+              "value": "={{ $json.widget_type }}"
+            },
+            {
+              "name": "widget_label",
+              "value": "={{ $json.widget_label }}"
+            },
+            {
+              "name": "source",
+              "value": "={{ $json.source }}"
+            },
+            {
+              "name": "summary",
+              "value": "={{ $json.summary }}"
+            },
+            {
+              "name": "listings",
+              "value": "={{ $json.listings || [] }}"
+            },
+            {
+              "name": "categories",
+              "value": "={{ $json.categories || [] }}"
+            },
+            {
+              "name": "tenant_id",
+              "value": "={{ $json.tenant_id }}"
+            },
+            {
+              "name": "dashboard_type",
+              "value": "={{ $json.dashboard_type }}"
+            },
+            {
+              "name": "metadata",
+              "value": "={{ $json.metadata }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "logAggregate",
+      "name": "Log Aggregate Result",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1450,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/v1/dashboard/push-widget-data",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] || $json.body?.token || '' }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "widget_key",
+              "value": "aggregate_log"
+            },
+            {
+              "name": "widget_type",
+              "value": "aggregate_log"
+            },
+            {
+              "name": "widget_label",
+              "value": "Marketplace Aggregator Log"
+            },
+            {
+              "name": "source",
+              "value": "aggregator"
+            },
+            {
+              "name": "summary",
+              "value": "={{ { total_listings: $json.summary.total_listings, sources: Object.keys($json.summary.source_breakdown).join(', '), timestamp: $json.summary.scrape_timestamp, status: 'completed' } }}"
+            },
+            {
+              "name": "dashboard_type",
+              "value": "market-intelligence-logs"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1650,
+        400
+      ],
+      "parameters": {
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "trigger": {
+      "main": [
+        [
+          {
+            "node": "mergeTriggers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "cron": {
+      "main": [
+        [
+          {
+            "node": "mergeTriggers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "mergeTriggers": {
+      "main": [
+        [
+          {
+            "node": "fetchFlippaData",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "fetchAcquireData",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "manualDataEntry": {
+      "main": [
+        [
+          {
+            "node": "classifyEntry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "classifyEntry": {
+      "main": [
+        [
+          {
+            "node": "routeToWidgetDirect",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "routeToWidgetDirect": {
+      "main": [
+        [
+          {
+            "node": "respondManual",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fetchFlippaData": {
+      "main": [
+        [
+          {
+            "node": "aggregateData",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fetchAcquireData": {
+      "main": [
+        [
+          {
+            "node": "aggregateData",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "aggregateData": {
+      "main": [
+        [
+          {
+            "node": "splitWidgets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "splitWidgets": {
+      "main": [
+        [
+          {
+            "node": "pushWidget",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "pushWidget": {
+      "main": [
+        [
+          {
+            "node": "logAggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "logAggregate": {
+      "main": [
+        [
+          {
+            "node": "respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "active": false
+}

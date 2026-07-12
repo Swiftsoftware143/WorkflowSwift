@@ -1,0 +1,562 @@
+{
+  "name": "Lead Generation (n8n Optimized)",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "path": "workflow/lead-gen",
+        "options": {}
+      },
+      "webhookId": "lead-gen-v2"
+    },
+    {
+      "id": "authCheck",
+      "name": "Auth & Credits Check",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        450,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/credits/balance",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "balance",
+      "name": "Balance OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        650,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "bal",
+              "leftValue": "={{ $json.balance }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "deduct",
+      "name": "Deduct Credit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        850,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/credits/deduct",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "workflow_type",
+              "value": "lead_gen"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "hexCheck",
+      "name": "Check Hexomatic",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        850,
+        400
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/tenants/hexomatic-key",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "hexBranch",
+      "name": "Hexomatic Available?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1050,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "hx",
+              "leftValue": "={{ $json.key.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "leadHexomatic",
+      "name": "Hexomatic - Lead Scrape",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1250,
+        150
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.body.recipe_url || 'https://api.hexomatic.com/v1/recipes/lead-gen/runs' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $json.key }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ $json.body.query }}"
+            },
+            {
+              "name": "location",
+              "value": "={{ $json.body.location || '' }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "leadPoll",
+      "name": "Wait for Hexomatic",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        1450,
+        150
+      ],
+      "parameters": {
+        "resume": "webhook",
+        "options": {
+          "webhookSuffix": "lead-result"
+        },
+        "limitWaitTime": 120
+      }
+    },
+    {
+      "id": "leadResults",
+      "name": "Get Results",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1650,
+        150
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.poll_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $json.headers['x-api-key'] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "leadInternal",
+      "name": "Internal - Google/Web Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1250,
+        450
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "={{ 'https://www.google.com/search?q=' + encodeURIComponent($json.body.query + ' ' + ($json.body.location || '') + ' business') }}",
+        "options": {
+          "timeout": 30000,
+          "response": {
+            "response": {
+              "responseFormat": "html"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "parseLeads",
+      "name": "Parse Lead Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1850,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Parse and structure lead data\nconst input = $input.first().json;\nconst leads = input.leads || input.data || input.results || [input];\n\nconst parsed = (Array.isArray(leads) ? leads : [leads]).filter(l => l.name || l.business_name).map(lead => ({\n  name: lead.name || lead.business_name || lead.title || 'Unknown',\n  phone: lead.phone || lead.phone_number || '',\n  email: lead.email || lead.email_address || '',\n  website: lead.website || lead.url || '',\n  address: lead.address || lead.location || '',\n  category: lead.category || lead.type || '',\n  source: lead.source || 'web-scrape',\n  rating: lead.rating || null,\n  reviews: lead.reviews || lead.review_count || null\n}));\n\nreturn parsed;</"
+      }
+    },
+    {
+      "id": "fetchLeadIntegrations",
+      "name": "Lookup Lead Integrations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2050,
+        200
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/integration-targets",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "routeLeads",
+      "name": "Route Leads to Integrations",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2250,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Route leads via dispatch + always save to WorkflowSwift dashboard\nconst leads = $json;\nconst integrations = $json.integration_targets || [];\n\nconst deliveries = [];\n\n// Always save to WorkflowSwift dashboard directly\ndeliveries.push({\n  target_id: 'workflowswift_dashboard',\n  payload: { data: leads, dashboard_type: 'lead-generation' },\n  url: 'http://workflowswift:8085/api/dashboard/data'\n});\n\n// Route to connected integrations via dispatch\nfor (const target of integrations) {\n  if (!target.is_active) continue;\n  deliveries.push({\n    target_id: target.id,\n    payload: { data: leads, action: 'create_leads' }\n  });\n}\n\nreturn deliveries;"
+      }
+    },
+    {
+      "id": "splitLeadDeliveries",
+      "name": "Deliver to Each Integration",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 2,
+      "position": [
+        2450,
+        300
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "saveLeads",
+      "name": "Save Leads",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2650,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url || ('http://workflowswift:8085/api/integration-dispatch?target_id=' + $json.target_id) }}",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "data",
+              "value": "={{ $json.data }}"
+            },
+            {
+              "name": "dashboard_type",
+              "value": "={{ $json.dashboard_type || 'lead-generation' }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2850,
+        300
+      ],
+      "parameters": {
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "webhook": {
+      "main": [
+        [
+          {
+            "node": "authCheck",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "authCheck": {
+      "main": [
+        [
+          {
+            "node": "balance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "balance": {
+      "main": [
+        [
+          {
+            "node": "deduct",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "hexCheck",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "deduct": {
+      "main": [
+        [
+          {
+            "node": "hexCheck",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "hexCheck": {
+      "main": [
+        [
+          {
+            "node": "hexBranch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "hexBranch": {
+      "main": [
+        [
+          {
+            "node": "leadHexomatic",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "leadInternal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "leadHexomatic": {
+      "main": [
+        [
+          {
+            "node": "leadPoll",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "leadPoll": {
+      "main": [
+        [
+          {
+            "node": "leadResults",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "leadResults": {
+      "main": [
+        [
+          {
+            "node": "parseLeads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "leadInternal": {
+      "main": [
+        [
+          {
+            "node": "parseLeads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "parseLeads": {
+      "main": [
+        [
+          {
+            "node": "fetchLeadIntegrations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fetchLeadIntegrations": {
+      "main": [
+        [
+          {
+            "node": "routeLeads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "routeLeads": {
+      "main": [
+        [
+          {
+            "node": "splitLeadDeliveries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "splitLeadDeliveries": {
+      "main": [
+        [
+          {
+            "node": "saveLeads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "saveLeads": {
+      "main": [
+        [
+          {
+            "node": "respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "active": false
+}

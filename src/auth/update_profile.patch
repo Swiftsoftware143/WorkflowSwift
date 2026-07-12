@@ -1,0 +1,27 @@
+Add to auth/handlers.rs after change_password function:
+
+pub async fn update_profile(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<impl IntoResponse> {
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+
+    if let Some(name) = req.get("name").and_then(|v| v.as_str()) {
+        if !name.trim().is_empty() {
+            sqlx::query("UPDATE users SET name = $1 WHERE id = $2")
+                .bind(name.trim())
+                .bind(user_id)
+                .execute(&state.db)
+                .await?;
+        }
+    }
+
+    let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(AppError::NotFound("User not found".to_string()))?;
+
+    Ok(Json(json!({ "user": UserResponse::from(user), "message": "Profile updated" })))
+}

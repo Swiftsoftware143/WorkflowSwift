@@ -1,0 +1,67 @@
+{
+  "name": "Send Affiliate Conversion to FunnelSwift",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {},
+        "httpMethod": "POST",
+        "url": "https://app.funnelswift.net/api/v1/webhooks/conversion",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "source_app",
+              "value": "={{ $node[\"Start\"].json.app || \"workflowswift\" }}"
+            },
+            {
+              "name": "lead_email",
+              "value": "={{ $json.email || $node[\"Start\"].json.email || \"\" }}"
+            },
+            {
+              "name": "lead_id",
+              "value": "={{ $json.lead_id || $node[\"Start\"].json.lead_id || \"\" }}"
+            },
+            {
+              "name": "amount",
+              "value": "={{ $json.amount || $node[\"Start\"].json.amount || 0 }}"
+            },
+            {
+              "name": "cookie_id",
+              "value": "={{ $json.cookie_id || $node[\"Start\"].json.cookie_id || \"\" }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "send-conversion-to-funnelswift",
+      "name": "Send Conversion to FunnelSwift",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [580, 300],
+      "credentials": {}
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Send Conversion to FunnelSwift",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

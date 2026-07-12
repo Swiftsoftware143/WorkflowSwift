@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Swift Market Intel — Settings</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0f172a; color: #e2e8f0; min-height: 100vh;
+      display: flex; align-items: center; justify-content: center; padding: 20px;
+    }
+    .container { max-width: 500px; width: 100%; }
+
+    .header { text-align: center; margin-bottom: 28px; }
+    .header .logo {
+      font-size: 36px; margin-bottom: 8px;
+    }
+    .header h1 {
+      font-size: 22px; font-weight: 700;
+      background: linear-gradient(135deg,#6366f1,#8b5cf6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 4px;
+    }
+    .header p { color: #64748b; font-size: 13px; }
+
+    .card {
+      background: #1e293b; border-radius: 14px; padding: 24px;
+      border: 1px solid #334155; margin-bottom: 16px;
+    }
+    .card-title {
+      font-size: 15px; font-weight: 600; margin-bottom: 4px;
+      display: flex; align-items: center; gap: 8px;
+    }
+    .card-desc { color: #64748b; font-size: 12px; margin-bottom: 16px; line-height: 1.5; }
+
+    .form-group { margin-bottom: 16px; }
+    label {
+      display: block; font-size: 12px; font-weight: 500; margin-bottom: 5px; color: #94a3b8;
+    }
+    input[type="text"], input[type="password"], input[type="url"] {
+      width: 100%; padding: 10px 14px; background: #0f172a; border: 1px solid #334155;
+      border-radius: 8px; color: #e2e8f0; font-size: 13px; outline: none; transition: border-color 0.2s;
+    }
+    input:focus { border-color: #6366f1; }
+
+    .input-group { position: relative; }
+    .input-group .toggle-btn {
+      position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+      background: none; border: none; color: #64748b; cursor: pointer; font-size: 11px;
+      padding: 2px 6px; border-radius: 4px;
+    }
+    .input-group .toggle-btn:hover { background: #1e293b; color: #94a3b8; }
+
+    .status-badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      padding: 5px 12px; border-radius: 10px; font-size: 12px; font-weight: 500;
+    }
+    .status-badge.configured { background: #10b98120; color: #10b981; }
+    .status-badge.not-configured { background: #ef444420; color: #ef4444; }
+    .status-badge.testing { background: #6366f120; color: #6366f1; }
+
+    .btn-row { display: flex; gap: 10px; margin-top: 20px; }
+    button, .btn-like {
+      flex: 1; padding: 11px; border: none; border-radius: 8px;
+      font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s;
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    }
+    button:hover { opacity: 0.9; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: linear-gradient(135deg,#6366f1,#8b5cf6); color: white; }
+    .btn-secondary { background: transparent; border: 1px solid #334155; color: #94a3b8; }
+    .btn-danger { background: transparent; border: 1px solid #ef4444; color: #ef4444; }
+    .btn-success { background: #10b981; color: white; }
+
+    .test-result {
+      padding: 10px 14px; border-radius: 8px; margin-top: 12px; font-size: 12px;
+      display: none;
+    }
+    .test-result.success { display: block; background: #10b98120; color: #10b981; border: 1px solid #10b98140; }
+    .test-result.error { display: block; background: #ef444420; color: #ef4444; border: 1px solid #ef444440; }
+
+    .info-box {
+      background: #0f172a; border-radius: 8px; padding: 14px; margin-top: 12px;
+      font-size: 12px; color: #64748b; line-height: 1.6;
+    }
+    .info-box a { color: #6366f1; text-decoration: none; }
+    .info-box a:hover { text-decoration: underline; }
+    .info-box code {
+      background: #1e293b; padding: 1px 5px; border-radius: 4px; font-size: 11px; color: #e2e8f0;
+    }
+
+    /* Toggle Switch */
+    .toggle-row {
+      display: flex; align-items: center; justify-content: space-between; padding: 8px 0;
+    }
+    .toggle-row span { font-size: 13px; }
+    .toggle-row .toggle-desc { font-size: 11px; color: #64748b; }
+    .toggle {
+      position: relative; width: 40px; height: 22px; cursor: pointer;
+    }
+    .toggle input { opacity: 0; width: 0; height: 0; }
+    .toggle .slider {
+      position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+      background: #334155; border-radius: 22px; transition: 0.3s;
+    }
+    .toggle .slider:before {
+      content: ''; position: absolute; width: 18px; height: 18px;
+      left: 2px; bottom: 2px; background: white; border-radius: 50%; transition: 0.3s;
+    }
+    .toggle input:checked + .slider { background: #6366f1; }
+    .toggle input:checked + .slider:before { transform: translateX(18px); }
+
+    .toast {
+      position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%) translateY(60px);
+      padding: 10px 20px; background: #10b981; color: white; border-radius: 8px;
+      font-size: 13px; font-weight: 500; opacity: 0;
+      transition: all 0.3s; z-index: 100;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    .toast.error { background: #ef4444; }
+
+    .spinner-small {
+      width: 12px; height: 12px; border: 2px solid transparent;
+      border-top-color: white; border-radius: 50%;
+      animation: spin 1s linear infinite; display: inline-block;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .footer-note {
+      text-align: center; margin-top: 16px; font-size: 11px; color: #475569;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo">📊</div>
+      <h1>Swift Market Intel</h1>
+      <p>Connect the extension to your WorkflowSwift account</p>
+    </div>
+
+    <!-- Connection Settings -->
+    <div class="card">
+      <div class="card-title">🔌 WorkflowSwift Connection</div>
+      <div class="card-desc">
+        Your API token links this browser to your WorkflowSwift dashboard.
+        Get your token from the WorkflowSwift settings page.
+      </div>
+
+      <div class="form-group">
+        <label>API Token</label>
+        <div class="input-group">
+          <input type="password" id="wsToken" placeholder="Paste your WorkflowSwift API token" autocomplete="off" />
+          <button class="toggle-btn" onclick="togglePassword('wsToken')">Show</button>
+        </div>
+        <div id="connectionStatus" class="status-badge not-configured" style="margin-top:8px;">
+          ● Not Connected
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>
+          API Base URL
+          <span style="color:#64748b;font-weight:400;">(optional)</span>
+        </label>
+        <input type="url" id="wsBaseUrl" placeholder="https://workflowswift.netlify.app/api" />
+      </div>
+
+      <button id="testConnectionBtn" class="btn-secondary" style="width:100%;margin-bottom:12px;">
+        🔍 Test Connection
+      </button>
+
+      <div id="testResult" class="test-result"></div>
+
+      <div class="info-box">
+        💡 <strong>How to get your API token:</strong><br>
+        1. Go to <a href="https://workflowswift.netlify.app/settings/api-keys" target="_blank">workflowswift.netlify.app</a><br>
+        2. Generate a new API key<br>
+        3. Copy it here<br><br>
+        Your token is stored locally in your browser's secure storage. It's only sent to WorkflowSwift.
+      </div>
+    </div>
+
+    <!-- Auto-Scrape Settings -->
+    <div class="card">
+      <div class="card-title">⚙️ Preferences</div>
+      <div class="card-desc">Configure how the extension behaves.</div>
+
+      <div class="toggle-row">
+        <div>
+          <div>Auto-detect platforms</div>
+          <div class="toggle-desc">Automatically detect and prepare data collection on supported sites</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="autoDetect" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <div class="toggle-row" style="border-top:1px solid #334155;">
+        <div>
+          <div>Background polling</div>
+          <div class="toggle-desc">Poll WorkflowSwift for commands every 30 seconds</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="backgroundPolling" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <!-- Buttons -->
+    <div class="btn-row">
+      <button class="btn-primary" onclick="saveSettings()">💾 Save Settings</button>
+      <button class="btn-danger" onclick="clearData()">🚫 Disconnect</button>
+    </div>
+
+    <div class="footer-note">
+      Swift Market Intel v1.0 • Data transmitted directly to your WorkflowSwift server<br>
+      No LLM keys in extension — all intelligence runs on WorkflowSwift
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <script src="options.js"></script>
+</body>
+</html>

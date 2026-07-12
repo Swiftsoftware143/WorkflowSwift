@@ -1,0 +1,2101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WorkflowSwift Admin</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0f1117;--surface:#1a1d27;--surface2:#232736;--border:#2d3248;--text:#e1e4ed;--text2:#8b8fa3;--accent:#4f86f7;--accent2:#6ca0f9;--green:#34d399;--red:#ef4444;--yellow:#fbbf24;--orange:#fb923c;--radius:8px}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+a{color:var(--accent);text-decoration:none}
+input,select,textarea{background:var(--surface2);border:1px solid var(--border);color:var(--text);padding:10px 14px;border-radius:var(--radius);font-size:14px;width:100%}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
+button{cursor:pointer;font-size:14px;border:none;border-radius:var(--radius);padding:10px 20px;transition:all .2s}
+.btn-primary{background:var(--accent);color:#fff}.btn-primary:hover{background:var(--accent2)}
+.btn-secondary{background:var(--surface2);color:var(--text);border:1px solid var(--border)}.btn-secondary:hover{background:var(--border)}
+.btn-danger{background:var(--red);color:#fff}.btn-danger:hover{opacity:.85}
+.btn-sm{padding:6px 12px;font-size:12px}
+table{width:100%;border-collapse:collapse}
+th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--border);font-size:13px}
+th{color:var(--text2);font-weight:600;text-transform:uppercase;font-size:11px;letter-spacing:.5px}
+tr:hover{background:rgba(79,134,247,.04)}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:16px}
+.stat-card{padding:20px;text-align:center}.stat-card .num{font-size:28px;font-weight:700;color:var(--accent)}.stat-card .label{color:var(--text2);font-size:12px;text-transform:uppercase;margin-top:4px}
+.grid-4{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px}
+.modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.6);z-index:100;display:flex;align-items:center;justify-content:center}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:24px;width:90%;max-width:500px;max-height:80vh;overflow-y:auto}
+.modal h2{margin-bottom:16px}.modal label{display:block;margin-bottom:4px;color:var(--text2);font-size:12px;margin-top:10px}.modal .actions{display:flex;gap:8px;justify-content:flex-end;margin-top:20px}
+#app{display:flex;min-height:100vh}
+.sidebar{width:240px;background:var(--surface);border-right:1px solid var(--border);padding:20px 0;flex-shrink:0}
+.sidebar .logo{padding:0 20px 20px;font-size:18px;font-weight:700;color:var(--accent);border-bottom:1px solid var(--border);margin-bottom:12px}
+.sidebar .user-info{padding:0 20px 16px;font-size:12px;color:var(--text2);border-bottom:1px solid var(--border);margin-bottom:12px}
+.sidebar nav a{display:flex;align-items:center;gap:10px;padding:10px 20px;color:var(--text2);font-size:13px;transition:all .2s;border-left:3px solid transparent}
+.sidebar nav a:hover,.sidebar nav a.active{color:var(--text);background:rgba(79,134,247,.08);border-left-color:var(--accent)}
+.sidebar .admin-divider{border:none;border-top:1px solid var(--border);margin:6px 16px}
+.sidebar .admin-toggle{display:flex;align-items:center;gap:10px;padding:10px 20px;color:var(--accent);font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;cursor:pointer;transition:all .2s;border-left:3px solid transparent;user-select:none}
+.sidebar .admin-toggle:hover{background:rgba(79,134,247,.08);border-left-color:var(--accent)}
+.sidebar .admin-toggle .arrow{font-size:10px;transition:transform .2s;margin-left:auto}
+.sidebar .admin-toggle .arrow.open{transform:rotate(90deg)}
+.sidebar .admin-group{max-height:0;overflow:hidden;transition:max-height .3s ease}
+.sidebar .admin-group.open{max-height:600px}
+.main{flex:1;padding:24px;overflow-x:auto}
+.main h1{font-size:22px;margin-bottom:20px}
+.main .top-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px}
+.tabs{display:flex;gap:4px;margin-bottom:20px;border-bottom:1px solid var(--border);padding-bottom:0}
+.tabs button{background:none;color:var(--text2);padding:8px 16px;font-size:13px;border-bottom:2px solid transparent;border-radius:0}
+.tabs button.active{color:var(--accent);border-bottom-color:var(--accent)}
+.loading{text-align:center;padding:40px;color:var(--text2)}.error{color:var(--red);padding:12px;background:rgba(239,68,68,.1);border-radius:var(--radius);margin-bottom:12px;font-size:13px}
+.success{color:var(--green);padding:12px;background:rgba(52,211,153,.1);border-radius:var(--radius);margin-bottom:12px;font-size:13px}
+.empty{text-align:center;padding:40px;color:var(--text2);font-size:14px}
+#login-page{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+.login-box{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:40px;width:100%;max-width:400px}
+.login-box h1{text-align:center;margin-bottom:8px;color:var(--accent);font-size:24px}
+.login-box p{text-align:center;color:var(--text2);margin-bottom:24px;font-size:13px}
+.login-box label{display:block;font-size:12px;color:var(--text2);margin-bottom:4px;margin-top:14px}
+.login-box button{width:100%;margin-top:20px}
+.badge{display:inline-block;padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600}
+.badge-active{background:rgba(52,211,153,.15);color:var(--green)}
+.badge-inactive{background:rgba(239,68,68,.15);color:var(--red)}
+.badge-pending{background:rgba(251,191,36,.15);color:var(--yellow)}
+.pagination{display:flex;gap:8px;justify-content:center;align-items:center;padding:16px 0;font-size:13px}
+.pagination button{background:var(--surface2);color:var(--text);padding:6px 12px;border:1px solid var(--border)}
+.pagination button:disabled{opacity:.4;cursor:default}
+@media(max-width:768px){.sidebar{width:60px;overflow:hidden}.sidebar .logo{font-size:14px;padding:12px 16px}.sidebar nav a{padding:10px 16px;justify-content:center}.sidebar nav a span{display:none}.sidebar .user-info{display:none}.main{padding:16px}}
+
+/* ===== WORKFLOW BUILDER ===== */
+.wb-canvas{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:20px;min-height:300px;position:relative}
+.wb-step{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:14px 16px;margin-bottom:12px;display:flex;align-items:center;gap:12px;cursor:pointer;transition:all .2s}
+.wb-step:hover{border-color:var(--accent);background:rgba(79,134,247,.06)}
+.wb-step .step-icon{font-size:24px;width:36px;text-align:center}
+.wb-step .step-info{flex:1}
+.wb-step .step-info .step-name{font-weight:600;font-size:14px}
+.wb-step .step-info .step-desc{font-size:12px;color:var(--text2);margin-top:2px}
+.wb-step .step-actions{display:flex;gap:6px}
+.wb-step .step-type-badge{font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(79,134,247,.12);color:var(--accent);text-transform:uppercase}
+.wb-connector{width:2px;height:20px;background:var(--border);margin:0 auto 0 20px}
+.wb-empty{text-align:center;padding:40px;color:var(--text2)}
+.wb-empty .big-icon{font-size:48px;margin-bottom:12px}
+.wb-toolbar{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+.wb-config{max-width:700px}
+.wb-config textarea{font-family:monospace;font-size:13px}
+.wb-config .config-group{margin-bottom:16px;padding:14px;background:var(--surface2);border-radius:var(--radius);border:1px solid var(--border)}
+.wb-config .config-group h4{font-size:13px;margin-bottom:8px;color:var(--text2)}
+
+/* ===== PIPELINE / KANBAN ===== */
+.pipeline{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px}
+.pipeline-col{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:12px;min-height:100px}
+.pipeline-col h4{font-size:12px;text-transform:uppercase;color:var(--text2);margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid var(--border)}
+.pipeline-col .pipe-item{font-size:12px;padding:8px 10px;background:var(--surface);border:1px solid var(--border);border-radius:6px;margin-bottom:6px;cursor:grab}
+.pipeline-col .pipe-item:hover{border-color:var(--accent)}
+.pipeline-col .pipe-item .pipe-title{font-weight:600;font-size:13px}
+.pipeline-col .pipe-item .pipe-meta{color:var(--text2);font-size:11px;margin-top:2px}
+
+/* ===== TEMPLATE ENHANCEMENTS ===== */
+.template-card{position:relative;overflow:hidden}
+.template-card .lock-badge{position:absolute;top:10px;right:10px;font-size:16px;opacity:.6}
+.template-card .plan-tag{font-size:10px;padding:2px 8px;background:rgba(79,134,247,.12);color:var(--accent);border-radius:10px}
+.tpl-detail-step{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border);font-size:13px}
+.tpl-detail-step:last-child{border-bottom:none}
+.tpl-detail-step .step-num{background:var(--surface2);color:var(--text2);width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex-shrink:0}
+
+/* ===== ENHANCED GRID ===== */
+.widget-pipeline{display:flex;gap:12px;overflow-x:auto;padding-bottom:12px}
+.widget-pipeline .pipe-stage{min-width:200px;flex:1}
+.pipe-item-big{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:8px}
+.pipe-item-big .val{font-size:24px;font-weight:700;color:var(--accent)}
+.pipe-item-big .lbl{font-size:11px;color:var(--text2);margin-top:2px}
+</style>
+</head>
+<body>
+<div id="login-page" style="display:none">
+<div class="login-box" id="login-box">
+<h1>⚡ WorkflowSwift</h1>
+<p id="login-subtitle">Admin Dashboard</p>
+<div id="login-error" class="error" style="display:none"></div>
+<!-- Login form -->
+<div id="login-form">
+<label>Email</label>
+<input type="email" id="login-email" value="swiftsoftware143@yahoo.com" placeholder="swiftsoftware143@yahoo.com">
+<label>Password</label>
+<input type="password" id="login-password" value="SwiftAdmin2026!" placeholder="••••••••">
+<button class="btn-primary" onclick="login()">Sign In</button>
+<p style="text-align:center;margin-top:16px;font-size:13px;color:var(--text2)">
+  No account? <a href="#" onclick="showRegisterForm()" style="color:var(--accent)">Create one</a>
+</p>
+</div>
+<!-- Register form (hidden by default) -->
+<div id="register-form" style="display:none">
+<label>Full Name</label>
+<input type="text" id="reg-name" placeholder="Your name">
+<label>Email</label>
+<input type="email" id="reg-email" placeholder="you@example.com">
+<label>Password</label>
+<input type="password" id="reg-password" placeholder="At least 6 characters">
+<label>Industry</label>
+<select id="reg-industry">
+  <option value="">Loading industries...</option>
+</select>
+<button class="btn-primary" onclick="register()" style="margin-top:20px">Create Account</button>
+<p style="text-align:center;margin-top:16px;font-size:13px;color:var(--text2)">
+  Already have an account? <a href="#" onclick="showLoginForm()" style="color:var(--accent)">Sign in</a>
+</p>
+</div>
+</div>
+</div>
+<div id="app" style="display:none">
+<div class="sidebar">
+<div class="logo">⚡ WFSwift</div>
+<div class="user-info" id="user-info">swiftsoftware143@yahoo.com<br>Admin</div>
+<a href="#" onclick="showPage('profile')" data-page="profile" style="display:block;padding:8px 20px;font-size:12px;color:var(--accent);cursor:pointer;border-bottom:1px solid var(--border);margin-bottom:8px;transition:all .2s" onmouseover="this.style.background='rgba(79,134,247,.08)'" onmouseout="this.style.background='transparent'"><span>👤</span> My Profile</a>
+<nav>
+<a href="#" onclick="showPage('dashboard')" data-page="dashboard" class="active"><span>📊</span><span>Dashboard</span></a>
+
+<!-- WORKFLOW group -->
+<div style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:1px;padding:8px 20px 4px">Workflow</div>
+<a href="#" onclick="showPage('workflows')" data-page="workflows"><span>🔄</span><span>Workflows</span></a>
+<a href="#" onclick="showPage('workflow-builder')" data-page="workflow-builder"><span>🔧</span><span>Builder</span></a>
+<a href="#" onclick="showPage('templates')" data-page="templates"><span>📋</span><span>Templates</span></a>
+<a href="#" onclick="showPage('instances')" data-page="instances"><span>📦</span><span>Instances</span></a>
+<a href="#" onclick="showPage('automations')" data-page="automations"><span>🤖</span><span>Automations</span></a>
+
+<!-- INTEL group -->
+<div style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:1px;padding:16px 20px 4px">Market Intel</div>
+<a href="#" onclick="showPage('prospecting')" data-page="prospecting"><span>🔍</span><span>Prospecting</span></a>
+<a href="#" onclick="showPage('brand-monitor')" data-page="brand-monitor"><span>📡</span><span>Brand Monitor</span></a>
+<a href="#" onclick="showPage('competitor-watch')" data-page="competitor-watch"><span>🏆</span><span>Competitor Watch</span></a>
+
+<!-- BUSINESS group -->
+<div style="font-size:10px;color:var(--text2);text-transform:uppercase;letter-spacing:1px;padding:16px 20px 4px">Business</div>
+<a href="#" onclick="showPage('clients')" data-page="clients"><span>👥</span><span>Clients</span></a>
+<a href="#" onclick="showPage('invoices')" data-page="invoices"><span>💰</span><span>Invoices</span></a>
+<a href="#" onclick="showPage('credits')" data-page="credits"><span>⭐</span><span>Credits</span></a>
+<a href="#" onclick="showPage('deals')" data-page="deals"><span>💎</span><span>Deals</span></a>
+<a href="#" onclick="showPage('leads')" data-page="leads"><span>🎯</span><span>Leads</span></a>
+<a href="#" onclick="showPage('campaigns')" data-page="campaigns"><span>📣</span><span>Campaigns</span></a>
+<a href="#" onclick="showPage('tickets')" data-page="tickets"><span>🎫</span><span>Tickets</span></a>
+
+<!-- ADMIN accordion -->
+<hr class="admin-divider">
+<div class="admin-toggle" id="admin-toggle" onclick="toggleAdminMenu()">
+  <span>⚙️</span><span>Admin</span><span class="arrow" id="admin-arrow">▶</span>
+</div>
+<div class="admin-group" id="admin-group">
+<a href="#" onclick="showPage('admin-dashboard')" data-page="admin-dashboard"><span>📊</span><span>Dashboard</span></a>
+<a href="#" onclick="showPage('admin-tenants')" data-page="admin-tenants"><span>🏢</span><span>Tenants</span></a>
+<a href="#" onclick="showPage('admin-users')" data-page="admin-users"><span>👤</span><span>Users</span></a>
+<a href="#" onclick="showPage('admin-plans')" data-page="admin-plans"><span>📋</span><span>Plans</span></a>
+<a href="#" onclick="showPage('admin-api-keys')" data-page="admin-api-keys"><span>🔑</span><span>API Keys</span></a>
+<a href="#" onclick="showPage('admin-provider-keys')" data-page="admin-provider-keys"><span>🔗</span><span>Provider Keys</span></a>
+<a href="#" onclick="showPage('admin-affiliates')" data-page="admin-affiliates"><span>🤝</span><span>Affiliates</span></a>
+<a href="#" onclick="showPage('admin-webhooks')" data-page="admin-webhooks"><span>🪝</span><span>Webhooks</span></a>
+<a href="#" onclick="showPage('admin-reviews')" data-page="admin-reviews"><span>⭐</span><span>Reviews</span></a>
+<a href="#" onclick="showPage('admin-surfaces')" data-page="admin-surfaces"><span>📱</span><span>Surfaces</span></a>
+<a href="#" onclick="showPage('admin-categories')" data-page="admin-categories"><span>📂</span><span>Categories</span></a>
+<a href="#" onclick="showPage('admin-tag-groups')" data-page="admin-tag-groups"><span>🏷️</span><span>Tag Groups</span></a>
+<a href="#" onclick="showPage('admin-email-templates')" data-page="admin-email-templates"><span>📧</span><span>Email Templates</span></a>
+<a href="#" onclick="showPage('admin-export-templates')" data-page="admin-export-templates"><span>📤</span><span>Export Templates</span></a>
+<a href="#" onclick="showPage('admin-reports')" data-page="admin-reports"><span>📈</span><span>Reports</span></a>
+<a href="#" onclick="showPage('admin-knowledge-base')" data-page="admin-knowledge-base"><span>📖</span><span>Knowledge Base</span></a>
+<a href="#" onclick="showPage('admin-integrations')" data-page="admin-integrations"><span>🔌</span><span>Integrations</span></a>
+<a href="#" onclick="showPage('admin-call-logs')" data-page="admin-call-logs"><span>📞</span><span>Call Logs</span></a>
+<a href="#" onclick="showPage('admin-calendar')" data-page="admin-calendar"><span>📅</span><span>Calendar Events</span></a>
+<a href="#" onclick="showPage('admin-import-logs')" data-page="admin-import-logs"><span>📥</span><span>Import Logs</span></a>
+<a href="#" onclick="showPage('admin-n8n')" data-page="admin-n8n"><span>⚡</span><span>n8n Proxy</span></a>
+<a href="#" onclick="showPage('admin-bridge')" data-page="admin-bridge"><span>🌉</span><span>Bridge</span></a>
+</div>
+
+<a href="#" onclick="showPage('integrations')" data-page="integrations"><span>🔗</span><span>Integrations</span></a>
+<a href="#" onclick="showPage('extension')" data-page="extension" style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px"><span>🧩</span><span>Extension</span></a>
+<a href="#" onclick="logout()"><span>🚪</span><span>Logout</span></a>
+</nav>
+</div>
+<div class="main" id="main-content"></div>
+</div>
+<script>
+const API = window.location.origin + '/api/v1';
+let token = localStorage.getItem('wfs_token');
+let currentUser = null;
+
+function $(id){return document.getElementById(id)}
+function show(el){el.style.display=''}
+function hide(el){el.style.display='none'}
+
+async function api(path, opts={}){
+  const headers={'Content-Type':'application/json'};
+  if(token) headers['Authorization']='Bearer '+token;
+  const res=await fetch(API+path,{...opts,headers});
+  if(res.status===401 && token){token=null;localStorage.removeItem('wfs_token');render()}
+  const data=await res.json();
+  if(!res.ok) throw new Error(data.message||data.error||'Request failed');
+  return data;
+}
+
+function showRegisterForm(){
+  hide($('login-form'));
+  show($('register-form'));
+  $('login-subtitle').textContent='Create Account';
+  // Load industries into dropdown
+  const sel=document.getElementById('reg-industry');
+  if(sel.options.length===1){
+    fetch(API+'/industries').then(r=>r.json()).then(d=>{
+      const industries=d.industries||d||[];
+      sel.innerHTML='<option value="">Select your industry...</option>'+industries.map(i=>'<option value="'+esc(i.slug)+'">'+esc(i.name||i.slug)+'</option>').join('');
+    }).catch(()=>{
+      sel.innerHTML='<option value="site-flipping">Site Flipping</option><option value="sales-lead-gen">Sales & Lead Gen</option><option value="service-businesses">Service Businesses</option>'; 
+    });
+  }
+}
+
+function showLoginForm(){
+  show($('login-form'));
+  hide($('register-form'));
+  $('login-subtitle').textContent='Admin Dashboard';
+}
+
+async function register(){
+  const name=$('reg-name')?.value;
+  const email=$('reg-email')?.value;
+  const pw=$('reg-password')?.value;
+  const slug=$('reg-industry')?.value;
+  hide($('login-error'));
+  if(!name||!email||!pw){$('login-error').textContent='All fields required';show($('login-error'));return;}
+  if(pw.length<6){$('login-error').textContent='Password must be 6+ characters';show($('login-error'));return;}
+  try{
+    const res=await api('/auth/register',{method:'POST',body:JSON.stringify({name,email,password:pw,industry_slug:slug||'site-flipping'})});
+    token=res.access_token||res.token;
+    currentUser=res.user;
+    localStorage.setItem('wfs_token',token);
+    showToast('Account created! Welcome to WorkflowSwift.');
+    render();
+  }catch(e){
+    $('login-error').textContent=e.message;
+    show($('login-error'));
+  }
+}
+
+async function login(){
+  const email=$('login-email').value;
+  const password=$('login-password').value;
+  hide($('login-error'));
+  try{
+    const res=await api('/auth/login',{method:'POST',body:JSON.stringify({email,password})});
+    token=res.access_token||res.token;
+    currentUser=res.user;
+    localStorage.setItem('wfs_token',token);
+    render();
+  }catch(e){
+    $('login-error').textContent=e.message;
+    show($('login-error'));
+  }
+}
+
+function logout(){
+  token=null;currentUser=null;
+  localStorage.removeItem('wfs_token');
+  render();
+}
+
+async function loadUser(){
+  try{
+    const res=await api('/auth/me');
+    currentUser=res;
+    $('user-info').innerHTML=currentUser.email+'<br>'+(currentUser.role||'User');
+  }catch(e){/*ignore*/}
+}
+
+function render(){
+  if(token){
+    hide($('login-page'));
+    show($('app'));
+    loadUser();
+    showPage('dashboard');
+  }else{
+    show($('login-page'));
+    hide($('app'));
+  }
+}
+
+let currentPage='';
+
+async function showPage(page){
+  currentPage=page;
+  document.querySelectorAll('.sidebar nav a').forEach(a=>a.classList.toggle('active',a.dataset.page===page));
+  const mc=$('main-content');
+  mc.innerHTML='<div class="loading">Loading...</div>';
+  const renderers={
+    dashboard:renderDashboard,
+    profile:renderProfile,
+    workflows:renderWorkflows,
+    'workflow-builder':renderWorkflowBuilder,
+    templates:renderTemplates,
+    instances:renderInstances,
+    automations:renderAutomations,
+    prospecting:renderProspecting,
+    'brand-monitor':renderBrandMonitor,
+    'competitor-watch':renderCompetitorWatch,
+    clients:renderClients,
+    invoices:renderInvoices,
+    credits:renderCredits,
+    deals:renderDeals,
+    leads:renderLeads,
+    campaigns:renderCampaigns,
+    tickets:renderTickets,
+    integrations:renderIntegrations,
+    extension:renderExtension,
+    // Admin pages
+    'admin-dashboard':renderAdminDashboard,
+    'admin-tenants':renderAdminTenants,
+    'admin-users':renderAdminUsers,
+    'admin-plans':renderAdminPlans,
+    'admin-api-keys':renderAdminApiKeys,
+    'admin-provider-keys':renderAdminProviderKeys,
+    'admin-affiliates':renderAdminAffiliates,
+    'admin-webhooks':renderAdminWebhooks,
+    'admin-reviews':renderAdminReviews,
+    'admin-surfaces':renderAdminSurfaces,
+    'admin-categories':renderAdminCategories,
+    'admin-tag-groups':renderAdminTagGroups,
+    'admin-email-templates':renderAdminEmailTemplates,
+    'admin-export-templates':renderAdminExportTemplates,
+    'admin-reports':renderAdminReports,
+    'admin-knowledge-base':renderAdminKnowledgeBase,
+    'admin-integrations':renderAdminIntegrations,
+    'admin-call-logs':renderAdminCallLogs,
+    'admin-calendar':renderAdminCalendar,
+    'admin-import-logs':renderAdminImportLogs,
+    'admin-n8n':renderAdminN8n,
+    'admin-bridge':renderAdminBridge,
+  };
+  try{
+    await renderers[page]();
+  }catch(e){
+    mc.innerHTML='<div class="error">Failed to load: '+e.message+'</div>';
+  }
+}
+
+/* ===== DASHBOARD ===== */
+let currentDashboardIndustry=null;
+
+async function renderDashboard(){
+  let stats,widgets,tenantInd;
+  try{stats=await api('/dashboard/stats')}catch(e){stats=null}
+  try{
+    const ti=await api('/tenants/industry');
+    tenantInd=ti;
+  }catch(e){tenantInd=null}
+  // If no industry slug selected yet, default to primary
+  if(!currentDashboardIndustry){
+    currentDashboardIndustry=tenantInd?.primary_industry||tenantInd?.industries?.[0]?.industry_slug||null;
+  }
+  const industries=tenantInd?.industries||[];
+  try{widgets=await api('/dashboard/widgets'+(currentDashboardIndustry?'?industry='+encodeURIComponent(currentDashboardIndustry):''))}catch(e){widgets=null}
+  const mc=$('main-content');
+  let html='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px"><h1 style="margin:0">📊 Market Intel Dashboard</h1><button class="btn-secondary btn-sm" onclick="showDataEntryForm()">+ Add Data</button></div>';
+  // Industry switcher
+  if(industries.length>1){
+    html+='<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">';
+    industries.forEach(ind=>{
+      const active=ind.industry_slug===currentDashboardIndustry;
+      html+='<button class="btn-sm '+(active?'btn-primary':'btn-secondary')+'" onclick="switchDashboardIndustry(\''+esc(ind.industry_slug)+'\')" style="'+(ind.is_primary?'border-left:3px solid var(--yellow)':'')+'">';
+      if(ind.is_primary) html+='⭐ ';
+      html+=esc(ind.industry_name||ind.industry_slug)+(active?' ◀':'')+'</button>';
+    });
+    html+='</div>';
+  }
+  if(widgets?.widgets?.length){
+    html+='<div style="margin-bottom:12px;"><span class="badge badge-active">'+esc(widgets.industry_name||'')+'</span> <span style="color:var(--text2);font-size:12px">'+widgets.widgets.length+' widgets</span></div>';
+    html+='<div class="widget-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px">';
+    widgets.widgets.forEach(w=>{
+      const val=w.data?.value||w.data?.count||w.data?.items||w.data?.amount||null;
+      const suffix=w.config?.suffix||'';
+      const curr=w.config?.currency?'$':'';
+      html+='<div class="card" style="padding:16px;position:relative">';
+      html+='<div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px">'+esc(w.title)+'</div>';
+      if(w.widget_type==='stat-counter'||w.widget_type==='revenue-card'){
+        html+='<div style="font-size:28px;font-weight:700;color:var(--accent);margin:6px 0 2px">'+(val!==null?curr+esc(String(val))+suffix:'—')+'</div>';
+      }else if(w.widget_type==='list'){
+        const items=w.data?.items||w.data||[];
+        html+='<div style="margin:6px 0;font-size:12px">';
+        if(items.length){items.slice(0,5).forEach(i=>{html+='<div style="padding:4px 0;border-bottom:1px solid var(--border)">• '+esc(i.name||i.title||i)+'</div>';});}
+        else{html+='<div class="empty" style="padding:12px">No data yet</div>';}
+        html+='</div>';
+      }else if(w.widget_type==='connection-status'){
+        const ok=w.data?.connected||w.data?.status==='ok';
+        html+='<div style="margin:10px 0;font-size:13px"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:'+(ok?'var(--green)':'var(--red)')+';margin-right:8px"></span>'+(ok?'All Connected':'Needs Setup')+'</div>';
+      }else if(w.widget_type==='chart-trend'){
+        html+='<div style="margin:10px 0;height:60px;background:var(--surface2);border-radius:var(--radius);display:flex;align-items:center;justify-content:center;font-size:11px;color:var(--text2)">📈 Trend chart</div>';
+      }else if(w.widget_type==='activity-feed'){
+        const acts=w.data?.activities||w.data?.items||[];
+        html+='<div style="margin:6px 0;font-size:12px;max-height:120px;overflow-y:auto">';
+        if(acts.length){acts.slice(0,5).forEach(a=>{html+='<div style="padding:4px 0;border-bottom:1px solid var(--border);font-size:11px">'+esc(a.action||a.title||a)+'</div>';});}
+        else{html+='<div class="empty" style="padding:8px">No activity</div>';}
+        html+='</div>';
+      }else{
+        html+='<div style="font-size:24px;font-weight:700;color:var(--accent);margin:6px 0 2px">'+(val!==null?esc(String(val)):'—')+'</div>';
+      }
+      html+='<div style="font-size:10px;color:var(--text2);margin-top:4px">'+esc(w.config?.subtitle||'')+'</div>';
+      html+='</div>';
+    });
+    html+='</div>';
+  }else{
+    const s=stats?.stats||{};
+    html+='<div class="grid-4">';
+    html+='<div class="card stat-card"><div class="num">'+(s.total_workflows||0)+'</div><div class="label">Workflows</div></div>';
+    html+='<div class="card stat-card"><div class="num">'+(s.active_instances||0)+'</div><div class="label">Active Instances</div></div>';
+    html+='<div class="card stat-card"><div class="num">'+(s.total_clients||0)+'</div><div class="label">Clients</div></div>';
+    html+='<div class="card stat-card"><div class="num">'+(s.total_templates||0)+'</div><div class="label">Templates</div></div>';
+    html+='</div>';
+  }
+  html+='<div class="card"><h3 style="margin-bottom:12px">Recent Activity</h3>';
+  try{const act=await api('/dashboard/activity');if(act?.activities?.length){html+='<div style="font-size:13px">'+act.activities.slice(0,10).map(a=>'<div style="padding:6px 0;border-bottom:1px solid var(--border)">'+esc(a.action)+' — '+esc(a.entity_type)+' <span style="color:var(--text2);font-size:11px">'+esc(a.created_at?.slice(0,10)||'')+'</span></div>').join('')+'</div>';}else{html+='<div class="empty">No recent activity</div>';}}catch(e){html+='<div class="empty">Activity feed</div>';}
+  html+='</div>';
+  mc.innerHTML=html;
+}
+
+function switchDashboardIndustry(slug){
+  currentDashboardIndustry=slug;
+  renderDashboard();
+}
+
+/* ===== DATA ENTRY FORM FOR MANUAL DATA PUSH ===== */
+function showDataEntryForm(){
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
+  overlay.innerHTML='<div class="modal" style="max-width:600px"><h2>📝 Add Dashboard Data</h2>'
+    +'<p style="font-size:12px;color:var(--text2);margin-bottom:12px">Enter market data to populate your dashboard widgets. This gets pushed to the widget by metric_key.</p>'
+    +'<label>Metric Key</label>'
+    +'<select id="data-metric-key" style="margin-bottom:8px">'
+    +'<option value="marketplace_listings">Active Listings Across Markets</option>'
+    +'<option value="avg_selling_price">Avg Selling Price (30d)</option>'
+    +'<option value="trending_categories">Trending Categories</option>'
+    +'<option value="portfolio_value">Your Portfolio Value</option>'
+    +'<option value="competitor_activity">Competitor Activity</option>'
+    +'<option value="market_split">SaaS vs Content vs Ecom</option>'
+    +'<option value="recent_sales">Recent Market Activity</option>'
+    +'<option value="multiples_by_category">Multiples by Category</option>'
+    +'</select>'
+    +'<label>Value (number or JSON)</label>'
+    +'<input id="data-value" placeholder="e.g. 42 or {"items":[{"name":"SaaS site for $50k"}]}" style="margin-bottom:8px">'
+    +'<div class="actions"><button class="btn-secondary" onclick="this.closest(\'\'.modal-overlay\'\').remove()">Cancel</button>'
+    +'<button class="btn-primary" onclick="submitDashboardData(this)">Push to Dashboard</button></div></div>';
+  document.body.appendChild(overlay);
+}
+
+async function submitDashboardData(btn){
+  const key=document.getElementById('data-metric-key').value;
+  const raw=document.getElementById('data-value').value;
+  if(!raw){showToast('Enter a value','error');return;}
+  btn.textContent='Pushing...';btn.disabled=true;
+  try{
+    let value=raw;
+    if(raw.startsWith('{')||raw.startsWith('[')){value=JSON.parse(raw);}
+    else if(!isNaN(Number(raw))){value=Number(raw);}
+    await api('/dashboard/push-widget-data',{method:'POST',body:JSON.stringify({metric_key:key,value:value})});
+    btn.closest('.modal-overlay').remove();
+    showToast('Data pushed to dashboard!');
+    renderDashboard();
+  }catch(e){showToast(e.message,'error');btn.textContent='Push to Dashboard';btn.disabled=false;}
+}
+
+/* ===== WORKFLOW BUILDER ===== */
+let wbWorkflowId=null, wbWorkflow=null, wbSteps=[], wbDirty=false;
+
+const STEP_TYPES = {
+  'data-card':     { icon:'📊', label:'Data Card',     desc:'Pull data from a dashboard widget by name', color:'#4f86f7' },
+  'ai-action':     { icon:'🤖', label:'AI Action',     desc:'Run an LLM prompt — output is editable', color:'#a855f7' },
+  'export':        { icon:'📤', label:'Export',        desc:'CSV, Resend, SendGrid, or CRM Swift', color:'#34d399' },
+  'notify':        { icon:'🔔', label:'Notify',        desc:'Send alert or email notification', color:'#fbbf24' },
+  'delay':         { icon:'⏳', label:'Delay/Wait',    desc:'Wait set time before next step', color:'#fb923c' },
+  'fork':          { icon:'🔀', label:'Fork',          desc:'Split into parallel branches', color:'#f472b6' },
+};
+
+async function renderWorkflowBuilder(){
+  const mc=$('main-content');
+  // Show workflow list first
+  try{wbWorkflows=await api('/workflows')}catch(e){wbWorkflows=[]}
+  if(!Array.isArray(wbWorkflows)) wbWorkflows=wbWorkflows?.data||wbWorkflows?.workflows||[];
+  
+  if(wbWorkflowId){
+    await renderWorkflowBuilderEditor();
+    return;
+  }
+  
+  let html='<div class="top-bar"><h1>🔧 Workflow Builder</h1><button class="btn-primary" onclick="wbWorkflowId=null;wbWorkflow=null;wbSteps=[];renderWorkflowBuilder()">+ New Workflow</button></div>';
+  html+='<p style="font-size:13px;color:var(--text2);margin-bottom:16px">Create and edit workflows with visual step builder. Choose a workflow to edit or create a new one.</p>';
+  
+  if(wbWorkflows.length===0){
+    html+='<div class="card"><div class="empty">No workflows yet. Create one!</div></div>';
+  } else {
+    html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">';
+    wbWorkflows.forEach(w=>{
+      html+='<div class="card" style="padding:16px;cursor:pointer" onclick="selectWorkflowForBuild(\''+esc(w.id)+'\')">';
+      html+='<div style="font-weight:600;font-size:14px">'+esc(w.name||'Untitled')+'</div>';
+      html+='<div style="font-size:12px;color:var(--text2);margin:6px 0">'+(w.description||'No description')+'</div>';
+      html+='<div style="font-size:11px;color:var(--text2)">'+(w.step_count||0)+' steps · '+(w.status||'draft')+'</div>';
+      html+='</div>';
+    });
+    html+='</div>';
+  }
+  mc.innerHTML=html;
+}
+
+async function selectWorkflowForBuild(id){
+  wbWorkflowId=id;
+  await renderWorkflowBuilderEditor();
+}
+
+async function renderWorkflowBuilderEditor(){
+  const mc=$('main-content');
+  
+  // Create new if no id
+  if(!wbWorkflowId){
+    wbWorkflow={id:null,name:'New Workflow',description:'',status:'draft'};
+    wbSteps=[];
+  } else {
+    try{
+      const res=await api('/workflows/'+wbWorkflowId);
+      wbWorkflow=res.workflow||res;
+      wbSteps=res.steps||[];
+    } catch(e){
+      mc.innerHTML='<div class="error">Failed to load workflow: '+e.message+'</div>';
+      return;
+    }
+  }
+  wbDirty=false;
+  renderBuilderUI();
+}
+
+function renderBuilderUI(){
+  const mc=$('main-content');
+  let html='';
+  
+  // Top bar
+  html+='<div class="top-bar"><h1>🔧 '+(wbWorkflowId?'Edit: ':'New: ')+esc(wbWorkflow.name||'Untitled')+'</h1><div>';
+  html+='<button class="btn-secondary btn-sm" onclick="wbWorkflowId=null;renderWorkflowBuilder()">← Back</button> ';
+  html+='<button class="btn-primary btn-sm" onclick="saveWorkflowFromBuilder()">💾 Save</button>';
+  if(wbWorkflowId) {
+    html+=' <button class="btn-primary btn-sm" onclick="deployWorkflowToN8n()" style="background:var(--green)">🚀 Deploy to n8n</button>';
+    html+=' <button class="btn-primary btn-sm" onclick="runDeployedWorkflow()" style="background:var(--accent)">▶ Run Now</button>';
+  }
+  html+='</div></div>';
+  
+  // Workflow meta card
+  html+='<div class="card" style="padding:16px;margin-bottom:16px">';
+  html+='<div style="display:flex;gap:12px;align-items:start;flex-wrap:wrap">';
+  html+='<div style="flex:1;min-width:200px"><label style="font-size:11px;color:var(--text2)">Name</label><input id="wb-name" value="'+esc(wbWorkflow.name||'')+'" oninput="wbDirty=true" style="margin-top:4px"></div>';
+  html+='<div style="flex:2;min-width:300px"><label style="font-size:11px;color:var(--text2)">Description</label><input id="wb-desc" value="'+esc(wbWorkflow.description||'')+'" oninput="wbDirty=true" style="margin-top:4px"></div>';
+  html+='</div></div>';
+  
+  // Step toolbar
+  html+='<div class="wb-toolbar">';
+  Object.entries(STEP_TYPES).forEach(([key,st]) => {
+    html+='<button class="btn-secondary btn-sm" onclick="addStepToBuilder(\''+key+'\')" style="border-left:3px solid '+st.color+'">'+st.icon+' '+st.label+'</button>';
+  });
+  html+='</div>';
+  
+  // Steps canvas
+  html+='<div class="wb-canvas" id="wb-canvas">';
+  if(wbSteps.length===0){
+    html+='<div class="wb-empty"><div class="big-icon">🔧</div><div>No steps yet. Click a step type above to add one.</div><div style="font-size:12px;color:var(--text2);margin-top:8px">Choose from Data Card, AI Action, Export, Notify, Delay, or Fork</div></div>';
+  } else {
+    wbSteps.forEach((s,i) => {
+      const st = STEP_TYPES[s.step_type] || { icon:'❓', label:s.step_type, desc:'', color:'var(--text2)' };
+      html+='<div class="wb-step" onclick="editStepFromBuilder('+i+')">';
+      html+='<div class="step-icon">'+st.icon+'</div>';
+      html+='<div class="step-info"><div class="step-name">'+(i+1)+'. '+esc(s.name||st.label||'Step')+'</div>';
+      html+='<div class="step-desc">'+(s.description||st.desc||'')+'</div></div>';
+      html+='<div><span class="step-type-badge" style="background:'+st.color+'22;color:'+st.color+'">'+st.label+'</span></div>';
+      html+='<div class="step-actions">';
+      if(i>0) html+='<button class="btn-secondary btn-sm" onclick="event.stopPropagation();moveStep('+i+','+(i-1)+')">↑</button>';
+      if(i<wbSteps.length-1) html+='<button class="btn-secondary btn-sm" onclick="event.stopPropagation();moveStep('+i+','+(i+1)+')">↓</button>';
+      html+='<button class="btn-danger btn-sm" onclick="event.stopPropagation();removeStep('+i+')">✕</button>';
+      html+='</div></div>';
+    });
+  }
+  html+='</div>';
+  
+  // Quick config area (active step editing shown inline)
+  html+='<div id="wb-step-config"></div>';
+  
+  mc.innerHTML=html;
+  
+  // Auto-pick the first step for editing if steps exist
+  if(wbSteps.length>0 && !document.querySelector('.wb-config')){
+    editStepFromBuilder(0);
+  }
+}
+
+function moveStep(from, to){
+  const step=wbSteps.splice(from,1)[0];
+  if(step) wbSteps.splice(to,0,step);
+  wbDirty=true;
+  renderBuilderUI();
+}
+
+function removeStep(idx){
+  wbSteps.splice(idx,1);
+  wbDirty=true;
+  renderBuilderUI();
+}
+
+async function addStepToBuilder(stepType){
+  const st=STEP_TYPES[stepType];
+  const defaultConfig = getDefaultConfig(stepType);
+  
+  wbSteps.push({
+    id: 'new_'+Date.now(),
+    step_type: stepType,
+    name: st.label,
+    description: st.desc,
+    sort_order: wbSteps.length,
+    config: defaultConfig
+  });
+  wbDirty=true;
+  renderBuilderUI();
+  // Open the new step for editing
+  setTimeout(() => editStepFromBuilder(wbSteps.length-1), 50);
+}
+
+function getDefaultConfig(stepType){
+  switch(stepType){
+    case 'data-card': return { widget_name: '', metric_key: '', filter: '' };
+    case 'ai-action': return { prompt: '', model: 'gpt-4', temperature: 0.7, system_prompt: '' };
+    case 'export':   return { targets: [], format: 'csv', filename: '' };
+    case 'notify':   return { channel: 'email', recipient: '', subject: '', message: '' };
+    case 'delay':    return { duration: 60, unit: 'seconds' };
+    case 'fork':     return { branches: [ {name:'Branch 1',steps:[]}, {name:'Branch 2',steps:[]} ] };
+    default: return {};
+  }
+}
+
+function editStepFromBuilder(idx){
+  const s = wbSteps[idx];
+  if(!s) return;
+  const st = STEP_TYPES[s.step_type] || { icon:'❓', label:'Step', color:'var(--text2)' };
+  
+  let html='<div class="wb-config"><div class="config-group" style="border-left:3px solid '+st.color+'">';
+  html+='<h4>'+st.icon+' '+st.label+' Configuration</h4>';
+  
+  // Common fields
+  html+='<label style="font-size:11px;color:var(--text2)">Step Name</label>';
+  html+='<input id="step-cfg-name" value="'+esc(s.name||'')+'" onchange="wbSteps['+idx+'].name=this.value;wbDirty=true" style="margin-bottom:8px">';
+  html+='<label style="font-size:11px;color:var(--text2)">Description</label>';
+  html+='<textarea id="step-cfg-desc" rows="2" onchange="wbSteps['+idx+'].description=this.value;wbDirty=true" style="margin-bottom:8px">'+esc(s.description||'')+'</textarea>';
+  
+  // Type-specific config
+  switch(s.step_type){
+    case 'data-card':
+      html+='<label style="font-size:11px;color:var(--text2)">Dashboard Widget</label>';
+      html+='<input id="step-cfg-widget" value="'+esc(s.config?.widget_name||'')+'" placeholder="Widget name (metric_key)" onchange="wbSteps['+idx+'].config.widget_name=this.value;wbDirty=true" style="margin-bottom:8px">';
+      html+='<label style="font-size:11px;color:var(--text2)">Metric Key (optional filter)</label>';
+      html+='<input id="step-cfg-metric" value="'+esc(s.config?.metric_key||'')+'" onchange="wbSteps['+idx+'].config.metric_key=this.value;wbDirty=true">';
+      break;
+    case 'ai-action':
+      html+='<label style="font-size:11px;color:var(--text2)">Model</label>';
+      html+='<select id="step-cfg-model" onchange="wbSteps['+idx+'].config.model=this.value;wbDirty=true" style="margin-bottom:8px">';
+      ['gpt-4','gpt-3.5-turbo','claude-3','claude-3-sonnet','gemini-pro'].forEach(m => {
+        html+='<option value="'+m+'"'+(s.config?.model===m?' selected':'')+'>'+m+'</option>';
+      });
+      html+='</select>';
+      html+='<label style="font-size:11px;color:var(--text2)">System Prompt</label>';
+      html+='<textarea id="step-cfg-system" rows="2" onchange="wbSteps['+idx+'].config.system_prompt=this.value;wbDirty=true" style="margin-bottom:8px;font-family:monospace;font-size:12px">'+esc(s.config?.system_prompt||'')+'</textarea>';
+      html+='<label style="font-size:11px;color:var(--text2)">User Prompt</label>';
+      html+='<textarea id="step-cfg-prompt" rows="4" onchange="wbSteps['+idx+'].config.prompt=this.value;wbDirty=true" style="font-family:monospace;font-size:12px" placeholder="Enter your prompt here...">'+esc(s.config?.prompt||'')+'</textarea>';
+      break;
+    case 'export':
+      html+='<label style="font-size:11px;color:var(--text2)">Export Format</label>';
+      const formats=['csv','resend','sendgrid','crm-swift'];
+      html+='<select id="step-cfg-format" onchange="wbSteps['+idx+'].config.format=this.value;wbDirty=true" style="margin-bottom:8px">';
+      formats.forEach(f => {
+        html+='<option value="'+f+'"'+(s.config?.format===f?' selected':'')+'>'+f.toUpperCase()+'</option>';
+      });
+      html+='</select>';
+      html+='<label style="font-size:11px;color:var(--text2)">Targets (comma-separated emails or identifiers)</label>';
+      html+='<input id="step-cfg-targets" value="'+(s.config?.targets||[]).join(', ')+'" onchange="wbSteps['+idx+'].config.targets=this.value.split(/,\\s*/).filter(Boolean);wbDirty=true" style="margin-bottom:8px">';
+      html+='<label style="font-size:11px;color:var(--text2)">Filename (optional)</label>';
+      html+='<input id="step-cfg-filename" value="'+esc(s.config?.filename||'')+'" onchange="wbSteps['+idx+'].config.filename=this.value;wbDirty=true">';
+      break;
+    case 'notify':
+      html+='<label style="font-size:11px;color:var(--text2)">Channel</label>';
+      html+='<select id="step-cfg-notify-channel" onchange="wbSteps['+idx+'].config.channel=this.value;wbDirty=true" style="margin-bottom:8px">';
+      ['email','alert','slack','telegram'].forEach(ch => {
+        html+='<option value="'+ch+'"'+(s.config?.channel===ch?' selected':'')+'>'+ch+'</option>';
+      });
+      html+='</select>';
+      html+='<label style="font-size:11px;color:var(--text2)">Recipient</label>';
+      html+='<input id="step-cfg-recipient" value="'+esc(s.config?.recipient||'')+'" onchange="wbSteps['+idx+'].config.recipient=this.value;wbDirty=true" style="margin-bottom:8px">';
+      html+='<label style="font-size:11px;color:var(--text2)">Subject</label>';
+      html+='<input id="step-cfg-subject" value="'+esc(s.config?.subject||'')+'" onchange="wbSteps['+idx+'].config.subject=this.value;wbDirty=true" style="margin-bottom:8px">';
+      html+='<label style="font-size:11px;color:var(--text2)">Message</label>';
+      html+='<textarea id="step-cfg-message" rows="3" onchange="wbSteps['+idx+'].config.message=this.value;wbDirty=true">'+esc(s.config?.message||'')+'</textarea>';
+      break;
+    case 'delay':
+      html+='<label style="font-size:11px;color:var(--text2)">Duration</label>';
+      html+='<input id="step-cfg-duration" type="number" value="'+(s.config?.duration||60)+'" onchange="wbSteps['+idx+'].config.duration=Number(this.value);wbDirty=true" style="margin-bottom:8px">';
+      html+='<label style="font-size:11px;color:var(--text2)">Unit</label>';
+      html+='<select id="step-cfg-unit" onchange="wbSteps['+idx+'].config.unit=this.value;wbDirty=true">';
+      ['seconds','minutes','hours','days'].forEach(u => {
+        html+='<option value="'+u+'"'+(s.config?.unit===u?' selected':'')+'>'+u+'</option>';
+      });
+      html+='</select>';
+      break;
+    case 'fork':
+      const branches = s.config?.branches || [{name:'Branch 1',steps:[]}];
+      html+='<p style="font-size:12px;color:var(--text2);margin-bottom:8px">Workflow will split into parallel branches. Each branch can have its own steps.</p>';
+      html+='<div id="branch-list">';
+      branches.forEach((b,bi) => {
+        html+='<div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-bottom:8px">';
+        html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
+        html+='<input value="'+esc(b.name)+'" onchange="wbSteps['+idx+'].config.branches['+bi+'].name=this.value;wbDirty=true" style="max-width:200px">';
+        html+='<button class="btn-danger btn-sm" onclick="wbSteps['+idx+'].config.branches.splice('+bi+',1);wbDirty=true;editStepFromBuilder('+idx+')">✕</button>';
+        html+='</div>';
+        html+='<div style="font-size:11px;color:var(--text2)">'+(b.steps?.length||0)+' steps in this branch</div>';
+        html+='</div>';
+      });
+      html+='</div>';
+      html+='<button class="btn-secondary btn-sm" onclick="wbSteps['+idx+'].config.branches.push({name:"New Branch",steps:[]});wbDirty=true;editStepFromBuilder('+idx+')">+ Add Branch</button>';
+      break;
+  }
+  
+  html+='</div></div>';
+  
+  const cfgEl=document.getElementById('wb-step-config');
+  if(cfgEl) cfgEl.innerHTML=html;
+}
+
+async function saveWorkflowFromBuilder(){
+  const nameEl=document.getElementById('wb-name');
+  const descEl=document.getElementById('wb-desc');
+  if(!nameEl||!nameEl.value.trim()){showToast('Workflow name required','error');return;}
+  
+  const btn=document.querySelector('.top-bar .btn-primary');
+  if(btn){btn.textContent='💾 Saving...';btn.disabled=true;}
+  
+  try{
+    let wf;
+    if(wbWorkflowId){
+      // Update existing
+      wf=await api('/workflows/'+wbWorkflowId,{method:'PUT',body:JSON.stringify({name:nameEl.value,description:descEl?.value||''})});
+    } else {
+      // Create new
+      wf=await api('/workflows',{method:'POST',body:JSON.stringify({name:nameEl.value,description:descEl?.value||'',category:''})});
+      wbWorkflowId=wf.workflow?.id||wf.id;
+    }
+    
+    // Save steps — for new steps, create them; for existing, update
+    for(let i=0;i<wbSteps.length;i++){
+      const s=wbSteps[i];
+      if(s.id && !s.id.startsWith('new_')){
+        // Update existing step
+        await api('/workflows/'+wbWorkflowId+'/steps/'+s.id,{method:'PUT',body:JSON.stringify({
+          step_type:s.step_type,
+          name:s.name,
+          description:s.description||'',
+          sort_order:i,
+          config:s.config
+        })});
+      } else {
+        // Create new step
+        const created=await api('/workflows/'+wbWorkflowId+'/steps',{method:'POST',body:JSON.stringify({
+          step_type:s.step_type,
+          name:s.name,
+          description:s.description||'',
+          config:s.config
+        })});
+        wbSteps[i].id=created.step?.id||created.id;
+      }
+    }
+    
+    wbDirty=false;
+    showToast('Workflow saved!');
+    // Refresh to get proper IDs
+    await renderWorkflowBuilderEditor();
+  } catch(e){
+    showToast('Save failed: '+e.message,'error');
+  }
+  if(btn){btn.textContent='💾 Save Workflow';btn.disabled=false;}
+}
+
+/* ===== WORKFLOWS ===== */
+let surfaces=[],wfPage=1,wfPerPage=20,wfSearch='',wfSurface='all';
+async function renderWorkflows(){
+  if(!surfaces.length) try{surfaces=await api('/surfaces');if(!Array.isArray(surfaces))surfaces=surfaces?.items||[]}catch(e){surfaces=[]}
+  try{workflows=await api('/workflows')}catch(e){workflows=[]}
+  if(!Array.isArray(workflows))workflows=workflows?.data||workflows?.workflows||[];
+  renderWorkflowsTable();
+}
+function renderWorkflowsTable(){
+  const start=(wfPage-1)*wfPerPage;
+  const filtered=workflows.filter(w=>!wfSearch||(w.name||'').toLowerCase().includes(wfSearch.toLowerCase())).filter(w=>wfSurface==='all'||w.surface_id===wfSurface||(!w.surface_id&&wfSurface==='none'));
+  const page=filtered.slice(start,start+wfPerPage);
+  const totalPages=Math.ceil(filtered.length/wfPerPage)||1;
+  const mc=$('main-content');
+  mc.innerHTML='<div class="top-bar"><h1>🔄 Workflows</h1><button class="btn-primary" onclick="showWorkflowForm()">+ New Workflow</button></div>'
+    +'<div style="margin-bottom:12px;display:flex;gap:8px;align-items:center"><input placeholder="Search workflows..." oninput="wfSearch=this.value;wfPage=1;renderWorkflowsTable()" style="max-width:300px;flex:1">'
+    +'<select onchange="wfSurface=this.value;wfPage=1;renderWorkflowsTable()" style="max-width:200px"><option value="all">All Surfaces</option><option value="none">No Surface</option>'+(surfaces.map(s=>'<option value="'+esc(s.id)+'"'+(wfSurface===s.id?' selected':'')+'>'+esc(s.name)+'</option>').join(''))+'</select></div>'
+    +'<div class="card" style="padding:0;overflow-x:auto"><table>'
+    +'<tr><th>Name</th><th>Status</th><th>Template</th><th>Steps</th><th>Created</th><th>Actions</th></tr>'
+    +page.map(w=>'<tr><td>'+esc(w.name||w.title||'—')+'</td><td><span class="badge badge-'+((w.status==='active'||w.status==='published')?'active':'inactive')+'">'+esc(w.status||'draft')+'</span></td><td>'+esc(w.template_name||'—')+'</td><td>'+(w.step_count||0)+'</td><td>'+(w.created_at?new Date(w.created_at).toLocaleDateString():'—')+'</td><td><button class="btn-secondary btn-sm" onclick="editWorkflow(\''+(w.id||'')+'\')">Edit</button> <button class="btn-danger btn-sm" onclick="deleteWorkflow(\''+(w.id||'')+'\')">Del</button></td></tr>').join('')
+    +'</table></div>'
+    +'<div class="pagination"><button onclick="wfPage=Math.max(1,wfPage-1);renderWorkflowsTable()" '+(wfPage<=1?'disabled':'')+'>← Prev</button><span>Page '+wfPage+' of '+totalPages+'</span><button onclick="wfPage=Math.min(totalPages,wfPage+1);renderWorkflowsTable()" '+(wfPage>=totalPages?'disabled':'')+'>Next →</button></div>';
+}
+
+function showWorkflowForm(w){showModal('Workflow',w||{});}
+function editWorkflow(id){
+  const w=workflows.find(x=>x.id===id);
+  if(w)showWorkflowForm(w);else showToast('Workflow not found','error');
+}
+async function deleteWorkflow(id){
+  if(!confirm('Delete this workflow?'))return;
+  try{await api('/workflows/'+id,{method:'DELETE'});workflows=workflows.filter(w=>w.id!==id);renderWorkflowsTable();showToast('Deleted');}
+  catch(e){showToast(e.message,'error')}
+}
+
+/* ===== TEMPLATES ===== */
+let templates=[],tplPage=1,tplSearch='',tplIndustry='all',tplSurface='all',industries=[];
+let tplTab='gallery', myWorkflows=[];
+
+async function renderTemplates(){
+  try{industries=await api('/industries')}catch(e){industries=[]}
+  if(!Array.isArray(industries))industries=industries?.industries||[];
+  try{templates=await api('/templates')}catch(e){templates=[]}
+  if(!Array.isArray(templates))templates=templates?.data||templates?.templates||[];
+  try{myWorkflows=await api('/workflows')}catch(e){myWorkflows=[]}
+  if(!Array.isArray(myWorkflows))myWorkflows=myWorkflows?.data||myWorkflows?.workflows||[];
+  
+  if(!surfaces.length) try{surfaces=await api('/surfaces');if(!Array.isArray(surfaces))surfaces=surfaces?.items||[]}catch(e){surfaces=[]}
+  if(tplTab==='gallery') renderTemplatesGallery();
+  else renderMyWorkflows();
+}
+
+function renderTemplatesGallery(){
+  const start=(tplPage-1)*20;
+  const filtered=templates.filter(t=>!tplSearch||(t.name||'').toLowerCase().includes(tplSearch.toLowerCase())).filter(t=>tplSurface==='all'||t.surface_id===tplSurface||(!t.surface_id&&tplSurface==='none'));
+  const page=filtered.slice(start,start+20);
+  const tp=Math.ceil(filtered.length/20)||1;
+  const mc=$('main-content');
+  
+  let html='<div class="top-bar"><h1>📋 Template Gallery</h1></div>';
+  
+  // Tabs
+  html+='<div class="tabs">';
+  html+='<button class="'+(tplTab==='gallery'?'active':'')+'" onclick="tplTab=\'gallery\';renderTemplates()">📋 Templates Gallery</button>';
+  html+='<button class="'+(tplTab==='my'?'active':'')+'" onclick="tplTab=\'my\';renderTemplates()">🔄 My Workflows ('+(myWorkflows.length||0)+')</button>';
+  html+='</div>';
+  
+  // Plan tier pricing reference (for lock badges)
+  const PLAN_TIERS = { free:'Free', starter:'Starter', pro:'Pro', enterprise:'Enterprise' };
+  const PLAN_ORDER = { free:0, starter:1, pro:2, enterprise:3 };
+  
+  // Filters
+  html+='<div style="margin-bottom:12px"><input placeholder="Search templates..." oninput="tplSearch=this.value;tplPage=1;renderTemplatesGallery()" style="max-width:280px;display:inline-block;margin-right:8px">';
+  html+='<select onchange="tplIndustry=this.value;tplPage=1;renderTemplatesGallery()" style="max-width:200px;display:inline-block;margin-right:8px"><option value="all">All Industries</option>';
+  (industries.industries||industries).forEach(c=>{html+='<option value="'+esc(c.slug)+'"'+(tplIndustry===c.slug?' selected':'')+'>'+esc(c.name||c.slug)+' ('+(c.template_count||0)+')</option>';});
+  html+='<select onchange="tplSurface=this.value;tplPage=1;renderTemplatesGallery()" style="max-width:200px;display:inline-block"><option value="all">All Surfaces</option><option value="none">No Surface</option>'+(surfaces.map(s=>'<option value="'+esc(s.id)+'"'+(tplSurface===s.id?' selected':'')+'>'+esc(s.name)+'</option>').join(''))+'</select></div>';
+  
+  if(page.length===0){html+='<div class="card"><div class="empty">No templates found for this industry</div></div>';}
+  else{
+    html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">';
+    page.forEach(t=>{
+      const cat=t.category||'general';
+      const icons={'sales-lead-gen':'💼','service-businesses':'🔧','recruitment-staffing':'👥','marketing-agencies':'📣','marketing':'📣','professional-services':'⚖️','ecommerce-retail':'🛒','healthcare-wellness':'🏥','construction-development':'🏗️','grant-funding':'💰','government-contracting':'🏛️','education-training':'📚','publishing-media':'📰','site-flipping':'🔄','onboarding':'📁','operations':'⚙️'};
+      const icon=icons[cat]||'📋';
+      
+      // Determine plan tier for lock badge
+      const minPlan = t.min_plan_tier || 'free';
+      const isLocked = minPlan !== 'free';
+      
+      html+='<div class="card template-card" style="padding:16px;display:flex;flex-direction:column;gap:8px;cursor:pointer" onclick="showTemplateDetail(\''+esc(t.id)+'\')">';
+      if(isLocked) html+='<div class="lock-badge" title="Requires '+PLAN_TIERS[minPlan]+' plan">🔒</div>';
+      html+='<div style="font-size:28px">'+icon+'</div>';
+      html+='<div style="font-weight:600;font-size:14px">'+esc(t.name||'Untitled')+'</div>';
+      html+='<div style="font-size:12px;color:var(--text2);flex:1">'+(t.description?esc(t.description).slice(0,100):'No description')+'</div>';
+      html+='<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--text2)">';
+      html+='<span>'+(t.step_count||t.steps?.length||0)+' steps</span>';
+      html+='<div><span class="badge badge-active">'+esc(cat)+'</span>';
+      if(isLocked) html+=' <span class="plan-tag">'+PLAN_TIERS[minPlan]+'</span>';
+      html+='</div></div>';
+      html+='<button class="btn-primary btn-sm" onclick="event.stopPropagation();showTemplateDetail(\''+esc(t.id)+'\')">📄 View Details</button>';
+      html+='</div>';
+    });
+    html+='</div>';}
+  
+  html+='<div class="pagination"><button onclick="tplPage=Math.max(1,tplPage-1);renderTemplatesGallery()" '+(tplPage<=1?'disabled':'')+'>← Prev</button><span>Page '+tplPage+' of '+tp+'</span><button onclick="tplPage=Math.min(tp,tplPage+1);renderTemplatesGallery()" '+(tplPage>=tp?'disabled':'')+'>Next →</button></div>';
+  mc.innerHTML=html;
+}
+
+function renderMyWorkflows(){
+  const mc=$('main-content');
+  let html='<div class="top-bar"><h1>🔄 My Workflows</h1><button class="btn-primary" onclick="showPage(\'workflow-builder\')">+ New Workflow</button></div>';
+  
+  // Tabs
+  html+='<div class="tabs">';
+  html+='<button onclick="tplTab=\'gallery\';renderTemplates()">📋 Templates Gallery</button>';
+  html+='<button class="active" onclick="tplTab=\'my\';renderTemplates()">🔄 My Workflows ('+(myWorkflows.length||0)+')</button>';
+  html+='</div>';
+  
+  if(!myWorkflows.length){
+    html+='<div class="card"><div class="empty">No workflows yet. Clone a template or create one from scratch.</div></div>';
+  } else {
+    html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">';
+    myWorkflows.forEach(w=>{
+      html+='<div class="card template-card" style="padding:16px;display:flex;flex-direction:column;gap:8px" onclick="selectWorkflowForBuild(\''+esc(w.id)+'\')">';
+      html+='<div style="font-size:28px">🔄</div>';
+      html+='<div style="font-weight:600;font-size:14px">'+esc(w.name||w.title||'Untitled')+'</div>';
+      html+='<div style="font-size:12px;color:var(--text2);flex:1">'+(w.description?esc(w.description).slice(0,100):'No description')+'</div>';
+      html+='<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px">';
+      html+='<span>'+(w.step_count||0)+' steps</span>';
+      html+='<span class="badge badge-'+(w.status==='active'||w.status==='published'?'active':'inactive')+'">'+esc(w.status||'draft')+'</span>';
+      html+='</div>';
+      html+='<div style="display:flex;gap:6px">'
+      html+='<button class="btn-primary btn-sm" onclick="event.stopPropagation();selectWorkflowForBuild(\''+esc(w.id)+'\')">🔧 Edit</button>';
+      html+='<button class="btn-danger btn-sm" onclick="event.stopPropagation();if(confirm(\'Delete this workflow?\'))deleteWorkflow(\''+esc(w.id)+'\')">🗑</button>';
+      html+='</div></div>';
+    });
+    html+='</div>';
+  }
+  mc.innerHTML=html;
+}
+
+async function showTemplateDetail(id){
+  let tpl, steps;
+  try{
+    const res=await api('/templates/'+id);
+    tpl=res.template||res.data||res;
+  } catch(e){showToast('Failed to load template','error');return;}
+  try{
+    const stepRes=await api('/templates/'+id+'/steps');
+    steps=stepRes.steps||stepRes.data||stepRes||[];
+  } catch(e){steps=[];}
+  
+  const cat=tpl.category||'general';
+  const icons={'sales-lead-gen':'💼','service-businesses':'🔧','recruitment-staffing':'👥','marketing-agencies':'📣','professional-services':'⚖️','ecommerce-retail':'🛒','healthcare-wellness':'🏥','construction-development':'🏗️','grant-funding':'💰','government-contracting':'🏛️','education-training':'📚','publishing-media':'📰','site-flipping':'🔄','onboarding':'📁','operations':'⚙️'};
+  const icon=icons[cat]||'📋';
+  
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
+  
+  let html='<div class="modal" style="max-width:700px">';
+  html+='<div style="display:flex;align-items:start;gap:12px;margin-bottom:20px">';
+  html+='<div style="font-size:40px">'+icon+'</div>';
+  html+='<div><h2 style="margin:0 0 4px">'+esc(tpl.name||'Template')+'</h2>';
+  html+='<div style="font-size:13px;color:var(--text2)">'+(tpl.description||'No description')+'</div>';
+  html+='<div style="margin-top:8px"><span class="badge badge-active">'+esc(cat)+'</span> <span style="color:var(--text2);font-size:12px">'+(steps.length||0)+' steps</span></div>';
+  html+='</div></div>';
+  
+  // Step list
+  if(steps.length){
+    html+='<h3 style="font-size:15px;margin-bottom:12px">Steps</h3>';
+    const stepIcons={'data-card':'📊','ai-action':'🤖','export':'📤','notify':'🔔','delay':'⏳','fork':'🔀'};
+    steps.forEach((s,i)=>{
+      const si=stepIcons[s.step_type]||'📋';
+      html+='<div class="tpl-detail-step"><div class="step-num">'+(i+1)+'</div><div>'+si+' <strong>'+esc(s.name||s.step_type||'Step')+'</strong><br><span style="font-size:12px;color:var(--text2)">'+(s.description||s.step_type||'')+'</span></div></div>';
+    });
+  }
+  
+  html+='<div class="actions">';
+  html+='<button class="btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Close</button>';
+  html+='<button class="btn-primary" onclick="this.closest(\'.modal-overlay\').remove();cloneTemplate(\''+esc(tpl.id)+'\',\''+esc(tpl.name||'Template')+'\')">📋 Clone to My Workflows</button>';
+  html+='</div></div>';
+  
+  overlay.innerHTML=html;
+  document.body.appendChild(overlay);
+}
+
+async function cloneTemplate(id,name){
+  try{
+    const res=await api('/workflows',{method:'POST',body:JSON.stringify({name:name+' (cloned)',template_id:id,description:'Cloned from template'})});
+    showToast('✅ Cloned! Edit it in My Workflows tab');
+    myWorkflows.push(res.workflow||res);
+  }catch(e){showToast(e.message,'error');}
+}
+
+/* ===== DATA ENTRY FORM (reused by prospecting/brand/competitor) ===== */
+function dashboardTabBar(tabs, activeTab, onSwitch){
+  let html='<div class="tabs">';
+  tabs.forEach(t=>{html+='<button class="'+(t.id===activeTab?'active':'')+'" onclick="'+onSwitch.name+'(\''+t.id+'\')">'+esc(t.label||t.name||t.id)+'</button>';});
+  html+='</div>';
+  return html;
+}
+
+async function showConnectWorkflowModal(sourceType, sourceId){
+  let workflows;
+  try{workflows=await api('/workflows')}catch(e){workflows=[]}
+  if(!Array.isArray(workflows))workflows=workflows?.data||workflows?.workflows||[];
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
+  overlay.innerHTML='<div class="modal"><h2>🔗 Connect to Workflow</h2>'
+    +'<p style="font-size:12px;color:var(--text2);margin-bottom:12px">Link this data source to a workflow step.</p>'
+    +'<label>Source Type</label><input value="'+esc(sourceType)+'" readonly style="opacity:.6">'
+    +'<label>Source ID</label><input value="'+esc(sourceId)+'" readonly style="opacity:.6">'
+    +'<label>Workflow</label><select id="connect-workflow-select">'
+    +(workflows.length?workflows.map(w=>'<option value="'+esc(w.id)+'">'+esc(w.name||w.title||w.id.slice(0,8))+'</option>').join(''):'<option value="">No workflows found</option>')
+    +'</select>'
+    +'<label>Step (optional)</label><input id="connect-step" placeholder="e.g. analyze_data">'
+    +'<div class="actions"><button class="btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
+    +'<button class="btn-primary" onclick="submitConnectWorkflow(this,\'"+sourceType+"\',\'"+sourceId+"')">Connect</button></div></div>';
+  document.body.appendChild(overlay);
+}
+
+async function submitConnectWorkflow(btn, sourceType, sourceId){
+  const workflowId=document.getElementById('connect-workflow-select').value;
+  const step=document.getElementById('connect-step').value||'';
+  if(!workflowId){showToast('Select a workflow','error');return;}
+  btn.textContent='Connecting...';btn.disabled=true;
+  try{
+    await api('/dashboard/connect-workflow',{method:'POST',body:JSON.stringify({source_type:sourceType,source_id:sourceId,workflow_id:workflowId,step:step})});
+    btn.closest('.modal-overlay').remove();
+    showToast('Connected to workflow!');
+  }catch(e){showToast(e.message,'error');btn.textContent='Connect';btn.disabled=false;}
+}
+
+/* ===== BRAND MONITOR ===== */
+let brandMonitors=[], brandResults={};
+async function renderBrandMonitor(){
+  try{brandMonitors=await api('/dashboard/brand-monitor')}catch(e){brandMonitors=[]}
+  if(!Array.isArray(brandMonitors))brandMonitors=brandMonitors?.data||brandMonitors?.items||[];
+  renderBrandMonitorList();
+}
+function renderBrandMonitorList(){
+  const mc=$('main-content');
+  let html='<div class="top-bar"><h1>📡 Brand Monitor</h1><button class="btn-primary" onclick="showBrandMonitorForm()">+ Track Brand</button></div>';
+  html+='<p style="font-size:12px;color:var(--text2);margin-bottom:12px">Monitor brand mentions, sentiment, and social presence across the web.</p>';
+  if(brandMonitors.length===0){html+='<div class="card"><div class="empty">No brands being monitored. Click "+ Track Brand" to start.</div></div>';}
+  else{html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px">';
+  brandMonitors.forEach(b=>{
+    const results=brandResults[b.id]||[];
+    const latest=results[0];
+    html+='<div class="card" style="padding:16px">';
+    html+='<div style="display:flex;justify-content:space-between;align-items:start">';
+    html+='<div><div style="font-weight:600;font-size:14px">'+esc(b.name||b.brand||'Unnamed')+'</div>';
+    html+='<div style="font-size:11px;color:var(--text2);margin-top:2px">'+(b.keywords||b.name||'')+'</div></div>';
+    html+='<button class="btn-danger btn-sm" onclick="deleteBrandMonitor(\''+esc(b.id)+'\')">✕</button>';
+    html+='</div>';
+    if(latest){html+='<div style="margin:8px 0;font-size:12px;color:var(--text2)">Latest: '+esc((latest.title||latest.content||'').slice(0,80))+'</div>';}
+    html+='<div style="display:flex;gap:8px;margin-top:8px">';
+    html+='<button class="btn-secondary btn-sm" onclick="loadBrandResults(\''+esc(b.id)+'\')">📊 View Mentions ('+(results.length||0)+')</button>';
+    html+='<button class="btn-secondary btn-sm" onclick="showConnectWorkflowModal(\'brand-monitor\',\''+esc(b.id)+'\')">🔗</button>';
+    html+='</div></div>';
+  });
+  html+='</div>';}
+  mc.innerHTML=html;
+}
+function showBrandMonitorForm(){
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
+  overlay.innerHTML='<div class="modal"><h2>📡 Track New Brand</h2>'
+    +'<label>Brand Name</label><input id="bm-name" placeholder="e.g. Nike">'
+    +'<label>Keywords (comma separated)</label><input id="bm-keywords" placeholder="e.g. Nike, Just Do It, swoosh">'
+    +'<label>Platforms to monitor</label><select id="bm-platforms" multiple style="height:80px"><option value="etsy" selected>Etsy</option><option value="pinterest" selected>Pinterest</option><option value="tiktok">TikTok</option><option value="yelp">Yelp</option><option value="google_maps">Google Maps</option><option value="instagram">Instagram</option></select>'
+    +'<p style="font-size:11px;color:var(--text2);margin-top:4px">Hold Ctrl/Cmd to select multiple</p>'
+    +'<div class="actions"><button class="btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
+    +'<button class="btn-primary" onclick="createBrandMonitor(this)">Start Monitoring</button></div></div>';
+  document.body.appendChild(overlay);
+}
+async function createBrandMonitor(btn){
+  const name=document.getElementById('bm-name').value;
+  const keywords=document.getElementById('bm-keywords').value;
+  const sel=document.getElementById('bm-platforms');
+  const platforms=Array.from(sel.selectedOptions).map(o=>o.value);
+  if(!name){showToast('Enter a brand name','error');return;}
+  btn.textContent='Creating...';btn.disabled=true;
+  try{
+    const res=await api('/dashboard/brand-monitor',{method:'POST',body:JSON.stringify({name:name,keywords:keywords||name,platforms:platforms})});
+    btn.closest('.modal-overlay').remove();
+    showToast('Brand monitor created!');
+    brandMonitors.push(res.data||res.item||res);
+    renderBrandMonitorList();
+  }catch(e){showToast(e.message,'error');btn.textContent='Start Monitoring';btn.disabled=false;}
+}
+async function loadBrandResults(id){
+  try{
+    brandResults[id]=await api('/dashboard/brand-monitor/'+id+'/results');
+    if(!Array.isArray(brandResults[id]))brandResults[id]=brandResults[id]?.data||brandResults[id]?.items||[];
+  }catch(e){brandResults[id]=[];}
+  renderBrandResultsModal(id);
+}
+function renderBrandResultsModal(id){
+  const results=brandResults[id]||[];
+  const b=brandMonitors.find(x=>x.id===id);
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
+  let html='<div class="modal" style="max-width:700px"><h2>📊 '+esc(b?.name||'Brand')+' Mentions</h2>';
+  if(results.length===0){html+='<div class="empty">No mentions found yet. Run a search to find mentions.</div>';}
+  else{results.slice(0,20).forEach(r=>{
+    const sentiment=r.sentiment||'neutral';
+    const icons={positive:'🟢',negative:'🔴',neutral:'🟡'};
+    html+='<div style="padding:10px 0;border-bottom:1px solid var(--border);font-size:13px">';
+    html+='<div style="display:flex;justify-content:space-between"><span>'+icons[sentiment]+' '+esc((r.title||r.content||'').slice(0,100))+'</span><span style="font-size:11px;color:var(--text2)">'+(r.platform||'')+'</span></div>';
+    if(r.url)html+='<div style="font-size:11px;color:var(--accent);margin-top:2px"><a href="'+esc(r.url)+'" target="_blank">'+esc(r.url.slice(0,60))+'</a></div>';
+    html+='</div>';
+  });}
+  html+='<div class="actions"><button class="btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Close</button></div></div>';
+  overlay.innerHTML=html;
+  document.body.appendChild(overlay);
+}
+async function deleteBrandMonitor(id){
+  if(!confirm('Remove this brand monitor?'))return;
+  try{await api('/dashboard/brand-monitor/'+id,{method:'DELETE'});brandMonitors=brandMonitors.filter(b=>b.id!==id);renderBrandMonitorList();showToast('Removed');}
+  catch(e){showToast(e.message,'error')}
+}
+
+/* ===== COMPETITOR WATCH ===== */
+let competitors=[], competitorChanges={};
+async function renderCompetitorWatch(){
+  try{competitors=await api('/dashboard/competitor-watch')}catch(e){competitors=[]}
+  if(!Array.isArray(competitors))competitors=competitors?.data||competitors?.items||[];
+  renderCompetitorList();
+}
+function renderCompetitorList(){
+  const mc=$('main-content');
+  let html='<div class="top-bar"><h1>🏆 Competitor Watch</h1><button class="btn-primary" onclick="showCompetitorForm()">+ Track Competitor</button></div>';
+  html+='<p style="font-size:12px;color:var(--text2);margin-bottom:12px">Monitor competitor websites, pricing changes, and new activity.</p>';
+  if(competitors.length===0){html+='<div class="card"><div class="empty">No competitors tracked. Click "+ Track Competitor" to start.</div></div>';}
+  else{html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px">';
+  competitors.forEach(c=>{
+    const changes=competitorChanges[c.id]||[];
+    const latest=changes[0];
+    html+='<div class="card" style="padding:16px">';
+    html+='<div style="display:flex;justify-content:space-between;align-items:start">';
+    html+='<div><div style="font-weight:600;font-size:14px">'+esc(c.name||'Unnamed')+'</div>';
+    html+='<div style="font-size:11px;color:var(--text2);margin-top:2px">'+(c.url||c.website||'')+'</div></div>';
+    html+='<button class="btn-danger btn-sm" onclick="deleteCompetitor(\''+esc(c.id)+'\')">✕</button>';
+    html+='</div>';
+    if(latest){html+='<div style="margin:8px 0;font-size:12px"><span style="color:var(--yellow)">⚠️</span> '+esc((latest.change||latest.title||'').slice(0,80))+'</div>';}
+    html+='<div style="display:flex;gap:8px;margin-top:8px">';
+    html+='<button class="btn-secondary btn-sm" onclick="loadCompetitorChanges(\''+esc(c.id)+'\')">📊 Changes ('+(changes.length||0)+')</button>';
+    html+='<button class="btn-secondary btn-sm" onclick="showConnectWorkflowModal(\'competitor\',\''+esc(c.id)+'\')">🔗</button>';
+    html+='</div></div>';
+  });
+  html+='</div>';}
+  mc.innerHTML=html;
+}
+function showCompetitorForm(){
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
+  overlay.innerHTML='<div class="modal"><h2>🏆 Track New Competitor</h2>'
+    +'<label>Competitor Name</label><input id="comp-name" placeholder="e.g. Acme Corp">'
+    +'<label>Website URL</label><input id="comp-url" placeholder="e.g. https://acme.com">'
+    +'<label>Notes</label><textarea id="comp-notes" rows="2" placeholder="What to watch for..."></textarea>'
+    +'<div class="actions"><button class="btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
+    +'<button class="btn-primary" onclick="createCompetitor(this)">Start Watching</button></div></div>';
+  document.body.appendChild(overlay);
+}
+async function createCompetitor(btn){
+  const name=document.getElementById('comp-name').value;
+  const url=document.getElementById('comp-url').value;
+  const notes=document.getElementById('comp-notes').value;
+  if(!name){showToast('Enter a competitor name','error');return;}
+  btn.textContent='Creating...';btn.disabled=true;
+  try{
+    const res=await api('/dashboard/competitor-watch',{method:'POST',body:JSON.stringify({name:name,url:url,notes:notes})});
+    btn.closest('.modal-overlay').remove();
+    showToast('Competitor tracked!');
+    competitors.push(res.data||res.item||res);
+    renderCompetitorList();
+  }catch(e){showToast(e.message,'error');btn.textContent='Start Watching';btn.disabled=false;}
+}
+async function loadCompetitorChanges(id){
+  try{
+    competitorChanges[id]=await api('/dashboard/competitor-watch/'+id+'/changes');
+    if(!Array.isArray(competitorChanges[id]))competitorChanges[id]=competitorChanges[id]?.data||competitorChanges[id]?.items||[];
+  }catch(e){competitorChanges[id]=[];}
+  renderChangesModal(id);
+}
+function renderChangesModal(id){
+  const changes=competitorChanges[id]||[];
+  const c=competitors.find(x=>x.id===id);
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
+  let html='<div class="modal" style="max-width:700px"><h2>📊 '+esc(c?.name||'Competitor')+' Changes</h2>';
+  if(changes.length===0){html+='<div class="empty">No changes detected yet.</div>';}
+  else{changes.slice(0,20).forEach(ch=>{
+    html+='<div style="padding:10px 0;border-bottom:1px solid var(--border);font-size:13px">';
+    html+='<div>⚠️ '+esc((ch.change||ch.title||ch.description||'').slice(0,150))+'</div>';
+    html+='<div style="font-size:11px;color:var(--text2);margin-top:2px">'+(ch.detected_at?new Date(ch.detected_at).toLocaleString():'')+'</div>';
+    html+='</div>';
+  });}
+  html+='<div class="actions"><button class="btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Close</button></div></div>';
+  overlay.innerHTML=html;
+  document.body.appendChild(overlay);
+}
+async function deleteCompetitor(id){
+  if(!confirm('Remove this competitor?'))return;
+  try{await api('/dashboard/competitor-watch/'+id,{method:'DELETE'});competitors=competitors.filter(c=>c.id!==id);renderCompetitorList();showToast('Removed');}
+  catch(e){showToast(e.message,'error')}
+}
+
+/* ===== PROSPECTING ===== */
+let prospectingSearches=[], prospectingResults={};
+async function renderProspecting(){
+  try{prospectingSearches=await api('/dashboard/prospecting')}catch(e){prospectingSearches=[]}
+  if(!Array.isArray(prospectingSearches))prospectingSearches=prospectingSearches?.data||prospectingSearches?.items||[];
+  renderProspectingList();
+}
+function renderProspectingList(){
+  const mc=$('main-content');
+  let html='<div class="top-bar"><h1>🔍 Business Prospecting</h1><button class="btn-primary" onclick="showProspectingForm()">+ New Search</button></div>';
+  html+='<p style="font-size:12px;color:var(--text2);margin-bottom:12px">Search for businesses, leads, and prospects using AI-powered discovery.</p>';
+  if(prospectingSearches.length===0){html+='<div class="card"><div class="empty">No searches yet. Click "+ New Search" to find prospects.</div></div>';}
+  else{html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px">';
+  prospectingSearches.forEach(s=>{
+    const results=prospectingResults[s.id]||[];
+    html+='<div class="card" style="padding:16px">';
+    html+='<div style="display:flex;justify-content:space-between;align-items:start">';
+    html+='<div><div style="font-weight:600;font-size:14px">🔍 '+esc(s.query||s.name||'Search')+'</div>';
+    html+='<div style="font-size:11px;color:var(--text2);margin-top:2px">'+(s.location||'')+'</div></div>';
+    html+='<button class="btn-danger btn-sm" onclick="deleteProspectingSearch(\''+esc(s.id)+'\')">✕</button>';
+    html+='</div>';
+    html+='<div style="font-size:12px;color:var(--text2);margin:8px 0">'+(results.length||0)+' leads found</div>';
+    html+='<div style="display:flex;gap:8px;margin-top:8px">';
+    html+='<button class="btn-secondary btn-sm" onclick="loadProspectingResults(\''+esc(s.id)+'\')">🎯 View Leads ('+(results.length||0)+')</button>';
+    html+='<button class="btn-secondary btn-sm" onclick="exportProspectingCSV(\''+esc(s.id)+'\')">📥 CSV</button>';
+    html+='<button class="btn-secondary btn-sm" onclick="showConnectWorkflowModal(\'prospecting\',\''+esc(s.id)+'\')">🔗</button>';
+    html+='</div></div>';
+  });
+  html+='</div>';}
+  mc.innerHTML=html;
+}
+function showProspectingForm(){
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
+  overlay.innerHTML='<div class="modal"><h2>🔍 New Prospect Search</h2>'
+    +'<label>Search Query</label><input id="prosp-query" placeholder="e.g. plumbers in Seattle">'
+    +'<label>Location</label><input id="prosp-location" placeholder="Seattle, WA">'
+    +'<label>Industry</label><input id="prosp-industry" placeholder="e.g. Plumbing">'
+    +'<div class="actions"><button class="btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
+    +'<button class="btn-primary" onclick="createProspectingSearch(this)">Search</button></div></div>';
+  document.body.appendChild(overlay);
+}
+async function createProspectingSearch(btn){
+  const query=document.getElementById('prosp-query').value;
+  const location=document.getElementById('prosp-location').value;
+  const industry=document.getElementById('prosp-industry').value;
+  if(!query){showToast('Enter a search query','error');return;}
+  btn.textContent='Searching...';btn.disabled=true;
+  try{
+    const res=await api('/dashboard/prospecting',{method:'POST',body:JSON.stringify({query:query,location:location,industry:industry})});
+    btn.closest('.modal-overlay').remove();
+    showToast('Search created!');
+    prospectingSearches.push(res.data||res.item||res);
+    renderProspectingList();
+  }catch(e){showToast(e.message,'error');btn.textContent='Search';btn.disabled=false;}
+}
+async function loadProspectingResults(id){
+  try{
+    prospectingResults[id]=await api('/dashboard/prospecting/'+id+'/results');
+    if(!Array.isArray(prospectingResults[id]))prospectingResults[id]=prospectingResults[id]?.data||prospectingResults[id]?.items||[];
+  }catch(e){prospectingResults[id]=[];}
+  renderProspectingResultsModal(id);
+}
+function renderProspectingResultsModal(id){
+  const results=prospectingResults[id]||[];
+  const s=prospectingSearches.find(x=>x.id===id);
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
+  let html='<div class="modal" style="max-width:800px;max-height:90vh"><h2>🎯 '+esc(s?.query||'Results')+'</h2>';
+  if(results.length===0){html+='<div class="empty">No results yet. Results will appear once the search completes.</div>';}
+  else{html+='<div style="overflow-y:auto;max-height:60vh">';
+  results.forEach(r=>{
+    html+='<div class="card" style="padding:12px;margin-bottom:8px">';
+    html+='<div style="font-weight:600;font-size:13px">'+esc(r.name||r.business_name||'Unknown')+'</div>';
+    if(r.phone)html+='<div style="font-size:12px;color:var(--text2)">📞 '+esc(r.phone)+'</div>';
+    if(r.email)html+='<div style="font-size:12px;color:var(--text2)">📧 '+esc(r.email)+'</div>';
+    if(r.website)html+='<div style="font-size:12px;color:var(--accent)">🔗 <a href="'+esc(r.website)+'" target="_blank">'+esc(r.website.slice(0,50))+'</a></div>';
+    if(r.address)html+='<div style="font-size:12px;color:var(--text2)">📍 '+esc(r.address)+'</div>';
+    if(r.rating)html+='<div style="font-size:12px">'+'⭐'.repeat(Math.round(r.rating))+' '+esc(String(r.rating))+'</div>';
+    html+='</div>';
+  });
+  html+='</div>';}
+  html+='<div class="actions"><button class="btn-secondary" onclick="exportProspectingCSV(\''+esc(id)+'\')">📥 Export CSV</button><button class="btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Close</button></div></div>';
+  overlay.innerHTML=html;
+  document.body.appendChild(overlay);
+}
+function exportProspectingCSV(id){
+  const results=prospectingResults[id]||[];
+  if(!results.length){showToast('No results to export','error');return;}
+  const headers=['Name','Phone','Email','Website','Address','Rating'];
+  const rows=results.map(r=>[r.name||r.business_name||'',r.phone||'',r.email||'',r.website||'',r.address||'',r.rating||'']);
+  const csv=[headers.join(','),...rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(','))].join('\n');
+  const blob=new Blob([csv],{type:'text/csv'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='prospects-'+id.slice(0,8)+'.csv';a.click();
+  URL.revokeObjectURL(a.href);
+  showToast('CSV exported!');
+}
+async function deleteProspectingSearch(id){
+  if(!confirm('Delete this search?'))return;
+  try{await api('/dashboard/prospecting/'+id,{method:'DELETE'});prospectingSearches=prospectingSearches.filter(s=>s.id!==id);renderProspectingList();showToast('Deleted');}
+  catch(e){showToast(e.message,'error')}
+}
+
+/* ===== CLIENTS ===== */
+let clients=[],clPage=1,clSearch='';
+async function renderClients(){
+  try{clients=await api('/clients')}catch(e){clients=[]}
+  if(!Array.isArray(clients))clients=clients?.data||clients?.clients||[];
+  renderClientsTable();
+}
+function renderClientsTable(){
+  const start=(clPage-1)*20;
+  const filtered=clients.filter(c=>!clSearch||(c.name||c.email||'').toLowerCase().includes(clSearch.toLowerCase()));
+  const page=filtered.slice(start,start+20);
+  const tp=Math.ceil(filtered.length/20)||1;
+  const mc=$('main-content');
+  mc.innerHTML='<div class="top-bar"><h1>👥 Clients</h1></div>'
+    +'<div style="margin-bottom:12px"><input placeholder="Search clients..." oninput="clSearch=this.value;clPage=1;renderClientsTable()" style="max-width:300px"></div>'
+    +'<div class="card" style="padding:0;overflow-x:auto"><table>'
+    +'<tr><th>Name</th><th>Email</th><th>Company</th><th>Status</th><th>Created</th></tr>'
+    +page.map(c=>'<tr><td>'+esc(c.name||'—')+'</td><td>'+esc(c.email||'—')+'</td><td>'+esc(c.company||c.company_name||'—')+'</td><td><span class="badge badge-'+(c.status==='active'?'active':'inactive')+'">'+esc(c.status||'active')+'</span></td><td>'+(c.created_at?new Date(c.created_at).toLocaleDateString():'—')+'</td></tr>').join('')
+    +'</table></div>'
+    +'<div class="pagination"><button onclick="clPage=Math.max(1,clPage-1);renderClientsTable()" '+(clPage<=1?'disabled':'')+'>← Prev</button><span>Page '+clPage+' of '+tp+'</span><button onclick="clPage=Math.min(tp,clPage+1);renderClientsTable()" '+(clPage>=tp?'disabled':'')+'>Next →</button></div>';
+}
+
+/* ===== INVOICES ===== */
+let invoices=[],invPage=1;
+async function renderInvoices(){
+  try{invoices=await api('/invoices')}catch(e){invoices=[]}
+  if(!Array.isArray(invoices))invoices=invoices?.data||invoices?.invoices||[];
+  renderInvoicesTable();
+}
+function renderInvoicesTable(){
+  const start=(invPage-1)*20;
+  const page=invoices.slice(start,start+20);
+  const tp=Math.ceil(invoices.length/20)||1;
+  const mc=$('main-content');
+  mc.innerHTML='<div class="top-bar"><h1>💰 Invoices</h1></div>'
+    +'<div class="card" style="padding:0;overflow-x:auto"><table>'
+    +'<tr><th>#</th><th>Client</th><th>Amount</th><th>Status</th><th>Due Date</th></tr>'
+    +page.map(i=>'<tr><td>'+esc(i.invoice_number||i.id?.slice(0,8)||'—')+'</td><td>'+esc(i.client_name||i.client?.name||'—')+'</td><td>'+(i.amount? '$'+Number(i.amount).toFixed(2):'—')+'</td><td><span class="badge badge-'+(i.status==='paid'?'active':i.status==='overdue'?'inactive':'pending')+'">'+esc(i.status||'pending')+'</span></td><td>'+(i.due_date?new Date(i.due_date).toLocaleDateString():'—')+'</td></tr>').join('')
+    +'</table></div>'
+    +'<div class="pagination"><button onclick="invPage=Math.max(1,invPage-1);renderInvoicesTable()" '+(invPage<=1?'disabled':'')+'>← Prev</button><span>Page '+invPage+' of '+tp+'</span><button onclick="invPage=Math.min(tp,invPage+1);renderInvoicesTable()" '+(invPage>=tp?'disabled':'')+'>Next →</button></div>';
+}
+
+/* ===== CREDITS ===== */
+async function renderCredits(){
+  let creditData;
+  try{creditData=await api('/credits/balance')}catch(e){creditData=null}
+  const mc=$('main-content');
+  mc.innerHTML='<h1>⭐ Credit Management</h1>'
+    +'<div class="grid-4">'
+    +  '<div class="card stat-card"><div class="num">'+(creditData?.balance||0)+'</div><div class="label">Total Credits</div></div>'
+    +  '<div class="card stat-card"><div class="num">'+(creditData?.used||0)+'</div><div class="label">Used</div></div>'
+    +  '<div class="card stat-card"><div class="num">'+(creditData?.available||creditData?.balance||0)+'</div><div class="label">Available</div></div>'
+    +'</div>'
+    +'<div class="card"><p class="empty">Credit transactions and management coming soon</p></div>';
+}
+
+/* ===== INSTANCES ===== */
+let instances=[],instPage=1;
+async function renderInstances(){
+  try{instances=await api('/instances')}catch(e){instances=[]}
+  if(!Array.isArray(instances))instances=instances?.data||instances?.instances||[];
+  renderInstancesTable();
+}
+function renderInstancesTable(){
+  const start=(instPage-1)*20;
+  const page=instances.slice(start,start+20);
+  const tp=Math.ceil(instances.length/20)||1;
+  const mc=$('main-content');
+  mc.innerHTML='<div class="top-bar"><h1>📦 Workflow Instances</h1></div>'
+    +'<div class="card" style="padding:0;overflow-x:auto"><table>'
+    +'<tr><th>ID</th><th>Workflow</th><th>Status</th><th>Step</th><th>Started</th></tr>'
+    +page.map(i=>'<tr><td>'+esc(i.id?.slice(0,8)||'—')+'</td><td>'+esc(i.workflow_name||i.workflow?.name||'—')+'</td><td><span class="badge badge-'+(i.status==='completed'?'active':i.status==='failed'?'inactive':'pending')+'">'+esc(i.status||'running')+'</span></td><td>'+(i.current_step||i.step||0)+'</td><td>'+(i.created_at?new Date(i.created_at).toLocaleDateString():'—')+'</td></tr>').join('')
+    +'</table></div>'
+    +'<div class="pagination"><button onclick="instPage=Math.max(1,instPage-1);renderInstancesTable()" '+(instPage<=1?'disabled':'')+'>← Prev</button><span>Page '+instPage+' of '+tp+'</span><button onclick="instPage=Math.min(tp,instPage+1);renderInstancesTable()" '+(instPage>=tp?'disabled':'')+'>Next →</button></div>';
+}
+
+/* ===== EXTENSION ===== */
+/* ===== INTEGRATION CENTER ===== */
+let userIntegrations=[];
+
+async function renderIntegrations(){
+  const mc=$('main-content');
+  mc.innerHTML='<h1>🔗 Integration Center</h1>\n'
+    +'<p style="font-size:13px;color:var(--text2);margin-bottom:16px">Connect your own API keys and engines. WorkflowSwift automatically uses your keys when available — otherwise it falls back to the system default at standard credit rates.</p>';
+
+  try{
+    const res=await api('/integrations');
+    userIntegrations=res.integrations||[];
+  }catch(e){userIntegrations=[]}
+
+  let native,byok,engine;
+  try{
+    const nres=await api('/integrations/native');
+    native=nres.native_integrations||[];
+  }catch(e){native=[]}
+
+  // Separate integrations by type
+  byok=userIntegrations.filter(i=>i.integration_type==='byok');
+  engine=userIntegrations.filter(i=>i.integration_type==='engine');
+
+  // Available providers checklist for adding
+  const availableProviders={
+    'openai':{name:'OpenAI',icon:'🤖',desc:'LLM calls — GPT-4, GPT-3.5',requiresBaseUrl:false},
+    'anthropic':{name:'Anthropic',icon:'🧠',desc:'LLM calls — Claude 3, Claude 3.5 Sonnet',requiresBaseUrl:false},
+    'deepseek':{name:'DeepSeek',icon:'🔍',desc:'LLM calls — DeepSeek models',requiresBaseUrl:false},
+    'gemini':{name:'Gemini',icon:'🌟',desc:'LLM calls — Google Gemini Pro',requiresBaseUrl:false},
+    'sendgrid':{name:'SendGrid',icon:'📧',desc:'Email delivery — transactional and marketing',requiresBaseUrl:false},
+    'smtp':{name:'SMTP (Custom)',icon:'📨',desc:'Custom SMTP for email',requiresBaseUrl:true},
+    'mailchimp':{name:'Mailchimp',icon:'🐵',desc:'Email marketing and audiences',requiresBaseUrl:false},
+    'activecampaign':{name:'ActiveCampaign',icon:'🎯',desc:'Marketing automation and CRM',requiresBaseUrl:false},
+    'hubspot':{name:'HubSpot',icon:'🔄',desc:'Full CRM platform',requiresBaseUrl:false},
+    'salesforce':{name:'Salesforce',icon:'☁️',desc:'Enterprise CRM',requiresBaseUrl:false},
+    'convertkit':{name:'ConvertKit',icon:'✉️',desc:'Creator email platform',requiresBaseUrl:false},
+    'slack':{name:'Slack',icon:'💬',desc:'Team messaging and alerts',requiresBaseUrl:false},
+    'discord':{name:'Discord',icon:'🎮',desc:'Community messaging and alerts',requiresBaseUrl:false},
+    'google_sheets':{name:'Google Sheets',icon:'📗',desc:'Spreadsheet data',requiresBaseUrl:false},
+    'stripe':{name:'Stripe',icon:'💳',desc:'Payment processing',requiresBaseUrl:false},
+    'openclaw':{name:'OpenClaw (Engine)',icon:'⚙️',desc:'Your own OpenClaw instance for reasoning',requiresBaseUrl:true},
+    'hexomatic':{name:'Hexomatic',icon:'🔬',desc:'Web scraping and data extraction',requiresBaseUrl:false},
+    'mailgun':{name:'Mailgun',icon:'📬',desc:'Email API for developers',requiresBaseUrl:false},
+    'twilio':{name:'Twilio',icon:'📱',desc:'SMS and communication API',requiresBaseUrl:false},
+  };
+
+  let html='';
+
+  // ===== NATIVE INTEGRATIONS =====
+  if(native && native.length){
+    html+='<div class="card" style="margin-bottom:16px">';
+    html+='<h3 style="margin-bottom:12px">⚡ Native SwiftSoftware</h3>';
+    html+='<p style="font-size:12px;color:var(--text2);margin-bottom:12px">Built-in products — no setup needed. Toggle on to enable.</p>';
+    html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px">';
+    native.forEach(n=>{
+      const icon=n.icon||'🔗';
+      html+='<div class="card" style="padding:12px;display:flex;align-items:center;gap:12px">';
+      html+='<div style="font-size:24px">'+icon+'</div>';
+      html+='<div style="flex:1"><div style="font-weight:600;font-size:13px">'+esc(n.name||n.provider)+'</div>';
+      html+='<div style="font-size:11px;color:var(--text2)">'+(n.description||'')+'</div></div>';
+      html+='<label style="position:relative;display:inline-block;width:44px;height:24px">';
+      html+='<input type="checkbox" '+(n.enabled?'checked':'')+' style="opacity:0;width:0;height:0" onchange="toggleNativeIntegration(\\''+esc(n.provider)+'\\',this.checked)">';
+      html+='<span style="position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:'+(n.enabled?'var(--accent)':'var(--border)')+';border-radius:12px;transition:.3s">';
+      html+='<span style="position:absolute;content:\\"\\";height:18px;width:18px;left:'+(n.enabled?'24px':'3px')+';bottom:3px;background:white;border-radius:50%;transition:.3s"></span></span></label>';
+      html+='</div>';
+    });
+    html+='</div></div>';
+  }
+
+  // ===== YOUR CONNECTIONS (BYOK + ENGINE) =====
+  html+='<div class="card" style="margin-bottom:16px">';
+  html+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">';
+  html+='<h3 style="margin:0">🔑 Your Connected APIs</h3>';
+  html+='<button class="btn-primary btn-sm" onclick="showAddIntegrationModal()">+ Connect New</button></div>';
+
+  const connected=byok.concat(engine);
+  if(connected.length===0){
+    html+='<div class="empty" style="padding:24px">No API keys connected yet. Click "+ Connect New" to add your first provider.<br><span style="font-size:11px;color:var(--text2)">Once connected, workflow steps auto-use your keys at zero credit cost.</span></div>';
+  } else {
+    html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px">';
+    connected.forEach(c=>{
+      const prov=availableProviders[c.provider]||{name:c.provider_label||c.provider,icon:'🔗',desc:''};
+      const healthClass=c.last_health_status==='connected'?'badge-active':c.last_health_status==='error'?'badge-inactive':'badge-pending';
+      const healthLabel=c.last_health_status||'pending';
+      html+='<div class="card" style="padding:12px;position:relative">';
+      html+='<div style="display:flex;align-items:start;gap:8px">';
+      html+='<div style="font-size:20px">'+prov.icon+'</div>';
+      html+='<div style="flex:1"><div style="font-weight:600;font-size:13px">'+esc(prov.name||c.provider)+'</div>';
+      html+='<div style="font-size:11px;color:var(--text2)">'+esc(prov.desc||'')+'</div>';
+      html+='<div style="margin-top:4px"><span class="badge '+healthClass+'">'+healthLabel+'</span>';
+      if(c.credit_cost===0) html+=' <span class="badge badge-active" style="background:rgba(52,211,153,.15);color:var(--green)">0 credits</span>';
+      html+='</div></div>';
+      html+='<button class="btn-danger btn-sm" onclick="deleteIntegration(\\''+esc(c.provider)+'\\')" title="Disconnect">✕</button>';
+      html+='</div>';
+      html+='<div style="margin-top:8px;display:flex;gap:6px">';
+      html+='<button class="btn-secondary btn-sm" onclick="testIntegrationHealth(\\''+esc(c.provider)+'\\')">🔄 Test</button>';
+      html+='<button class="btn-secondary btn-sm" onclick="editIntegration(\\''+esc(c.provider)+'\\')">✏️ Edit</button>';
+      html+='</div></div>';
+    });
+    html+='</div>';
+  }
+  html+='</div>';
+
+  // ===== CREDIT INFO =====
+  html+='<div class="card">';
+  html+='<h3 style="margin-bottom:8px">💳 How Credits Work</h3>';
+  html+='<div style="font-size:12px;color:var(--text2);line-height:1.7">';
+  html+='<div>✅ <strong>Your API key = 0 credits</strong> — steps automatically use your connected keys</div>';
+  html+='<div>⚡ <strong>System default</strong> — 1 credit per step when no key is connected</div>';
+  html+='<div>🔍 <strong>Browser automation</strong> — always system-owned, consumed from your credit balance</div>';
+  html+='<div>📊 <strong>Dashboard display</strong> — 0 credits (included with your plan)</div>';
+  html+='<div>💰 <strong>Unused credits</strong> — roll over month to month</div>';
+  html+='</div></div>';
+
+  mc.innerHTML=html;
+}
+
+function showAddIntegrationModal(){
+  const availableProviders={
+    'openai':{name:'OpenAI',icon:'🤖',desc:'LLM calls',requiresBaseUrl:false,placeholder:'sk-...'},
+    'anthropic':{name:'Anthropic',icon:'🧠',desc:'LLM calls',requiresBaseUrl:false,placeholder:'sk-ant-...'},
+    'deepseek':{name:'DeepSeek',icon:'🔍',desc:'LLM calls',requiresBaseUrl:false,placeholder:'sk-...'},
+    'gemini':{name:'Gemini',icon:'🌟',desc:'LLM calls',requiresBaseUrl:false,placeholder:'AIza...'},
+    'sendgrid':{name:'SendGrid',icon:'📧',desc:'Email (send + templates)',requiresBaseUrl:false,placeholder:'SG....'},
+    'smtp':{name:'SMTP (Custom)',icon:'📨',desc:'Email via your own server',requiresBaseUrl:true,placeholder:'smtp.gmail.com'},
+    'mailchimp':{name:'Mailchimp',icon:'🐵',desc:'Email marketing',requiresBaseUrl:false,placeholder:'...us18'},
+    'activecampaign':{name:'ActiveCampaign',icon:'🎯',desc:'Marketing automation',requiresBaseUrl:true,placeholder:'https://...'},
+    'hubspot':{name:'HubSpot',icon:'🔄',desc:'CRM',requiresBaseUrl:false,placeholder:'pat-...'},
+    'salesforce':{name:'Salesforce',icon:'☁️',desc:'Enterprise CRM',requiresBaseUrl:true,placeholder:'https://...'},
+    'convertkit':{name:'ConvertKit',icon:'✉️',desc:'Creator emails',requiresBaseUrl:false,placeholder:'key_...'},
+    'slack':{name:'Slack',icon:'💬',desc:'Messaging',requiresBaseUrl:false,placeholder:'xoxb-...'},
+    'discord':{name:'Discord',icon:'🎮',desc:'Messaging',requiresBaseUrl:false,placeholder:'Bot token'},
+    'google_sheets':{name:'Google Sheets',icon:'📗',desc:'Spreadsheets',requiresBaseUrl:false,placeholder:'JSON key'},
+    'stripe':{name:'Stripe',icon:'💳',desc:'Payments',requiresBaseUrl:false,placeholder:'sk_live_...'},
+    'openclaw':{name:'OpenClaw (Engine)',icon:'⚙️',desc:'Your own engine + reasoning',requiresBaseUrl:true,placeholder:'https://your-bot:18792'},
+    'hexomatic':{name:'Hexomatic',icon:'🔬',desc:'Web scraping',requiresBaseUrl:false,placeholder:'hex_...'},
+    'mailgun':{name:'Mailgun',icon:'📬',desc:'Email API',requiresBaseUrl:false,placeholder:'key-...'},
+    'twilio':{name:'Twilio',icon:'📱',desc:'SMS',requiresBaseUrl:false,placeholder:'AC...'},
+  };
+
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
+  let html='<div class="modal" style="max-width:500px"><h2>🔗 Connect API</h2>'
+    +'<p style="font-size:12px;color:var(--text2);margin-bottom:12px">Select a provider and enter your API key. WorkflowSwift will use your key instead of the system default — saving you credits.</p>'
+    +'<label>Provider</label>'
+    +'<select id="integ-provider" onchange="updateIntegrationForm()" style="margin-bottom:8px">'
+    +'<option value="">— Select —</option>';
+  Object.entries(availableProviders).forEach(([key,p])=>{
+    html+='<option value="'+key+'">'+p.icon+' '+p.name+'</option>';
+  });
+  html+='</select>'
+    +'<div id="integ-form-details">'
+    +'<div style="font-size:12px;color:var(--text2);padding:12px;text-align:center">Select a provider above</div>'
+    +'</div>'
+    +'<div class="actions"><button class="btn-secondary" onclick="this.closest(\\'.modal-overlay\\').remove()">Cancel</button>'
+    +'<button class="btn-primary" id="integ-save-btn" onclick="saveNewIntegration(this)" disabled>Save Connection</button></div></div>';
+  overlay.innerHTML=html;
+  document.body.appendChild(overlay);
+}
+
+function updateIntegrationForm(){
+  const sel=document.getElementById('integ-provider');
+  const prov=sel.value;
+  const details=document.getElementById('integ-form-details');
+  const btn=document.getElementById('integ-save-btn');
+  if(!prov||!details)return;
+
+  const availableProviders={
+    'openai':{name:'OpenAI',requiresBaseUrl:false,placeholder:'sk-...'},
+    'anthropic':{name:'Anthropic',requiresBaseUrl:false,placeholder:'sk-ant-...'},
+    'deepseek':{name:'DeepSeek',requiresBaseUrl:false,placeholder:'sk-...'},
+    'gemini':{name:'Gemini',requiresBaseUrl:false,placeholder:'AIza...'},
+    'sendgrid':{name:'SendGrid',requiresBaseUrl:false,placeholder:'SG....'},
+    'smtp':{name:'SMTP',requiresBaseUrl:true,placeholder:'smtp.gmail.com'},
+    'mailchimp':{name:'Mailchimp',requiresBaseUrl:false,placeholder:'...us18'},
+    'activecampaign':{name:'ActiveCampaign',requiresBaseUrl:true,placeholder:'https://...'},
+    'hubspot':{name:'HubSpot',requiresBaseUrl:false,placeholder:'pat-...'},
+    'salesforce':{name:'Salesforce',requiresBaseUrl:true,placeholder:'https://...'},
+    'convertkit':{name:'ConvertKit',requiresBaseUrl:false,placeholder:'key_...'},
+    'slack':{name:'Slack',requiresBaseUrl:false,placeholder:'xoxb-...'},
+    'discord':{name:'Discord',requiresBaseUrl:false,placeholder:'Bot token'},
+    'google_sheets':{name:'Google Sheets',requiresBaseUrl:false,placeholder:'JSON key'},
+    'stripe':{name:'Stripe',requiresBaseUrl:false,placeholder:'sk_live_...'},
+    'openclaw':{name:'OpenClaw',requiresBaseUrl:true,placeholder:'https://your-bot:18792'},
+    'hexomatic':{name:'Hexomatic',requiresBaseUrl:false,placeholder:'hex_...'},
+    'mailgun':{name:'Mailgun',requiresBaseUrl:false,placeholder:'key-...'},
+    'twilio':{name:'Twilio',requiresBaseUrl:false,placeholder:'AC...'},
+  };
+
+  const p=availableProviders[prov];
+  if(!p){details.innerHTML='<div style="font-size:12px;color:var(--text2);padding:12px;text-align:center">Select a provider above</div>';btn.disabled=true;return;}
+
+  let form='<label>API Key</label>'
+    +'<input id="integ-api-key" type="password" placeholder="'+esc(p.placeholder)+'" style="margin-bottom:8px" oninput="validateIntegrationForm()">';
+  if(p.requiresBaseUrl){
+    form+='<label>Base URL / Endpoint</label>'
+      +'<input id="integ-base-url" placeholder="https://..." style="margin-bottom:8px" oninput="validateIntegrationForm()">';
+  }
+  form+='<p style="font-size:11px;color:var(--text2);margin-top:4px">Your key is stored encrypted. WorkflowSwift never shares it. Steps using this provider will route to your key at 0 credit cost.</p>';
+  details.innerHTML=form;
+  btn.disabled=false;
+}
+
+function validateIntegrationForm(){
+  // Just a UX helper — real validation on save
+}
+
+async function saveNewIntegration(btn){
+  const provider=document.getElementById('integ-provider').value;
+  const apiKey=document.getElementById('integ-api-key')?.value;
+  const baseUrl=document.getElementById('integ-base-url')?.value;
+  if(!provider||!apiKey){showToast('API key is required','error');return;}
+  btn.textContent='Connecting...';btn.disabled=true;
+  try{
+    const body={provider:provider,api_key:apiKey};
+    if(baseUrl) body.base_url=baseUrl;
+    const res=await api('/integrations',{method:'POST',body:JSON.stringify(body)});
+    btn.closest('.modal-overlay').remove();
+    showToast(res.message||'Connected!');
+    renderIntegrations();
+  }catch(e){showToast(e.message,'error');btn.textContent='Save Connection';btn.disabled=false;}
+}
+
+async function toggleNativeIntegration(provider,enabled){
+  try{
+    await api('/integrations/native/'+provider,{method:'POST'});
+    showToast(enabled?'Enabled':'Disabled');
+    renderIntegrations();
+  }catch(e){showToast(e.message,'error');}
+}
+
+async function deleteIntegration(provider){
+  if(!confirm('Disconnect '+provider+'?'))return;
+  try{
+    await api('/integrations/'+provider,{method:'DELETE'});
+    showToast('Disconnected');
+    renderIntegrations();
+  }catch(e){showToast(e.message,'error');}
+}
+
+async function testIntegrationHealth(provider){
+  try{
+    const res=await api('/integrations/health-check',{method:'POST',body:JSON.stringify({provider:provider})});
+    showToast(res.provider+': '+res.status);
+    renderIntegrations();
+  }catch(e){showToast(e.message,'error');}
+}
+
+function editIntegration(provider){
+  const integration=userIntegrations.find(i=>i.provider===provider);
+  if(!integration){showToast('Integration not found','error');return;}
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
+  overlay.innerHTML='<div class="modal" style="max-width:500px"><h2>✏️ Edit '+esc(integration.provider)+'</h2>'
+    +'<label>API Key (leave blank to keep current)</label>'
+    +'<input id="edit-integ-key" type="password" placeholder="New key or leave empty" style="margin-bottom:8px">'
+    +(integration.base_url?'<label>Base URL</label><input id="edit-integ-url" value="'+esc(integration.base_url)+'" style="margin-bottom:8px">':'')
+    +'<div class="actions"><button class="btn-secondary" onclick="this.closest(\\'.modal-overlay\\').remove()">Cancel</button>'
+    +'<button class="btn-primary" onclick="saveEditedIntegration(\\''+esc(integration.provider)+'\\',this)">Save</button></div></div>';
+  document.body.appendChild(overlay);
+}
+
+async function saveEditedIntegration(provider,btn){
+  const apiKey=document.getElementById('edit-integ-key')?.value;
+  const baseUrl=document.getElementById('edit-integ-url')?.value;
+  btn.textContent='Saving...';btn.disabled=true;
+  try{
+    const body={provider:provider};
+    if(apiKey) body.api_key=apiKey;
+    if(baseUrl) body.base_url=baseUrl;
+    await api('/integrations',{method:'POST',body:JSON.stringify(body)});
+    btn.closest('.modal-overlay').remove();
+    showToast('Updated');
+    renderIntegrations();
+  }catch(e){showToast(e.message,'error');btn.textContent='Save';btn.disabled=false;}
+}
+
+/* ===== CREDIT INFO ON STEP BUILDER ===== */
+// Patch the step edit UI to show credit cost
+async function showStepProviderInfo(stepType,currentProvider){
+  try{
+    const params='?step_type='+stepType;
+    const res=await api('/integrations/resolve'+params);
+    return res.resolution||{};
+  }catch(e){return {}}
+}
+
+function renderExtension(){
+  const mc=$('main-content');
+  mc.innerHTML='<h1>?? Swift Market Intel Extension</h1>'
+    +'<p style="font-size:13px;color:var(--text2);margin-bottom:20px">Install the browser extension to collect market intelligence from Etsy, Pinterest, TikTok, Yelp, Google Maps, Instagram, Amazon, and eBay. Data is automatically sent to your dashboard.</p>'
+    +'<div class="grid-4">'
+    +  '<div class="card" style="text-align:center">'
+    +    '<div style="font-size:40px;margin-bottom:8px">??</div>'
+    +    '<div style="font-weight:600;font-size:14px">Download Extension</div>'
+    +    '<p style="font-size:12px;color:var(--text2);margin:8px 0">ZIP file for manual install</p>'
+    +    '<a href="/swift-market-intel-extension.zip" download class="btn-primary" style="display:inline-block;padding:10px 24px;margin-top:8px">Download .zip</a>'
+    +  '</div>'
+    +  '<div class="card" style="text-align:center">'
+    +    '<div style="font-size:40px;margin-bottom:8px">??</div>'
+    +    '<div style="font-weight:600;font-size:14px">How to Install</div>'
+    +    '<p style="font-size:12px;color:var(--text2);margin:8px 0;text-align:left;line-height:1.6">'
+    +    '1. Download the .zip above<br>'
+    +    '2. Unzip to a folder on your computer<br>'
+    +    '3. Open Chrome → go to <code style="background:var(--surface2);padding:2px 6px;border-radius:4px;font-size:11px">chrome://extensions</code><br>'
+    +    '4. Enable "Developer mode" (toggle top-right)<br>'
+    +    '5. Click "Load unpacked"<br>'
+    +    '6. Point to the unzipped folder<br>'
+    +    '7. Done! Extension icon appears in toolbar'
+    +    '</p>'
+    +  '</div>'
+    +  '<div class="card" style="text-align:center">'
+    +    '<div style="font-size:40px;margin-bottom:8px">??</div>'
+    +    '<div style="font-weight:600;font-size:14px">Supported Sites</div>'
+    +    '<div style="font-size:12px;color:var(--text2);margin-top:8px;text-align:left;line-height:2">'
+    +    '<div>?? <strong>Etsy</strong> — Product research</div>'
+    +    '<div>?? <strong>Pinterest</strong> — Trend analysis</div>'
+    +    '<div>?? <strong>TikTok</strong> — Viral content</div>'
+    +    '<div>?? <strong>Yelp</strong> — Reviews & ratings</div>'
+    +    '<div>?? <strong>Google Maps</strong> — Local business data</div>'
+    +    '<div>?? <strong>Instagram</strong> — Social presence</div>'
+    +    '<div>?? <strong>Amazon</strong> — Product listings</div>'
+    +    '<div>?? <strong>eBay</strong> — Marketplace data</div>'
+    +    '</div>'
+    +  '</div>'
+    +  '<div class="card" style="text-align:center">'
+    +    '<div style="font-size:40px;margin-bottom:8px">??</div>'
+    +    '<div style="font-weight:600;font-size:14px">Auth Setup</div>'
+    +    '<p style="font-size:12px;color:var(--text2);margin:8px 0;text-align:left;line-height:1.6">'
+    +    'After installing, open the extension popup and enter your API token.<br><br>'
+    +    '<strong>Get your token:</strong> Go to <strong>Settings</strong> > API Keys to generate one.<br><br>'
+    +    'The extension will automatically send scraped data to your WorkflowSwift dashboard.'
+    +    '</p>'
+    +  '</div>'
+    +'</div>'
+    +'<div class="card" style="margin-top:8px">'
+    +  '<h3 style="margin-bottom:8px">?? API Keys</h3>'
+    +  '<div id="extension-api-keys-section"></div>'
+    +'</div>';
+  loadExtensionApiKeys();
+}
+
+async function loadExtensionApiKeys(){
+  try{
+    const keys=await api('/api-keys');
+    const arr=Array.isArray(keys)?keys:keys?.data||keys?.keys||[];
+    const section=document.getElementById('extension-api-keys-section');
+    if(!section)return;
+    if(arr.length===0){
+      section.innerHTML='<div class="empty">No API keys yet. <button class="btn-primary btn-sm" onclick="generateApiKey()">Generate Key</button></div>';
+    }else{
+      let html='<table><tr><th>Name</th><th>Key</th><th>Status</th><th></th></tr>';
+      arr.forEach(k=>{
+        html+='<tr><td>'+esc(k.name||'Key')+'</td><td><code style="font-size:11px;background:var(--surface2);padding:2px 6px;border-radius:4px">'+esc(k.key||k.api_key||'')+'</code></td><td><span class="badge badge-active">Active</span></td><td><button class="btn-danger btn-sm" onclick="deleteApiKey(\''+esc(k.id)+'\')">Delete</button></td></tr>';
+      });
+      html+='</table><button class="btn-primary btn-sm" style="margin-top:8px" onclick="generateApiKey()">+ Generate New Key</button>';
+      section.innerHTML=html;
+    }
+  }catch(e){/*ignore*/}
+}
+
+async function generateApiKey(){
+  const name=prompt('Name this API key:');
+  if(!name)return;
+  try{
+    const res=await api('/api-keys',{method:'POST',body:JSON.stringify({name:name})});
+    showToast('API key generated: '+(res.key||res.api_key||'saved'));
+    loadExtensionApiKeys();
+  }catch(e){showToast(e.message,'error');}
+}
+
+async function deleteApiKey(id){
+  if(!confirm('Delete this API key?'))return;
+  try{await api('/api-keys/'+id,{method:'DELETE'});loadExtensionApiKeys();showToast('Deleted');}
+  catch(e){showToast(e.message,'error');}
+}
+
+/* ===== MODAL ===== */
+function showModal(title,data){
+  const overlay=document.createElement('div');
+  overlay.className='modal-overlay';
+  overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
+  overlay.innerHTML='<div class="modal"><h2>'+esc(title)+'</h2><form id="modal-form">'
+    +'<label>Name</label><input name="name" value="'+(data.name||data.title||'')+'">'
+    +'<label>Description</label><textarea name="description" rows="3">'+(data.description||'')+'</textarea>'
+    +'</form><div class="actions"><button class="btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
+    +'<button class="btn-primary" onclick="saveModal(this)">Save</button></div></div>';
+  document.body.appendChild(overlay);
+}
+async function saveModal(btn){
+  const form=btn.closest('.modal').querySelector('#modal-form');
+  const data=Object.fromEntries(new FormData(form));
+  btn.textContent='Saving...';btn.disabled=true;
+  if(currentPage==='workflows'){
+    try{
+      const res=await api('/workflows',{method:'POST',body:JSON.stringify(data)});
+      if(res.id||res.workflow){workflows.push(res.workflow||res);showToast('Workflow created');}
+      btn.closest('.modal-overlay')?.remove();renderWorkflows();
+    }catch(e){showToast(e.message,'error');btn.textContent='Save';btn.disabled=false;}
+  }else{
+    setTimeout(()=>{btn.closest('.modal-overlay')?.remove();showToast('Saved');},500);
+  }
+}
+
+/* ===== PROFILE PAGE ===== */
+async function renderProfile(){
+  const mc=$('main-content');
+  let user, industries, tenantIndustry;
+  try{
+    const res=await api('/auth/me');
+    user=res.user||res;
+  }catch(e){
+    mc.innerHTML='<div class="error">Failed to load profile: '+e.message+'</div>';
+    return;
+  }
+  try{
+    const ir=await api('/industries');
+    industries=ir.industries||ir||[];
+  }catch(e){industries=[];}
+  try{
+    const tir=await api('/tenants/industry');
+    tenantIndustry=tir;
+  }catch(e){tenantIndustry=null;}
+  const currentSlug=tenantIndustry?.primary_industry||tenantIndustry?.industries?.[0]?.industry_slug||'';
+  mc.innerHTML='<h1>👤 My Profile</h1>'
+    +'<div class="card" style="max-width:500px">'
+    +'<label>Email</label>'
+    +'<input id="profile-email" value="'+esc(user.email||'')+'" disabled style="opacity:.6;margin-bottom:12px">'
+    +'<label>Name</label>'
+    +'<input id="profile-name" value="'+esc(user.name||'')+'" style="margin-bottom:12px">'
+    +'<button class="btn-primary" onclick="saveProfile()" style="width:100%">💾 Save Name</button>'
+    +'</div>'
+    +'<div class="card" style="max-width:500px">'
+    +'<h3 style="margin-bottom:12px">🏢 Industry</h3>'
+    +'<p style="font-size:12px;color:var(--text2);margin-bottom:12px">Your industry determines which dashboard KPIs, widgets, and templates are shown. Changing industry creates a new dashboard with relevant metrics.</p>'
+    +'<label>Industry</label>'
+    +'<select id="profile-industry" style="margin-bottom:12px">'
+    +industries.map(i=>'<option value="'+esc(i.slug)+'"'+(i.slug===currentSlug?' selected':'')+'>'+esc(i.name||i.slug)+'</option>').join('')
+    +'</select>'
+    +'<button class="btn-primary" onclick="saveProfileIndustry()" style="width:100%">💾 Set Industry</button>'
+    +'</div>'
+    +'<div class="card" style="max-width:500px">'
+    +'<h3 style="margin-bottom:12px">🔑 Change Password</h3>'
+    +'<label>Current Password</label>'
+    +'<input id="profile-cur-pw" type="password" placeholder="••••••••" style="margin-bottom:12px">'
+    +'<label>New Password</label>'
+    +'<input id="profile-new-pw" type="password" placeholder="••••••••" style="margin-bottom:12px">'
+    +'<button class="btn-primary" onclick="changeMyPassword()" style="width:100%">🔑 Update Password</button>'
+    +'</div>';
+}
+
+async function saveProfileIndustry(){
+  const slug=document.getElementById('profile-industry')?.value;
+  if(!slug){showToast('Select an industry','error');return;}
+  if(!confirm('Switch to this industry? A new dashboard with relevant KPIs and widgets will be created.')) return;
+  const btn=document.querySelectorAll('#main-content .btn-primary')[1];
+  if(btn){btn.textContent='Saving...';btn.disabled=true;}
+  try{
+    await api('/tenants/industry',{method:'PUT',body:JSON.stringify({industry_slug:slug})});
+    showToast('Industry updated! Dashboard and widgets are ready.');
+  }catch(e){showToast(e.message,'error');}
+  if(btn){btn.textContent='Set Industry';btn.disabled=false;}
+}
+
+async function saveProfile(){
+  const name=document.getElementById('profile-name')?.value;
+  if(!name||!name.trim()){showToast('Name cannot be empty','error');return;}
+  const btn=document.querySelector('#main-content .btn-primary');
+  if(btn){btn.textContent='Saving...';btn.disabled=true;}
+  try{
+    const res=await api('/auth/profile',{method:'PUT',body:JSON.stringify({name:name.trim()})});
+    currentUser=res.user||null;
+    if(currentUser){$('user-info').innerHTML=currentUser.email+'<br>'+(currentUser.role||'User');}
+    showToast('Profile updated!');
+  }catch(e){showToast(e.message,'error');}
+  if(btn){btn.textContent='Save';btn.disabled=false;}
+}
+
+async function changeMyPassword(){
+  const cur=$('profile-cur-pw')?.value;
+  const pw=$('profile-new-pw')?.value;
+  if(!cur||!pw){showToast('Enter both passwords','error');return;}
+  if(pw.length<6){showToast('Password must be at least 6 characters','error');return;}
+  const btn=document.querySelectorAll('#main-content .btn-primary')[2];
+  if(btn){btn.textContent='Updating...';btn.disabled=true;}
+  try{
+    await api('/auth/change-password',{method:'POST',body:JSON.stringify({current_password:cur,new_password:pw})});
+    showToast('Password changed!');
+    $('profile-cur-pw').value='';
+    $('profile-new-pw').value='';
+  }catch(e){showToast(e.message,'error');}
+  if(btn){btn.textContent='Update Password';btn.disabled=false;}
+}
+
+/* ===== ADMIN MENU TOGGLE ===== */
+function toggleAdminMenu(){
+  const group=document.getElementById('admin-group');
+  const arrow=document.getElementById('admin-arrow');
+  const isOpen=group.classList.toggle('open');
+  arrow.classList.toggle('open',isOpen);
+}
+
+/* ===== NEW USER PAGES (stubs calling real handlers) ===== */
+
+// Automations
+async function renderAutomations(){
+  const mc=$('main-content');
+  let data;
+  try{data=await api('/automations')}catch(e){data=[]}
+  if(!Array.isArray(data))data=data?.data||data?.automations||[];
+  if(data.length===0){
+    mc.innerHTML='<h1>🤖 Automations</h1><div class="empty">No automations defined yet</div>';
+    return;
+  }
+  mc.innerHTML='<h1>🤖 Automations</h1><div class="card" style="padding:0;overflow-x:auto"><table>'
+    +'<tr><th>Name</th><th>Type</th><th>Status</th><th>Actions</th></tr>'
+    +data.map(a=>'<tr><td>'+esc(a.name||'—')+'</td><td>'+esc(a.automation_type||'—')+'</td><td><span class="badge badge-'+(a.is_active?'active':'inactive')+'">'+(a.is_active?'Active':'Inactive')+'</span></td><td><button class="btn-secondary btn-sm" onclick="runAutomation(\''+esc(a.id)+'\')">▶ Run</button></td></tr>').join('')
+    +'</table></div>';
+}
+
+async function runAutomation(id){
+  try{
+    const res=await api('/automations/'+id+'/run',{method:'POST'});
+    showToast('Automation triggered!');
+  }catch(e){showToast(e.message,'error');}
+}
+
+// Deals
+async function renderDeals(){
+  const mc=$('main-content');
+  let data;
+  try{data=await api('/deals')}catch(e){data=[]}
+  if(!Array.isArray(data))data=data?.data||data?.deals||[];
+  if(data.length===0){mc.innerHTML='<h1>💎 Deals</h1><div class="empty">No deals yet</div>';return;}
+  mc.innerHTML='<h1>💎 Deals</h1><div class="card" style="padding:0;overflow-x:auto"><table>'
+    +'<tr><th>Name</th><th>Value</th><th>Stage</th><th>Contact</th></tr>'
+    +data.map(d=>'<tr><td>'+esc(d.name||d.title||'—')+'</td><td>'+(d.value?'$'+Number(d.value).toLocaleString():'—')+'</td><td>'+esc(d.stage||'—')+'</td><td>'+esc(d.contact_name||'—')+'</td></tr>').join('')
+    +'</table></div>';
+}
+
+// Leads
+async function renderLeads(){
+  const mc=$('main-content');
+  let data;
+  try{data=await api('/leads')}catch(e){data=[]}
+  if(!Array.isArray(data))data=data?.data||data?.leads||[];
+  if(data.length===0){mc.innerHTML='<h1>🎯 Leads</h1><div class="empty">No leads yet</div>';return;}
+  mc.innerHTML='<h1>🎯 Leads</h1><div class="card" style="padding:0;overflow-x:auto"><table>'
+    +'<tr><th>Name</th><th>Email</th><th>Source</th><th>Status</th></tr>'
+    +data.map(l=>'<tr><td>'+esc(l.name||'—')+'</td><td>'+esc(l.email||'—')+'</td><td>'+esc(l.source||'—')+'</td><td><span class="badge badge-'+(l.status==='converted'?'active':'pending')+'">'+esc(l.status||'new')+'</span></td></tr>').join('')
+    +'</table></div>';
+}
+
+// Campaigns
+async function renderCampaigns(){
+  const mc=$('main-content');
+  let data;
+  try{data=await api('/campaigns')}catch(e){data=[]}
+  if(!Array.isArray(data))data=data?.data||data?.campaigns||[];
+  if(data.length===0){mc.innerHTML='<h1>📣 Campaigns</h1><div class="empty">No campaigns yet</div>';return;}
+  mc.innerHTML='<h1>📣 Campaigns</h1><div class="card" style="padding:0;overflow-x:auto"><table>'
+    +'<tr><th>Name</th><th>Type</th><th>Budget</th><th>Status</th></tr>'
+    +data.map(c=>'<tr><td>'+esc(c.name||c.title||'—')+'</td><td>'+esc(c.campaign_type||'—')+'</td><td>'+(c.budget?'$'+Number(c.budget).toLocaleString():'—')+'</td><td><span class="badge badge-'+(c.status==='active'?'active':'inactive')+'">'+esc(c.status||'draft')+'</span></td></tr>').join('')
+    +'</table></div>';
+}
+
+// Tickets
+async function renderTickets(){
+  const mc=$('main-content');
+  let data;
+  try{data=await api('/tickets')}catch(e){data=[]}
+  if(!Array.isArray(data))data=data?.data||data?.tickets||[];
+  if(data.length===0){mc.innerHTML='<h1>🎫 Support Tickets</h1><div class="empty">No tickets</div>';return;}
+  mc.innerHTML='<h1>🎫 Tickets</h1><div class="card" style="padding:0;overflow-x:auto"><table>'
+    +'<tr><th>Title</th><th>Status</th><th>Priority</th><th>Assigned</th></tr>'
+    +data.map(t=>'<tr><td>'+esc(t.title||t.subject||'—')+'</td><td><span class="badge badge-'+(t.status==='open'||t.status==='in_progress'?'pending':t.status==='resolved'||t.status==='closed'?'active':'inactive')+'">'+esc(t.status||'open')+'</span></td><td>'+esc(t.priority||'—')+'</td><td>'+esc(t.assigned_to||'—')+'</td></tr>').join('')
+    +'</table></div>';
+}
+
+/* ===== ADMIN PAGES ===== */
+function genericAdminPage(title, icon, endpoint, key){
+  return async function(){
+    const mc=$('main-content');
+    let data;
+    try{data=await api(endpoint)}catch(e){data=[]}
+    if(!Array.isArray(data))data=data?.data||data?.[key]||data?.items||[];
+    if(data.length===0){mc.innerHTML='<h1>'+icon+' '+esc(title)+'</h1><div class="empty">No items found</div>';return;}
+    const keys=Object.keys(data[0]||{});
+    mc.innerHTML='<h1>'+icon+' '+esc(title)+'</h1><div class="card" style="padding:0;overflow-x:auto"><table><tr>'+keys.map(k=>'<th>'+esc(k).replace(/_/g,' ')+'</th>').join('')+'</tr>'+data.map(r=>'<tr>'+keys.map(k=>'<td>'+esc(String(r[k]??'')).slice(0,80)+'</td>').join('')+'</tr>').join('')+'</table></div>';
+  };
+}
+
+const renderAdminDashboard=genericAdminPage('Admin Dashboard','📊','/dashboard/stats','stats');
+const renderAdminTenants=genericAdminPage('Tenants','🏢','/tenants','tenant');
+const renderAdminUsers=genericAdminPage('Users','👤','/users','users');
+const renderAdminPlans=genericAdminPage('Plans','📋','/plans','plans');
+const renderAdminApiKeys=async function(){
+  try{
+    const section=document.getElementById('extension-api-keys-section');
+    if(section){loadExtensionApiKeys();return;}
+  }catch(e){}
+  const mc=document.getElementById('main-content');
+  mc.innerHTML='<h1>🔑 API Keys</h1><div class="card" id="extension-api-keys-section"><div class="loading">Loading...</div></div>';
+  await loadExtensionApiKeys();
+};
+const renderAdminProviderKeys=genericAdminPage('Provider Keys','🔗','/provider-keys','keys');
+const renderAdminAffiliates=genericAdminPage('Affiliates','🤝','/affiliates','affiliates');
+const renderAdminWebhooks=genericAdminPage('Webhooks','🪝','/webhooks','webhooks');
+const renderAdminReviews=genericAdminPage('Reviews','⭐','/reviews','reviews');
+const renderAdminSurfaces=genericAdminPage('Surfaces','📱','/surfaces','surfaces');
+const renderAdminCategories=genericAdminPage('Categories','📂','/categories','categories');
+const renderAdminTagGroups=genericAdminPage('Tag Groups','🏷️','/tag-groups','tag_groups');
+const renderAdminEmailTemplates=genericAdminPage('Email Templates','📧','/email-templates','email_templates');
+const renderAdminExportTemplates=genericAdminPage('Export Templates','📤','/export-templates','export_templates');
+const renderAdminReports=genericAdminPage('Reports','📈','/reports','reports');
+const renderAdminKnowledgeBase=genericAdminPage('Knowledge Base','📖','/knowledge-base','knowledge_base');
+const renderAdminCallLogs=genericAdminPage('Call Logs','📞','/call-logs','call_logs');
+const renderAdminCalendar=genericAdminPage('Calendar Events','📅','/calendar-events','calendar_events');
+const renderAdminImportLogs=genericAdminPage('Import Logs','📥','/import-logs','import_logs');
+
+async function renderAdminN8n(){
+  let health;
+  try{health=await api('/n8n/health')}catch(e){health={status:'unreachable'}}
+  const mc=$('main-content');
+  mc.innerHTML='<h1>⚡ n8n Proxy</h1>'
+    +'<div class="card"><h3>n8n Health</h3>'
+    +'<div style="margin-top:8px"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:'+(health.status==='ok'?'var(--green)':'var(--red)')+';margin-right:8px"></span>'
+    +esc(JSON.stringify(health,null,2))+'</div></div>'
+    +'<div class="card"><h3>Trigger n8n Workflow</h3>'
+    +'<label>Workflow ID</label><input id="n8n-wf-id" placeholder="n8n workflow ID">'
+    +'<label>Payload (JSON)</label><textarea id="n8n-payload" rows="4">{}</textarea>'
+    +'<div style="margin-top:12px"><button class="btn-primary" onclick="triggerN8n()">Trigger</button></div></div>';
+}
+
+async function triggerN8n(){
+  const id=document.getElementById('n8n-wf-id')?.value;
+  const raw=document.getElementById('n8n-payload')?.value;
+  if(!id){showToast('Enter a workflow ID','error');return;}
+  let payload={};
+  try{if(raw)payload=JSON.parse(raw);}catch(e){showToast('Invalid JSON','error');return;}
+  try{
+    const res=await api('/n8n/trigger',{method:'POST',body:JSON.stringify({workflow_id:id,payload})});
+    showToast('n8n workflow triggered!');
+  }catch(e){showToast(e.message,'error');}
+}
+
+async function renderAdminIntegrations(){
+  const mc=$('main-content');
+  let targets,available;
+  try{targets=await api('/integration-targets')}catch(e){targets=[]}
+  try{available=await api('/available-integrations')}catch(e){available=[]}
+  if(!Array.isArray(targets))targets=targets?.data||targets?.targets||[];
+  if(!Array.isArray(available))available=available?.data||available?.integrations||[];
+  let html='<h1>🔌 Integrations</h1>';
+  html+='<div class="card"><h3>Available Integrations</h3>';
+  if(!available.length) html+='<div class="empty">No integrations configured</div>';
+  else{html+='<table><tr><th>Provider</th><th>Type</th></tr>'+available.map(a=>'<tr><td>'+esc(a.provider||a.name||'—')+'</td><td>'+esc(a.integration_type||'—')+'</td></tr>').join('')+'</table>';}
+  html+='</div>';
+  html+='<div class="card"><h3>Integration Targets</h3>';
+  if(!targets.length) html+='<div class="empty">No targets configured</div>';
+  else{html+='<table><tr><th>Name</th><th>Type</th><th>Endpoint</th></tr>'+targets.map(t=>'<tr><td>'+esc(t.name||'—')+'</td><td>'+esc(t.target_type||'—')+'</td><td>'+esc(t.endpoint_url||'—')+'</td></tr>').join('')+'</table>';}
+  html+='</div>';
+  mc.innerHTML=html;
+}
+
+const renderAdminBridge=genericAdminPage('Bridge','🌉','/bridge/commands','commands');
+
+/* ===== UTILITIES ===== */
+function esc(s){if(!s)return'';const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+function showToast(msg,type){
+  const el=document.createElement('div');
+  el.className=type==='error'?'error':'success';
+  el.textContent=msg;
+  el.style.position='fixed';el.style.top='16px';el.style.right='16px';el.style.zIndex='200';el.style.maxWidth='400px';
+  document.body.appendChild(el);
+  setTimeout(()=>el.remove(),3000);
+}
+
+render();
+</script>
+</body>
+</html>

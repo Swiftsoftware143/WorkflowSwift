@@ -1,0 +1,24 @@
+name: Deploy WorkflowSwift
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Build and Deploy to VPS
+      uses: appleboy/ssh-action@master
+      with:
+        host: 178.156.221.18
+        username: root
+        key: ${{ secrets.VPS_SSH_KEY }}
+        script: |
+          cd /opt/swift/workflowswift
+          git pull origin main
+          /root/.cargo/bin/cargo build --release
+          systemctl restart workflowswift-api
+          systemctl --no-pager status workflowswift-api --no-pager | head -10

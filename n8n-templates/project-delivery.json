@@ -1,0 +1,510 @@
+{
+  "name": "Project Delivery (n8n)",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ],
+      "parameters": {
+        "path": "workflow/project-delivery",
+        "options": {}
+      },
+      "webhookId": "project-delivery"
+    },
+    {
+      "id": "auth",
+      "name": "Auth & Credit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        450,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/credits/balance",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "balance",
+      "name": "Balance OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        650,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "bal",
+              "leftValue": "={{ $json.balance }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "gte"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "deduct",
+      "name": "Deduct Credit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        850,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/credits/deduct",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "workflow_type",
+              "value": "project"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "createProject",
+      "name": "Create Project Record",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1050,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/projects",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "name",
+              "value": "={{ $json.body.project_name }}"
+            },
+            {
+              "name": "client",
+              "value": "={{ $json.body.client_name }}"
+            },
+            {
+              "name": "deadline",
+              "value": "={{ $json.body.deadline || '' }}"
+            },
+            {
+              "name": "budget",
+              "value": "={{ $json.body.budget || 0 }}"
+            },
+            {
+              "name": "status",
+              "value": "active"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "fetchIntegrations",
+      "name": "Get Connected Integrations",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1250,
+        200
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/integration-targets",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "routeProject",
+      "name": "Route Project Tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1450,
+        200
+      ],
+      "parameters": {
+        "jsCode": "// Route project delivery tasks to connected integrations\nconst integrations = $json.integration_targets || [];\nconst body = $json.body;\n\n// Standard project delivery workflow stages\nconst stages = [\n  { name: 'Kickoff', sort: 1, depends_on: null },\n  { name: 'Requirements', sort: 2, depends_on: 'Kickoff' },\n  { name: 'Design', sort: 3, depends_on: 'Requirements' },\n  { name: 'Development', sort: 4, depends_on: 'Design' },\n  { name: 'Testing', sort: 5, depends_on: 'Development' },\n  { name: 'Delivery', sort: 6, depends_on: 'Testing' },\n  { name: 'Follow-up', sort: 7, depends_on: 'Delivery' }\n];\n\nconst deliveries = [];\n\n// Always save to WorkflowSwift dashboard\ndeliveries.push({\n  target_id: 'workflowswift_dashboard',\n  url: 'http://workflowswift:8085/api/dashboard/data',\n  payload: { data: { project_name: body.project_name, client: body.client_name, stages: stages, status: 'active' }, dashboard_type: 'project-delivery' }\n});\n\nfor (const target of integrations) {\n  if (!target.is_active) continue;\n  deliveries.push({\n    target_id: target.id,\n    payload: { project_name: body.project_name, client: body.client_name, stages: stages, action: 'project_start' }\n  });\n}\n\nif (deliveries.length === 0) deliveries.push({ status: 'no_integrations', stages: stages });\nreturn deliveries;"
+      }
+    },
+    {
+      "id": "split",
+      "name": "Deliver",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 2,
+      "position": [
+        1650,
+        200
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "deliver",
+      "name": "Dispatch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1850,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url || ('http://workflowswift:8085/api/integration-dispatch?target_id=' + $json.target_id) }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true
+      }
+    },
+    {
+      "id": "stageWait",
+      "name": "Wait 7 Days",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1,
+      "position": [
+        2050,
+        300
+      ],
+      "parameters": {
+        "resume": "webhook",
+        "options": {
+          "webhookSuffix": "project-stage"
+        },
+        "limitWaitTime": 604800
+      }
+    },
+    {
+      "id": "stageCheck",
+      "name": "Check Stage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2250,
+        300
+      ],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/projects/stage",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "branchStage",
+      "name": "Completed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2450,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "stg",
+              "leftValue": "={{ $json.stage_status }}",
+              "rightValue": "completed",
+              "operator": {
+                "type": "string",
+                "operation": "equal"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "notifyProgress",
+      "name": "Notify Progress",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2650,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'http://workflowswift:8085/api/integration-dispatch?target_id=' + ($json.target_id || '') }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+            }
+          ]
+        },
+        "sendBody": true
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2850,
+        300
+      ],
+      "parameters": {
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "webhook": {
+      "main": [
+        [
+          {
+            "node": "auth",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "auth": {
+      "main": [
+        [
+          {
+            "node": "balance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "balance": {
+      "main": [
+        [
+          {
+            "node": "deduct",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "createProject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "deduct": {
+      "main": [
+        [
+          {
+            "node": "createProject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "createProject": {
+      "main": [
+        [
+          {
+            "node": "fetchIntegrations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "fetchIntegrations": {
+      "main": [
+        [
+          {
+            "node": "routeProject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "routeProject": {
+      "main": [
+        [
+          {
+            "node": "split",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "split": {
+      "main": [
+        [
+          {
+            "node": "deliver",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "deliver": {
+      "main": [
+        [
+          {
+            "node": "stageWait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "stageWait": {
+      "main": [
+        [
+          {
+            "node": "stageCheck",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "stageCheck": {
+      "main": [
+        [
+          {
+            "node": "branchStage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "branchStage": {
+      "main": [
+        [
+          {
+            "node": "respond",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "notifyProgress",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "notifyProgress": {
+      "main": [
+        [
+          {
+            "node": "respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1",
+  "active": false
+}

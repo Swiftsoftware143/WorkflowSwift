@@ -1,0 +1,110 @@
+{
+  "name": "ADASwift - Email Widget Blast",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "webhook-entry",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "adaswift-email-blast",
+      "path": "adaswift-email-blast",
+      "options": {}
+    },
+    {
+      "parameters": {
+        "functionCode": "// Parse the incoming widget payload\nconst payload = $input.first().json;\nconst widgets = payload.widgets || [];\n\n// Build email list\nconst items = widgets.map(function(w) {\n  return {\n    json: {\n      email_to: null,\n      company: w.company,\n      domain: w.domain,\n      embed_code: w.embed,\n      status: w.status,\n      subject: payload.subject || 'Your ADA Compliance Widget is Ready',\n      body_template: payload.body || 'Install this code on your website to display your compliance badge.'\n    }\n  };\n});\n\n// If no specific emails, create single item for preview\nif (items.length === 0) {\n  items.push({\n    json: {\n      email_to: null,\n      company: 'Preview',\n      domain: 'example.com',\n      embed_code: '<script src=\"https://adaswift.com/widget.js?domain=example.com\" async></script>',\n      status: 'preview',\n      subject: payload.subject || 'Your ADA Compliance Widget is Ready',\n      body_template: payload.body || 'Install this code on your website to display your compliance badge.'\n    }\n  });\n}\n\nreturn items;"
+      },
+      "id": "format-payload",
+      "name": "Format Email Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "htmlBody": "<html><body style=\"font-family: Arial, sans-serif; background: #f8fafc; padding: 24px;\">\n<div style=\"max-width: 600px; margin: 0 auto; background: white; border-radius: 12px; padding: 32px; box-shadow: 0 2px 8px rgba(0,0,0,0.08);\">\n  <div style=\"text-align: center; margin-bottom: 24px;\">\n    <span style=\"font-size: 48px;\">\u267f</span>\n    <h1 style=\"color: #1e293b; margin: 8px 0 4px;\">ADASwift</h1>\n    <p style=\"color: #64748b; font-size: 14px;\">ADA Compliance Platform</p>\n  </div>\n  \n  <h2 style=\"color: #1e293b;\">Your ADA Compliance Widget is Ready</h2>\n  \n  <p style=\"color: #475569; font-size: 15px; line-height: 1.6;\">\n    {{ $json.body_template }}\n  </p>\n  \n  <div style=\"background: #f1f5f9; border-radius: 8px; padding: 20px; margin: 20px 0;\">\n    <h3 style=\"color: #1e293b; margin: 0 0 4px;\">{{ $json.company }}</h3>\n    <p style=\"color: #64748b; font-size: 13px; margin: 0 0 12px;\">{{ $json.domain }}</p>\n    \n    <div style=\"background: #1e293b; color: #e2e8f0; padding: 16px; border-radius: 8px; font-family: monospace; font-size: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-all;\">\n      {{ $json.embed_code }}\n    </div>\n  </div>\n  \n  <p style=\"color: #94a3b8; font-size: 13px;\">\n    <strong>Instructions:</strong> Copy the code above and paste it just before the closing <code>&lt;/body&gt;</code> tag on your website. The widget will automatically display a compliance badge.\n  </p>\n  \n  <hr style=\"border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;\">\n  \n  <p style=\"color: #94a3b8; font-size: 12px; text-align: center;\">\n    ADASwift \u2014 ADA Compliance Platform<br>\n    Need help? Visit adaswift.com/support\n  </p>\n</div>\n</body></html>",
+        "subject": "= {{ $json.subject }}",
+        "textBody": "{{ $json.body_template }}\n\nEmbed Code:\n{{ $json.embed_code }}\n\nCopy the code above and paste it before the closing </body> tag on your website.",
+        "options": {}
+      },
+      "id": "email-template",
+      "name": "Email Template",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "senderName": "ADASwift",
+        "senderEmail": "compliance@adaswift.com",
+        "emailType": "html",
+        "message": {
+          "subject": "={{ $json.subject }}",
+          "htmlBody": "={{ $json.htmlBody }}",
+          "textBody": "={{ $json.textBody }}",
+          "toEmail": "={{ $json.email_to }}"
+        },
+        "credentials": {
+          "mailgunApi": {
+            "id": "1",
+            "name": "Mailgun"
+          }
+        },
+        "options": {
+          "sandbox": true
+        }
+      },
+      "id": "send-email",
+      "name": "Send Email (Mailgun)",
+      "type": "n8n-nodes-base.mailgun",
+      "typeVersion": 1,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "const results = $input.all();\nconst sent = results.filter(function(r) { return !r.json.error; }).length;\nconst failed = results.filter(function(r) { return r.json.error; }).length;\n\nreturn [{\n  json: {\n    status: 'complete',\n    total_attempted: results.length,\n    sent: sent,\n    failed: failed\n  }\n}];"
+      },
+      "id": "summarize",
+      "name": "Summarize Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 1,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "respond",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1250, 300]
+    }
+  ],
+  "connections": {
+    "webhook-entry": {
+      "main": [[{"node": "format-payload", "type": "main", "index": 0}]]
+    },
+    "format-payload": {
+      "main": [[{"node": "email-template", "type": "main", "index": 0}]]
+    },
+    "email-template": {
+      "main": [[{"node": "send-email", "type": "main", "index": 0}]]
+    },
+    "send-email": {
+      "main": [[{"node": "summarize", "type": "main", "index": 0}]]
+    },
+    "summarize": {
+      "main": [[{"node": "respond", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionOrder": "v1"
+  }
+}
