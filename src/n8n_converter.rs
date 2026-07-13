@@ -36,25 +36,25 @@ pub struct N8nWorkflow {
 /// `steps` — a list of JSON objects, each with at minimum:
 ///   { "step_type": "...", "name": "...", "config": { ... } }
 ///
-/// `tenant_id` is used for webhook path namespacing.
+/// `aid` is used for webhook path namespacing.
 /// `workflow_id` is the UUID of the WorkflowSwift workflow.
 /// `workflow_name` is used as the n8n workflow title.
 /// `callback_base_url` is the base URL for callbacks (e.g. "http://workflowswift:8085").
 pub fn convert_steps_to_n8n(
     steps: &[Value],
-    tenant_id: Uuid,
+    aid: Uuid,
     workflow_id: Uuid,
     callback_base_url: &str,
 ) -> N8nWorkflow {
     let mut nodes: Vec<Value> = Vec::new();
     let mut connections_map = serde_json::Map::new();
 
-    // Namespaced webhook path so tenant workflows don't collide
-    let tenant_short = &tenant_id.to_string()[..8];
-    let webhook_path = format!("wfs/{}/{:.8}", tenant_short, workflow_id);
+    // Namespaced webhook path so account workflows don't collide
+    let aid_short = &aid.to_string()[..8];
+    let webhook_path = format!("wfs/{}/{:.8}", aid_short, workflow_id);
 
     // ===== Node 0: Webhook Trigger =====
-    let webhook_id = format!("wfs_{:.8}_{:.8}", tenant_short, workflow_id);
+    let webhook_id = format!("wfs_{:.8}_{:.8}", aid_short, workflow_id);
     let webhook_node = json!({
         "id": "webhook",
         "name": "Webhook",
@@ -162,7 +162,9 @@ pub fn convert_steps_to_n8n(
     nodes.push(deduct_node);
 
     // ===== Convert user steps =====
-    let step_nodes = convert_user_steps(steps, tenant_id, workflow_id, callback_base_url);
+    // Returns (all_step_nodes, step_output_ids), where step_output_ids[i] is the
+    // ID of the last node produced by step i (the one to wire forward).
+    let (step_nodes, step_output_ids) = convert_user_steps(steps, aid, workflow_id, callback_base_url, &mut connections_map);
 
     // Wire Webhook → Credit Check
     let mut webhook_conn = serde_json::Map::new();
@@ -182,28 +184,27 @@ pub fn convert_steps_to_n8n(
     ]));
     connections_map.insert("balance_check".to_string(), Value::Object(balance_conn));
 
-    // Wire Deduct → first user step
-    if let Some(first_user_node) = step_nodes.first() {
-        let first_id = get_node_id(first_user_node);
+    // Wire Deduct → first user step's output node
+    if let Some(first_output) = step_output_ids.first() {
         let mut deduct_conn = serde_json::Map::new();
-        deduct_conn.insert("main".to_string(), json!([[{"node": first_id, "type": "main", "index": 0}]]));
+        deduct_conn.insert("main".to_string(), json!([[{"node": first_output, "type": "main", "index": 0}]]));
         connections_map.insert("deduct_credit".to_string(), Value::Object(deduct_conn));
     }
 
-    // Wire user steps in sequence
-    for i in 0..step_nodes.len() {
-        let current_id = get_node_id(&step_nodes[i]);
+    // Wire user steps in sequence using step_output_ids
+    for i in 0..step_output_ids.len() {
+        let current_id = &step_output_ids[i];
 
-        if i + 1 < step_nodes.len() {
-            let next_id = get_node_id(&step_nodes[i + 1]);
+        if i + 1 < step_output_ids.len() {
+            let next_id = &step_output_ids[i + 1];
             let mut conn = serde_json::Map::new();
             conn.insert("main".to_string(), json!([[{"node": next_id, "type": "main", "index": 0}]]));
-            connections_map.insert(current_id.to_string(), Value::Object(conn));
+            connections_map.insert(current_id.clone(), Value::Object(conn));
         } else {
             // Last user step → Respond node
             let mut conn = serde_json::Map::new();
             conn.insert("main".to_string(), json!([[{"node": "respond", "type": "main", "index": 0}]]));
-            connections_map.insert(current_id.to_string(), Value::Object(conn));
+            connections_map.insert(current_id.clone(), Value::Object(conn));
         }
     }
 
@@ -213,7 +214,7 @@ pub fn convert_steps_to_n8n(
         "name": "Respond to Webhook",
         "type": "n8n-nodes-base.respondToWebhook",
         "typeVersion": 1,
-        "position": [250 + (step_nodes.len() as i32 + 1) * 200, 600],
+        "position": [250 + (step_output_ids.len() as i32 + 1) * 200, 600],
         "parameters": {
             "respondWith": "json",
             "responseBody": "={{ $json }}"
@@ -221,7 +222,7 @@ pub fn convert_steps_to_n8n(
     });
     nodes.push(respond_node);
 
-    // Collect all nodes
+    // Collect all nodes from user steps
     nodes.extend(step_nodes);
 
     // Settings
@@ -251,13 +252,16 @@ fn get_node_id(node: &Value) -> String {
 
 fn convert_user_steps(
     steps: &[Value],
-    tenant_id: Uuid,
+    aid: Uuid,
     workflow_id: Uuid,
     callback_base_url: &str,
-) -> Vec<Value> {
+    connections_map: &mut serde_json::Map<String, Value>,
+) -> (Vec<Value>, Vec<String>) {
     let mut nodes: Vec<Value> = Vec::new();
-    let tenant_prefix = &tenant_id.to_string()[..8];
-    let wf_short = &workflow_id.to_string()[..8];
+    // Track the last (output) node ID for each step
+    let mut step_output_ids: Vec<String> = Vec::new();
+    let aid_prefix = &aid.to_string()[..8];
+    let _wf_short = &workflow_id.to_string()[..8];
 
     for (i, step) in steps.iter().enumerate() {
         let step_type = step.get("step_type")
@@ -271,6 +275,9 @@ fn convert_user_steps(
         let x_pos = 250 + (i as i32 + 1) * 200;
         let y_base = 300;
         let node_id = format!("step_{}", i);
+
+        // Track whether this step produced a custom last-node ID (for multi-node steps)
+        let mut step_last_node_id: Option<String> = None;
 
         match step_type {
             "http-request" | "action" => {
@@ -576,6 +583,92 @@ fn convert_user_steps(
                 nodes.push(node);
             }
 
+            "render_video" | "render_media" | "render_image" | "render_audio" => {
+                // Rendering step: calls the third-party provider's render API
+                // to create content, then logs the result in account_renditions.
+                let provider = config.get("provider")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                let api_endpoint = config.get("endpoint")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let method = config.get("method")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("POST");
+                let asset_type = match step_type {
+                    "render_video" => "video",
+                    "render_image" => "image",
+                    "render_audio" => "audio",
+                    _ => "video",
+                };
+
+                // Node 1: Call the provider's API
+                let node = json!({
+                    "id": node_id,
+                    "name": step_name,
+                    "type": "n8n-nodes-base.httpRequest",
+                    "typeVersion": 4.2,
+                    "position": [x_pos, y_base],
+                    "parameters": {
+                        "method": method,
+                        "url": api_endpoint,
+                        "authentication": "none",
+                        "sendHeaders": true,
+                        "sendBody": true,
+                        "options": {
+                            "timeout": 120000
+                        }
+                    }
+                });
+                nodes.push(node);
+
+                // Node 2: Log rendition via WorkflowSwift callback
+                let log_id = format!("{}_log", node_id);
+                // Build rendition payload from provider response
+                let log_node = json!({
+                    "id": log_id,
+                    "name": format!("Log {} {}", provider, asset_type),
+                    "type": "n8n-nodes-base.httpRequest",
+                    "typeVersion": 4.2,
+                    "position": [x_pos + 200, y_base],
+                    "parameters": {
+                        "method": "POST",
+                        "url": format!("{}/api/v1/renditions", callback_base_url.trim_end_matches('/')),
+                        "authentication": "genericCredentialType",
+                        "genericAuthType": "httpHeaderAuth",
+                        "sendHeaders": true,
+                        "headerParameters": {
+                            "parameters": [
+                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Content-Type", "value": "application/json" }
+                            ]
+                        },
+                        "sendBody": true,
+                        "bodyParameters": {
+                            "parameters": [
+                                { "name": "provider", "value": provider },
+                                { "name": "provider_asset_id", "value": "={{ $json.id || $json.asset_id || $json.render_id || $json.video_id || $json.file_id }}" },
+                                { "name": "provider_asset_url", "value": "={{ $json.url || $json.video_url || $json.asset_url || $json.generated_url || $json.download_url }}" },
+                                { "name": "preview_url", "value": "={{ $json.preview_url || $json.thumbnail_url || $json.video_url || $json.url }}" },
+                                { "name": "thumbnail_url", "value": "={{ $json.thumbnail_url || $json.thumbnail }}" },
+                                { "name": "asset_type", "value": asset_type },
+                                { "name": "step_name", "value": step_name },
+                                { "name": "metadata", "value": "={{ $json }}" }
+                            ]
+                        }
+                    }
+                });
+                nodes.push(log_node);
+
+                // Wire render → log node
+                let mut conn = serde_json::Map::new();
+                conn.insert("main".to_string(), json!([[{"node": log_id, "type": "main", "index": 0}]]));
+                connections_map.insert(node_id.to_string(), Value::Object(conn));
+
+                // The log_id is the effective "output" node of this step
+                step_last_node_id = Some(log_id);
+            }
+
             "fork" | "branch" => {
                 let branches = config.get("branches")
                     .and_then(|v| v.as_array())
@@ -631,9 +724,11 @@ fn convert_user_steps(
                 nodes.push(node);
             }
         }
+        // Track this step's output node ID for external wiring
+        step_output_ids.push(step_last_node_id.unwrap_or_else(|| node_id.clone()));
     }
 
-    nodes
+    (nodes, step_output_ids)
 }
 
 /// Serialize the generated workflow to n8n-compatible JSON.

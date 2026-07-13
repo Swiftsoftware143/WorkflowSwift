@@ -16,7 +16,7 @@ pub async fn trigger_n8n_workflow(
     Extension(claims): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let workflow_id = req.get("workflow_id")
         .and_then(|v| v.as_str())
@@ -29,9 +29,9 @@ pub async fn trigger_n8n_workflow(
 
     // Check credit balance
     let balance = sqlx::query_scalar::<_, i64>(
-        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE tenant_id = $1",
+        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_one(&state.db)
     .await
     .unwrap_or(0);
@@ -47,11 +47,11 @@ pub async fn trigger_n8n_workflow(
 
     // Deduct 1 credit
     sqlx::query(
-        r#"INSERT INTO credit_transactions (id, tenant_id, amount, transaction_type, description)
+        r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
            VALUES ($1, $2, -1, 'n8n_execution', $3)"#,
     )
     .bind(Uuid::new_v4())
-    .bind(tenant_id)
+    .bind(aid)
     .bind(format!("n8n workflow execution: {}", workflow_id))
     .execute(&state.db)
     .await?;
@@ -61,7 +61,7 @@ pub async fn trigger_n8n_workflow(
     let client = reqwest::Client::new();
 
     let n8n_body = json!({
-        "tenant_id": claims.aid,
+        "aid": claims.aid,
         "triggered_by": claims.sub,
         "payload": payload,
         "webhook_data": webhook_data,
@@ -79,9 +79,9 @@ pub async fn trigger_n8n_workflow(
             let body: serde_json::Value = resp.json().await.unwrap_or(json!({"note": "n8n responded without body"}));
 
             let new_balance = sqlx::query_scalar::<_, i64>(
-                "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE tenant_id = $1",
+                "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
             )
-            .bind(tenant_id)
+            .bind(aid)
             .fetch_one(&state.db)
             .await
             .unwrap_or(0);
@@ -96,11 +96,11 @@ pub async fn trigger_n8n_workflow(
         Err(e) => {
             // Refund credit on failure
             sqlx::query(
-                r#"INSERT INTO credit_transactions (id, tenant_id, amount, transaction_type, description)
+                r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
                    VALUES ($1, $2, 1, 'refund', $3)"#,
             )
             .bind(Uuid::new_v4())
-            .bind(tenant_id)
+            .bind(aid)
             .bind(format!("Refund for failed n8n execution: {}", workflow_id))
             .execute(&state.db)
             .await?;

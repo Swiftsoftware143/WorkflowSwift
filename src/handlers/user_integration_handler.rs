@@ -81,7 +81,7 @@ pub async fn list_native_integrations(
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Native providers are the SwiftSoftware products
     let native_providers = vec!["coreswift", "funnelswift", "incentiveswift"];
@@ -123,7 +123,7 @@ pub async fn upsert_integration(
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let provider = req.get("provider")
         .and_then(|v| v.as_str())
@@ -169,7 +169,7 @@ pub async fn upsert_integration(
     let now = chrono::Utc::now();
 
     sqlx::query(
-        r#"INSERT INTO user_integrations (id, user_id, tenant_id, provider, provider_label, integration_type, api_key_encrypted, base_url, config, is_active, created_at, updated_at)
+        r#"INSERT INTO user_integrations (id, user_id, aid, provider, provider_label, integration_type, api_key_encrypted, base_url, config, is_active, created_at, updated_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
            ON CONFLICT (user_id, provider)
            DO UPDATE SET
@@ -182,7 +182,7 @@ pub async fn upsert_integration(
     )
     .bind(id)
     .bind(user_id)
-    .bind(tenant_id)
+    .bind(aid)
     .bind(provider)
     .bind(provider_label)
     .bind(integration_type)
@@ -201,7 +201,7 @@ pub async fn upsert_integration(
     let db = state.db.clone();
     let prov = provider.to_string();
     let uid = user_id;
-    let tid = tenant_id;
+    let tid = aid;
     tokio::spawn(async move {
         let _ = run_health_check(&db, uid, tid, &prov).await;
     });
@@ -222,7 +222,7 @@ pub async fn toggle_native_integration(
     Path(provider): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Check if it already exists
     let existing = sqlx::query_scalar::<_, bool>(
@@ -253,12 +253,12 @@ pub async fn toggle_native_integration(
         let id = Uuid::new_v4();
         let now = chrono::Utc::now();
         sqlx::query(
-            r#"INSERT INTO user_integrations (id, user_id, tenant_id, provider, provider_label, integration_type, is_active, created_at, updated_at)
+            r#"INSERT INTO user_integrations (id, user_id, aid, provider, provider_label, integration_type, is_active, created_at, updated_at)
                VALUES ($1, $2, $3, $4, $5, 'native', true, $6, $6)"#,
         )
         .bind(id)
         .bind(user_id)
-        .bind(tenant_id)
+        .bind(aid)
         .bind(&provider)
         .bind(&provider)
         .bind(now)
@@ -313,13 +313,13 @@ pub async fn check_integration_health(
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let provider = req.get("provider")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("provider is required".into()))?;
 
-    let (status, message) = run_health_check(&state.db, user_id, tenant_id, provider).await;
+    let (status, message) = run_health_check(&state.db, user_id, aid, provider).await;
 
     Ok(Json(json!({
         "provider": provider,
@@ -332,7 +332,7 @@ pub async fn check_integration_health(
 async fn run_health_check(
     db: &sqlx::PgPool,
     user_id: Uuid,
-    tenant_id: Uuid,
+    aid: Uuid,
     provider: &str,
 ) -> (String, String) {
     // Fetch the integration
@@ -482,7 +482,7 @@ pub async fn resolve_step_provider(
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> ApiResult<impl IntoResponse> {
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let step_type = params.get("step_type").map(|s| s.as_str()).unwrap_or("");
     let requested_provider = params.get("provider");

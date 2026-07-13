@@ -50,45 +50,45 @@ pub async fn register(
         .map_err(|e| AppError::Hash(e.to_string()))?
         .to_string();
 
-    // Create tenant
-    let tenant_name = req.tenant_name.unwrap_or_else(|| format!("{}'s Workspace", req.name));
-    let tenant_slug = req.tenant_slug.unwrap_or_else(|| {
+    // Create account
+    let account_name = req.account_name.unwrap_or_else(|| format!("{}'s Workspace", req.name));
+    let account_slug = req.account_slug.unwrap_or_else(|| {
         req.name.to_lowercase().replace(' ', "-").chars().take(30).collect()
     });
 
-    let tenant_id = Uuid::new_v4();
+    let aid = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO tenants (id, name, slug, is_active) VALUES ($1, $2, $3, true)",
+        "INSERT INTO accounts (id, name, account_slug, is_active) VALUES ($1, $2, $3, true)",
     )
-    .bind(tenant_id)
-    .bind(&tenant_name)
-    .bind(&tenant_slug)
+    .bind(aid)
+    .bind(&account_name)
+    .bind(&account_slug)
     .execute(&state.db)
     .await?;
 
-    // Seed default tags for this tenant
+    // Seed default tags for this account
     let default_tag_names = vec!["active", "archived", "priority"];
     for tag_name in &default_tag_names {
         sqlx::query(
-            "INSERT INTO tags (id, tenant_id, name) VALUES ($1, $2, $3)",
+            "INSERT INTO tags (id, aid, name) VALUES ($1, $2, $3)",
         )
         .bind(Uuid::new_v4())
-        .bind(tenant_id)
+        .bind(aid)
         .bind(tag_name)
         .execute(&state.db)
         .await
         .ok();
     }
 
-    // Create user (admin role)
+    // Create user (user role — only David is super_admin)
     let user_id = Uuid::new_v4();
     let now = Utc::now();
     sqlx::query(
-        r#"INSERT INTO users (id, tenant_id, email, password_hash, name, role, is_active, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5, 'admin', true, $6, $6)"#,
+        r#"INSERT INTO users (id, aid, email, password_hash, name, role, is_active, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, 'user', true, $6, $6)"#,
     )
     .bind(user_id)
-    .bind(tenant_id)
+    .bind(aid)
     .bind(&req.email)
     .bind(&password_hash)
     .bind(&req.name)
@@ -98,7 +98,7 @@ pub async fn register(
 
     // Auto-generate API keys for the new user
     use crate::handlers::integration_center_handler;
-    let _ = integration_center_handler::seed_user_keys(&state.db, user_id, tenant_id).await;
+    let _ = integration_center_handler::seed_user_keys(&state.db, user_id, aid).await;
 
     // Assign plan if provided, or use default Free plan
     let plan_slug = req.plan_slug.as_deref().unwrap_or("free");
@@ -111,14 +111,42 @@ pub async fn register(
 
     if let Some(pid) = plan_id {
         sqlx::query(
-            r#"INSERT INTO tenant_plans (tenant_id, plan_id, status, started_at)
+            r#"INSERT INTO account_plans (aid, plan_id, status, started_at)
                VALUES ($1, $2, 'active', NOW())"#
         )
-        .bind(tenant_id)
+        .bind(aid)
         .bind(pid)
         .execute(&state.db)
         .await
         .ok();
+
+        // Grant initial monthly credits for the plan
+        let credits: Option<i32> = sqlx::query_scalar(
+            r#"SELECT (features->>'credits_monthly')::integer
+               FROM plan_tiers WHERE id = $1"#
+        )
+        .bind(pid)
+        .fetch_optional(&state.db)
+        .await
+        .unwrap_or(None);
+
+        if let Some(amt) = credits {
+            if amt > 0 {
+                sqlx::query(
+                    r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
+                       VALUES ($1, $2, $3, 'grant', 'Welcome credits: first month of ' || (
+                         SELECT name FROM plan_tiers WHERE id = $4
+                       ))"#
+                )
+                .bind(Uuid::new_v4())
+                .bind(aid)
+                .bind(amt)
+                .bind(pid)
+                .execute(&state.db)
+                .await
+                .ok();
+            }
+        }
     }
 
     // Set industry and seed dashboard if provided
@@ -132,9 +160,9 @@ pub async fn register(
     .unwrap_or(false);
 
     if exists {
-        sqlx::query("UPDATE tenants SET industry_slug = $1 WHERE id = $2")
+        sqlx::query("UPDATE accounts SET industry_slug = $1 WHERE id = $2")
             .bind(industry_slug)
-            .bind(tenant_id)
+            .bind(aid)
             .execute(&state.db)
             .await?;
 
@@ -151,25 +179,25 @@ pub async fn register(
         let dashboard_id = Uuid::new_v4();
         let dashboard_name = format!("{} Dashboard", industry_name);
         sqlx::query(
-            r#"INSERT INTO dashboards (id, tenant_id, name, description)
+            r#"INSERT INTO dashboards (id, aid, name, description)
                VALUES ($1, $2, $3, $4)"#,
         )
         .bind(dashboard_id)
-        .bind(tenant_id)
+        .bind(aid)
         .bind(&dashboard_name)
         .bind(format!("Your {} dashboard", industry_name))
         .execute(&state.db)
         .await?;
 
-        industry_handler::seed_default_widgets_internal(&state, tenant_id, dashboard_id, industry_slug).await;
+        industry_handler::seed_default_widgets_internal(&state, aid, dashboard_id, industry_slug).await;
 
-        // Also register in tenant_industries (for multi-industry support)
+        // Also register in account_industries (for multi-industry support)
         sqlx::query(
-            r#"INSERT INTO tenant_industries (tenant_id, industry_slug, dashboard_id)
+            r#"INSERT INTO account_industries (aid, industry_slug, dashboard_id)
                VALUES ($1, $2, $3)
-               ON CONFLICT (tenant_id, industry_slug) DO NOTHING"#
+               ON CONFLICT (aid, industry_slug) DO NOTHING"#
         )
-        .bind(tenant_id)
+        .bind(aid)
         .bind(industry_slug)
         .bind(dashboard_id)
         .execute(&state.db)
@@ -181,28 +209,30 @@ pub async fn register(
     let now_ts = chrono::Utc::now().timestamp() as usize;
     let claims = Claims {
         sub: user_id.to_string(),
-        aid: tenant_id.to_string(),
-        role: "admin".to_string(),
+        aid: aid.to_string(),
+        role: "user".to_string(),
         exp: now_ts + state.config.jwt_access_expiry as usize,
         iat: now_ts,
+        perm_is_super_admin: Some(false),
     };
     let token = create_token(&claims, &state.config.jwt_secret)?;
 
     let refresh_claims = Claims {
         sub: user_id.to_string(),
-        aid: tenant_id.to_string(),
-        role: "admin".to_string(),
+        aid: aid.to_string(),
+        role: "user".to_string(),
         exp: now_ts + state.config.jwt_refresh_expiry as usize,
         iat: now_ts,
+        perm_is_super_admin: Some(false),
     };
     let refresh_token = create_token(&refresh_claims, &state.config.jwt_secret)?;
 
     let user_response = UserResponse {
         id: user_id,
-        tenant_id,
+        aid,
         email: req.email,
         name: req.name,
-        role: "admin".to_string(),
+        role: "user".to_string(),
         is_active: true,
         last_login_at: None,
         created_at: now,
@@ -216,14 +246,60 @@ pub async fn register(
             token_type: "Bearer".to_string(),
             expires_in: state.config.jwt_access_expiry,
             user: user_response,
-            tenant: TenantResponse {
-                id: tenant_id,
-                name: tenant_name,
-                slug: tenant_slug,
+            account: AccountResponse {
+                id: aid,
+                name: account_name,
+                slug: account_slug,
                 is_active: true,
             },
         })),
     ))
+}
+
+/// Lightweight registration endpoint for marketing site signups.
+/// Auto-generates display name from email prefix if not provided.
+pub async fn lightweight_register(
+    State(state): State<AppState>,
+    Json(req): Json<LightweightRegisterRequest>,
+) -> ApiResult<impl IntoResponse> {
+    if req.email.is_empty() || req.password.is_empty() {
+        return Err(AppError::Validation("Email and password are required".to_string()));
+    }
+    if req.password.len() < 6 {
+        return Err(AppError::Validation("Password must be at least 6 characters".to_string()));
+    }
+
+    // Auto-generate name from email prefix if not provided
+    let name = req.name.unwrap_or_else(|| {
+        let prefix = req.email.split('@').next().unwrap_or("User");
+        // Replace non-alphanumeric chars with spaces, capitalize words
+        prefix
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|s| !s.is_empty())
+            .map(|s| {
+                let mut c = s.chars();
+                match c.next() {
+                    None => String::new(),
+                    Some(f) => f.to_uppercase().to_string() + c.as_str(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    });
+
+    // Build a full RegisterRequest and delegate to the existing register handler
+    let full_req = RegisterRequest {
+        name: name.clone(),
+        email: req.email,
+        password: req.password,
+        account_name: req.account_name,
+        account_slug: req.account_slug,
+        industry_slug: req.industry_slug,
+        plan_slug: req.plan_slug,
+    };
+
+    // Call register logic directly (reuse same code path)
+    register(State(state), Json(full_req)).await
 }
 
 pub async fn login(
@@ -260,19 +336,21 @@ pub async fn login(
     let now_ts = chrono::Utc::now().timestamp() as usize;
     let claims = Claims {
         sub: user.id.to_string(),
-        aid: user.tenant_id.to_string(),
+        aid: user.aid.to_string(),
         role: user.role.clone(),
         exp: now_ts + state.config.jwt_access_expiry as usize,
         iat: now_ts,
+        perm_is_super_admin: Some(user.perm_is_super_admin),
     };
     let token = create_token(&claims, &state.config.jwt_secret)?;
 
     let refresh_claims = Claims {
         sub: user.id.to_string(),
-        aid: user.tenant_id.to_string(),
+        aid: user.aid.to_string(),
         role: user.role.clone(),
         exp: now_ts + state.config.jwt_refresh_expiry as usize,
         iat: now_ts,
+        perm_is_super_admin: Some(user.perm_is_super_admin),
     };
     let refresh_token = create_token(&refresh_claims, &state.config.jwt_secret)?;
 
@@ -448,4 +526,3 @@ pub async fn reset_password(
 
     Ok((StatusCode::OK, Json(json!({"message": "Password has been reset successfully"}))))
 }
-

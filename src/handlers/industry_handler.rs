@@ -53,33 +53,33 @@ pub async fn list_industries(
     Ok(Json(json!({"industries": industries})))
 }
 
-/// GET /api/v1/tenants/industry — get current tenant's active industry + all linked industries
-/// Now returns all industries the tenant has, plus the "primary" one
-pub async fn get_tenant_industry(
+/// GET /api/v1/accounts/industry — get current account's active industry + all linked industries
+/// Now returns all industries the account has, plus the "primary" one
+pub async fn get_account_industry(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    // Get primary (legacy) industry slug from tenants table
+    // Get primary (legacy) industry slug from accounts table
     let primary_slug: String = sqlx::query_scalar(
-        "SELECT COALESCE(industry_slug, 'site-flipping') FROM tenants WHERE id = $1"
+        "SELECT COALESCE(industry_slug, 'site-flipping') FROM accounts WHERE id = $1"
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_one(&state.db)
     .await
     .unwrap_or_default();
 
-    // Get all industries this tenant has dashboards for
+    // Get all industries this account has dashboards for
     let industry_rows = sqlx::query(
         r#"SELECT ti.industry_slug, tc.name as industry_name, tc.description as industry_description,
                   tc.icon, ti.dashboard_id, ti.is_active
-           FROM tenant_industries ti
+           FROM account_industries ti
            LEFT JOIN template_categories tc ON tc.slug = ti.industry_slug
-           WHERE ti.tenant_id = $1
+           WHERE ti.aid = $1
            ORDER BY ti.created_at"#,
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_all(&state.db)
     .await?;
 
@@ -109,14 +109,14 @@ pub async fn get_tenant_industry(
     })))
 }
 
-/// PUT /api/v1/tenants/industry — set or add tenant's industry (multi-industry)
+/// PUT /api/v1/accounts/industry — set or add account's industry (multi-industry)
 /// Now supports setting primary industry OR adding a new industry dashboard
-pub async fn set_tenant_industry(
+pub async fn set_account_industry(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let industry_slug = req.get("industry_slug")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::Validation("industry_slug is required".to_string()))?;
@@ -141,25 +141,25 @@ pub async fn set_tenant_industry(
 
     // Check plan limits for multi-industry
     let is_new = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM tenant_industries WHERE tenant_id = $1 AND industry_slug = $2"
+        "SELECT COUNT(*) FROM account_industries WHERE aid = $1 AND industry_slug = $2"
     )
-    .bind(tenant_id)
+    .bind(aid)
     .bind(industry_slug)
     .fetch_one(&state.db)
     .await
     .unwrap_or(0) == 0;
 
     if is_new {
-        // Check how many industries this tenant already has
+        // Check how many industries this account already has
         let current_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM tenant_industries WHERE tenant_id = $1 AND is_active = true"
+            "SELECT COUNT(*) FROM account_industries WHERE aid = $1 AND is_active = true"
         )
-        .bind(tenant_id)
+        .bind(aid)
         .fetch_one(&state.db)
         .await
         .unwrap_or(0);
 
-        let limit_check = features::check_feature_limit(&state.db, tenant_id, "max_industries").await?;
+        let limit_check = features::check_feature_limit(&state.db, aid, "max_industries").await?;
         if !limit_check.allowed && limit_check.limit != -1 {
             return Err(AppError::BadRequest(format!(
                 "Industry dashboard limit reached ({}/{}) on your current plan. Upgrade to add more industries.",
@@ -181,9 +181,9 @@ pub async fn set_tenant_industry(
     // This keeps dashboard names in sync with template category names
     let dashboard_name = format!("{} Dashboard", industry_name);
     let dashboard_id = match sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM dashboards WHERE tenant_id = $1 AND name = $2 LIMIT 1"
+        "SELECT id FROM dashboards WHERE aid = $1 AND name = $2 LIMIT 1"
     )
-    .bind(tenant_id)
+    .bind(aid)
     .bind(&dashboard_name)
     .fetch_optional(&state.db)
     .await?
@@ -192,29 +192,29 @@ pub async fn set_tenant_industry(
         None => {
             let id = Uuid::new_v4();
             sqlx::query(
-                r#"INSERT INTO dashboards (id, tenant_id, name, description)
+                r#"INSERT INTO dashboards (id, aid, name, description)
                    VALUES ($1, $2, $3, $4)"#,
             )
             .bind(id)
-            .bind(tenant_id)
+            .bind(aid)
             .bind(&dashboard_name)
             .bind(format!("Your {} dashboard", industry_name))
             .execute(&state.db)
             .await?;
 
-            seed_default_widgets_internal(&state, tenant_id, id, industry_slug).await;
+            seed_default_widgets_internal(&state, aid, id, industry_slug).await;
             id
         }
     };
 
-    // Upsert into tenant_industries
+    // Upsert into account_industries
     sqlx::query(
-        r#"INSERT INTO tenant_industries (tenant_id, industry_slug, dashboard_id, is_active)
+        r#"INSERT INTO account_industries (aid, industry_slug, dashboard_id, is_active)
            VALUES ($1, $2, $3, true)
-           ON CONFLICT (tenant_id, industry_slug)
+           ON CONFLICT (aid, industry_slug)
            DO UPDATE SET dashboard_id = EXCLUDED.dashboard_id, is_active = true, updated_at = NOW()"#,
     )
-    .bind(tenant_id)
+    .bind(aid)
     .bind(industry_slug)
     .bind(dashboard_id)
     .execute(&state.db)
@@ -222,9 +222,9 @@ pub async fn set_tenant_industry(
 
     // Set as primary industry if requested
     if set_as_primary {
-        sqlx::query("UPDATE tenants SET industry_slug = $1 WHERE id = $2")
+        sqlx::query("UPDATE accounts SET industry_slug = $1 WHERE id = $2")
             .bind(industry_slug)
-            .bind(tenant_id)
+            .bind(aid)
             .execute(&state.db)
             .await?;
     }
@@ -237,19 +237,19 @@ pub async fn set_tenant_industry(
     })))
 }
 
-/// DELETE /api/v1/tenants/industry/{slug} — remove an industry dashboard
-pub async fn remove_tenant_industry(
+/// DELETE /api/v1/accounts/industry/{slug} — remove an industry dashboard
+pub async fn remove_account_industry(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Path(slug): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Check if this is the primary industry — if so, can't remove, must switch primary first
     let primary: String = sqlx::query_scalar(
-        "SELECT COALESCE(industry_slug, 'site-flipping') FROM tenants WHERE id = $1"
+        "SELECT COALESCE(industry_slug, 'site-flipping') FROM accounts WHERE id = $1"
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_one(&state.db)
     .await
     .unwrap_or_default();
@@ -257,26 +257,26 @@ pub async fn remove_tenant_industry(
     if primary == slug {
         // Check if there are other industries — auto-switch primary if possible
         let other: Option<String> = sqlx::query_scalar(
-            "SELECT industry_slug FROM tenant_industries 
-             WHERE tenant_id = $1 AND industry_slug != $2 AND is_active = true 
+            "SELECT industry_slug FROM account_industries 
+             WHERE aid = $1 AND industry_slug != $2 AND is_active = true 
              LIMIT 1"
         )
-        .bind(tenant_id)
+        .bind(aid)
         .bind(&slug)
         .fetch_optional(&state.db)
         .await?
         .flatten();
 
         if let Some(new_primary) = other {
-            sqlx::query("UPDATE tenants SET industry_slug = $1 WHERE id = $2")
+            sqlx::query("UPDATE accounts SET industry_slug = $1 WHERE id = $2")
                 .bind(&new_primary)
-                .bind(tenant_id)
+                .bind(aid)
                 .execute(&state.db)
                 .await?;
         } else {
             // Can't remove the last industry
-            sqlx::query("UPDATE tenants SET industry_slug = 'site-flipping' WHERE id = $1")
-                .bind(tenant_id)
+            sqlx::query("UPDATE accounts SET industry_slug = 'site-flipping' WHERE id = $1")
+                .bind(aid)
                 .execute(&state.db)
                 .await?;
         }
@@ -284,9 +284,9 @@ pub async fn remove_tenant_industry(
 
     // Soft-deactivate (don't delete dashboards/data)
     sqlx::query(
-        "UPDATE tenant_industries SET is_active = false, updated_at = NOW() WHERE tenant_id = $1 AND industry_slug = $2"
+        "UPDATE account_industries SET is_active = false, updated_at = NOW() WHERE aid = $1 AND industry_slug = $2"
     )
-    .bind(tenant_id)
+    .bind(aid)
     .bind(&slug)
     .execute(&state.db)
     .await?;
@@ -300,7 +300,7 @@ pub async fn remove_tenant_industry(
 /// - Always: 1 recent activity feed
 /// - Additional widgets based on industry type (sales-pipeline vs project-tracker vs service-scheduler)
 /// All widgets accept data pushed via n8n, APIs, or browser automation through the standard endpoints.
-pub async fn seed_default_widgets_internal(state: &AppState, _tenant_id: Uuid, dashboard_id: Uuid, industry_slug: &str) {
+pub async fn seed_default_widgets_internal(state: &AppState, _aid: Uuid, dashboard_id: Uuid, industry_slug: &str) {
     let widgets = generate_industry_widgets(industry_slug);
 
     for (w_type, title, config, position) in widgets {
@@ -487,16 +487,16 @@ pub async fn get_dashboard_widgets(
     Extension(claims): Extension<Claims>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Determine which industry dashboard to load
     let industry_slug = match params.get("industry") {
         Some(slug) => {
-            // Verify tenant actually has this industry
+            // Verify account actually has this industry
             let exists: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM tenant_industries WHERE tenant_id = $1 AND industry_slug = $2 AND is_active = true)"
+                "SELECT EXISTS(SELECT 1 FROM account_industries WHERE aid = $1 AND industry_slug = $2 AND is_active = true)"
             )
-            .bind(tenant_id)
+            .bind(aid)
             .bind(slug)
             .fetch_one(&state.db)
             .await
@@ -509,9 +509,9 @@ pub async fn get_dashboard_widgets(
         }
         None => {
             sqlx::query_scalar(
-                "SELECT COALESCE(industry_slug, 'site-flipping') FROM tenants WHERE id = $1"
+                "SELECT COALESCE(industry_slug, 'site-flipping') FROM accounts WHERE id = $1"
             )
-            .bind(tenant_id)
+            .bind(aid)
             .fetch_one(&state.db)
             .await
             .unwrap_or_default()
@@ -530,9 +530,9 @@ pub async fn get_dashboard_widgets(
     let dashboard_name = format!("{} Dashboard", industry_name);
 
     let dashboard_id: Uuid = match sqlx::query_scalar(
-        "SELECT id FROM dashboards WHERE tenant_id = $1 AND name = $2 LIMIT 1"
+        "SELECT id FROM dashboards WHERE aid = $1 AND name = $2 LIMIT 1"
     )
-    .bind(tenant_id)
+    .bind(aid)
     .bind(&dashboard_name)
     .fetch_optional(&state.db)
     .await?
@@ -541,24 +541,24 @@ pub async fn get_dashboard_widgets(
         None => {
             let id = Uuid::new_v4();
             sqlx::query(
-                r#"INSERT INTO dashboards (id, tenant_id, name, description)
+                r#"INSERT INTO dashboards (id, aid, name, description)
                    VALUES ($1, $2, $3, $4)"#,
             )
             .bind(id)
-            .bind(tenant_id)
+            .bind(aid)
             .bind(&dashboard_name)
             .bind(format!("Your {} dashboard", industry_name))
             .execute(&state.db)
             .await?;
-            seed_default_widgets_internal(&state, tenant_id, id, &industry_slug).await;
+            seed_default_widgets_internal(&state, aid, id, &industry_slug).await;
 
-            // Also ensure tenant_industries record exists
+            // Also ensure account_industries record exists
             sqlx::query(
-                r#"INSERT INTO tenant_industries (tenant_id, industry_slug, dashboard_id)
+                r#"INSERT INTO account_industries (aid, industry_slug, dashboard_id)
                    VALUES ($1, $2, $3)
-                   ON CONFLICT (tenant_id, industry_slug) DO UPDATE SET dashboard_id = EXCLUDED.dashboard_id"#
+                   ON CONFLICT (aid, industry_slug) DO UPDATE SET dashboard_id = EXCLUDED.dashboard_id"#
             )
-            .bind(tenant_id)
+            .bind(aid)
             .bind(&industry_slug)
             .bind(id)
             .execute(&state.db)
@@ -593,10 +593,10 @@ pub async fn get_dashboard_widgets(
         // Fetch latest data for this widget's metric_key
         let data: Option<serde_json::Value> = sqlx::query_scalar(
             r#"SELECT metric_value FROM dashboard_data
-               WHERE tenant_id = $1 AND metric_key = $2
+               WHERE aid = $1 AND metric_key = $2
                ORDER BY recorded_at DESC LIMIT 1"#,
         )
-        .bind(tenant_id)
+        .bind(aid)
         .bind(&format!("n8n_{}", metric_key))
         .fetch_optional(&state.db)
         .await
@@ -641,14 +641,14 @@ pub async fn get_dashboard_metric(
     Extension(claims): Extension<Claims>,
     Path(metric_key): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let data: Option<serde_json::Value> = sqlx::query_scalar(
         r#"SELECT metric_value FROM dashboard_data
-           WHERE tenant_id = $1 AND metric_key = $2
+           WHERE aid = $1 AND metric_key = $2
            ORDER BY recorded_at DESC LIMIT 1"#,
     )
-    .bind(tenant_id)
+    .bind(aid)
     .bind(&metric_key)
     .fetch_optional(&state.db)
     .await?;
@@ -677,7 +677,7 @@ pub async fn push_widget_data(
     Extension(claims): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let metric_key = req.get("metric_key")
         .and_then(|v| v.as_str())
@@ -698,9 +698,9 @@ pub async fn push_widget_data(
 
         let name = format!("{} Dashboard", industry_name);
         sqlx::query_scalar(
-            "SELECT id FROM dashboards WHERE tenant_id = $1 AND name = $2 LIMIT 1"
+            "SELECT id FROM dashboards WHERE aid = $1 AND name = $2 LIMIT 1"
         )
-        .bind(tenant_id)
+        .bind(aid)
         .bind(&name)
         .fetch_optional(&state.db)
         .await?
@@ -708,10 +708,10 @@ pub async fn push_widget_data(
             // Auto-create if it doesn't exist
             let id = Uuid::new_v4();
             let _ = sqlx::query(
-                r#"INSERT INTO dashboards (id, tenant_id, name, description) VALUES ($1, $2, $3, $4)"#
+                r#"INSERT INTO dashboards (id, aid, name, description) VALUES ($1, $2, $3, $4)"#
             )
             .bind(id)
-            .bind(tenant_id)
+            .bind(aid)
             .bind(&name)
             .bind(format!("Your {} dashboard", industry_name))
             .execute(&state.db);
@@ -719,18 +719,18 @@ pub async fn push_widget_data(
         })
     } else {
         sqlx::query_scalar(
-            "SELECT id FROM dashboards WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 1"
+            "SELECT id FROM dashboards WHERE aid = $1 ORDER BY created_at DESC LIMIT 1"
         )
-        .bind(tenant_id)
+        .bind(aid)
         .fetch_optional(&state.db)
         .await?
         .unwrap_or_else(|| {
             let id = Uuid::new_v4();
             let _ = sqlx::query(
-                r#"INSERT INTO dashboards (id, tenant_id, name, description) VALUES ($1, $2, 'Default', 'Auto-created')"#
+                r#"INSERT INTO dashboards (id, aid, name, description) VALUES ($1, $2, 'Default', 'Auto-created')"#
             )
             .bind(id)
-            .bind(tenant_id)
+            .bind(aid)
             .execute(&state.db);
             id
         })
@@ -738,12 +738,12 @@ pub async fn push_widget_data(
 
     let data_id = Uuid::new_v4();
     sqlx::query(
-        r#"INSERT INTO dashboard_data (id, dashboard_id, tenant_id, metric_key, metric_value)
+        r#"INSERT INTO dashboard_data (id, dashboard_id, aid, metric_key, metric_value)
            VALUES ($1, $2, $3, $4, $5::jsonb)"#,
     )
     .bind(data_id)
     .bind(dashboard_id)
-    .bind(tenant_id)
+    .bind(aid)
     .bind(metric_key)
     .bind(metric_value)
     .execute(&state.db)

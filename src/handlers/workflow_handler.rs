@@ -26,21 +26,21 @@ pub async fn list_workflows(
     Extension(claims): Extension<Claims>,
     Query(query): Query<ListWorkflowsQuery>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let workflows = if let Some(surface_id) = query.surface {
         sqlx::query_as::<_, Workflow>(
-            "SELECT * FROM workflows WHERE tenant_id = $1 AND (surface_id = $2 OR surface_id IS NULL) ORDER BY name ASC",
+            "SELECT * FROM workflows WHERE aid = $1 AND (surface_id = $2 OR surface_id IS NULL) ORDER BY name ASC",
         )
-        .bind(tenant_id)
+        .bind(aid)
         .bind(surface_id)
         .fetch_all(&state.db)
         .await?
     } else {
         sqlx::query_as::<_, Workflow>(
-            "SELECT * FROM workflows WHERE tenant_id = $1 ORDER BY name ASC",
+            "SELECT * FROM workflows WHERE aid = $1 ORDER BY name ASC",
         )
-        .bind(tenant_id)
+        .bind(aid)
         .fetch_all(&state.db)
         .await?
     };
@@ -53,16 +53,16 @@ pub async fn create_workflow(
     Extension(claims): Extension<Claims>,
     Json(req): Json<CreateWorkflowRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    features::enforce_feature_limit(&state.db, tenant_id, "max_workflows", "Workflows").await?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    features::enforce_feature_limit(&state.db, aid, "max_workflows", "Workflows").await?;
 
     let workflow = sqlx::query_as::<_, Workflow>(
-        r#"INSERT INTO workflows (id, tenant_id, name, description, category, lifecycle_summary, tags, surface_id)
+        r#"INSERT INTO workflows (id, aid, name, description, category, lifecycle_summary, tags, surface_id)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
            RETURNING *"#,
     )
     .bind(Uuid::new_v4())
-    .bind(tenant_id)
+    .bind(aid)
     .bind(&req.name)
     .bind(&req.description)
     .bind(&req.category)
@@ -80,13 +80,13 @@ pub async fn get_workflow(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let workflow = sqlx::query_as::<_, Workflow>(
-        "SELECT * FROM workflows WHERE id = $1 AND tenant_id = $2",
+        "SELECT * FROM workflows WHERE id = $1 AND aid = $2",
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
@@ -107,13 +107,13 @@ pub async fn update_workflow(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateWorkflowRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let existing = sqlx::query_as::<_, Workflow>(
-        "SELECT * FROM workflows WHERE id = $1 AND tenant_id = $2",
+        "SELECT * FROM workflows WHERE id = $1 AND aid = $2",
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
@@ -145,11 +145,11 @@ pub async fn delete_workflow(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let result = sqlx::query("UPDATE workflows SET is_active = false WHERE id = $1 AND tenant_id = $2")
+    let result = sqlx::query("UPDATE workflows SET is_active = false WHERE id = $1 AND aid = $2")
         .bind(id)
-        .bind(tenant_id)
+        .bind(aid)
         .execute(&state.db)
         .await?;
 
@@ -166,8 +166,8 @@ pub async fn start_workflow(
     Path(id): Path<Uuid>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    features::enforce_feature_limit(&state.db, tenant_id, "max_instances", "Instances").await?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    features::enforce_feature_limit(&state.db, aid, "max_instances", "Instances").await?;
 
     let client_id = req.get("client_id")
         .and_then(|v| v.as_str())
@@ -175,19 +175,19 @@ pub async fn start_workflow(
         .ok_or(AppError::Validation("client_id is required".to_string()))?;
 
     let workflow = sqlx::query_as::<_, Workflow>(
-        "SELECT * FROM workflows WHERE id = $1 AND tenant_id = $2",
+        "SELECT * FROM workflows WHERE id = $1 AND aid = $2",
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
     // Check credits
     let balance: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE tenant_id = $1",
+        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_one(&state.db)
     .await
     .unwrap_or(0);
@@ -238,7 +238,7 @@ pub async fn start_workflow(
             })
             .collect();
 
-        let n8n_wf = n8n_converter::convert_steps_to_n8n(&step_values, tenant_id, id, &callback_base_url);
+        let n8n_wf = n8n_converter::convert_steps_to_n8n(&step_values, aid, id, &callback_base_url);
         let n8n_json = n8n_converter::to_n8n_json(&n8n_wf);
         let n8n_json_str = serde_json::to_string_pretty(&n8n_json)
             .map_err(|e| AppError::Internal(format!("JSON serialization: {}", e)))?;
@@ -307,24 +307,24 @@ pub async fn start_workflow(
 
     // Create instance record
     sqlx::query(
-        r#"INSERT INTO workflow_instances (id, workflow_id, client_id, tenant_id, name, status, started_at)
+        r#"INSERT INTO workflow_instances (id, workflow_id, client_id, aid, name, status, started_at)
            VALUES ($1, $2, $3, $4, $5, 'running', NOW())"#,
     )
     .bind(instance_id)
     .bind(id)
     .bind(client_id)
-    .bind(tenant_id)
+    .bind(aid)
     .bind(&name)
     .execute(&state.db)
     .await?;
 
     // Deduct 1 execution credit
     sqlx::query(
-        r#"INSERT INTO credit_transactions (id, tenant_id, amount, transaction_type, description)
+        r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
            VALUES ($1, $2, -1, 'workflow_execution', $3)"#,
     )
     .bind(Uuid::new_v4())
-    .bind(tenant_id)
+    .bind(aid)
     .bind(format!("Workflow execution: {}", workflow.name))
     .execute(&state.db)
     .await?;
@@ -339,7 +339,7 @@ pub async fn start_workflow(
     let trigger_payload = json!({
         "instance_id": instance_id.to_string(),
         "workflow_id": id.to_string(),
-        "tenant_id": claims.aid,
+        "aid": claims.aid,
         "triggered_by": claims.sub,
         "client_id": client_id.to_string(),
         "payload": req.get("payload").cloned().unwrap_or(json!({})),
@@ -354,7 +354,7 @@ pub async fn start_workflow(
     let db = state.db.clone();
     let inst_id = instance_id;
     let wf_name = workflow.name.clone();
-    let tid = tenant_id;
+    let tid = aid;
 
     tokio::spawn(async move {
         match client.post(&n8n_url).json(&trigger_payload).send().await {
@@ -370,7 +370,7 @@ pub async fn start_workflow(
                     .execute(&db)
                     .await;
                     let _ = sqlx::query(
-                        r#"INSERT INTO credit_transactions (id, tenant_id, amount, transaction_type, description)
+                        r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
                            VALUES ($1, $2, 1, 'refund', $3)"#
                     )
                     .bind(Uuid::new_v4())
@@ -389,7 +389,7 @@ pub async fn start_workflow(
                 .execute(&db)
                 .await;
                 let _ = sqlx::query(
-                    r#"INSERT INTO credit_transactions (id, tenant_id, amount, transaction_type, description)
+                    r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
                        VALUES ($1, $2, 1, 'refund', $3)"#
                 )
                 .bind(Uuid::new_v4())
@@ -415,7 +415,7 @@ pub async fn get_workflow_steps(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let _tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let _aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let steps = sqlx::query_as::<_, WorkflowStep>(
         "SELECT * FROM workflow_steps WHERE workflow_id = $1 ORDER BY sort_order ASC",
@@ -433,14 +433,14 @@ pub async fn create_workflow_step(
     Path(id): Path<Uuid>,
     Json(req): Json<CreateWorkflowStepRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    // Verify workflow exists and belongs to tenant
+    // Verify workflow exists and belongs to account
     let _workflow = sqlx::query_as::<_, Workflow>(
-        "SELECT * FROM workflows WHERE id = $1 AND tenant_id = $2",
+        "SELECT * FROM workflows WHERE id = $1 AND aid = $2",
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
@@ -482,14 +482,14 @@ pub async fn update_workflow_step(
     Path((workflow_id, step_id)): Path<(Uuid, Uuid)>,
     Json(req): Json<UpdateWorkflowStepRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    // Verify workflow exists and belongs to tenant
+    // Verify workflow exists and belongs to account
     let _workflow = sqlx::query_as::<_, Workflow>(
-        "SELECT * FROM workflows WHERE id = $1 AND tenant_id = $2",
+        "SELECT * FROM workflows WHERE id = $1 AND aid = $2",
     )
     .bind(workflow_id)
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
@@ -519,14 +519,14 @@ pub async fn delete_workflow_step(
     Extension(claims): Extension<Claims>,
     Path((workflow_id, step_id)): Path<(Uuid, Uuid)>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    // Verify workflow exists and belongs to tenant
+    // Verify workflow exists and belongs to account
     let _workflow = sqlx::query_as::<_, Workflow>(
-        "SELECT * FROM workflows WHERE id = $1 AND tenant_id = $2",
+        "SELECT * FROM workflows WHERE id = $1 AND aid = $2",
     )
     .bind(workflow_id)
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
@@ -550,14 +550,14 @@ pub async fn reorder_workflow_steps(
     Path(id): Path<Uuid>,
     Json(req): Json<ReorderStepsRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    // Verify workflow exists and belongs to tenant
+    // Verify workflow exists and belongs to account
     let _workflow = sqlx::query_as::<_, Workflow>(
-        "SELECT * FROM workflows WHERE id = $1 AND tenant_id = $2",
+        "SELECT * FROM workflows WHERE id = $1 AND aid = $2",
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
@@ -592,13 +592,13 @@ pub async fn deploy_workflow_to_n8n(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let workflow = sqlx::query_as::<_, Workflow>(
-        "SELECT * FROM workflows WHERE id = $1 AND tenant_id = $2",
+        "SELECT * FROM workflows WHERE id = $1 AND aid = $2",
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
@@ -632,7 +632,7 @@ pub async fn deploy_workflow_to_n8n(
 
     let callback_base_url = std::env::var("CALLBACK_BASE_URL")
         .unwrap_or_else(|_| "http://workflowswift:8085".to_string());
-    let n8n_wf = n8n_converter::convert_steps_to_n8n(&step_values, tenant_id, id, &callback_base_url);
+    let n8n_wf = n8n_converter::convert_steps_to_n8n(&step_values, aid, id, &callback_base_url);
     let n8n_json = n8n_converter::to_n8n_json(&n8n_wf);
 
     // Deploy via n8n REST API
@@ -692,13 +692,13 @@ pub async fn run_workflow(
     Path(id): Path<Uuid>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let workflow = sqlx::query_as::<_, Workflow>(
-        "SELECT * FROM workflows WHERE id = $1 AND tenant_id = $2",
+        "SELECT * FROM workflows WHERE id = $1 AND aid = $2",
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
@@ -738,7 +738,7 @@ pub async fn run_workflow(
 
         let callback_base_url = std::env::var("CALLBACK_BASE_URL")
             .unwrap_or_else(|_| "http://workflowswift:8085".to_string());
-        let n8n_wf = n8n_converter::convert_steps_to_n8n(&step_values, tenant_id, id, &callback_base_url);
+        let n8n_wf = n8n_converter::convert_steps_to_n8n(&step_values, aid, id, &callback_base_url);
         let n8n_json = n8n_converter::to_n8n_json(&n8n_wf);
 
         // Deploy via n8n REST API
@@ -793,9 +793,9 @@ pub async fn run_workflow(
 
     // Check credits before triggering
     let balance = sqlx::query_scalar::<_, i64>(
-        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE tenant_id = $1",
+        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_one(&state.db)
     .await
     .unwrap_or(0);
@@ -808,11 +808,11 @@ pub async fn run_workflow(
 
     // Deduct 1 credit
     sqlx::query(
-        r#"INSERT INTO credit_transactions (id, tenant_id, amount, transaction_type, description)
+        r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
            VALUES ($1, $2, -1, 'workflow_execution', $3)"#,
     )
     .bind(Uuid::new_v4())
-    .bind(tenant_id)
+    .bind(aid)
     .bind(format!("Workflow execution: {}", workflow.name))
     .execute(&state.db)
     .await?;
@@ -821,7 +821,7 @@ pub async fn run_workflow(
     let n8n_url = format!("{}/webhook/{}", state.config.n8n_webhook_url.trim_end_matches('/'), webhook_path);
     let client = reqwest::Client::new();
     let trigger_payload = json!({
-        "tenant_id": claims.aid,
+        "aid": claims.aid,
         "triggered_by": claims.sub,
         "payload": req.get("payload").cloned().unwrap_or(json!({})),
         "headers": {
@@ -843,9 +843,9 @@ pub async fn run_workflow(
                 .unwrap_or(json!({"note": "n8n responded without body"}));
 
             let new_balance = sqlx::query_scalar::<_, i64>(
-                "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE tenant_id = $1",
+                "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
             )
-            .bind(tenant_id)
+            .bind(aid)
             .fetch_one(&state.db)
             .await
             .unwrap_or(0);
@@ -860,11 +860,11 @@ pub async fn run_workflow(
         Err(e) => {
             // Refund on failure
             let _ = sqlx::query(
-                r#"INSERT INTO credit_transactions (id, tenant_id, amount, transaction_type, description)
+                r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
                    VALUES ($1, $2, 1, 'refund', $3)"#,
             )
             .bind(Uuid::new_v4())
-            .bind(tenant_id)
+            .bind(aid)
             .bind(format!("Refund for failed execution: {}", workflow.name))
             .execute(&state.db)
             .await;

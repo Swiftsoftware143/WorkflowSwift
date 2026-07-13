@@ -83,7 +83,7 @@ pub async fn receive_incoming(
     // Workflows are linked to integration targets via workflow_steps.integration_target_id
     // The trigger mapping is: workflow name contains source slug, or a step config maps it
     let workflow = sqlx::query_as::<_, WorkflowRow>(
-        r#"SELECT id, tenant_id, name, description, category
+        r#"SELECT id, aid, name, description, category
            FROM workflows
            WHERE is_active = true
            AND (
@@ -118,8 +118,8 @@ pub async fn receive_incoming(
         }
     };
 
-    // Use the workflow's tenant
-    let tenant_id = workflow.tenant_id;
+    // Use the workflow's account
+    let aid = workflow.aid;
 
     // Fetch the workflow steps (ordered by sort_order)
     let steps = sqlx::query_as::<_, WorkflowStepRow>(
@@ -150,17 +150,17 @@ pub async fn receive_incoming(
     });
 
     // Create a workflow instance. We need a client_id — use a system/placeholder one
-    let placeholder_client_id = find_or_create_system_client(&state.db, tenant_id, source).await?;
+    let placeholder_client_id = find_or_create_system_client(&state.db, aid, source).await?;
     let instance_id = Uuid::new_v4();
 
     sqlx::query(
-        r#"INSERT INTO workflow_instances (id, workflow_id, client_id, tenant_id, name, status, current_step_order)
+        r#"INSERT INTO workflow_instances (id, workflow_id, client_id, aid, name, status, current_step_order)
            VALUES ($1, $2, $3, $4, $5, 'active', 0)"#,
     )
     .bind(instance_id)
     .bind(workflow.id)
     .bind(placeholder_client_id)
-    .bind(tenant_id)
+    .bind(aid)
     .bind(format!("Incoming: {} from {}", 
         payload.contact.email.as_deref().unwrap_or("lead"), source))
     .execute(&state.db)
@@ -215,7 +215,7 @@ pub async fn receive_incoming(
                     match super::integration_dispatch_handler::forward_dispatch(
                         &state.db,
                         target_id,
-                        tenant_id,
+                        aid,
                         &dispatch_payload,
                     ).await {
                         Ok(resp) => {
@@ -372,7 +372,7 @@ pub async fn receive_incoming(
 #[derive(Debug, sqlx::FromRow)]
 struct WorkflowRow {
     id: Uuid,
-    tenant_id: Uuid,
+    aid: Uuid,
     name: String,
     description: Option<String>,
     category: Option<String>,
@@ -393,7 +393,7 @@ struct WorkflowStepRow {
 /// Uses a v4 UUID each time (we upsert by email so duplicates are harmless).
 async fn find_or_create_system_client(
     db: &sqlx::PgPool,
-    tenant_id: Uuid,
+    aid: Uuid,
     source: &str,
 ) -> Result<Uuid, AppError> {
     let client_id = Uuid::new_v4();
@@ -401,10 +401,10 @@ async fn find_or_create_system_client(
 
     // Check if a system client by email already exists
     let existing: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM clients WHERE email = $1 AND tenant_id = $2"
+        "SELECT id FROM clients WHERE email = $1 AND aid = $2"
     )
     .bind(&sys_email)
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_optional(db)
     .await
     .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
@@ -415,12 +415,12 @@ async fn find_or_create_system_client(
 
     // Create new system client (clients has is_active, not status)
     sqlx::query(
-        r#"INSERT INTO clients (id, tenant_id, name, email, is_active)
+        r#"INSERT INTO clients (id, aid, name, email, is_active)
            VALUES ($1, $2, $3, $4, true)
            ON CONFLICT (id) DO NOTHING"#,
     )
     .bind(client_id)
-    .bind(tenant_id)
+    .bind(aid)
     .bind(format!("System ({})", source))
     .bind(&sys_email)
     .execute(db)

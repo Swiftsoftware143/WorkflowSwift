@@ -26,13 +26,13 @@ pub async fn list_templates(
     Extension(claims): Extension<Claims>,
     Query(query): Query<ListTemplatesQuery>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    // Determine which templates this tenant's plan allows
+    // Determine which templates this account's plan allows
     let plan_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT plan_id FROM tenant_plans WHERE tenant_id = $1 AND status = 'active'"
+        "SELECT plan_id FROM account_plans WHERE aid = $1 AND status = 'active'"
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_optional(&state.db)
     .await?
     .flatten();
@@ -40,15 +40,15 @@ pub async fn list_templates(
     // If a specific industry is requested, also check user has access to it
     if let Some(ref industry_slug) = query.industry {
         let has_industry: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM tenant_industries WHERE tenant_id = $1 AND industry_slug = $2 AND is_active = true)"
+            "SELECT EXISTS(SELECT 1 FROM account_industries WHERE aid = $1 AND industry_slug = $2 AND is_active = true)"
         )
-        .bind(tenant_id)
+        .bind(aid)
         .bind(industry_slug)
         .fetch_one(&state.db)
         .await
         .unwrap_or(false);
 
-        // If tenant doesn't own this industry, fall back to public templates
+        // If account doesn't own this industry, fall back to public templates
         if !has_industry {
             // Allow view but only show public templates for that industry
             let templates = if let Some(surface_id) = query.surface {
@@ -78,18 +78,18 @@ pub async fn list_templates(
         }
     }
 
-    // For tenant-owned templates, combine with plan capabilities
+    // For account-owned templates, combine with plan capabilities
     // Plan capabilities control which public templates are visible/usable
     let templates = if let Some(ref industry_slug) = query.industry {
         if let Some(surface_id) = query.surface {
             sqlx::query_as::<_, WorkflowTemplate>(
                 r#"SELECT wt.* FROM workflow_templates wt
                    INNER JOIN industry_templates it ON it.template_id = wt.id
-                   WHERE wt.tenant_id = $1 AND it.industry_slug = $2
+                   WHERE wt.aid = $1 AND it.industry_slug = $2
                    AND (wt.surface_id = $3 OR wt.surface_id IS NULL)
                    ORDER BY wt.name ASC"#
             )
-            .bind(tenant_id)
+            .bind(aid)
             .bind(industry_slug)
             .bind(surface_id)
             .fetch_all(&state.db)
@@ -98,27 +98,27 @@ pub async fn list_templates(
             sqlx::query_as::<_, WorkflowTemplate>(
                 r#"SELECT wt.* FROM workflow_templates wt
                    INNER JOIN industry_templates it ON it.template_id = wt.id
-                   WHERE wt.tenant_id = $1 AND it.industry_slug = $2
+                   WHERE wt.aid = $1 AND it.industry_slug = $2
                    ORDER BY wt.name ASC"#
             )
-            .bind(tenant_id)
+            .bind(aid)
             .bind(industry_slug)
             .fetch_all(&state.db)
             .await?
         }
     } else if let Some(surface_id) = query.surface {
         sqlx::query_as::<_, WorkflowTemplate>(
-            "SELECT * FROM workflow_templates WHERE tenant_id = $1 AND (surface_id = $2 OR surface_id IS NULL) ORDER BY name ASC",
+            "SELECT * FROM workflow_templates WHERE aid = $1 AND (surface_id = $2 OR surface_id IS NULL) ORDER BY name ASC",
         )
-        .bind(tenant_id)
+        .bind(aid)
         .bind(surface_id)
         .fetch_all(&state.db)
         .await?
     } else {
         sqlx::query_as::<_, WorkflowTemplate>(
-            "SELECT * FROM workflow_templates WHERE tenant_id = $1 ORDER BY name ASC",
+            "SELECT * FROM workflow_templates WHERE aid = $1 ORDER BY name ASC",
         )
-        .bind(tenant_id)
+        .bind(aid)
         .fetch_all(&state.db)
         .await?
     };
@@ -131,11 +131,11 @@ pub async fn list_templates(
                JOIN workflow_templates wt ON wt.id = vpit.template_id
                JOIN template_categories tc ON tc.slug = vpit.industry_slug
                WHERE vpit.plan_id = $1
-                  AND (wt.tenant_id = $2 OR wt.is_public = true)
+                  AND (wt.aid = $2 OR wt.is_public = true)
                ORDER BY wt.name"#
         )
         .bind(pid)
-        .bind(tenant_id)
+        .bind(aid)
         .fetch_all(&state.db)
         .await?
         .iter()
@@ -164,17 +164,17 @@ pub async fn create_template(
     Extension(claims): Extension<Claims>,
     Json(req): Json<CreateTemplateRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    features::enforce_feature_limit(&state.db, tenant_id, "max_templates", "Templates").await?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    features::enforce_feature_limit(&state.db, aid, "max_templates", "Templates").await?;
 
     let template_id = Uuid::new_v4();
     let template = sqlx::query_as::<_, WorkflowTemplate>(
-        r#"INSERT INTO workflow_templates (id, tenant_id, name, description, category, tags, is_public)
+        r#"INSERT INTO workflow_templates (id, aid, name, description, category, tags, is_public)
            VALUES ($1, $2, $3, $4, $5, $6, $7)
            RETURNING *"#,
     )
     .bind(template_id)
-    .bind(tenant_id)
+    .bind(aid)
     .bind(&req.name)
     .bind(&req.description)
     .bind(&req.category)
@@ -208,13 +208,13 @@ pub async fn get_template(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let template = sqlx::query_as::<_, WorkflowTemplate>(
-        "SELECT * FROM workflow_templates WHERE id = $1 AND tenant_id = $2",
+        "SELECT * FROM workflow_templates WHERE id = $1 AND aid = $2",
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound("Template not found".to_string()))?;
@@ -235,13 +235,13 @@ pub async fn update_template(
     Path(id): Path<Uuid>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let existing = sqlx::query_as::<_, WorkflowTemplate>(
-        "SELECT * FROM workflow_templates WHERE id = $1 AND tenant_id = $2",
+        "SELECT * FROM workflow_templates WHERE id = $1 AND aid = $2",
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound("Template not found".to_string()))?;
@@ -270,11 +270,11 @@ pub async fn delete_template(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let result = sqlx::query("DELETE FROM workflow_templates WHERE id = $1 AND tenant_id = $2")
+    let result = sqlx::query("DELETE FROM workflow_templates WHERE id = $1 AND aid = $2")
         .bind(id)
-        .bind(tenant_id)
+        .bind(aid)
         .execute(&state.db)
         .await?;
 
@@ -286,7 +286,7 @@ pub async fn delete_template(
 }
 
 /// POST /api/v1/templates/{id}/install
-/// Installs a template as a new workflow for the current tenant.
+/// Installs a template as a new workflow for the current account.
 /// Copies the template steps into a new workflow and returns the workflow.
 pub async fn install_template_as_workflow(
     State(state): State<AppState>,
@@ -294,15 +294,15 @@ pub async fn install_template_as_workflow(
     Path(id): Path<Uuid>,
     Json(req): Json<HashMap<String, serde_json::Value>>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    features::enforce_feature_limit(&state.db, tenant_id, "max_workflows", "Workflows").await?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    features::enforce_feature_limit(&state.db, aid, "max_workflows", "Workflows").await?;
 
     // Fetch template
     let template = sqlx::query_as::<_, WorkflowTemplate>(
-        "SELECT * FROM workflow_templates WHERE id = $1 AND (tenant_id = $2 OR is_public = true)",
+        "SELECT * FROM workflow_templates WHERE id = $1 AND (aid = $2 OR is_public = true)",
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound("Template not found or not accessible".to_string()))?;
@@ -343,12 +343,12 @@ pub async fn install_template_as_workflow(
 
     // Create the workflow
     let workflow = sqlx::query_as::<_, crate::models::workflow::Workflow>(
-        r#"INSERT INTO workflows (id, tenant_id, name, description, category, tags, surface_id)
+        r#"INSERT INTO workflows (id, aid, name, description, category, tags, surface_id)
            VALUES ($1, $2, $3, $4, $5, $6, $7)
            RETURNING *"#,
     )
     .bind(workflow_id)
-    .bind(tenant_id)
+    .bind(aid)
     .bind(&workflow_name)
     .bind(&workflow_description)
     .bind(&template.category)
@@ -394,7 +394,7 @@ pub async fn get_template_steps(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let _tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let _aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let steps = sqlx::query_as::<_, WorkflowTemplateStep>(
         "SELECT * FROM workflow_template_steps WHERE template_id = $1 ORDER BY sort_order ASC",

@@ -12,7 +12,7 @@ pub mod import_logs_handler;
 pub mod export_templates_handler;
 pub mod instance_handler;
 pub mod automation_handler;
-pub mod tenant_handler;
+pub mod account_handler;
 pub mod user_handler;
 pub mod dashboard_handler;
 
@@ -45,3 +45,5 @@ pub mod provider_keys_handler;
 pub mod integration_center_handler;
 pub mod user_integration_handler;
 pub mod internal_handler;
+pub mod rendition_handler;
+pub mod admin_settings_handler;

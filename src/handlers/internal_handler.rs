@@ -10,7 +10,7 @@ use sqlx::Row;
 use crate::AppState;
 use crate::error::{AppError, ApiResult};
 /// POST /api/v1/internal/dashboard-data-seed
-/// Called by n8n on a schedule to generate dashboard data for all tenants.
+/// Called by n8n on a schedule to generate dashboard data for all accounts.
 /// Requires X-Internal-Key header matching the configured internal_sync_key.
 pub async fn seed_dashboard_data(
     State(state): State<AppState>,
@@ -24,10 +24,10 @@ pub async fn seed_dashboard_data(
         return Err(AppError::Forbidden("Invalid internal key".into()));
     }
 
-    // Get all active tenants with their primary industry
-    let tenants = sqlx::query(
+    // Get all active accounts with their primary industry
+    let accounts = sqlx::query(
         r#"SELECT t.id, t.industry_slug
-           FROM tenants t
+           FROM accounts t
            WHERE t.is_active = true"#
     )
     .fetch_all(&state.db)
@@ -35,20 +35,20 @@ pub async fn seed_dashboard_data(
 
     let mut results = Vec::new();
 
-    for row in &tenants {
-        let tenant_id: Uuid = row.try_get("id").unwrap_or_default();
+    for row in &accounts {
+        let aid: Uuid = row.try_get("id").unwrap_or_default();
         let industry_slug: String = row.try_get("industry_slug").unwrap_or_else(|_| "site-flipping".to_string());
 
-        // Get the metric keys for this tenant's dashboard widgets
+        // Get the metric keys for this account's dashboard widgets
         let metric_keys: Vec<String> = sqlx::query_scalar(
             r#"SELECT DISTINCT config->>'metric_key'
                FROM dashboard_widgets dw
                JOIN dashboards d ON d.id = dw.dashboard_id
-               JOIN tenant_industries ti ON ti.dashboard_id = d.id
-               WHERE ti.tenant_id = $1 AND ti.industry_slug = $2
+               JOIN account_industries ti ON ti.dashboard_id = d.id
+               WHERE ti.aid = $1 AND ti.industry_slug = $2
                AND config->>'metric_key' IS NOT NULL"#
         )
-        .bind(tenant_id)
+        .bind(aid)
         .bind(&industry_slug)
         .fetch_all(&state.db)
         .await
@@ -59,16 +59,16 @@ pub async fn seed_dashboard_data(
             let value = generate_sample_data(metric_key);
 
             sqlx::query(
-                r#"INSERT INTO dashboard_data (id, dashboard_id, tenant_id, metric_key, metric_value)
+                r#"INSERT INTO dashboard_data (id, dashboard_id, aid, metric_key, metric_value)
                    SELECT $1, d.id, $2, $3, $4::jsonb
                    FROM dashboards d
-                   JOIN tenant_industries ti ON ti.dashboard_id = d.id
-                   WHERE ti.tenant_id = $2 AND ti.industry_slug = $5
+                   JOIN account_industries ti ON ti.dashboard_id = d.id
+                   WHERE ti.aid = $2 AND ti.industry_slug = $5
                    ORDER BY d.created_at DESC
                    LIMIT 1"#
             )
             .bind(Uuid::new_v4())
-            .bind(tenant_id)
+            .bind(aid)
             .bind(format!("n8n_{}", metric_key))
             .bind(&value)
             .bind(&industry_slug)
@@ -77,7 +77,7 @@ pub async fn seed_dashboard_data(
             .ok();
 
             results.push(json!({
-                "tenant_id": tenant_id.to_string(),
+                "aid": aid.to_string(),
                 "metric_key": metric_key,
                 "industry": &industry_slug
             }));
@@ -86,7 +86,7 @@ pub async fn seed_dashboard_data(
 
     Ok(Json(json!({
         "seeded": true,
-        "tenants_processed": tenants.len(),
+        "accounts_processed": accounts.len(),
         "metrics_seeded": results.len(),
         "details": results
     })))

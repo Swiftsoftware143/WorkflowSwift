@@ -6,7 +6,7 @@ use sqlx::FromRow;
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Client {
     pub id: Uuid,
-    pub tenant_id: Uuid,
+    pub aid: Uuid,
     pub name: String,
     pub email: Option<String>,
     pub phone: Option<String>,

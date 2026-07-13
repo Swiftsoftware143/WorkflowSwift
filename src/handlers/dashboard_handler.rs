@@ -21,25 +21,25 @@ pub async fn dashboard_stats(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let total_workflows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workflows WHERE tenant_id = $1")
-        .bind(tenant_id)
+    let total_workflows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workflows WHERE aid = $1")
+        .bind(aid)
         .fetch_one(&state.db)
         .await
         .unwrap_or(0);
-    let active_instances: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workflow_instances WHERE tenant_id = $1 AND status NOT IN ('completed', 'cancelled')")
-        .bind(tenant_id)
+    let active_instances: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workflow_instances WHERE aid = $1 AND status NOT IN ('completed', 'cancelled')")
+        .bind(aid)
         .fetch_one(&state.db)
         .await
         .unwrap_or(0);
-    let total_clients: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM clients WHERE tenant_id = $1 AND is_active = true")
-        .bind(tenant_id)
+    let total_clients: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM clients WHERE aid = $1 AND is_active = true")
+        .bind(aid)
         .fetch_one(&state.db)
         .await
         .unwrap_or(0);
-    let total_templates: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workflow_templates WHERE tenant_id = $1")
-        .bind(tenant_id)
+    let total_templates: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workflow_templates WHERE aid = $1")
+        .bind(aid)
         .fetch_one(&state.db)
         .await
         .unwrap_or(0);
@@ -59,13 +59,13 @@ pub async fn dashboard_activity(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let rows = sqlx::query(
         r#"SELECT id::text, user_id::text, action, entity_type, entity_id::text, created_at::text
-           FROM audit_logs WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 20"#,
+           FROM audit_logs WHERE aid = $1 ORDER BY created_at DESC LIMIT 20"#,
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_all(&state.db)
     .await?;
 
@@ -89,13 +89,13 @@ pub async fn dashboard_activity(
 /// feature on top of the workflow execution itself.
 /// 
 /// n8n calls this after running a workflow. The data is stored keyed by
-/// (tenant_id, dashboard_type) and displayed in the user's dashboard.
+/// (aid, dashboard_type) and displayed in the user's dashboard.
 pub async fn push_dashboard_data(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Extract dashboard type and data
     let dashboard_type = req.get("dashboard_type")
@@ -112,9 +112,9 @@ pub async fn push_dashboard_data(
 
     // Check credits for dashboard data storage
     let balance: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE tenant_id = $1",
+        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_one(&state.db)
     .await
     .unwrap_or(0);
@@ -129,21 +129,21 @@ pub async fn push_dashboard_data(
     // Deduct credit for dashboard data storage
     let tx_id = Uuid::new_v4();
     sqlx::query(
-        r#"INSERT INTO credit_transactions (id, tenant_id, amount, transaction_type, description)
+        r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
            VALUES ($1, $2, $3, 'usage', 'Dashboard data: ') "#,
     )
     .bind(tx_id)
-    .bind(tenant_id)
+    .bind(aid)
     .bind(-DASHBOARD_DATA_COST)
     .bind(format!("Dashboard data push: {}", dashboard_type))
     .execute(&state.db)
     .await?;
 
-    // Get or create default dashboard for this tenant (async, not closure)
+    // Get or create default dashboard for this account (async, not closure)
     let dashboard_id: Uuid = match sqlx::query_scalar(
-        "SELECT id FROM dashboards WHERE tenant_id = $1 AND name = $2 LIMIT 1",
+        "SELECT id FROM dashboards WHERE aid = $1 AND name = $2 LIMIT 1",
     )
-    .bind(tenant_id)
+    .bind(aid)
     .bind("Default Dashboard")
     .fetch_optional(&state.db)
     .await?
@@ -152,11 +152,11 @@ pub async fn push_dashboard_data(
         None => {
             let id = Uuid::new_v4();
             sqlx::query(
-                r#"INSERT INTO dashboards (id, tenant_id, name, description, layout)
+                r#"INSERT INTO dashboards (id, aid, name, description, layout)
                    VALUES ($1, $2, 'Default Dashboard', 'Auto-created dashboard', '{}'::jsonb)"#,
             )
             .bind(id)
-            .bind(tenant_id)
+            .bind(aid)
             .execute(&state.db)
             .await?;
             id
@@ -166,38 +166,38 @@ pub async fn push_dashboard_data(
     // Store the data
     let data_id = Uuid::new_v4();
     sqlx::query(
-        r#"INSERT INTO dashboard_data (id, dashboard_id, tenant_id, metric_key, metric_value)
+        r#"INSERT INTO dashboard_data (id, dashboard_id, aid, metric_key, metric_value)
            VALUES ($1, $2, $3, $4, $5::jsonb)"#,
     )
     .bind(data_id)
     .bind(dashboard_id)
-    .bind(tenant_id)
+    .bind(aid)
     .bind(format!("n8n_{}", dashboard_type))
     .bind(serde_json::to_value(&data).unwrap_or_default())
     .execute(&state.db)
     .await?;
 
-    // Clean old data — keep latest 100 entries per key per tenant
+    // Clean old data — keep latest 100 entries per key per account
     sqlx::query(
         r#"DELETE FROM dashboard_data
-           WHERE tenant_id = $1 AND metric_key = $2
+           WHERE aid = $1 AND metric_key = $2
            AND id NOT IN (
                SELECT id FROM dashboard_data
-               WHERE tenant_id = $1 AND metric_key = $2
+               WHERE aid = $1 AND metric_key = $2
                ORDER BY recorded_at DESC
                LIMIT 100
            )"#,
     )
-    .bind(tenant_id)
+    .bind(aid)
     .bind(format!("n8n_{}", dashboard_type))
     .execute(&state.db)
     .await
     .ok();
 
     let new_balance: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE tenant_id = $1",
+        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_one(&state.db)
     .await
     .unwrap_or(0);
@@ -218,13 +218,13 @@ pub async fn industry_dashboard_data(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     
-    // Get tenant's industry
+    // Get account's industry
     let industry_slug: Option<String> = sqlx::query_scalar(
-        "SELECT industry_slug FROM tenants WHERE id = $1"
+        "SELECT industry_slug FROM accounts WHERE id = $1"
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_optional(&state.db)
     .await?
     .flatten();
@@ -246,9 +246,9 @@ pub async fn industry_dashboard_data(
     let mut widget_data = Vec::new();
     for (widget_id, name, data_type, default_config, sort_order) in &widgets {
         let data: Vec<serde_json::Value> = sqlx::query_as::<_, (serde_json::Value,)>(
-            "SELECT data_value FROM dashboard_data WHERE tenant_id = $1 AND metric_key = $2 ORDER BY recorded_at DESC LIMIT 1"
+            "SELECT data_value FROM dashboard_data WHERE aid = $1 AND metric_key = $2 ORDER BY recorded_at DESC LIMIT 1"
         )
-        .bind(tenant_id)
+        .bind(aid)
         .bind(name)
         .fetch_all(&state.db)
         .await?
@@ -274,24 +274,24 @@ pub async fn industry_dashboard_data(
 
 /// GET /api/v1/dashboard/metric-keys — return the authenticated user's widget metric keys
 /// for the frontend data entry dropdown. Queries dashboard_widgets joined with dashboards
-/// joined with tenant_industries for the user's tenant.
+/// joined with account_industries for the user's account.
 pub async fn get_widget_metric_keys(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     type MetricKeyRow = (String, Option<String>, Option<String>);
     let rows = sqlx::query_as::<_, MetricKeyRow>(
         r#"SELECT DISTINCT dw.title, dw.config->>'metric_key', dw.config->>'subtitle'
            FROM dashboard_widgets dw
            JOIN dashboards d ON d.id = dw.dashboard_id
-           JOIN tenant_industries ti ON ti.dashboard_id = d.id
-           WHERE ti.tenant_id = $1 AND ti.is_active = true
+           JOIN account_industries ti ON ti.dashboard_id = d.id
+           WHERE ti.aid = $1 AND ti.is_active = true
              AND dw.config->>'metric_key' IS NOT NULL
            ORDER BY dw.title"#
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_all(&state.db)
     .await?;
 

@@ -17,12 +17,12 @@ pub async fn list_automations(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let automations = sqlx::query_as::<_, Automation>(
-        "SELECT * FROM automations WHERE tenant_id = $1 ORDER BY name ASC",
+        "SELECT * FROM automations WHERE aid = $1 ORDER BY name ASC",
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_all(&state.db)
     .await?;
 
@@ -34,8 +34,8 @@ pub async fn create_automation(
     Extension(claims): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    features::enforce_feature_limit(&state.db, tenant_id, "max_automations", "Automations").await?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    features::enforce_feature_limit(&state.db, aid, "max_automations", "Automations").await?;
 
     let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let description = req.get("description").and_then(|v| v.as_str()).map(|s| s.to_string());
@@ -49,12 +49,12 @@ pub async fn create_automation(
     }
 
     let automation = sqlx::query_as::<_, Automation>(
-        r#"INSERT INTO automations (id, tenant_id, name, description, trigger_type, trigger_config, action_type, action_config)
+        r#"INSERT INTO automations (id, aid, name, description, trigger_type, trigger_config, action_type, action_config)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
            RETURNING *"#,
     )
     .bind(Uuid::new_v4())
-    .bind(tenant_id)
+    .bind(aid)
     .bind(&name)
     .bind(&description)
     .bind(&trigger_type)
@@ -73,7 +73,7 @@ pub async fn run_automation(
     Path(id): Path<Uuid>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let _tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let _aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let _automation = sqlx::query_as::<_, Automation>(
         "SELECT * FROM automations WHERE id = $1",

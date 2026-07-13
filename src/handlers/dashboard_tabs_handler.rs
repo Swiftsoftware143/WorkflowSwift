@@ -43,15 +43,15 @@ pub async fn create_brand_monitor(
     Extension(claims): Extension<Claims>,
     AxumJson(req): AxumJson<CreateBrandMonitorRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let id = Uuid::new_v4();
 
     sqlx::query(
-        r#"INSERT INTO brand_monitor_items (id, tenant_id, brand_name, keywords, sources)
+        r#"INSERT INTO brand_monitor_items (id, aid, brand_name, keywords, sources)
            VALUES ($1, $2, $3, $4, $5)"#,
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .bind(&req.brand_name)
     .bind(&req.keywords.unwrap_or_default())
     .bind(&req.sources.unwrap_or_else(|| vec!["web".into(), "news".into(), "social".into()]))
@@ -70,16 +70,16 @@ pub async fn list_brand_monitors(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let rows = sqlx::query(
         r#"SELECT b.id::text, b.brand_name, b.keywords, b.sources, b.is_active, b.created_at::text,
                   (SELECT COUNT(*) FROM brand_monitor_results r WHERE r.brand_item_id = b.id) as result_count
            FROM brand_monitor_items b
-           WHERE b.tenant_id = $1
+           WHERE b.aid = $1
            ORDER BY b.created_at DESC"#,
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_all(&state.db)
     .await?;
 
@@ -104,17 +104,17 @@ pub async fn get_brand_monitor_results(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let rows = sqlx::query(
         r#"SELECT id::text, source, source_url, title, snippet, sentiment, published_at::text, fetched_at::text
            FROM brand_monitor_results
-           WHERE brand_item_id = $1 AND tenant_id = $2
+           WHERE brand_item_id = $1 AND aid = $2
            ORDER BY fetched_at DESC
            LIMIT 100"#,
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_all(&state.db)
     .await?;
 
@@ -140,13 +140,13 @@ pub async fn delete_brand_monitor(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let result = sqlx::query(
-        "DELETE FROM brand_monitor_items WHERE id = $1 AND tenant_id = $2"
+        "DELETE FROM brand_monitor_items WHERE id = $1 AND aid = $2"
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .execute(&state.db)
     .await?;
 
@@ -173,15 +173,15 @@ pub async fn create_competitor_watch(
     Extension(claims): Extension<Claims>,
     AxumJson(req): AxumJson<CreateCompetitorWatchRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let id = Uuid::new_v4();
 
     sqlx::query(
-        r#"INSERT INTO competitor_watch_items (id, tenant_id, competitor_name, competitor_website, competitor_social, watch_focus)
+        r#"INSERT INTO competitor_watch_items (id, aid, competitor_name, competitor_website, competitor_social, watch_focus)
            VALUES ($1, $2, $3, $4, $5, $6)"#,
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .bind(&req.competitor_name)
     .bind(&req.competitor_website)
     .bind(&req.competitor_social.unwrap_or(json!({})))
@@ -201,17 +201,17 @@ pub async fn list_competitor_watches(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let rows = sqlx::query(
         r#"SELECT c.id::text, c.competitor_name, c.competitor_website, c.competitor_social,
                   c.watch_focus, c.is_active, c.created_at::text,
                   (SELECT COUNT(*) FROM competitor_watch_results r WHERE r.competitor_id = c.id) as change_count
            FROM competitor_watch_items c
-           WHERE c.tenant_id = $1
+           WHERE c.aid = $1
            ORDER BY c.created_at DESC"#,
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_all(&state.db)
     .await?;
 
@@ -237,17 +237,17 @@ pub async fn get_competitor_changes(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let rows = sqlx::query(
         r#"SELECT id::text, change_type, description, source_url, detected_at::text, alert_sent
            FROM competitor_watch_results
-           WHERE competitor_id = $1 AND tenant_id = $2
+           WHERE competitor_id = $1 AND aid = $2
            ORDER BY detected_at DESC
            LIMIT 100"#,
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_all(&state.db)
     .await?;
 
@@ -271,13 +271,13 @@ pub async fn delete_competitor_watch(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let result = sqlx::query(
-        "DELETE FROM competitor_watch_items WHERE id = $1 AND tenant_id = $2"
+        "DELETE FROM competitor_watch_items WHERE id = $1 AND aid = $2"
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .execute(&state.db)
     .await?;
 
@@ -315,15 +315,15 @@ pub async fn create_prospecting(
     Extension(claims): Extension<Claims>,
     AxumJson(req): AxumJson<CreateProspectingRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let id = Uuid::new_v4();
 
     sqlx::query(
-        r#"INSERT INTO prospecting_items (id, tenant_id, industry, city, state)
+        r#"INSERT INTO prospecting_items (id, aid, industry, city, state)
            VALUES ($1, $2, $3, $4, $5)"#,
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .bind(&req.industry)
     .bind(&req.city)
     .bind(&req.state)
@@ -342,16 +342,16 @@ pub async fn list_prospectings(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let rows = sqlx::query(
         r#"SELECT p.id::text, p.industry, p.city, p.state, p.search_query, p.is_active, p.created_at::text,
                   (SELECT COUNT(*) FROM prospecting_results r WHERE r.prospecting_id = p.id) as result_count
            FROM prospecting_items p
-           WHERE p.tenant_id = $1
+           WHERE p.aid = $1
            ORDER BY p.created_at DESC"#,
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_all(&state.db)
     .await?;
 
@@ -377,18 +377,18 @@ pub async fn get_prospecting_results(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let rows = sqlx::query(
         r#"SELECT id::text, business_name, business_website, business_phone, business_email,
                   business_address, source, source_url, social_links, rating, review_count, fetched_at::text
            FROM prospecting_results
-           WHERE prospecting_id = $1 AND tenant_id = $2
+           WHERE prospecting_id = $1 AND aid = $2
            ORDER BY rating DESC NULLS LAST, business_name ASC
            LIMIT 200"#,
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_all(&state.db)
     .await?;
 
@@ -418,13 +418,13 @@ pub async fn delete_prospecting(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let result = sqlx::query(
-        "DELETE FROM prospecting_items WHERE id = $1 AND tenant_id = $2"
+        "DELETE FROM prospecting_items WHERE id = $1 AND aid = $2"
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .execute(&state.db)
     .await?;
 
@@ -442,7 +442,7 @@ pub async fn get_dashboard_tabs(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Ensure default tabs exist
     let default_tabs = vec![
@@ -453,12 +453,12 @@ pub async fn get_dashboard_tabs(
 
     for (i, (tab_type, label)) in default_tabs.iter().enumerate() {
         sqlx::query(
-            r#"INSERT INTO dashboard_tab_config (id, tenant_id, tab_type, tab_label, sort_order, is_visible)
+            r#"INSERT INTO dashboard_tab_config (id, aid, tab_type, tab_label, sort_order, is_visible)
                VALUES ($1, $2, $3, $4, $5, true)
-               ON CONFLICT (tenant_id, tab_type) DO NOTHING"#,
+               ON CONFLICT (aid, tab_type) DO NOTHING"#,
         )
         .bind(Uuid::new_v4())
-        .bind(tenant_id)
+        .bind(aid)
         .bind(tab_type)
         .bind(label)
         .bind(i as i32)
@@ -470,10 +470,10 @@ pub async fn get_dashboard_tabs(
     let rows = sqlx::query(
         r#"SELECT id::text, tab_type, tab_label, sort_order, is_visible
            FROM dashboard_tab_config
-           WHERE tenant_id = $1
+           WHERE aid = $1
            ORDER BY sort_order"#,
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_all(&state.db)
     .await?;
 
@@ -507,17 +507,17 @@ pub async fn connect_to_workflow(
     Extension(claims): Extension<Claims>,
     AxumJson(req): AxumJson<ConnectToWorkflowRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let id = Uuid::new_v4();
     let source_id = Uuid::parse_str(&req.source_item_id).map_err(|_| AppError::BadRequest("Invalid source_item_id".into()))?;
     let workflow_id = Uuid::parse_str(&req.workflow_id).map_err(|_| AppError::BadRequest("Invalid workflow_id".into()))?;
 
     sqlx::query(
-        r#"INSERT INTO dashboard_workflow_links (id, tenant_id, dashboard_tab_type, source_item_id, source_table, workflow_id, trigger_on)
+        r#"INSERT INTO dashboard_workflow_links (id, aid, dashboard_tab_type, source_item_id, source_table, workflow_id, trigger_on)
            VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .bind(&req.dashboard_tab_type)
     .bind(source_id)
     .bind(&req.source_table)

@@ -143,7 +143,7 @@
         400
       ],
       "parameters": {
-        "jsCode": "// Build the dashboard widget data payload\nconst listings = $input.all().map(item => item.json);\n\n// Calculate summary stats\nconst withPrices = listings.filter(l => l.price_numeric > 0);\nconst withRevenue = listings.filter(l => l.monthly_revenue_numeric > 0);\n\nconst summary = {\n  total_listings: listings.length,\n  avg_price: withPrices.length > 0 \n    ? Math.round(withPrices.reduce((s, l) => s + l.price_numeric, 0) / withPrices.length)\n    : 0,\n  avg_monthly_revenue: withRevenue.length > 0\n    ? Math.round(withRevenue.reduce((s, l) => s + l.monthly_revenue_numeric, 0) / withRevenue.length)\n    : 0,\n  total_estimated_value: withPrices.reduce((s, l) => s + l.price_numeric, 0),\n  category_breakdown: listings.reduce((acc, l) => {\n    const cat = l.category || 'General';\n    acc[cat] = (acc[cat] || 0) + 1;\n    return acc;\n  }, {}),\n  scrape_timestamp: new Date().toISOString(),\n  source: 'flippa'\n};\n\n// Return payload formatted for WorkflowSwift dashboard push\nreturn {\n  widget_key: 'marketplace_listings',\n  widget_type: 'marketplace_scraper',\n  widget_label: 'Flippa Marketplace Listings',\n  source: 'flippa',\n  summary: summary,\n  listings: listings,\n  tenant_id: $json.tenant_id || $json.body?.tenant_id || 'default',\n  dashboard_type: 'market-intelligence',\n  metadata: {\n    marketplace_name: 'Flippa',\n    marketplace_url: 'https://flippa.com',\n    scrape_strategy: 'api',\n    record_count: listings.length,\n    trigger: $json.headers?.['x-trigger'] || 'scheduled'\n  }\n};"
+        "jsCode": "// Build the dashboard widget data payload\nconst listings = $input.all().map(item => item.json);\n\n// Calculate summary stats\nconst withPrices = listings.filter(l => l.price_numeric > 0);\nconst withRevenue = listings.filter(l => l.monthly_revenue_numeric > 0);\n\nconst summary = {\n  total_listings: listings.length,\n  avg_price: withPrices.length > 0 \n    ? Math.round(withPrices.reduce((s, l) => s + l.price_numeric, 0) / withPrices.length)\n    : 0,\n  avg_monthly_revenue: withRevenue.length > 0\n    ? Math.round(withRevenue.reduce((s, l) => s + l.monthly_revenue_numeric, 0) / withRevenue.length)\n    : 0,\n  total_estimated_value: withPrices.reduce((s, l) => s + l.price_numeric, 0),\n  category_breakdown: listings.reduce((acc, l) => {\n    const cat = l.category || 'General';\n    acc[cat] = (acc[cat] || 0) + 1;\n    return acc;\n  }, {}),\n  scrape_timestamp: new Date().toISOString(),\n  source: 'flippa'\n};\n\n// Return payload formatted for WorkflowSwift dashboard push\nreturn {\n  widget_key: 'marketplace_listings',\n  widget_type: 'marketplace_scraper',\n  widget_label: 'Flippa Marketplace Listings',\n  source: 'flippa',\n  summary: summary,\n  listings: listings,\n  aid: $json.aid || $json.body?.aid || 'default',\n  dashboard_type: 'market-intelligence',\n  metadata: {\n    marketplace_name: 'Flippa',\n    marketplace_url: 'https://flippa.com',\n    scrape_strategy: 'api',\n    record_count: listings.length,\n    trigger: $json.headers?.['x-trigger'] || 'scheduled'\n  }\n};"
       }
     },
     {
@@ -201,8 +201,8 @@
               "value": "={{ $json.listings }}"
             },
             {
-              "name": "tenant_id",
-              "value": "={{ $json.tenant_id }}"
+              "name": "aid",
+              "value": "={{ $json.aid }}"
             },
             {
               "name": "dashboard_type",

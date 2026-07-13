@@ -32,10 +32,10 @@ pub async fn create_plan(
     Extension(claims): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    features::enforce_feature_limit(&state.db, tenant_id, "max_plans", "Plans").await?;
-    if claims.role != "admin" {
-        return Err(AppError::Forbidden("Only admins can create plans".to_string()));
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    features::enforce_feature_limit(&state.db, aid, "max_plans", "Plans").await?;
+    if !claims.perm_is_super_admin.unwrap_or(false) {
+        return Err(AppError::Forbidden("Only the super admin can create plans".to_string()));
     }
 
     let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -79,8 +79,8 @@ pub async fn update_plan(
     Path(id): Path<Uuid>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    if claims.role != "admin" && claims.role != "agency_admin" {
-        return Err(AppError::Forbidden("Only admins can update plans".to_string()));
+    if !claims.perm_is_super_admin.unwrap_or(false) {
+        return Err(AppError::Forbidden("Only the super admin can update plans".to_string()));
     }
 
     let existing = sqlx::query_as::<_, PlanTier>(
@@ -249,17 +249,17 @@ pub async fn get_plan_capabilities(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Find user's active plan
     let plan_info = sqlx::query(
         r#"SELECT p.id, p.slug, p.name, p.features::text
-           FROM tenant_plans tp
+           FROM account_plans tp
            JOIN plan_tiers p ON p.id = tp.plan_id
-           WHERE tp.tenant_id = $1 AND tp.status = 'active'
+           WHERE tp.aid = $1 AND tp.status = 'active'
            ORDER BY tp.created_at DESC LIMIT 1"#
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_optional(&state.db)
     .await?;
 
@@ -322,9 +322,9 @@ pub async fn get_plan_capabilities(
 
     // Get current usage count
     let current_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM tenant_industries WHERE tenant_id = $1 AND is_active = true"
+        "SELECT COUNT(*) FROM account_industries WHERE aid = $1 AND is_active = true"
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_one(&state.db)
     .await
     .unwrap_or(0);
@@ -348,20 +348,20 @@ pub async fn admin_assign_plan(
     if claims.role != "agency_admin" && claims.role != "admin" {
         return Err(AppError::Forbidden("Admin access required".to_string()));
     }
-    let tenant_id = req.get("tenant_id").and_then(|v| v.as_str()).and_then(|s| Uuid::parse_str(s).ok())
-        .ok_or_else(|| AppError::Validation("Valid tenant_id is required".to_string()))?;
+    let target_aid = req.get("aid").and_then(|v| v.as_str()).and_then(|s| Uuid::parse_str(s).ok())
+        .ok_or_else(|| AppError::Validation("Valid aid is required".to_string()))?;
     let plan_id = req.get("plan_id").and_then(|v| v.as_str()).and_then(|s| Uuid::parse_str(s).ok())
         .ok_or_else(|| AppError::Validation("Valid plan_id is required".to_string()))?;
     let _billing_cycle = req.get("billing_cycle").and_then(|v| v.as_str()).unwrap_or("monthly");
 
     let _result = sqlx::query(
-        r#"INSERT INTO tenant_plans (id, tenant_id, plan_id, status, started_at)
+        r#"INSERT INTO account_plans (id, aid, plan_id, status, started_at)
            VALUES ($1, $2, $3, 'active', NOW())
-           ON CONFLICT (tenant_id) DO UPDATE SET plan_id = $3, status = 'active', started_at = NOW()
-           RETURNING id, tenant_id, plan_id, status"#,
+           ON CONFLICT (aid) DO UPDATE SET plan_id = $3, status = 'active', started_at = NOW()
+           RETURNING id, aid, plan_id, status"#,
     )
     .bind(Uuid::new_v4())
-    .bind(tenant_id)
+    .bind(target_aid)
     .bind(plan_id)
     .fetch_optional(&state.db)
     .await?;

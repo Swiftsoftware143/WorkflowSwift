@@ -208,6 +208,7 @@ tr:hover{background:rgba(79,134,247,.04)}
 <a href="#" onclick="showPage('integrations')" data-page="integrations"><span>🔗</span><span>Integrations</span></a>
 <a href="#" onclick="showPage('extension')" data-page="extension" style="margin-top:12px;border-top:1px solid var(--border);padding-top:12px"><span>🧩</span><span>Extension</span></a>
 <a href="#" onclick="logout()"><span>🚪</span><span>Logout</span></a>
+<a href="#" onclick="showPage('guide')" data-page="guide"><span>?</span><span>Guide</span></a>
 </nav>
 </div>
 <div class="main" id="main-content"></div>
@@ -314,12 +315,18 @@ function render(){
     show($('login-page'));
     hide($('app'));
   }
+  if(token && typeof showWalkthroughWFS === 'function'){
+    setTimeout(function(){ showWalkthroughWFS(); }, 500);
+  }
 }
 
 let currentPage='';
 
 async function showPage(page){
   currentPage=page;
+  if(typeof showWalkthroughWFS === 'function' && token){
+    setTimeout(function(){ showWalkthroughWFS(page); }, 400);
+  }
   document.querySelectorAll('.sidebar nav a').forEach(a=>a.classList.toggle('active',a.dataset.page===page));
   const mc=$('main-content');
   mc.innerHTML='<div class="loading">Loading...</div>';
@@ -339,6 +346,7 @@ async function showPage(page){
     credits:renderCredits,
     deals:renderDeals,
     leads:renderLeads,
+    guide:renderGuide,
     campaigns:renderCampaigns,
     tickets:renderTickets,
     integrations:renderIntegrations,
@@ -366,6 +374,7 @@ async function showPage(page){
     'admin-import-logs':renderAdminImportLogs,
     'admin-n8n':renderAdminN8n,
     'admin-bridge':renderAdminBridge,
+    'admin-settings':renderAdminSettings,
   };
   try{
     await renderers[page]();
@@ -2009,10 +2018,314 @@ function genericAdminPage(title, icon, endpoint, key){
   };
 }
 
-const renderAdminDashboard=genericAdminPage('Admin Dashboard','📊','/dashboard/stats','stats');
-const renderAdminTenants=genericAdminPage('Tenants','🏢','/tenants','tenant');
+// ── Admin Dashboard (stats tiles) ──
+async function renderAdminDashboard(){
+  const mc=$('main-content');
+  let stats;
+  try{stats=await api('/dashboard/stats')}catch(e){stats=null}
+  let plans,tenants;
+  try{
+    const p=await api('/admin/plans');plans=p?.plans?.length||0;
+    const t=await api('/admin/accounts');tenants=t?.accounts?.length||0;
+  }catch(e){plans='?';tenants='?'}
+  
+  mc.innerHTML='<h1>📊 Admin Dashboard</h1>'
+    +'<div class="grid-4">'
+    +'<div class="card stat-card"><div class="num">'+(stats?.total_workflows||0)+'</div><div class="label">Workflows</div></div>'
+    +'<div class="card stat-card"><div class="num">'+(stats?.total_instances||0)+'</div><div class="label">Executions</div></div>'
+    +'<div class="card stat-card"><div class="num">'+plans+'</div><div class="label">Plans</div></div>'
+    +'<div class="card stat-card"><div class="num">'+tenants+'</div><div class="label">Accounts</div></div>'
+    +'</div>'
+    +'<div class="card"><h3>Quick Actions</h3>'
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">'
+    +'<button class="btn-primary" onclick="showPage(\'admin-plans\')">📋 Manage Plans</button>'
+    +'<button class="btn-primary" onclick="showPage(\'admin-settings\')">⚙️ Admin Settings</button>'
+    +'<button class="btn-primary" onclick="showPage(\'admin-tenants\')">🏢 Accounts</button>'
+    +'</div></div>';
+}
+
+const renderAdminTenants=genericAdminPage('Accounts','🏢','/admin/accounts','accounts');
 const renderAdminUsers=genericAdminPage('Users','👤','/users','users');
-const renderAdminPlans=genericAdminPage('Plans','📋','/plans','plans');
+
+// ── Admin Plans (full CRUD with feature editor) ──
+async function renderAdminPlans(){
+  const mc=$('main-content');
+  mc.innerHTML='<h1>📋 Plans</h1><div class="top-bar"><div></div><button class="btn-primary" onclick="showPlanForm()">+ New Plan</button></div><div id="plans-list"><div class="loading">Loading...</div></div>';
+  await loadPlanList();
+}
+
+async function loadPlanList(){
+  const el=$('plans-list');
+  let data;
+  try{data=await api('/admin/plans')}catch(e){el.innerHTML='<div class="error">Failed to load plans</div>';return}
+  const plans=data?.plans||[];
+  if(!plans.length){el.innerHTML='<div class="empty">No plans created yet</div>';return}
+  el.innerHTML='<div class="card" style="padding:0;overflow-x:auto"><table>'
+    +'<tr><th>Name</th><th>Slug</th><th>Monthly</th><th>Yearly</th><th>Workflows</th><th>Users</th><th>Retention</th><th>n8n</th><th>Active</th><th>Actions</th></tr>'
+    +plans.map(p=>'<tr>'
+      +'<td><strong>'+esc(p.name)+'</strong>'+(p.description?'<br><span style="font-size:11px;color:var(--text2)">'+esc(p.description)+'</span>':'')+'</td>'
+      +'<td>'+esc(p.slug)+'</td>'
+      +'<td>'+(p.price_monthly||'—')+'</td>'
+      +'<td>'+(p.price_yearly||'—')+'</td>'
+      +'<td>'+(p.max_workflows||0)+'</td>'
+      +'<td>'+(p.max_users||0)+'</td>'
+      +'<td>'+(p.retention_days||30)+'d</td>'
+      +'<td>'+(p.can_deploy_n8n?'✅':'❌')+'</td>'
+      +'<td><span class="badge '+(p.is_active?'badge-active':'badge-inactive')+'">'+(p.is_active?'Active':'Inactive')+'</span></td>'
+      +'<td><button class="btn-secondary btn-sm" onclick="showPlanForm(\''+p.id+'\')">✏️</button> <button class="btn-danger btn-sm" onclick="deletePlan(\''+p.id+'\',\''+esc(p.name)+'\')">🗑️</button></td>'
+      +'</tr>').join('')
+    +'</table></div>';
+}
+
+async function showPlanForm(id){
+  let plan={features:{}},featureDefs=[];
+  if(id){
+    try{
+      const data=await api('/admin/plans');
+      const found=data?.plans?.find(p=>p.id===id);
+      if(found)plan=found;
+    }catch(e){}
+  }
+  try{
+    const fd=await api('/admin/feature-definitions');
+    featureDefs=fd?.features||[];
+  }catch(e){}
+
+  const isEdit=!!id;
+  const title=isEdit?'Edit Plan: '+esc(plan.name):'Create New Plan';
+  let html='<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
+    +'<h2>'+title+'</h2>'
+    +'<label>Plan Name</label><input id="plan-name" value="'+esc(plan.name||'')+'" placeholder="e.g. Pro">'
+    +'<label>Slug</label><input id="plan-slug" value="'+esc(plan.slug||'')+'" placeholder="e.g. pro">'
+    +'<label>Description</label><textarea id="plan-desc" rows="2">'+esc(plan.description||'')+'</textarea>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">'
+    +'<div><label>Monthly Price</label><input id="plan-monthly" value="'+esc(plan.price_monthly||'')+'" placeholder="e.g. 29.99"></div>'
+    +'<div><label>Yearly Price</label><input id="plan-yearly" value="'+esc(plan.price_yearly||'')+'" placeholder="e.g. 299.99"></div>'
+    +'</div>'
+    +'<label>Checkout URL</label><input id="plan-checkout" value="'+esc(plan.checkout_url||'')+'" placeholder="Stripe/Lemon link">'
+    +'<div style="margin-top:12px"><label style="display:inline-flex;align-items:center;gap:8px"><input type="checkbox" id="plan-active" '+(plan.is_active!==false?'checked':'')+'> Active</label></div>'
+    +'<h3 style="margin-top:16px;margin-bottom:8px;font-size:14px;color:var(--text2)">Feature Limits</h3>'
+    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+  
+  const limits=plan.feature_limits||{};
+  const quickFields=[
+    {key:'max_workflows',label:'Max Workflows',unit:'workflows'},
+    {key:'max_users',label:'Team Seats',unit:'seats'},
+    {key:'retention_days',label:'Data Retention',unit:'days'},
+  ];
+  quickFields.forEach(f=>{
+    const val=plan[f.key]||limits[f.key]||0;
+    html+='<div><label>'+esc(f.label)+'</label><input class="plan-limit" data-key="'+f.key+'" value="'+val+'" placeholder="'+f.unit+'"></div>';
+  });
+  
+  const boolFields=[
+    {key:'can_deploy_n8n',label:'n8n Deployment'},
+    {key:'can_export',label:'Export'},
+    {key:'has_api_access',label:'API Access'},
+  ];
+  boolFields.forEach(f=>{
+    const val=plan[f.key]===true||limits[f.key]===1;
+    html+='<div><label style="display:flex;align-items:center;gap:6px;margin-top:20px"><input type="checkbox" class="plan-limit-check" data-key="'+f.key+'" '+(val?'checked':'')+'> '+esc(f.label)+'</label></div>';
+  });
+  
+  html+='</div>';
+  
+  // Feature definitions
+  if(featureDefs.length){
+    html+='<h3 style="margin-top:16px;margin-bottom:8px;font-size:14px;color:var(--text2)">Extended Features</h3>'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    featureDefs.forEach(f=>{
+      const val=limits[f.key]!==undefined?limits[f.key]:f.default_value;
+      if(quickFields.some(q=>q.key===f.key)||boolFields.some(b=>b.key===f.key))return;
+      if(f.value_type==='boolean'){
+        html+='<div><label style="display:flex;align-items:center;gap:6px"><input type="checkbox" class="plan-limit-check" data-key="'+f.key+'" '+(val===true||val==='true'?'checked':'')+'> '+esc(f.label)+'</label></div>';
+      }else{
+        html+='<div><label>'+esc(f.label)+(f.unit?' ('+f.unit+')':'')+'</label><input class="plan-limit" data-key="'+f.key+'" value="'+(typeof val==='number'?val:parseInt(val)||'')+'" placeholder="'+esc(f.unit||'0')+'"></div>';
+      }
+    });
+    html+='</div>';
+  }
+  
+  html+='<div class="actions">'
+    +'<button class="btn-secondary" onclick="closeModal()">Cancel</button>'
+    +'<button class="btn-primary" onclick="savePlan(\''+(id||'')+'\')">'+(isEdit?'Update Plan':'Create Plan')+'</button>'
+    +'</div></div></div>';
+  
+  const mc=$('main-content');
+  mc.insertAdjacentHTML('beforeend',html);
+}
+
+async function savePlan(id){
+  const name=$('plan-name')?.value;
+  if(!name){showToast('Plan name is required','error');return}
+  const slug=$('plan-slug')?.value||name.toLowerCase().replace(/\s+/g,'-');
+  const payload={
+    name,slug,
+    description:$('plan-desc')?.value||null,
+    price_monthly:$('plan-monthly')?.value||null,
+    price_yearly:$('plan-yearly')?.value||null,
+    checkout_url:$('plan-checkout')?.value||null,
+    is_active:!!$('plan-active')?.checked,
+  };
+  const feature_limits={};
+  document.querySelectorAll('.plan-limit').forEach(el=>{
+    const k=el.dataset.key;
+    const v=parseInt(el.value)||0;
+    if(v>0)feature_limits[k]=v;
+  });
+  document.querySelectorAll('.plan-limit-check').forEach(el=>{
+    feature_limits[el.dataset.key]=el.checked?1:0;
+  });
+  if(Object.keys(feature_limits).length) payload.feature_limits=feature_limits;
+  
+  try{
+    if(id){
+      await api('/admin/plans/'+id,{method:'PUT',body:JSON.stringify(payload)});
+      showToast('Plan updated');
+    }else{
+      await api('/admin/plans',{method:'POST',body:JSON.stringify(payload)});
+      showToast('Plan created');
+    }
+    closeModal();
+    await loadPlanList();
+  }catch(e){showToast(e.message,'error')}
+}
+
+async function deletePlan(id,name){
+  if(!confirm('Delete plan \"'+name+'\"? This cannot be undone.'))return;
+  try{
+    await api('/admin/plans/'+id,{method:'DELETE'});
+    showToast('Plan deleted');
+    await loadPlanList();
+  }catch(e){showToast(e.message,'error')}
+}
+
+// ── Admin Settings & Retention ──
+async function renderAdminSettings(){
+  const mc=$('main-content');
+  mc.innerHTML='<h1>⚙️ Admin Settings</h1>'
+    +'<div class="tabs">'
+    +'<button class="active" onclick="switchSettingsTab(\'retention\',this)">📀 Retention</button>'
+    +'<button onclick="switchSettingsTab(\'signup\',this)">📝 Registration</button>'
+    +'<button onclick="switchSettingsTab(\'branding\',this)">🎨 Branding</button>'
+    +'<button onclick="switchSettingsTab(\'billing\',this)">💰 Billing</button>'
+    +'<button onclick="switchSettingsTab(\'security\',this)">🔒 Security</button>'
+    +'<button onclick="switchSettingsTab(\'features\',this)">🧩 Features</button>'
+    +'<button onclick="switchSettingsTab(\'accounts\',this)">🏢 Account Override</button>'
+    +'</div>'
+    +'<div id="settings-content"><div class="loading">Loading...</div></div>';
+  await loadSettingsTab('retention');
+}
+
+async function switchSettingsTab(tab,btn){
+  document.querySelectorAll('.tabs button').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  await loadSettingsTab(tab);
+}
+
+async function loadSettingsTab(tab){
+  const el=$('settings-content');
+  el.innerHTML='<div class="loading">Loading...</div>';
+  
+  if(tab==='retention'){
+    let policy;
+    try{const d=await api('/admin/retention');policy=d?.policy}catch(e){policy={default_days:90,max_days:365,min_days:1}}
+    el.innerHTML='<div class="card"><h3>📀 Global Retention Policy</h3>'
+      +'<p style="font-size:13px;color:var(--text2);margin-bottom:16px">How long execution data, rendition files, logs, and dashboard data are retained before auto-purge.</p>'
+      +'<label>Default Retention (days)</label><input id="ret-default" type="number" min="1" max="365" value="'+(policy.default_days||90)+'">'
+      +'<label>Maximum Retention (days)</label><input id="ret-max" type="number" min="1" max="3650" value="'+(policy.max_days||365)+'">'
+      +'<label>Minimum Retention (days)</label><input id="ret-min" type="number" min="1" value="'+(policy.min_days||1)+'">'
+      +'<div style="margin-top:16px"><button class="btn-primary" onclick="saveRetentionPolicy()">💾 Save Policy</button></div>'
+      +'</div>'
+      +'<div class="card"><h3>📊 Current Stats</h3>'
+      +'<p style="font-size:13px;color:var(--text2)">Default: <strong>'+policy.default_days+' days</strong> | Max: <strong>'+policy.max_days+' days</strong> | Min: <strong>'+policy.min_days+' days</strong></p>'
+      +'</div>';
+  }else if(tab==='features'){
+    let features;
+    try{const d=await api('/admin/feature-definitions');features=d?.features||[]}catch(e){features=[]}
+    if(!features.length){el.innerHTML='<div class="empty">No feature definitions</div>';return}
+    const cats={};
+    features.forEach(f=>{
+      if(!cats[f.category])cats[f.category]=[];
+      cats[f.category].push(f);
+    });
+    let html='';
+    Object.keys(cats).forEach(cat=>{
+      html+='<div class="card"><h3>'+esc(cat.charAt(0).toUpperCase()+cat.slice(1))+'</h3><table><tr><th>Key</th><th>Label</th><th>Type</th><th>Default</th><th>Unit</th></tr>'
+        +cats[cat].map(f=>'<tr><td><code>'+esc(f.key)+'</code></td><td>'+esc(f.label)+'</td><td>'+esc(f.value_type)+'</td><td>'+esc(String(f.default_value))+'</td><td>'+(f.unit||'—')+'</td></tr>').join('')
+        +'</table></div>';
+    });
+    el.innerHTML=html;
+  }else if(tab==='accounts'){
+    let accounts;
+    try{const d=await api('/admin/accounts');accounts=d?.accounts||[]}catch(e){accounts=[]}
+    if(!accounts.length){el.innerHTML='<div class="empty">No accounts found</div>';return}
+    el.innerHTML='<div class="card" style="padding:0;overflow-x:auto"><table>'
+      +'<tr><th>Name</th><th>Email</th><th>Plan</th><th>Retention</th><th>Override</th></tr>'
+      +accounts.map(a=>'<tr><td>'+esc(a.name||'—')+'</td><td>'+esc(a.email||'—')+'</td><td>'+(a.plan?esc(a.plan.name):'—')+'</td><td>'+(a.retention_days||'Default')+'d'+(a.retention_purge_at?' <span style="color:var(--orange)">(purging)</span>':'')+'</td>'
+        +'<td><input id="ret-acc-'+a.id+'" type="number" min="1" style="width:70px;display:inline-block" value="'+(a.retention_days||90)+'"> <button class="btn-sm btn-primary" onclick="overrideAccountRetention(\''+a.id+'\')">Set</button></td></tr>').join('')
+      +'</table></div>';
+  }else{
+    let settings;
+    try{const d=await api('/admin/settings');settings=d?.settings||{}}catch(e){settings={}}
+    if(!settings[tab]){el.innerHTML='<div class="card"><h3>'+esc(tab)+'</h3><div class="empty">No settings loaded. Please check /admin/settings endpoint.</div></div>';return}
+    const s=settings[tab];
+    const val=typeof s.value==='object'?s.value:JSON.parse(s.value||'{}');
+    el.innerHTML='<div class="card"><h3>'+esc(tab)+' Settings</h3>'
+      +'<div id="settings-editor"></div><button class="btn-primary" onclick="saveSettings(\''+tab+'\')">💾 Save</button></div>';
+    const editor=$('settings-editor');
+    let html='';
+    Object.keys(val).forEach(k=>{
+      const v=val[k];
+      if(typeof v==='boolean'){
+        html+='<label style="display:flex;align-items:center;gap:8px;margin-top:8px"><input type="checkbox" id="set-'+k+'" '+(v?'checked':'')+'> <strong>'+esc(k.replace(/_/g,' '))+'</strong></label>';
+      }else{
+        html+='<label>'+esc(k.replace(/_/g,' '))+'</label><input id="set-'+k+'" value="'+esc(String(v))+'" placeholder="Value">';
+      }
+    });
+    editor.innerHTML=html;
+  }
+}
+
+async function saveRetentionPolicy(){
+  const payload={
+    default_days:parseInt($('ret-default')?.value)||90,
+    max_days:parseInt($('ret-max')?.value)||365,
+    min_days:parseInt($('ret-min')?.value)||1,
+  };
+  if(payload.max_days<payload.min_days){showToast('Max must be >= min','error');return}
+  try{
+    await api('/admin/retention',{method:'PUT',body:JSON.stringify(payload)});
+    showToast('Retention policy updated');
+    await loadSettingsTab('retention');
+  }catch(e){showToast(e.message,'error')}
+}
+
+async function overrideAccountRetention(id){
+  const days=parseInt($('ret-acc-'+id)?.value);
+  if(!days||days<1){showToast('Enter valid days','error');return}
+  try{
+    await api('/admin/accounts/'+id+'/retention',{method:'PUT',body:JSON.stringify({retention_days:days})});
+    showToast('Account retention overridden to '+days+' days');
+  }catch(e){showToast(e.message,'error')}
+}
+
+async function saveSettings(key){
+  const editor=$('settings-editor');
+  if(!editor)return;
+  const inputs=editor.querySelectorAll('input,textarea,select');
+  const val={};
+  inputs.forEach(el=>{
+    const k=el.id.replace('set-','');
+    if(el.type==='checkbox')val[k]=el.checked;
+    else if(el.type==='number')val[k]=parseFloat(el.value)||0;
+    else val[k]=el.value;
+  });
+  try{
+    await api('/admin/settings/'+key,{method:'PUT',body:JSON.stringify({value:val})});
+    showToast('Settings updated');
+  }catch(e){showToast(e.message,'error')}
+}
 const renderAdminApiKeys=async function(){
   try{
     const section=document.getElementById('extension-api-keys-section');
@@ -2097,5 +2410,107 @@ function showToast(msg,type){
 
 render();
 </script>
+
+<script>
+
+function renderGuide(){
+  var mc = document.getElementById('main-content');
+  if(!mc) return;
+  var data = [
+    {h:'Overview',b:'WorkflowSwift automates business processes visually.'},
+    {h:'Dashboard',b:'Total workflows, active runs, completions.'},
+    {h:'Workflows',b:'View, create, edit. Trigger types and status.'},
+    {h:'Builder',b:'11 step types. Card-based visual editor.'},
+    {h:'Templates',b:'Pre-built: Brand Monitor, Lead Finder.'},
+    {h:'Run History',b:'Execution logs for debugging.'},
+    {h:'Integrations',b:'Connect with other platforms.'}
+  ];
+  var h = '<div style="max-width:600px;margin:40px auto;padding:24px"><h2 style="margin-bottom:4px">? WorkflowSwift Guide</h2><p style="font-size:.8rem;color:var(--text2);margin-bottom:16px">'+data.length+' topics</p>';
+  for(var i=0;i<data.length;i++){
+    var s = data[i];
+    h += '<div style="display:flex;gap:10px;margin-bottom:12px;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg)"><div style="width:24px;height:24px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:700;flex-shrink:0">'+(i+1)+'</div><div><strong style="font-size:.85rem">'+s.h+'</strong><p style="font-size:.8rem;color:var(--text2);margin-top:2px">'+s.b+'</p></div></div>';
+  }
+  h += '</div>';
+  mc.innerHTML = h;
+}
+
+// ── Walkthrough System ──
+(function(){
+  var wtData = {
+    dashboard:{title:"Dashboard",icon:"\uD83D\uDCCA",steps:[
+      {h:"Welcome to WorkflowSwift",b:"Build visual automation pipelines. Connect apps, trigger actions, and display data on live dashboards."},
+      {h:"Key Metrics",b:"Total workflows, active runs, recent completions, and failure rates."},
+      {h:"Quick Actions",b:"Create a new workflow, browse templates, or check run history."}
+    ]},
+    workflows:{title:"Workflows",icon:"\u26A1",steps:[
+      {h:"Workflow List",b:"View all your workflows. Each shows name, status (active/paused), last run, and trigger type."},
+      {h:"Create Workflow",b:"Click New Workflow. Choose a name, trigger type (webhook, schedule, manual), and start building."},
+      {h:"Edit & Delete",b:"Click any workflow to edit steps. Delete or archive workflows you no longer need."}
+    ]},
+    builder:{title:"Workflow Builder",icon:"\uD83D\uDCE0",steps:[
+      {h:"Visual Builder",b:"Drag-free card-based editor. Add, remove, reorder, and configure steps visually."},
+      {h:"Step Types",b:"11 step types: Webhook Trigger, Schedule, Manual Form, HTTP Request, Send Email, Condition/Branch, Dashboard Widget, Math/Transform, Output Variable, File Storage, Custom API Action."},
+      {h:"Test & Deploy",b:"Run a test execution to verify your workflow. Once confirmed, toggle Active to deploy."}
+    ]},
+    templates:{title:"Templates",icon:"\uD83D\uDCCB",steps:[
+      {h:"Browse Templates",b:"Pre-built workflows for common tasks: Brand Mention Monitor, Competitor Site Checker, Lead Finder, Email Alerts, and more."},
+      {h:"Use Template",b:"Click any template to clone it. Customize steps to fit your needs."}
+    ]},
+    dashboard:{title:"Dashboard Widgets",icon:"\uD83D\uDCCA",steps:[
+      {h:"Live Dashboards",b:"Push workflow data to real-time dashboard widgets. Display as cards, tables, or charts."},
+      {h:"Create Widget",b:"Add a Dashboard Widget step in your workflow. Configure data source and display format."}
+    ]},
+    runs:{title:"Run History",icon:"\uD83D\uDD04",steps:[
+      {h:"Execution Logs",b:"View every workflow execution. See start time, duration, success/failure, and step-by-step logs."},
+      {h:"Debug",b:"Click any run to inspect step outputs. Great for debugging failed workflows."}
+    ]},
+    settings:{title:"Settings",icon:"\u2699\uFE0F",steps:[
+      {h:"Account",b:"Update profile, change password, and manage preferences."},
+      {h:"API Keys",b:"Generate and manage API keys for programmatic access to the WorkflowSwift API."},
+      {h:"Webhooks",b:"View all registered webhook URLs for incoming triggers."}
+    ]}
+  };
+
+  window.showWalkthroughWFS = function(page){
+    var key = page || 'dashboard';
+    var data = wtData[key];
+    if(!data) return;
+    var seenKey = 'wfs_wt_' + key;
+    if(localStorage.getItem(seenKey)) return;
+    if(document.getElementById('wt-overlay')) return;
+    var stepsHtml = '';
+    for(var i=0;i<data.steps.length;i++){
+      var st = data.steps[i];
+      stepsHtml += '<div style="display:flex;gap:10px;margin-bottom:12px;padding:10px;border:1px solid #e2e8f0;border-radius:8px;background:#fff"><div style="width:24px;height:24px;border-radius:50%;background:#4f46e5;color:#fff;display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:700;flex-shrink:0">'+(i+1)+'</div><div><strong style="font-size:.85rem;color:#1e293b">'+st.h+'</strong><p style="font-size:.8rem;color:#64748b;margin-top:2px">'+st.b+'</p></div></div>';
+    }
+    var ov = document.createElement('div');
+    ov.id = 'wt-overlay';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.4);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+    ov.innerHTML = '<div style="background:#fff;border-radius:12px;width:500px;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.2);padding:24px"><div style="font-size:2rem;text-align:center;margin-bottom:8px">'+data.icon+'</div><h2 style="text-align:center;margin-bottom:4px;color:#1e293b">'+data.title+'</h2><p style="text-align:center;font-size:.8rem;color:#64748b;margin-bottom:16px">'+data.steps.length+' steps</p>'+stepsHtml+'<div style="text-align:center;margin-top:16px"><button style="background:#4f46e5;color:#fff;border:none;border-radius:8px;padding:10px 24px;font-size:14px;font-weight:600;cursor:pointer" onclick="this.closest(\"#wt-overlay\").remove();localStorage.setItem(\"'+seenKey+'\",\"1\")">Got it!</button></div></div>';
+    document.body.appendChild(ov);
+    ov.addEventListener('click',function(e){ if(e.target===ov) ov.remove(); });
+  };
+
+  // Help icon
+  var hIcon = document.createElement('div');
+  hIcon.id = 'wt-help';
+  hIcon.textContent = '?';
+  hIcon.style.cssText = 'position:fixed;bottom:20px;right:20px;width:40px;height:40px;border-radius:50%;background:#4f46e5;color:#fff;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:bold;cursor:pointer;z-index:9998;box-shadow:0 2px 8px rgba(79,70,229,0.4)';
+  hIcon.addEventListener('click', function(){
+    var views = ['dashboard','workflows','templates','runs','settings'];
+    var cur = '';
+    for(var i=0;i<views.length;i++){ var s=document.querySelector('[data-route="'+views[i]+'"]'); if(s&&s.style.display!=='none'){cur=views[i];break;} }
+    if(!cur) cur='dashboard';
+    showWalkthroughWFS(cur);
+  });
+  var check = setInterval(function(){
+    if(document.body){
+      document.body.appendChild(hIcon);
+      clearInterval(check);
+    }
+  },100);
+})();
+</script>
+
 </body>
 </html>

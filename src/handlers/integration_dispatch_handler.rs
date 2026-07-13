@@ -37,11 +37,11 @@ pub async fn dispatch_integration(
     Query(params): Query<HashMap<String, String>>,
     Json(payload): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let target_id_str = params.get("target_id").ok_or_else(|| AppError::BadRequest("target_id required".into()))?;
     let target_id = Uuid::parse_str(target_id_str).map_err(|_| AppError::BadRequest("Invalid target_id".into()))?;
 
-    let result = forward_dispatch(&state.db, target_id, tenant_id, &payload).await
+    let result = forward_dispatch(&state.db, target_id, aid, &payload).await
         .map_err(|e| AppError::Internal(format!("Dispatch failed: {}", e)))?;
 
     Ok(Json(json!({
@@ -58,7 +58,7 @@ pub async fn dispatch_integration(
 pub async fn forward_dispatch(
     db: &sqlx::PgPool,
     target_id: Uuid,
-    tenant_id: Uuid,
+    aid: Uuid,
     payload: &serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     // Fetch the integration target
@@ -66,10 +66,10 @@ pub async fn forward_dispatch(
         "SELECT it.webhook_url, it.provider_preset, pp.base_url as preset_base_url
          FROM integration_targets it
          LEFT JOIN integration_provider_presets pp ON pp.key = it.provider_preset
-         WHERE it.id = $1 AND it.tenant_id = $2 AND it.is_active = true"
+         WHERE it.id = $1 AND it.aid = $2 AND it.is_active = true"
     )
     .bind(target_id)
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_optional(db)
     .await
     .map_err(|e| format!("DB error fetching integration target: {}", e))?
@@ -86,7 +86,7 @@ pub async fn forward_dispatch(
     });
 
     // Look up the stored provider key from the provider_keys table
-    let (api_key, stored_base_url, metadata) = provider_keys_handler::get_provider_key(db, tenant_id, &provider_name)
+    let (api_key, stored_base_url, metadata) = provider_keys_handler::get_provider_key(db, aid, &provider_name)
         .await
         .map_err(|e| format!("DB error fetching provider key: {}", e))?
         .unwrap_or_else(|| (String::new(), None, json!({})));
