@@ -54,7 +54,7 @@ pub async fn create_step_integration(
     Extension(claims): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let step_id_str = req.get("step_id").and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("step_id required".into()))?;
@@ -67,9 +67,9 @@ pub async fn create_step_integration(
     let payload_template = req.get("payload_template").cloned().unwrap_or(json!({}));
     let sort_order: i32 = req.get("sort_order").and_then(|v| v.as_i64()).map(|n| n as i32).unwrap_or(0);
 
-    // Verify the integration target belongs to this tenant
-    let _target = sqlx::query("SELECT id FROM integration_targets WHERE id = $1 AND tenant_id = $2")
-        .bind(target_id).bind(tenant_id)
+    // Verify the integration target belongs to this account
+    let _target = sqlx::query("SELECT id FROM integration_targets WHERE id = $1 AND aid = $2")
+        .bind(target_id).bind(aid)
         .fetch_optional(&state.db).await?
         .ok_or(AppError::NotFound("Integration target not found".into()))?;
 
@@ -102,19 +102,19 @@ pub async fn delete_step_integration(
     Ok(Json(json!({"status": "unbound"})))
 }
 
-/// Get available integration targets for a tenant (for dropdown selection)
+/// Get available integration targets for an account (for dropdown selection)
 pub async fn list_available_integrations(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let rows = sqlx::query(
         "SELECT id::text, name, provider, provider_preset, is_active
-         FROM integration_targets WHERE tenant_id = $1 AND is_active = true
+         FROM integration_targets WHERE aid = $1 AND is_active = true
          ORDER BY name"
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_all(&state.db)
     .await?;
 

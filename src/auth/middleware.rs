@@ -20,6 +20,8 @@ fn is_public_path(path: &str) -> bool {
             "/api/v1/auth/reset-password".to_string(),
             "/api/v1/health".to_string(),
             "/api/v1/admin/portfolio-sync".to_string(),
+            "/api/v1/plans".to_string(),
+            "/api/v1/plans/".to_string(),
         ]
     });
 

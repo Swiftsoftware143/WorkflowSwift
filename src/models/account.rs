@@ -4,7 +4,7 @@ use uuid::Uuid;
 use sqlx::FromRow;
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct Tenant {
+pub struct Account {
     pub id: Uuid,
     pub name: String,
     pub slug: String,

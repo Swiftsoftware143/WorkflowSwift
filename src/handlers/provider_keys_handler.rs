@@ -29,20 +29,20 @@ fn mask_key(key: &str) -> String {
 // ============================
 
 /// GET /api/v1/provider-keys
-/// List all provider keys for the authenticated tenant (masked).
+/// List all provider keys for the authenticated account (masked).
 pub async fn list_provider_keys(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let rows = sqlx::query(
         r#"SELECT id, provider, api_key, base_url, metadata, is_active, created_at, updated_at
            FROM provider_keys
-           WHERE tenant_id = $1
+           WHERE aid = $1
            ORDER BY provider ASC"#,
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_all(&state.db)
     .await?;
 
@@ -70,14 +70,14 @@ pub async fn list_provider_keys(
 }
 
 /// POST /api/v1/provider-keys
-/// Create or update a provider key for the tenant.
-/// If the provider already exists for this tenant, it's upserted.
+/// Create or update a provider key for the account.
+/// If the provider already exists for this account, it's upserted.
 pub async fn upsert_provider_key(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let provider = req
         .get("provider")
@@ -101,9 +101,9 @@ pub async fn upsert_provider_key(
 
     // Upsert
     let result = sqlx::query(
-        r#"INSERT INTO provider_keys (id, tenant_id, provider, api_key, base_url, metadata, is_active)
+        r#"INSERT INTO provider_keys (id, aid, provider, api_key, base_url, metadata, is_active)
            VALUES ($1, $2, $3, $4, $5, $6, $7)
-           ON CONFLICT (tenant_id, provider)
+           ON CONFLICT (aid, provider)
            DO UPDATE SET
                api_key = EXCLUDED.api_key,
                base_url = EXCLUDED.base_url,
@@ -112,7 +112,7 @@ pub async fn upsert_provider_key(
                updated_at = NOW()"#,
     )
     .bind(Uuid::new_v4())
-    .bind(tenant_id)
+    .bind(aid)
     .bind(provider)
     .bind(api_key)
     .bind(base_url)
@@ -141,18 +141,18 @@ pub async fn upsert_provider_key(
 }
 
 /// DELETE /api/v1/provider-keys/:provider
-/// Remove a provider key for the authenticated tenant.
+/// Remove a provider key for the authenticated account.
 pub async fn delete_provider_key(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Path(provider): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let result = sqlx::query(
-        "DELETE FROM provider_keys WHERE tenant_id = $1 AND provider = $2",
+        "DELETE FROM provider_keys WHERE aid = $1 AND provider = $2",
     )
-    .bind(tenant_id)
+    .bind(aid)
     .bind(&provider)
     .execute(&state.db)
     .await?;
@@ -208,20 +208,20 @@ pub async fn list_available_providers(
 // Internal helpers
 // ============================
 
-/// Look up a stored provider key for a tenant.
+/// Look up a stored provider key for an account.
 /// DB-only version — used by dispatch handlers that don't have AppState access.
 /// Returns (api_key, base_url, metadata) or None.
 pub async fn get_provider_key(
     db: &sqlx::PgPool,
-    tenant_id: Uuid,
+    aid: Uuid,
     provider: &str,
 ) -> Result<Option<(String, Option<String>, serde_json::Value)>, sqlx::Error> {
     let row = sqlx::query(
         r#"SELECT api_key, base_url, metadata
            FROM provider_keys
-           WHERE tenant_id = $1 AND provider = $2 AND is_active = true"#,
+           WHERE aid = $1 AND provider = $2 AND is_active = true"#,
     )
-    .bind(tenant_id)
+    .bind(aid)
     .bind(provider)
     .fetch_optional(db)
     .await?;
@@ -234,19 +234,19 @@ pub async fn get_provider_key(
     }))
 }
 
-/// Look up a stored provider key for a tenant, with AppState caching.
+/// Look up a stored provider key for an account, with AppState caching.
 /// Used by resolution handlers (integration_center_handler, etc.).
 /// Returns (api_key, base_url, metadata) or None.
 pub async fn get_provider_key_cached(
     state: &AppState,
     db: &sqlx::PgPool,
-    tenant_id: Uuid,
+    aid: Uuid,
     provider: &str,
 ) -> Result<Option<(String, Option<String>, serde_json::Value)>, sqlx::Error> {
-    let tenant_id_str = tenant_id.to_string();
+    let aid_str = aid.to_string();
 
     // Check cache first
-    if let Some(cached) = state.provider_key_cache.get(&tenant_id_str, provider) {
+    if let Some(cached) = state.provider_key_cache.get(&aid_str, provider) {
         return Ok(Some(cached));
     }
 
@@ -254,9 +254,9 @@ pub async fn get_provider_key_cached(
     let row = sqlx::query(
         r#"SELECT api_key, base_url, metadata
            FROM provider_keys
-           WHERE tenant_id = $1 AND provider = $2 AND is_active = true"#,
+           WHERE aid = $1 AND provider = $2 AND is_active = true"#,
     )
-    .bind(tenant_id)
+    .bind(aid)
     .bind(provider)
     .fetch_optional(db)
     .await?;
@@ -267,7 +267,7 @@ pub async fn get_provider_key_cached(
         let metadata: serde_json::Value = r.try_get("metadata").unwrap_or(json!({}));
 
         // Populate cache
-        state.provider_key_cache.set(&tenant_id_str, provider,
+        state.provider_key_cache.set(&aid_str, provider,
             api_key.clone(), base_url.clone(), metadata.clone());
 
         Ok(Some((api_key, base_url, metadata)))

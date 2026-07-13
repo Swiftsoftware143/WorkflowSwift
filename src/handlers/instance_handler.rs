@@ -16,12 +16,12 @@ pub async fn list_instances(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let instances = sqlx::query_as::<_, WorkflowInstance>(
-        "SELECT * FROM workflow_instances WHERE tenant_id = $1 ORDER BY created_at DESC",
+        "SELECT * FROM workflow_instances WHERE aid = $1 ORDER BY created_at DESC",
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_all(&state.db)
     .await?;
 
@@ -33,13 +33,13 @@ pub async fn get_instance(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let instance = sqlx::query_as::<_, WorkflowInstance>(
-        "SELECT * FROM workflow_instances WHERE id = $1 AND tenant_id = $2",
+        "SELECT * FROM workflow_instances WHERE id = $1 AND aid = $2",
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound("Workflow instance not found".to_string()))?;
@@ -60,13 +60,13 @@ pub async fn update_instance(
     Path(id): Path<Uuid>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let _existing = sqlx::query_as::<_, WorkflowInstance>(
-        "SELECT * FROM workflow_instances WHERE id = $1 AND tenant_id = $2",
+        "SELECT * FROM workflow_instances WHERE id = $1 AND aid = $2",
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound("Instance not found".to_string()))?;
@@ -165,13 +165,13 @@ pub async fn advance_instance(
     Path(id): Path<Uuid>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let instance = sqlx::query_as::<_, WorkflowInstance>(
-        "SELECT * FROM workflow_instances WHERE id = $1 AND tenant_id = $2",
+        "SELECT * FROM workflow_instances WHERE id = $1 AND aid = $2",
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound("Instance not found".to_string()))?;
@@ -187,12 +187,12 @@ pub async fn advance_instance(
              SELECT ws.id FROM workflow_steps ws
              WHERE ws.workflow_id = $1 AND ws.sort_order = $2
          )
-         AND it.tenant_id = $3
+         AND it.aid = $3
          ORDER BY wsi.sort_order"
     )
     .bind(instance.workflow_id)
     .bind(current_order)
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_all(&state.db)
     .await?;
 

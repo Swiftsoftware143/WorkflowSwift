@@ -16,12 +16,12 @@ pub async fn list_brand_monitors(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let monitors = sqlx::query_as::<_, BrandMonitor>(
-        "SELECT * FROM brand_monitors WHERE tenant_id = $1 ORDER BY brand_name ASC",
+        "SELECT * FROM brand_monitors WHERE aid = $1 ORDER BY brand_name ASC",
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_all(&state.db)
     .await?;
 
@@ -33,7 +33,7 @@ pub async fn create_brand_monitor(
     Extension(claims): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let brand_name = req.get("brand_name")
         .and_then(|v| v.as_str())
@@ -58,12 +58,12 @@ pub async fn create_brand_monitor(
     }
 
     let monitor = sqlx::query_as::<_, BrandMonitor>(
-        r#"INSERT INTO brand_monitors (id, tenant_id, brand_name, keywords, platforms, is_active)
+        r#"INSERT INTO brand_monitors (id, aid, brand_name, keywords, platforms, is_active)
            VALUES ($1, $2, $3, $4::text[], $5::text[], true)
            RETURNING *"#,
     )
     .bind(Uuid::new_v4())
-    .bind(tenant_id)
+    .bind(aid)
     .bind(&brand_name)
     .bind(&keywords)
     .bind(&platforms)
@@ -78,13 +78,13 @@ pub async fn delete_brand_monitor(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let result = sqlx::query(
-        "DELETE FROM brand_monitors WHERE id = $1 AND tenant_id = $2",
+        "DELETE FROM brand_monitors WHERE id = $1 AND aid = $2",
     )
     .bind(id)
-    .bind(tenant_id)
+    .bind(aid)
     .execute(&state.db)
     .await?;
 
@@ -100,7 +100,7 @@ pub async fn search_brand_mentions(
     Extension(claims): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let brand_monitor_id = req.get("brand_monitor_id")
         .and_then(|v| v.as_str())
@@ -108,10 +108,10 @@ pub async fn search_brand_mentions(
         .ok_or(AppError::Validation("Valid brand_monitor_id is required".to_string()))?;
 
     let _monitor = sqlx::query_as::<_, BrandMonitor>(
-        "SELECT * FROM brand_monitors WHERE id = $1 AND tenant_id = $2 AND is_active = true",
+        "SELECT * FROM brand_monitors WHERE id = $1 AND aid = $2 AND is_active = true",
     )
     .bind(brand_monitor_id)
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound("Active brand monitor not found".to_string()))?;

@@ -19,9 +19,9 @@ pub struct PlanTier {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-pub struct TenantPlan {
+pub struct AccountPlan {
     pub id: Uuid,
-    pub tenant_id: Uuid,
+    pub aid: Uuid,
     pub plan_id: Uuid,
     pub status: String,
     pub started_at: DateTime<Utc>,
@@ -32,7 +32,7 @@ pub struct TenantPlan {
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Invoice {
     pub id: Uuid,
-    pub tenant_id: Uuid,
+    pub aid: Uuid,
     pub plan_id: Uuid,
     pub amount: serde_json::Value,
     pub status: String,

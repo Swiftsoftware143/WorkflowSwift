@@ -6,7 +6,7 @@ use sqlx::FromRow;
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct ProspectingLead {
     pub id: Uuid,
-    pub tenant_id: Uuid,
+    pub aid: Uuid,
     pub business_name: String,
     pub website: Option<String>,
     pub industry: Option<String>,

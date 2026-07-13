@@ -13,8 +13,8 @@ pub async fn create_api_key(
     Extension(claims): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    features::enforce_feature_limit(&state.db, tenant_id, "max_api_keys", "Api Keys").await?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    features::enforce_feature_limit(&state.db, aid, "max_api_keys", "Api Keys").await?;
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
     let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("default");
     let target_url = req.get("target_url").and_then(|v| v.as_str()).unwrap_or("");
@@ -29,11 +29,11 @@ pub async fn create_api_key(
     let key_hash = hash.serialize().to_string();
 
     sqlx::query(
-        r#"INSERT INTO api_keys (id, tenant_id, user_id, name, key_hash, prefix, target_url)
+        r#"INSERT INTO api_keys (id, aid, user_id, name, key_hash, prefix, target_url)
            VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
     )
     .bind(Uuid::new_v4())
-    .bind(tenant_id)
+    .bind(aid)
     .bind(user_id)
     .bind(name)
     .bind(&key_hash)
@@ -54,12 +54,12 @@ pub async fn list_api_keys(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let rows = sqlx::query(
         r#"SELECT id::text, name, prefix, target_url, is_active, last_used_at::text, created_at::text
-           FROM api_keys WHERE tenant_id = $1 ORDER BY created_at DESC"#,
+           FROM api_keys WHERE aid = $1 ORDER BY created_at DESC"#,
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_all(&state.db)
     .await?;
 
@@ -81,12 +81,12 @@ pub async fn delete_api_key(
     Extension(claims): Extension<Claims>,
     Path(id): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let key_id = Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid key ID".to_string()))?;
 
-    let result = sqlx::query("DELETE FROM api_keys WHERE id = $1 AND tenant_id = $2")
+    let result = sqlx::query("DELETE FROM api_keys WHERE id = $1 AND aid = $2")
         .bind(key_id)
-        .bind(tenant_id)
+        .bind(aid)
         .execute(&state.db)
         .await?;
 
@@ -102,7 +102,7 @@ pub async fn update_api_key(
     Path(id): Path<String>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let key_id = Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid key ID".to_string()))?;
 
     let name = req.get("name").and_then(|v| v.as_str());
@@ -115,13 +115,13 @@ pub async fn update_api_key(
 
     sqlx::query(
         r#"UPDATE api_keys SET name = COALESCE($1, name), target_url = COALESCE($2, target_url), is_active = COALESCE($3, is_active), updated_at = NOW()
-           WHERE id = $4 AND tenant_id = $5"#,
+           WHERE id = $4 AND aid = $5"#,
     )
     .bind(name)
     .bind(target_url)
     .bind(is_active)
     .bind(key_id)
-    .bind(tenant_id)
+    .bind(aid)
     .execute(&state.db)
     .await?;
 

@@ -6,7 +6,7 @@ use sqlx::FromRow;
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct Competitor {
     pub id: Uuid,
-    pub tenant_id: Uuid,
+    pub aid: Uuid,
     pub name: String,
     pub website: Option<String>,
     pub description: Option<String>,

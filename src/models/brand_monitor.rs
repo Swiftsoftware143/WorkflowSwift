@@ -6,7 +6,7 @@ use sqlx::FromRow;
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct BrandMonitor {
     pub id: Uuid,
-    pub tenant_id: Uuid,
+    pub aid: Uuid,
     pub brand_name: String,
     pub keywords: Option<Vec<String>>,
     pub platforms: Vec<String>,

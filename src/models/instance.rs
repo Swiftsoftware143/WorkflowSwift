@@ -8,7 +8,7 @@ pub struct WorkflowInstance {
     pub id: Uuid,
     pub workflow_id: Uuid,
     pub client_id: Uuid,
-    pub tenant_id: Uuid,
+    pub aid: Uuid,
     pub name: String,
     pub status: String,
     pub current_step_order: Option<i32>,

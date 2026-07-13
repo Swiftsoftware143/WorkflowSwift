@@ -43,30 +43,30 @@ pub async fn credit_balance(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let balance: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE tenant_id = $1",
+        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_one(&state.db)
     .await
     .unwrap_or(0);
 
     // Count total used credits (negative amounts)
     let used: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(ABS(amount)), 0) FROM credit_transactions WHERE tenant_id = $1 AND amount < 0 AND transaction_type = 'usage'",
+        "SELECT COALESCE(SUM(ABS(amount)), 0) FROM credit_transactions WHERE aid = $1 AND amount < 0 AND transaction_type = 'usage'",
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_one(&state.db)
     .await
     .unwrap_or(0);
 
     // Rollover balance: sum of all 'rollover' transactions
     let rollover_balance: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE tenant_id = $1 AND transaction_type = 'rollover'",
+        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1 AND transaction_type = 'rollover'",
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_one(&state.db)
     .await
     .unwrap_or(0);
@@ -77,11 +77,11 @@ pub async fn credit_balance(
     // Next reset date (if plan has monthly cycle)
     let next_reset: Option<String> = sqlx::query_scalar::<_, String>(
         r#"SELECT to_char(COALESCE(tp.billing_cycle_start, NOW() + interval '1 month'), 'YYYY-MM-DD')
-           FROM tenant_plans tp
-           WHERE tp.tenant_id = $1 AND tp.is_active = true
+           FROM account_plans tp
+           WHERE tp.aid = $1 AND tp.is_active = true
            LIMIT 1"#,
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_optional(&state.db)
     .await
     .ok()
@@ -98,21 +98,21 @@ pub async fn credit_balance(
 }
 
 /// GET /api/v1/credits/transactions
-/// List recent credit transactions for this tenant.
+/// List recent credit transactions for this account.
 pub async fn list_transactions(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let rows = sqlx::query(
         r#"SELECT id, amount, transaction_type, description, reference_id, created_at::text
            FROM credit_transactions
-           WHERE tenant_id = $1
+           WHERE aid = $1
            ORDER BY created_at DESC
            LIMIT 100"#,
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_all(&state.db)
     .await?;
 
@@ -165,13 +165,13 @@ pub async fn rollover_credits(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Get current non-rollover balance
     let non_rollover: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE tenant_id = $1 AND transaction_type != 'rollover'",
+        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1 AND transaction_type != 'rollover'",
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_one(&state.db)
     .await
     .unwrap_or(0);
@@ -185,11 +185,11 @@ pub async fn rollover_credits(
 
     // Move positive balance to rollover bucket
     sqlx::query(
-        r#"INSERT INTO credit_transactions (id, tenant_id, amount, transaction_type, description)
+        r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
            VALUES ($1, $2, $3, 'rollover', 'Credits rolled over from previous cycle — never expires')"#,
     )
     .bind(Uuid::new_v4())
-    .bind(tenant_id)
+    .bind(aid)
     .bind(non_rollover)
     .execute(&state.db)
     .await?;
@@ -202,9 +202,9 @@ pub async fn rollover_credits(
     // This means the user's total balance doesn't change — just re-categorized.
 
     let total: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE tenant_id = $1",
+        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_one(&state.db)
     .await
     .unwrap_or(0);
@@ -221,12 +221,11 @@ pub async fn create_credit_package(
     Extension(claims): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    features::enforce_feature_limit(&state.db, tenant_id, "max_credit_packages", "Credit Packages").await?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    features::enforce_feature_limit(&state.db, aid, "max_credit_packages", "Credit Packages").await?;
 
-    let role = &claims.role;
-    if role != "admin" && role != "owner" {
-        return Err(AppError::Forbidden("Only admins can purchase credits".to_string()));
+    if !claims.perm_is_super_admin.unwrap_or(false) {
+        return Err(AppError::Forbidden("Only the super admin can purchase credits".to_string()));
     }
 
     let package_id_str = req.get("package_id")
@@ -248,11 +247,11 @@ pub async fn create_credit_package(
 
     let tx_id = Uuid::new_v4();
     sqlx::query(
-        r#"INSERT INTO credit_transactions (id, tenant_id, amount, transaction_type, description)
+        r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
            VALUES ($1, $2, $3, 'purchase', $4)"#,
     )
     .bind(tx_id)
-    .bind(tenant_id)
+    .bind(aid)
     .bind(credits)
     .bind(format!("Purchased {} credit package for ${}", credits, price))
     .execute(&state.db)
@@ -260,9 +259,9 @@ pub async fn create_credit_package(
 
     // Check if this is their first rollover-eligible period
     let purchase_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM credit_transactions WHERE tenant_id = $1 AND transaction_type = 'purchase'",
+        "SELECT COUNT(*) FROM credit_transactions WHERE aid = $1 AND transaction_type = 'purchase'",
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_one(&state.db)
     .await
     .unwrap_or(0);
@@ -270,9 +269,9 @@ pub async fn create_credit_package(
     // Auto-rollover if they have existing unused credits
     if purchase_count > 1 {
         let current_sum: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE tenant_id = $1 AND transaction_type != 'rollover'",
+            "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1 AND transaction_type != 'rollover'",
         )
-        .bind(tenant_id)
+        .bind(aid)
         .fetch_one(&state.db)
         .await
         .unwrap_or(0);
@@ -288,9 +287,9 @@ pub async fn create_credit_package(
     }
 
     let new_balance: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE tenant_id = $1",
+        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_one(&state.db)
     .await
     .unwrap_or(0);
@@ -310,7 +309,7 @@ pub async fn deduct_credit(
     Extension(claims): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let pricing = tiered_pricing();
 
     let workflow_type = req.get("workflow_type").and_then(|v| v.as_str()).unwrap_or("simple");
@@ -329,9 +328,9 @@ pub async fn deduct_credit(
     }
 
     let balance: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE tenant_id = $1",
+        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_one(&state.db)
     .await
     .unwrap_or(0);
@@ -343,20 +342,20 @@ pub async fn deduct_credit(
     }
 
     sqlx::query(
-        r#"INSERT INTO credit_transactions (id, tenant_id, amount, transaction_type, description)
+        r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
            VALUES ($1, $2, $3, 'usage', $4)"#,
     )
     .bind(Uuid::new_v4())
-    .bind(tenant_id)
+    .bind(aid)
     .bind(-amount)
     .bind(&description)
     .execute(&state.db)
     .await?;
 
     let new_balance: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE tenant_id = $1",
+        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_one(&state.db)
     .await
     .unwrap_or(0);

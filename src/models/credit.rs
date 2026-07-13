@@ -16,7 +16,7 @@ pub struct CreditPackage {
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 pub struct CreditTransaction {
     pub id: Uuid,
-    pub tenant_id: Uuid,
+    pub aid: Uuid,
     pub amount: i32,
     pub transaction_type: String,
     pub description: Option<String>,
@@ -26,6 +26,6 @@ pub struct CreditTransaction {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreditBalance {
-    pub tenant_id: Uuid,
+    pub aid: Uuid,
     pub balance: i64,
 }

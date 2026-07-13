@@ -12,6 +12,7 @@ pub fn create_router(state: AppState) -> Router {
     let auth_public = Router::new()
         .route("/login", post(auth::login))
         .route("/register", post(auth::register))
+        .route("/lightweight-register", post(auth::lightweight_register))
         .route("/forgot-password", post(auth::forgot_password))
         .route("/reset-password", post(auth::reset_password));
 
@@ -76,15 +77,18 @@ pub fn create_router(state: AppState) -> Router {
         .route("/", get(handlers::automation_handler::list_automations).post(handlers::automation_handler::create_automation))
         .route("/{id}/run", post(handlers::automation_handler::run_automation));
 
-    let tenant_routes = Router::new()
-        .route("/", get(handlers::tenant_handler::get_tenant).put(handlers::tenant_handler::update_tenant))
-        .route("/hexomatic-key", get(handlers::tenant_handler::get_hexomatic_key).put(handlers::tenant_handler::set_hexomatic_key))
-        .route("/industry", get(handlers::industry_handler::get_tenant_industry).put(handlers::industry_handler::set_tenant_industry))
-        .route("/industry/{slug}", delete(handlers::industry_handler::remove_tenant_industry));
+    let account_routes = Router::new()
+        .route("/", get(handlers::account_handler::get_account).put(handlers::account_handler::update_account))
+        .route("/hexomatic-key", get(handlers::account_handler::get_hexomatic_key).put(handlers::account_handler::set_hexomatic_key))
+        .route("/industry", get(handlers::industry_handler::get_account_industry).put(handlers::industry_handler::set_account_industry))
+        .route("/industry/{slug}", delete(handlers::industry_handler::remove_account_industry));
 
     let user_routes = Router::new()
         .route("/", get(handlers::user_handler::list_users))
-        .route("/invite", post(handlers::user_handler::invite_user));
+        .route("/invite", post(handlers::user_handler::invite_user))
+        .route("/team", get(handlers::user_handler::list_team_members))
+        .route("/{id}", delete(handlers::user_handler::remove_user))
+        .route("/{id}/permissions", put(handlers::user_handler::update_user_permissions));
 
     let dashboard_routes = Router::new()
         .route("/stats", get(handlers::dashboard_handler::dashboard_stats))
@@ -252,15 +256,58 @@ pub fn create_router(state: AppState) -> Router {
         .route("/resolve", get(handlers::user_integration_handler::resolve_step_provider))
         .route("/health-check", post(handlers::user_integration_handler::check_integration_health));
 
+    let rendition_routes = Router::new()
+        .route("/", get(handlers::rendition_handler::list_renditions).post(handlers::rendition_handler::create_rendition))
+        .route("/{id}", get(handlers::rendition_handler::get_rendition)
+            .put(handlers::rendition_handler::update_rendition)
+            .delete(handlers::rendition_handler::delete_rendition))
+        .route("/summary", get(handlers::rendition_handler::rendition_summary))
+        .route("/purge-expired", post(handlers::rendition_handler::purge_expired_renditions))
+        .route("/stitch", post(handlers::rendition_handler::create_stitch_group))
+        .route("/workflow/{workflow_id}", get(handlers::rendition_handler::list_workflow_renditions));
+
+    let provider_category_routes = Router::new()
+        .route("/", get(handlers::rendition_handler::list_provider_categories))
+        .route("/{category}", get(handlers::rendition_handler::get_category_providers));
+
+    let step_type_category_routes = Router::new()
+        .route("/{category}", get(handlers::rendition_handler::get_step_types_for_category));
+
     let user_key_routes = Router::new()
         .route("/", get(handlers::integration_center_handler::list_user_keys))
         .route("/generate", post(handlers::integration_center_handler::generate_user_key))
         .route("/{id}", delete(handlers::integration_center_handler::revoke_user_key))
         .route("/health-check", post(handlers::integration_center_handler::check_provider_health));
 
+    // ── Admin routes (protected by admin middleware) ──
+    let admin_routes = Router::new()
+        // Settings
+        .route("/settings", get(handlers::admin_settings_handler::list_settings))
+        .route("/settings/{key}", get(handlers::admin_settings_handler::get_setting)
+            .put(handlers::admin_settings_handler::update_setting))
+        // Retention policy
+        .route("/retention", get(handlers::admin_settings_handler::get_retention_policy)
+            .put(handlers::admin_settings_handler::update_retention_policy))
+        // Feature definitions
+        .route("/feature-definitions", get(handlers::admin_settings_handler::list_feature_definitions))
+        // Plan management (full admin CRUD)
+        .route("/plans", get(handlers::admin_settings_handler::admin_list_plans)
+            .post(handlers::admin_settings_handler::admin_create_plan))
+        .route("/plans/{id}", put(handlers::admin_settings_handler::admin_update_plan_full)
+            .delete(handlers::admin_settings_handler::admin_delete_plan))
+        // Account management
+        .route("/accounts", get(handlers::admin_settings_handler::admin_list_accounts))
+        .route("/accounts/create", post(handlers::admin_settings_handler::admin_create_account))
+        .route("/accounts/{id}/retention", put(handlers::admin_settings_handler::admin_set_account_retention))
+        // Email templates (admin-only CRUD)
+        .route("/email-templates", get(handlers::admin_settings_handler::admin_list_email_templates)
+            .post(handlers::admin_settings_handler::admin_create_email_template))
+        .route("/email-templates/{id}", put(handlers::admin_settings_handler::admin_update_email_template)
+            .delete(handlers::admin_settings_handler::admin_delete_email_template));
+
     let protected_routes = Router::new()
         .nest("/auth", auth_protected)
-        .nest("/tenants", tenant_routes)
+        .nest("/accounts", account_routes)
         .nest("/users", user_routes)
         .nest("/clients", client_routes)
         .nest("/templates", template_routes)
@@ -304,7 +351,11 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/provider-keys", provider_keys_routes)
         .nest("/integration-destinations", integration_center_routes)
         .nest("/integrations", user_integration_routes)
+        .nest("/renditions", rendition_routes)
+        .nest("/provider-categories", provider_category_routes)
+        .nest("/step-types", step_type_category_routes)
         .nest("/user-keys", user_key_routes)
+        .nest("/admin", admin_routes)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::auth::middleware::auth_middleware,

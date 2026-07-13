@@ -11,7 +11,7 @@ use crate::error::{AppError, ApiResult};
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct Item {
     pub id: Uuid,
-    pub tenant_id: Uuid,
+    pub aid: Uuid,
     pub name: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -40,7 +40,7 @@ pub async fn list(
     let limit = 50;
     let offset = 0;
     let items = sqlx::query_as::<_, Item>(
-        "SELECT id, tenant_id, name, created_at, updated_at FROM reviews ORDER BY name LIMIT $1 OFFSET $2"
+        "SELECT id, aid, name, created_at, updated_at FROM reviews ORDER BY name LIMIT $1 OFFSET $2"
     )
     .bind(limit).bind(offset)
     .fetch_all(&state.db)
@@ -55,12 +55,12 @@ pub async fn create(
     Json(body): Json<CreateInput>,
 ) -> ApiResult<Json<Value>> {
     let id = Uuid::new_v4();
-    let tenant_id = Uuid::nil();
-    sqlx::query("INSERT INTO reviews (id, tenant_id, name) VALUES ($1, $2, $3)")
-        .bind(id).bind(tenant_id).bind(&body.name)
+    let aid = Uuid::nil();
+    sqlx::query("INSERT INTO reviews (id, aid, name) VALUES ($1, $2, $3)")
+        .bind(id).bind(aid).bind(&body.name)
         .execute(&state.db).await?;
     let item = sqlx::query_as::<_, Item>(
-        "SELECT id, tenant_id, name, created_at, updated_at FROM reviews WHERE id = $1"
+        "SELECT id, aid, name, created_at, updated_at FROM reviews WHERE id = $1"
     )
     .bind(id).fetch_one(&state.db).await?;
     Ok(Json(json!({"item": item})))
@@ -72,7 +72,7 @@ pub async fn get(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Value>> {
     let item = sqlx::query_as::<_, Item>(
-        "SELECT id, tenant_id, name, created_at, updated_at FROM reviews WHERE id = $1"
+        "SELECT id, aid, name, created_at, updated_at FROM reviews WHERE id = $1"
     )
     .bind(id).fetch_optional(&state.db).await?
     .ok_or_else(|| AppError::NotFound("Reviews not found".to_string()))?;
@@ -90,7 +90,7 @@ pub async fn update(
             .bind(&name).bind(id).execute(&state.db).await?;
     }
     let item = sqlx::query_as::<_, Item>(
-        "SELECT id, tenant_id, name, created_at, updated_at FROM reviews WHERE id = $1"
+        "SELECT id, aid, name, created_at, updated_at FROM reviews WHERE id = $1"
     )
     .bind(id).fetch_one(&state.db).await?;
     Ok(Json(json!({"item": item})))

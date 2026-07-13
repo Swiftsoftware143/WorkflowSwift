@@ -18,17 +18,17 @@ use crate::auth::models::Claims;
 // Destination fetch — powers the 3-level cascade
 // ──────────────────────────────────────────────
 
-/// Get the base URL for a given provider key (from the tenant's stored provider_key or the preset)
+/// Get the base URL for a given provider key (from the account stored provider_key or the preset)
 async fn get_provider_base_url(
     db: &sqlx::PgPool,
-    tenant_id: Uuid,
+    aid: Uuid,
     provider: &str,
 ) -> Option<String> {
     // First check provider_keys for a stored base_url
     if let Ok(row) = sqlx::query_scalar::<_, Option<String>>(
-        "SELECT base_url FROM provider_keys WHERE tenant_id = $1 AND provider = $2 AND is_active = true"
+        "SELECT base_url FROM provider_keys WHERE aid = $1 AND provider = $2 AND is_active = true"
     )
-    .bind(tenant_id)
+    .bind(aid)
     .bind(provider)
     .fetch_optional(db)
     .await
@@ -64,16 +64,16 @@ async fn get_provider_base_url(
     }
 }
 
-/// Fetch API key for a given provider from the tenant's stored keys
+/// Fetch API key for a given provider from the account stored keys
 async fn get_provider_api_key(
     db: &sqlx::PgPool,
-    tenant_id: Uuid,
+    aid: Uuid,
     provider: &str,
 ) -> Option<String> {
     sqlx::query_scalar::<_, String>(
-        "SELECT api_key FROM provider_keys WHERE tenant_id = $1 AND provider = $2 AND is_active = true"
+        "SELECT api_key FROM provider_keys WHERE aid = $1 AND provider = $2 AND is_active = true"
     )
-    .bind(tenant_id)
+    .bind(aid)
     .bind(provider)
     .fetch_optional(db)
     .await
@@ -172,11 +172,11 @@ pub async fn get_destination_values(
         return Err(AppError::BadRequest("provider and destination_type are required".into()));
     }
 
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Try to fetch live values from the provider's API
     // If the provider API is unreachable, fall back to cached/static values
-    let live_values = fetch_live_destination_values(&state.db, tenant_id, provider, dest_type).await;
+    let live_values = fetch_live_destination_values(&state.db, aid, provider, dest_type).await;
 
     // If we got live values, return them
     if let Some(values) = live_values {
@@ -219,12 +219,12 @@ pub async fn get_destination_values(
 /// Attempt to fetch live destination values from the provider's API
 async fn fetch_live_destination_values(
     db: &sqlx::PgPool,
-    tenant_id: Uuid,
+    aid: Uuid,
     provider: &str,
     dest_type: &str,
 ) -> Option<Vec<serde_json::Value>> {
-    let base_url = get_provider_base_url(db, tenant_id, provider).await?;
-    let api_key = match get_provider_api_key(db, tenant_id, provider).await {
+    let base_url = get_provider_base_url(db, aid, provider).await?;
+    let api_key = match get_provider_api_key(db, aid, provider).await {
         Some(k) if !k.is_empty() => k,
         _ => return None,
     };
@@ -414,7 +414,7 @@ pub async fn generate_user_key(
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let key_type = req.get("key_type")
         .and_then(|v| v.as_str())
@@ -451,12 +451,12 @@ pub async fn generate_user_key(
     let prefix_display = &raw_key[..raw_key.len().min(12)];
 
     sqlx::query(
-        "INSERT INTO user_api_keys (id, user_id, tenant_id, key_type, key_hash, key_prefix, label)
+        "INSERT INTO user_api_keys (id, user_id, aid, key_type, key_hash, key_prefix, label)
          VALUES ($1, $2, $3, $4, $5, $6, $7)"
     )
     .bind(id)
     .bind(user_id)
-    .bind(tenant_id)
+    .bind(aid)
     .bind(key_type)
     .bind(&key_hash)
     .bind(prefix_display)
@@ -504,7 +504,7 @@ pub async fn revoke_user_key(
 pub async fn seed_user_keys(
     db: &sqlx::PgPool,
     user_id: Uuid,
-    tenant_id: Uuid,
+    aid: Uuid,
 ) -> Result<(), sqlx::Error> {
     use argon2::password_hash::SaltString;
     use argon2::PasswordHasher;
@@ -527,12 +527,12 @@ pub async fn seed_user_keys(
         let prefix_display = &raw_key[..raw_key.len().min(12)];
 
         sqlx::query(
-            "INSERT INTO user_api_keys (id, user_id, tenant_id, key_type, key_hash, key_prefix)
+            "INSERT INTO user_api_keys (id, user_id, aid, key_type, key_hash, key_prefix)
              VALUES ($1, $2, $3, $4, $5, $6)"
         )
         .bind(Uuid::new_v4())
         .bind(user_id)
-        .bind(tenant_id)
+        .bind(aid)
         .bind(key_type)
         .bind(&key_hash)
         .bind(prefix_display)
@@ -550,13 +550,13 @@ pub async fn check_provider_health(
     Extension(claims): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let provider = req.get("provider")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("provider is required".into()))?;
 
-    let base_url = get_provider_base_url(&state.db, tenant_id, provider).await;
-    let api_key = get_provider_api_key(&state.db, tenant_id, provider).await;
+    let base_url = get_provider_base_url(&state.db, aid, provider).await;
+    let api_key = get_provider_api_key(&state.db, aid, provider).await;
 
     let health_url = base_url.as_ref().map(|u| {
         let trimmed = u.trim_end_matches('/');
@@ -584,10 +584,10 @@ pub async fn check_provider_health(
 
     // Update the provider key's metadata with health status
     if let Ok(_) = sqlx::query(
-        "UPDATE provider_keys SET metadata = jsonb_set(COALESCE(metadata, '{}'), '{last_health_check}', $1::jsonb), updated_at = NOW() WHERE tenant_id = $2 AND provider = $3"
+        "UPDATE provider_keys SET metadata = jsonb_set(COALESCE(metadata, '{}'), '{last_health_check}', $1::jsonb), updated_at = NOW() WHERE aid = $2 AND provider = $3"
     )
     .bind(json!({"healthy": healthy, "checked_at": chrono::Utc::now().to_rfc3339()}))
-    .bind(tenant_id)
+    .bind(aid)
     .bind(provider)
     .execute(&state.db)
     .await

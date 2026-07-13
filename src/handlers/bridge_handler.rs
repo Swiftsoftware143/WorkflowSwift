@@ -16,7 +16,7 @@ pub async fn ingest_data(
     Extension(claims): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let source = req.get("source")
         .and_then(|v| v.as_str())
@@ -28,12 +28,12 @@ pub async fn ingest_data(
         .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
     let log_entry = sqlx::query_as::<_, IngestLogEntry>(
-        r#"INSERT INTO extension_ingest_log (id, tenant_id, source, payload, status)
+        r#"INSERT INTO extension_ingest_log (id, aid, source, payload, status)
            VALUES ($1, $2, $3, $4::jsonb, 'received')
            RETURNING *"#,
     )
     .bind(Uuid::new_v4())
-    .bind(tenant_id)
+    .bind(aid)
     .bind(&source)
     .bind(&payload)
     .fetch_one(&state.db)
@@ -49,14 +49,14 @@ pub async fn get_commands(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    let tenant_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let commands = sqlx::query_as::<_, ExtensionCommand>(
         r#"SELECT * FROM extension_commands
-           WHERE tenant_id = $1 AND status = 'pending'
+           WHERE aid = $1 AND status = 'pending'
            ORDER BY created_at ASC"#,
     )
-    .bind(tenant_id)
+    .bind(aid)
     .fetch_all(&state.db)
     .await?;
 
@@ -78,7 +78,7 @@ use sqlx::FromRow;
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 struct IngestLogEntry {
     id: Uuid,
-    tenant_id: Uuid,
+    aid: Uuid,
     source: String,
     payload: serde_json::Value,
     status: String,
@@ -89,7 +89,7 @@ struct IngestLogEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 struct ExtensionCommand {
     id: Uuid,
-    tenant_id: Uuid,
+    aid: Uuid,
     command: String,
     payload: serde_json::Value,
     status: String,
