@@ -620,15 +620,15 @@ Your role determines what you can see and do in WorkflowSwift:
 
 | Role | Access Level |
 |------|-------------|
-| **super_admin** | Full system access — account creation, email template management, all tenants |
-| **user** | Full account access — can create and edit workflows, manage integrations, invite team members |
+| **super_admin** | Full system access — user creation, email template management |
+| **user** | Full access — can create and edit workflows, manage integrations, invite team members |
 | **team_member** | Scoped access — permissions are granular and set by the person who invited you |
 
 When you sign up, you're automatically assigned the **user** role. If you were invited by someone, you're a **team_member** with specific permissions.
 
 ### Inviting Team Members
 
-Any user can invite others to their account. This lets you collaborate on workflows without sharing login credentials.
+Any user can invite others to their workspace. This lets you collaborate on workflows without sharing login credentials.
 
 **Endpoint:** `POST /api/v1/users/invite`
 
@@ -656,7 +656,7 @@ Any user can invite others to their account. This lets you collaborate on workfl
 
 ### Managing Team Permissions
 
-**View your team:** `GET /api/v1/users/team` — lists only users who are team members of your account (not your own user account).
+**View your team:** `GET /api/v1/users/team` — lists only users who are team members of your workspace (not your own user account).
 
 **Update permissions:** `PUT /api/v1/users/{id}/permissions` — update granular permissions for a specific team member.
 

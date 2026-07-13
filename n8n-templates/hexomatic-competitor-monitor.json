@@ -27,7 +27,7 @@
       ],
       "parameters": {
         "method": "GET",
-        "url": "http://workflowswift:8085/api/accounts/hexomatic-key",
+        "url": "http://workflowswift:8085/api/users/hexomatic-key",
         "authentication": "genericCredentialType",
         "genericAuthType": "httpHeaderAuth",
         "sendHeaders": true,

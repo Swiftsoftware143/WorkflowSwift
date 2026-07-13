@@ -762,26 +762,25 @@ WorkflowSwift uses a three-tier role system:
 
 | Role | Permission Level | Description |
 |------|-----------------|-------------|
-| **super_admin** | Full system access | Can manage accounts, email templates, and all tenants. Only David (swiftsoftware143@yahoo.com) has this role. |
-| **user** | Account-level access | Standard user tied to an account. Cannot create new accounts or manage system-wide settings. |
-| **team_member** | Scoped account access | Invited users with granular permissions within an account. Assigned via the team invite flow. |
+| **super_admin** | Full system access | Can manage users, email templates, and all data. Only David (swiftsoftware143@yahoo.com) has this role. |
+| **user** | Full access | Standard user with full access to their own workflows and settings. |
+| **team_member** | Scoped access | Invited users with granular permissions set by the user who invited them. |
 
 The `perm_is_super_admin` boolean flag on the users table distinguishes super admins from other users. This flag is set at the database level and cannot be changed through the API.
 
 New signups are automatically assigned `role: "user"` with no admin privileges.
 
-### Creating Accounts (Super Admin Only)
+### Creating Users (Super Admin Only)
 
-**Endpoint:** `POST /api/v1/admin/accounts/create`
+**Endpoint:** `POST /api/v1/admin/users/create`
 
-Only super admins can create new accounts. This creates an account, a user (role: "user"), assigns a plan, and sends a welcome email with a temporary password.
+Only super admins can create new users. This creates a user, assigns a plan, and sends a welcome email with a temporary password.
 
 **Request body:**
 ```json
 {
   "name": "Jane Doe",
   "email": "jane@example.com",
-  "account_name": "Example Corp",
   "plan_slug": "starter",
   "industry_slug": "real-estate"
 }
@@ -792,7 +791,7 @@ Only super admins can create new accounts. This creates an account, a user (role
 - `industry_slug` must match an existing industry in the `industries` table
 - Email must not already be registered
 
-**Response:** Returns the created user and account details, including a flag indicating the welcome email was sent.
+**Response:** Returns the created user details, including a flag indicating the welcome email was sent.
 
 ### Email Template Management
 
@@ -801,7 +800,7 @@ Email templates are stored in the `email_templates` table and rendered at send-t
 **Template types:**
 | Type | Purpose | Default Seed |
 |------|---------|-------------|
-| `welcome` | Sent on account creation | Pre-loaded |
+| `welcome` | Sent on user creation | Pre-loaded |
 | `team_invite` | Sent when inviting team members | Pre-loaded |
 | `password_reset` | Password reset emails | Available for creation |
 | `custom` | Custom use cases | Available for creation |
@@ -817,8 +816,8 @@ Email templates are stored in the `email_templates` table and rendered at send-t
 ```json
 {
   "name": "Welcome Email",
-  "subject": "Welcome to {{account_name}}!",
-  "body": "Hi {{name}},\n\nWelcome to {{account_name}}. Your temporary password is: {{temp_password}}",
+  "subject": "Welcome to {{user_name}}!",
+  "body": "Hi {{name}},\n\nWelcome to {{user_name}}. Your temporary password is: {{temp_password}}",
   "html_body": "<h1>Welcome!</h1><p>Hi {{name}}...</p>",
   "template_type": "welcome",
   "is_html": true,
@@ -829,7 +828,7 @@ Email templates are stored in the `email_templates` table and rendered at send-t
 **Available template variables:**
 - `{{name}}` — Recipient's name
 - `{{email}}` — Recipient's email
-- `{{account_name}}` — Account/company name
+- `{{user_name}}` — User/company name
 - `{{temp_password}}` — Temporary password (welcome/team_invite only)
 - `{{inviter_name}}` — Name of the person who sent the invite (team_invite only)
 - `{{login_url}}` — Login URL
