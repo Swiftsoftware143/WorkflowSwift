@@ -751,3 +751,107 @@ To change your industry assignment, go to **Settings** in the sidebar.
 - Industry visibility can be scoped by tenant — check `tenant_industry_access` if that feature is enabled
 - Verify that the admin hasn't restricted industries in the tenant config: `SELECT restricted_industries FROM tenants WHERE id = '<uuid>';`
 - If restrictions are in place, the API must filter before returning the list — check the backend handler
+
+---
+
+## Admin Features
+
+### Role System
+
+WorkflowSwift uses a three-tier role system:
+
+| Role | Permission Level | Description |
+|------|-----------------|-------------|
+| **super_admin** | Full system access | Can manage accounts, email templates, and all tenants. Only David (swiftsoftware143@yahoo.com) has this role. |
+| **user** | Account-level access | Standard user tied to an account. Cannot create new accounts or manage system-wide settings. |
+| **team_member** | Scoped account access | Invited users with granular permissions within an account. Assigned via the team invite flow. |
+
+The `perm_is_super_admin` boolean flag on the users table distinguishes super admins from other users. This flag is set at the database level and cannot be changed through the API.
+
+New signups are automatically assigned `role: "user"` with no admin privileges.
+
+### Creating Accounts (Super Admin Only)
+
+**Endpoint:** `POST /api/v1/admin/accounts/create`
+
+Only super admins can create new accounts. This creates an account, a user (role: "user"), assigns a plan, and sends a welcome email with a temporary password.
+
+**Request body:**
+```json
+{
+  "name": "Jane Doe",
+  "email": "jane@example.com",
+  "account_name": "Example Corp",
+  "plan_slug": "starter",
+  "industry_slug": "real-estate"
+}
+```
+
+**Validation rules:**
+- `plan_slug` must match an existing plan in the `plans` table
+- `industry_slug` must match an existing industry in the `industries` table
+- Email must not already be registered
+
+**Response:** Returns the created user and account details, including a flag indicating the welcome email was sent.
+
+### Email Template Management
+
+Email templates are stored in the `email_templates` table and rendered at send-time using `{{variable}}` placeholders. Super admins can manage them via the admin API.
+
+**Template types:**
+| Type | Purpose | Default Seed |
+|------|---------|-------------|
+| `welcome` | Sent on account creation | Pre-loaded |
+| `team_invite` | Sent when inviting team members | Pre-loaded |
+| `password_reset` | Password reset emails | Available for creation |
+| `custom` | Custom use cases | Available for creation |
+
+**API endpoints:**
+
+- `GET /api/v1/admin/email-templates` — List all templates
+- `POST /api/v1/admin/email-templates` — Create a new template
+- `PUT /api/v1/admin/email-templates/{id}` — Update an existing template
+- `DELETE /api/v1/admin/email-templates/{id}` — Delete a template
+
+**Create/Update template body:**
+```json
+{
+  "name": "Welcome Email",
+  "subject": "Welcome to {{account_name}}!",
+  "body": "Hi {{name}},\n\nWelcome to {{account_name}}. Your temporary password is: {{temp_password}}",
+  "html_body": "<h1>Welcome!</h1><p>Hi {{name}}...</p>",
+  "template_type": "welcome",
+  "is_html": true,
+  "is_default": false
+}
+```
+
+**Available template variables:**
+- `{{name}}` — Recipient's name
+- `{{email}}` — Recipient's email
+- `{{account_name}}` — Account/company name
+- `{{temp_password}}` — Temporary password (welcome/team_invite only)
+- `{{inviter_name}}` — Name of the person who sent the invite (team_invite only)
+- `{{login_url}}` — Login URL
+
+### Email Sending System
+
+All outgoing emails use a DB-backed template engine:
+
+```
+send_email(state, to, template_type, vars)
+```
+
+- Looks up the template by `template_type` and renders `{{variable}}` placeholders
+- Supports both HTML and plain-text modes via the `is_html` flag
+- Falls back to inline hardcoded templates if the DB template is missing
+- Sends via the configured SMTP provider
+
+To test email delivery:
+```bash
+# Check the email_templates table for seeded templates
+psql -d workflowswift -c "SELECT template_type, name FROM email_templates;"
+
+# Verify SMTP config
+systemctl status workflowswift-api.service | grep smtp
+```

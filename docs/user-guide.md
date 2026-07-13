@@ -609,3 +609,77 @@ Use the **▲** and **▼** buttons on each step card to move it up or down in t
 - Add a Data Card as the final step with content like `{{step1}}`, `{{step2}}` to see what each step produces
 - Check that each step's configuration is fully filled in — partially configured steps may complete without producing output
 - If the workflow was triggered via webhook, verify the webhook actually received a request (check workflow run history)
+
+---
+
+## Team Management
+
+### Role System
+
+Your role determines what you can see and do in WorkflowSwift:
+
+| Role | Access Level |
+|------|-------------|
+| **super_admin** | Full system access — account creation, email template management, all tenants |
+| **user** | Full account access — can create and edit workflows, manage integrations, invite team members |
+| **team_member** | Scoped access — permissions are granular and set by the person who invited you |
+
+When you sign up, you're automatically assigned the **user** role. If you were invited by someone, you're a **team_member** with specific permissions.
+
+### Inviting Team Members
+
+Any user can invite others to their account. This lets you collaborate on workflows without sharing login credentials.
+
+**Endpoint:** `POST /api/v1/users/invite`
+
+**Request body:**
+```json
+{
+  "name": "Alex Smith",
+  "email": "alex@example.com",
+  "role": "team_member",
+  "permissions": {
+    "workflows": ["view", "create", "edit"],
+    "templates": ["view", "use"],
+    "settings": ["view"]
+  }
+}
+```
+
+**Valid roles for invite:** `team_member` (default). You cannot invite someone as `user` or `super_admin`.
+
+**How it works:**
+1. You fill in the invite form with name, email, role, and granular permissions
+2. The system sends a real HTML email with a temporary password and login link
+3. The invited team member logs in and can change their password
+4. Their permissions are immediately enforced on the next request
+
+### Managing Team Permissions
+
+**View your team:** `GET /api/v1/users/team` — lists only users who are team members of your account (not your own user account).
+
+**Update permissions:** `PUT /api/v1/users/{id}/permissions` — update granular permissions for a specific team member.
+
+**Request body:**
+```json
+{
+  "permissions": {
+    "workflows": ["view"],
+    "templates": [],
+    "settings": []
+  }
+}
+```
+
+This allows you to lock down or expand what each team member can do at any time. Permissions take effect immediately.
+
+### The Guide Page
+
+Click the **?** icon in the sidebar to access this guide at any time. The guide is context-sensitive — it covers the page you're currently viewing, with comprehensive sections for all features.
+
+### How Roles Affect Visibility
+
+- **Workflows**: Team members with only `view` permission on workflows can see workflow lists and run history but cannot create, edit, or delete workflows
+- **Templates**: Team members with only `use` permission can apply templates but cannot create or modify them
+- **Settings**: If `settings` is not included in a team member's permissions, the Settings menu will be hidden
+- **Integration Center**: Visible to all users and team members, but API key management may be restricted based on permissions
