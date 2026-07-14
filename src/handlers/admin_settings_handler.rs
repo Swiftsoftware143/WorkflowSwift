@@ -907,6 +907,74 @@ pub async fn admin_delete_email_template(
 
 // ── Helper ──
 
+
+/// POST /api/v1/admin/impersonate — generate JWT for impersonating a tenant
+pub async fn admin_impersonate(
+    Extension(claims): Extension<Claims>,
+    State(state): State<AppState>,
+    Json(body): Json<serde_json::Value>,
+) -> ApiResult<impl IntoResponse> {
+    let target_tenant_id = body.get("tenant_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::BadRequest("tenant_id is required".into()))?;
+
+    let tid = Uuid::parse_str(target_tenant_id)
+        .map_err(|_| AppError::BadRequest("Invalid tenant_id".into()))?;
+
+    // Check tenant exists
+    let _tenant_name: String = sqlx::query_scalar("SELECT name FROM tenants WHERE id = $1")
+        .bind(tid)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Tenant not found".into()))?;
+
+    // Find a user in this tenant
+    let user: Option<(String, String)> = sqlx::query_as(
+        "SELECT id::text, name FROM users WHERE aid = $1 LIMIT 1"
+    )
+    .bind(tid)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let (user_id, user_name) = match user {
+        Some(u) => u,
+        None => return Err(AppError::NotFound("No user found in this tenant".into())),
+    };
+
+    let now = chrono::Utc::now().timestamp() as usize;
+    let imp_claims = Claims {
+        sub: user_id,
+        aid: target_tenant_id.to_string(),
+        role: "impersonated".to_string(),
+        exp: now + 900,
+        iat: now,
+        perm_is_super_admin: Some(false),
+    };
+
+    let token = jsonwebtoken::encode(
+        &jsonwebtoken::Header::default(),
+        &imp_claims,
+        &jsonwebtoken::EncodingKey::from_secret(state.config.jwt_secret.as_bytes()),
+    )
+    .map_err(|e| AppError::Internal(format!("JWT encode error: {}", e)))?;
+
+    Ok(Json(serde_json::json!({
+        "impersonation_token": token,
+        "tenant_id": target_tenant_id,
+        "user_name": user_name,
+        "expires_in": 900
+    })))
+}
+
+/// POST /api/v1/admin/stop-impersonation
+pub async fn admin_stop_impersonation() -> ApiResult<impl IntoResponse> {
+    Ok(Json(serde_json::json!({
+        "status": "impersonation_stopped",
+        "note": "Drop impersonation token"
+    })))
+}
+
+
 fn require_admin(claims: &Claims) -> Result<(), AppError> {
     if !claims.perm_is_super_admin.unwrap_or(false) {
         return Err(AppError::Forbidden("Admin access required".to_string()));

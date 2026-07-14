@@ -303,7 +303,9 @@ pub fn create_router(state: AppState) -> Router {
         .route("/email-templates", get(handlers::admin_settings_handler::admin_list_email_templates)
             .post(handlers::admin_settings_handler::admin_create_email_template))
         .route("/email-templates/{id}", put(handlers::admin_settings_handler::admin_update_email_template)
-            .delete(handlers::admin_settings_handler::admin_delete_email_template));
+            .delete(handlers::admin_settings_handler::admin_delete_email_template))
+        .route("/site", get(handlers::site_handler::get_site)
+            .put(handlers::site_handler::update_site));
 
     let protected_routes = Router::new()
         .nest("/auth", auth_protected)
@@ -355,6 +357,9 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/provider-categories", provider_category_routes)
         .nest("/step-types", step_type_category_routes)
         .nest("/user-keys", user_key_routes)
+        .route("/impersonate", post(crate::handlers::admin_settings_handler::admin_impersonate))
+        .route("/stop-impersonation", post(crate::handlers::admin_settings_handler::admin_stop_impersonation))
+
         .nest("/admin", admin_routes)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
