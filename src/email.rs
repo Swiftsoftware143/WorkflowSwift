@@ -307,8 +307,8 @@ struct EmailTemplateRow {
 
 // ---- Core sender ----
 
-/// Core HTTP request to the email API provider.
-/// Sends both text and HTML versions (API decides which to deliver).
+/// Core HTTP request to the email API provider (Mailgun-compatible).
+/// Uses Basic Auth (api:<key>) and form-encoded body as required by Mailgun REST API.
 async fn send_email_request(
     api_url: &str,
     api_key: &str,
@@ -322,23 +322,22 @@ async fn send_email_request(
         return Err("Email not configured: set EMAIL_API_URL and EMAIL_API_KEY or configure in Admin > Settings > Email".to_string());
     }
 
-    let mut payload = json!({
-        "from": from,
-        "to": to,
-        "subject": subject,
-        "text": text_body,
-    });
+    let mut params = std::collections::HashMap::new();
+    params.insert("from", from);
+    params.insert("to", to);
+    params.insert("subject", subject);
+    params.insert("text", text_body);
 
     if !html_body.is_empty() {
-        payload["html"] = json!(html_body);
+        params.insert("html", html_body);
     }
 
     let client = reqwest::Client::new();
     let resp = client
         .post(api_url)
-        .header("Authorization", format!("Bearer {}", api_key))
-        .header("Content-Type", "application/json")
-        .json(&payload)
+        .basic_auth("api", Some(api_key))
+        .form(&params)
+        .timeout(std::time::Duration::from_secs(15))
         .send()
         .await
         .map_err(|e| format!("Failed to send email request: {}", e))?;
