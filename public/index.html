@@ -422,7 +422,7 @@ async function renderDashboard(){
       html+='<div class="card" style="padding:16px;position:relative">';
       html+='<div style="font-size:11px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px">'+esc(w.title)+'</div>';
       if(w.widget_type==='stat-counter'||w.widget_type==='revenue-card'){
-        html+='<div style="font-size:28px;font-weight:700;color:var(--accent);margin:6px 0 2px">'+(val!==null?curr+esc(String(val))+suffix:'—')+'</div>';
+        html+='<div style="font-size:28px;font-weight:700;color:var(--accent);margin:6px 0 2px">'+(val!==null?curr+esc(String(val))+suffix:'--')+'</div>';
       }else if(w.widget_type==='list'){
         const items=w.data?.items||w.data||[];
         html+='<div style="margin:6px 0;font-size:12px">';
@@ -441,7 +441,7 @@ async function renderDashboard(){
         else{html+='<div class="empty" style="padding:8px">No activity</div>';}
         html+='</div>';
       }else{
-        html+='<div style="font-size:24px;font-weight:700;color:var(--accent);margin:6px 0 2px">'+(val!==null?esc(String(val)):'—')+'</div>';
+        html+='<div style="font-size:24px;font-weight:700;color:var(--accent);margin:6px 0 2px">'+(val!==null?esc(String(val)):'--')+'</div>';
       }
       html+='<div style="font-size:10px;color:var(--text2);margin-top:4px">'+esc(w.config?.subtitle||'')+'</div>';
       html+='</div>';
@@ -457,7 +457,7 @@ async function renderDashboard(){
     html+='</div>';
   }
   html+='<div class="card"><h3 style="margin-bottom:12px">Recent Activity</h3>';
-  try{const act=await api('/dashboard/activity');if(act?.activities?.length){html+='<div style="font-size:13px">'+act.activities.slice(0,10).map(a=>'<div style="padding:6px 0;border-bottom:1px solid var(--border)">'+esc(a.action)+' — '+esc(a.entity_type)+' <span style="color:var(--text2);font-size:11px">'+esc(a.created_at?.slice(0,10)||'')+'</span></div>').join('')+'</div>';}else{html+='<div class="empty">No recent activity</div>';}}catch(e){html+='<div class="empty">Activity feed</div>';}
+  try{const act=await api('/dashboard/activity');if(act?.activities?.length){html+='<div style="font-size:13px">'+act.activities.slice(0,10).map(a=>'<div style="padding:6px 0;border-bottom:1px solid var(--border)">'+esc(a.action)+' -- '+esc(a.entity_type)+' <span style="color:var(--text2);font-size:11px">'+esc(a.created_at?.slice(0,10)||'')+'</span></div>').join('')+'</div>';}else{html+='<div class="empty">No recent activity</div>';}}catch(e){html+='<div class="empty">Activity feed</div>';}
   html+='</div>';
   mc.innerHTML=html;
 }
@@ -512,12 +512,20 @@ async function submitDashboardData(btn){
 let wbWorkflowId=null, wbWorkflow=null, wbSteps=[], wbDirty=false;
 
 const STEP_TYPES = {
-  'data-card':     { icon:'📊', label:'Data Card',     desc:'Pull data from a dashboard widget by name', color:'#4f86f7' },
-  'ai-action':     { icon:'🤖', label:'AI Action',     desc:'Run an LLM prompt — output is editable', color:'#a855f7' },
-  'export':        { icon:'📤', label:'Export',        desc:'CSV, Resend, SendGrid, or CRM Swift', color:'#34d399' },
-  'notify':        { icon:'🔔', label:'Notify',        desc:'Send alert or email notification', color:'#fbbf24' },
+  'generate':      { icon:'✍️', label:'Generate',      desc:'Create content -- text, image, video, audio', color:'#a855f7' },
+  'format':        { icon:'📄', label:'Format',        desc:'Transform content for a specific platform', color:'#3b82f6' },
+  'design':        { icon:'🎨', label:'Design',        desc:'Create visuals, layouts, assets', color:'#ec4899' },
+  'export':        { icon:'📤', label:'Export',        desc:'Save to CSV, email, or CRM', color:'#34d399' },
+  'publish':       { icon:'📡', label:'Publish',       desc:'Post via Buffer to social platforms (white-hat only)', color:'#f59e0b' },
+  'notify':        { icon:'🔔', label:'Notify',        desc:'Send SMS, email, Slack, or Telegram alert', color:'#fbbf24' },
+  'data-card':     { icon:'📊', label:'Data Card',     desc:'Pull data from a dashboard widget', color:'#4f86f7' },
+  'ai-action':     { icon:'🤖', label:'AI Action',     desc:'Run an LLM prompt', color:'#a855f7' },
+  'webhook':       { icon:'🪝', label:'Webhook',       desc:'Fire HTTP request to any URL', color:'#64748b' },
   'delay':         { icon:'⏳', label:'Delay/Wait',    desc:'Wait set time before next step', color:'#fb923c' },
   'fork':          { icon:'🔀', label:'Fork',          desc:'Split into parallel branches', color:'#f472b6' },
+  'loop':          { icon:'🔄', label:'Loop',          desc:'Repeat steps N times or until condition', color:'#14b8a6' },
+  'condition':     { icon:'❓', label:'Condition',     desc:'If/else logic to route based on data', color:'#eab308' },
+  'manual':        { icon:'👤', label:'Manual Review', desc:'Pause for human approval', color:'#94a3b8' },
 };
 
 async function renderWorkflowBuilder(){
@@ -595,9 +603,24 @@ function renderBuilderUI(){
   html+='<div style="display:flex;gap:12px;align-items:start;flex-wrap:wrap">';
   html+='<div style="flex:1;min-width:200px"><label style="font-size:11px;color:var(--text2)">Name</label><input id="wb-name" value="'+esc(wbWorkflow.name||'')+'" oninput="wbDirty=true" style="margin-top:4px"></div>';
   html+='<div style="flex:2;min-width:300px"><label style="font-size:11px;color:var(--text2)">Description</label><input id="wb-desc" value="'+esc(wbWorkflow.description||'')+'" oninput="wbDirty=true" style="margin-top:4px"></div>';
-  html+='</div></div>';
+  html+='</div>';
+  // Trigger configuration
+  const triggerConfig=wbWorkflow.trigger_config||{};
+  html+='<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">';
+  html+='<label style="font-size:11px;color:var(--text2);font-weight:600">🚀 Trigger Source</label>';
+  html+='<div style="display:flex;gap:12px;align-items:start;flex-wrap:wrap;margin-top:4px">';
+  html+='<div style="flex:1;min-width:160px"><select id="wb-trigger-type" onchange="toggleTriggerConfig(this.value);wbDirty=true">';
+  ['manual','webhook','dashboard_data','scheduled'].forEach(t=>{
+    const labels={'manual':'👤 Manual Run','webhook':'🪣 Webhook','dashboard_data':'📊 Dashboard Data','scheduled':'⏰ Scheduled'};
+    html+='<option value="'+t+'"'+(triggerConfig.type===t?' selected':'')+'>'+(labels[t]||t)+'</option>';
+  });
+  html+='</select></div>';
+  html+='<div id="wb-trigger-config" style="flex:3;min-width:280px">'+buildTriggerConfigHTML(triggerConfig)+'</div>';
+  html+='</div></div></div>';
   
   // Step toolbar
+  html+='<div style="margin-bottom:12px"><p style="font-size:12px;color:var(--text2);margin:4px 0">Each step has a <strong>type</strong> (what to do) and a <strong>tool</strong> (which provider handles it).</p>';
+  html+='<div class="warning-badge" style="background:#a855f722;color:#a855f7;padding:8px;border-radius:6px;font-size:12px;margin-bottom:12px">🔒 <strong>White-Hat Policy:</strong> Social publishing goes through Buffer only (never direct to platforms). All outbound API calls go through authorized intermediaries.</div></div>';
   html+='<div class="wb-toolbar">';
   Object.entries(STEP_TYPES).forEach(([key,st]) => {
     html+='<button class="btn-secondary btn-sm" onclick="addStepToBuilder(\''+key+'\')" style="border-left:3px solid '+st.color+'">'+st.icon+' '+st.label+'</button>';
@@ -636,6 +659,122 @@ function renderBuilderUI(){
   }
 }
 
+
+// ── Available Providers/Tools ──
+const AVAILABLE_PROVIDERS = [
+  {id:'openai', label:'OpenAI', icon:'🤖', category:'ai'},
+  {id:'anthropic', label:'Anthropic', icon:'🧠', category:'ai'},
+  {id:'artistly', label:'Artistly', icon:'🎨', category:'image'},
+  {id:'videoexpress', label:'VideoExpress', icon:'🎬', category:'video'},
+  {id:'clonevoice', label:'CloneVoice', icon:'🎙️', category:'audio'},
+  {id:'hexomatic', label:'Hexomatic', icon:'🕷️', category:'scraper'},
+  {id:'sendgrid', label:'SendGrid', icon:'📧', category:'email'},
+  {id:'resend', label:'Resend', icon:'✉️', category:'email'},
+  {id:'telnyx_sms', label:'Telnyx SMS', icon:'📱', category:'sms'},
+  {id:'telnyx_voice', label:'Telnyx Voice', icon:'📞', category:'voice'},
+  {id:'slack', label:'Slack', icon:'💬', category:'notify'},
+  {id:'telegram', label:'Telegram', icon:'✈️', category:'notify'},
+  {id:'twitter', label:'X / Twitter', icon:'🐦', category:'social'},
+  {id:'linkedin', label:'LinkedIn', icon:'💼', category:'social'},
+  {id:'facebook', label:'Facebook', icon:'📘', category:'social'},
+  {id:'youtube', label:'YouTube', icon:'▶️', category:'social'},
+  {id:'hubspot', label:'HubSpot', icon:'🔶', category:'crm'},
+  {id:'buffer', label:'Buffer', icon:'📅', category:'social'},
+  {id:'coreswift', label:'CoreSwift CRM', icon:'📋', category:'crm'},
+  {id:'funnelswift', label:'FunnelSwift', icon:'🔁', category:'crm'},
+  {id:'incentiveswift', label:'IncentiveSwift', icon:'🎯', category:'campaign'},
+  {id:'webhook', label:'Custom Webhook', icon:'🪪', category:'custom'},
+  {id:'google_places', label:'Google Places', icon:'📍', category:'data'},
+  {id:'apollo', label:'Apollo.io', icon:'🔍', category:'data'},
+];
+
+function getProvidersForStep(stepType){
+  const map = {
+    'generate': ['openai','anthropic','hexomatic'],
+    'ai-action': ['openai','anthropic'],
+    'publish': ['buffer','webhook'],
+    'export': ['sendgrid','resend','coreswift','funnelswift','incentiveswift','csv'],
+    'format': ['openai','anthropic'],
+    'design': ['artistly','openai','webhook'],
+    'notify': ['telnyx_sms','telnyx_voice','sendgrid','resend','slack','telegram','webhook'],
+    'research': ['hexomatic','google_places','apollo','webhook'],
+    'webhook': ['webhook'],
+    'data-card': ['coreswift','funnelswift','incentiveswift'],
+    'delay': [],
+    'fork': [],
+    'loop': [],
+    'condition': [],
+    'manual': [],
+  };
+  return map[stepType] || AVAILABLE_PROVIDERS.map(p=>p.id);
+}
+
+function renderToolPicker(stepType, currentProvider, idx){
+  const compatible = getProvidersForStep(stepType);
+  if(compatible.length === 0) return '';
+  let html = '<div style="margin:8px 0;padding:8px;background:var(--surface);border-radius:6px">';
+  html += '<label style="font-size:11px;color:var(--text2);font-weight:600">🔧 Tool / Provider</label>';
+  html += '<select id="step-cfg-tool" onchange="wbSteps['+idx+'].config.provider=this.value;wbDirty=true" style="margin-top:4px;width:100%">';
+  html += '<option value="">-- Select a tool --</option>';
+  compatible.forEach(pid => {
+    const p = AVAILABLE_PROVIDERS.find(x => x.id === pid);
+    if(p) html += '<option value="'+p.id+'"'+(currentProvider===p.id?' selected':'')+'>'+p.icon+' '+p.label+'</option>';
+  });
+  html += '</select>';
+  html += '</div>';
+  return html;
+}
+
+// ── Trigger Config Helpers ──
+
+function buildTriggerConfigHTML(cfg){
+  const type=cfg.type||'manual';
+  switch(type){
+    case 'dashboard_data':
+      return '<label style="font-size:11px;color:var(--text2)">Dashboard Metric Key</label>'
+        +'<select id="wb-trigger-metric" onchange="wbDirty=true" style="width:100%">'
+        +'<option value="">-- Select a data source --</option>'
+        +'<option value="trending_topics"'+((cfg.metric_key||'')==='trending_topics'?' selected':'')+'>Trending Topics</option>'
+        +'<option value="lead_gen"'+((cfg.metric_key||'')==='lead_gen'?' selected':'')+'>Lead Gen Results</option>'
+        +'<option value="competitor_watch"'+((cfg.metric_key||'')==='competitor_watch'?' selected':'')+'>Competitor Watch</option>'
+        +'<option value="brand_mentions"'+((cfg.metric_key||'')==='brand_mentions'?' selected':'')+'>Brand Mentions</option>'
+        +'<option value="reviews"'+((cfg.metric_key||'')==='reviews'?' selected':'')+'>Reviews</option>'
+        +'<option value="prospecting"'+((cfg.metric_key||'')==='prospecting'?' selected':'')+'>Prospecting</option>'
+        +'</select>';
+    case 'webhook':
+      return '<label style="font-size:11px;color:var(--text2)">Webhook URL</label>'
+        +'<input id="wb-trigger-webhook" value="'+esc(cfg.webhook_url||'')+'" onchange="wbDirty=true" placeholder="https://..." style="width:100%">';
+    case 'scheduled':
+      return '<label style="font-size:11px;color:var(--text2)">Schedule (cron or interval)</label>'
+        +'<input id="wb-trigger-schedule" value="'+esc(cfg.schedule||'')+'" onchange="wbDirty=true" placeholder="0 9 * * * (daily 9am)" style="width:100%">';
+    default:
+      return '<span style="font-size:12px;color:var(--text2)">Workflow runs when you click "Run Now"</span>';
+  }
+}
+
+function toggleTriggerConfig(type){
+  const el=document.getElementById('wb-trigger-config');
+  if(el) el.innerHTML=buildTriggerConfigHTML({type:type});
+}
+
+function collectTriggerConfig(){
+  const typeEl=document.getElementById('wb-trigger-type');
+  if(!typeEl) return {};
+  const type=typeEl.value;
+  const cfg={type:type};
+  if(type==='dashboard_data'){
+    const m=document.getElementById('wb-trigger-metric');
+    if(m) cfg.metric_key=m.value;
+  } else if(type==='webhook'){
+    const w=document.getElementById('wb-trigger-webhook');
+    if(w) cfg.webhook_url=w.value;
+  } else if(type==='scheduled'){
+    const s=document.getElementById('wb-trigger-schedule');
+    if(s) cfg.schedule=s.value;
+  }
+  return cfg;
+}
+
 function moveStep(from, to){
   const step=wbSteps.splice(from,1)[0];
   if(step) wbSteps.splice(to,0,step);
@@ -668,15 +807,48 @@ async function addStepToBuilder(stepType){
 }
 
 function getDefaultConfig(stepType){
+  const def={ provider: '' };
   switch(stepType){
-    case 'data-card': return { widget_name: '', metric_key: '', filter: '' };
-    case 'ai-action': return { prompt: '', model: 'gpt-4', temperature: 0.7, system_prompt: '' };
-    case 'export':   return { targets: [], format: 'csv', filename: '' };
-    case 'notify':   return { channel: 'email', recipient: '', subject: '', message: '' };
-    case 'delay':    return { duration: 60, unit: 'seconds' };
-    case 'fork':     return { branches: [ {name:'Branch 1',steps:[]}, {name:'Branch 2',steps:[]} ] };
-    default: return {};
+    case 'data-card': return { ...def, widget_name: '', metric_key: '', filter: '' };
+    case 'ai-action': return { ...def, prompt: '', model: 'gpt-4', temperature: 0.7, system_prompt: '' };
+    case 'generate':  return { ...def, provider: '', prompt: '', model: 'gpt-4', temperature: 0.7, output_format: 'text', tone: 'professional', length: 'medium' };
+    case 'publish':   return { ...def, provider: 'buffer', medium: 'social', buffer_profile_ids: [], message: '', media_url: '', schedule_at: '' };
+    case 'format':    return { ...def, format: 'twitter-thread', tone: 'professional' };
+    case 'design':    return { ...def, style: 'modern', dimensions: '1024x1024' };
+    case 'export':   return { ...def, targets: [], format: 'csv', filename: '' };
+    case 'notify':   return { ...def, channel: 'email', recipient: '', subject: '', message: '' };
+    case 'delay':    return { ...def, duration: 60, unit: 'seconds' };
+    case 'fork':     return { ...def, branches: [ {name:'Branch 1',steps:[]}, {name:'Branch 2',steps:[]} ] };
+    default: return { ...def };
   }
+}
+
+async function deployWorkflowToN8n(){
+  if(!wbWorkflowId){showToast('Save workflow first','error');return;}
+  try{
+    const btn=document.querySelector('button[onclick*="deployWorkflowToN8n"]');
+    if(btn){btn.textContent='🚀 Deploying...';btn.disabled=true;}
+    const res=await api('/workflows/'+wbWorkflowId+'/deploy',{method:'POST'});
+    showToast('✅ Deployed to n8n! Webhook: /webhook/'+(res.webhook_path||''));
+  }catch(e){showToast('Deploy failed: '+e.message,'error');}
+  const btn=document.querySelector('button[onclick*="deployWorkflowToN8n"]');
+  if(btn){btn.textContent='🚀 Deploy to n8n';btn.disabled=false;}
+}
+
+async function runDeployedWorkflow(){
+  if(!wbWorkflowId){showToast('Save workflow first','error');return;}
+  try{
+    const btn=document.querySelector('button[onclick*="runDeployedWorkflow"]');
+    if(btn){btn.textContent='▶ Running...';btn.disabled=true;}
+    const res=await api('/workflows/'+wbWorkflowId+'/start',{method:'POST',body:JSON.stringify({
+      client_id: '00000000-0000-0000-0000-000000000001',
+      name: 'Manual run',
+      payload: {}
+    })});
+    showToast('✅ '+res.message+(res.instance_id?' (Instance: '+res.instance_id.slice(0,8)+')':''));
+  }catch(e){showToast('Run failed: '+e.message,'error');}
+  const btn=document.querySelector('button[onclick*="runDeployedWorkflow"]');
+  if(btn){btn.textContent='▶ Run Now';btn.disabled=false;}
 }
 
 function editStepFromBuilder(idx){
@@ -692,6 +864,9 @@ function editStepFromBuilder(idx){
   html+='<input id="step-cfg-name" value="'+esc(s.name||'')+'" onchange="wbSteps['+idx+'].name=this.value;wbDirty=true" style="margin-bottom:8px">';
   html+='<label style="font-size:11px;color:var(--text2)">Description</label>';
   html+='<textarea id="step-cfg-desc" rows="2" onchange="wbSteps['+idx+'].description=this.value;wbDirty=true" style="margin-bottom:8px">'+esc(s.description||'')+'</textarea>';
+  
+  // Tool/Provider picker
+  html+=renderToolPicker(s.step_type, s.config?.provider||'', idx);
   
   // Type-specific config
   switch(s.step_type){
@@ -750,6 +925,32 @@ function editStepFromBuilder(idx){
       });
       html+='</select>';
       break;
+    case 'publish':
+      html+='<div class="warning-badge" style="background:#f59e0b22;color:#f59e0b;padding:8px;border-radius:6px;font-size:12px;margin-bottom:12px">⚠️ White-Hat Rule: Social posts go through <strong>Buffer</strong> only -- never direct to Facebook/X/LinkedIn. Buffer handles API permissions securely.</div>';
+      html+='<label style="font-size:11px;color:var(--text2)">Medium</label>';
+      html+='<select id="step-cfg-medium" onchange="wbSteps['+idx+'].config.medium=this.value;wbDirty=true" style="margin-bottom:8px">';
+      ['social','blog','webhook'].forEach(m => {
+        html+='<option value="'+m+'"'+(s.config?.medium===m?' selected':'')+'>'+(m==='social'?'📱 Social (via Buffer)':m==='blog'?'📝 Blog':m==='webhook'?'🪝 Custom Webhook':'')+'</option>';
+      });
+      html+='</select>';
+      html+='<div id="publish-config-detail">';
+      if(s.config?.medium==='social'||!s.config?.medium){
+        html+='<label style="font-size:11px;color:var(--text2)">Message/Tweet</label>';
+        html+='<textarea id="step-cfg-msg" rows="3" onchange="wbSteps['+idx+'].config.message=this.value;wbDirty=true" style="margin-bottom:8px">'+esc(s.config?.message||'')+'</textarea>';
+        html+='<label style="font-size:11px;color:var(--text2)">Media URL (optional)</label>';
+        html+='<input id="step-cfg-media" value="'+esc(s.config?.media_url||'')+'" onchange="wbSteps['+idx+'].config.media_url=this.value;wbDirty=true" placeholder="https://..." style="margin-bottom:8px">';
+        html+='<label style="font-size:11px;color:var(--text2)">Buffer Profile IDs (comma-separated)</label>';
+        html+='<input id="step-cfg-profiles" value="'+(s.config?.buffer_profile_ids||[]).join(', ')+'" onchange="wbSteps['+idx+'].config.buffer_profile_ids=this.value.split(/,\s*/).filter(Boolean);wbDirty=true" placeholder="Profile IDs from Buffer" style="margin-bottom:8px">';
+        html+='<label style="font-size:11px;color:var(--text2)">Schedule (optional -- leave blank for now)</label>';
+        html+='<input id="step-cfg-schedule" type="datetime-local" value="'+esc(s.config?.schedule_at||'')+'" onchange="wbSteps['+idx+'].config.schedule_at=this.value;wbDirty=true" style="margin-bottom:8px">';
+        html+='<p style="font-size:11px;color:var(--text2);margin-top:4px">🔒 Posts go through <strong>Buffer API</strong> -- not directly to social platforms. Configure your Buffer API key in <strong>Settings → API Keys</strong>.</p>';
+      } else if(s.config?.medium==='webhook'){
+        html+='<label style="font-size:11px;color:var(--text2)">Webhook URL</label>';
+        html+='<input id="step-cfg-pub-url" value="'+esc(s.config?.webhook_url||'')+'" onchange="wbSteps['+idx+'].config.webhook_url=this.value;wbDirty=true" placeholder="https://..." style="margin-bottom:8px">';
+        html+='<p style="font-size:11px;color:var(--text2)">The message will be POSTed as JSON to this URL.</p>';
+      }
+      html+='</div>';
+      break;
     case 'fork':
       const branches = s.config?.branches || [{name:'Branch 1',steps:[]}];
       html+='<p style="font-size:12px;color:var(--text2);margin-bottom:8px">Workflow will split into parallel branches. Each branch can have its own steps.</p>';
@@ -765,6 +966,87 @@ function editStepFromBuilder(idx){
       });
       html+='</div>';
       html+='<button class="btn-secondary btn-sm" onclick="wbSteps['+idx+'].config.branches.push({name:"New Branch",steps:[]});wbDirty=true;editStepFromBuilder('+idx+')">+ Add Branch</button>';
+      break;
+    case 'generate':
+      html+='<label style="font-size:11px;color:var(--text2)">Model</label>';
+      html+='<select id="step-cfg-gen-model" onchange="wbSteps['+idx+'].config.model=this.value;wbDirty=true" style="margin-bottom:8px">';
+      ['gpt-4','gpt-3.5-turbo','claude-3-sonnet','gemini-pro'].forEach(m => {
+        html+='<option value="'+m+'"'+(s.config?.model===m?' selected':'')+'>'+m+'</option>';
+      });
+      html+='</select>';
+      html+='<label style="font-size:11px;color:var(--text2)">Prompt</label>';
+      html+='<textarea id="step-cfg-gen-prompt" rows="4" onchange="wbSteps['+idx+'].config.prompt=this.value;wbDirty=true" style="margin-bottom:8px;font-family:monospace;font-size:12px" placeholder="Describe what to generate...">'+esc(s.config?.prompt||'')+'</textarea>';
+      html+='<label style="font-size:11px;color:var(--text2)">Output Format</label>';
+      html+='<select id="step-cfg-outfmt" onchange="wbSteps['+idx+'].config.output_format=this.value;wbDirty=true" style="margin-bottom:8px">';
+      ['text','markdown','json','html','csv'].forEach(f => {
+        html+='<option value="'+f+'"'+(s.config?.output_format===f?' selected':'')+'>'+f.toUpperCase()+'</option>';
+      });
+      html+='</select>';
+      html+='<label style="font-size:11px;color:var(--text2)">Tone</label>';
+      html+='<select id="step-cfg-tone" onchange="wbSteps['+idx+'].config.tone=this.value;wbDirty=true" style="margin-bottom:8px">';
+      ['professional','casual','persuasive','informative','humorous'].forEach(t => {
+        html+='<option value="'+t+'"'+(s.config?.tone===t?' selected':'')+'>'+t+'</option>';
+      });
+      html+='</select>';
+      html+='<label style="font-size:11px;color:var(--text2)">Length</label>';
+      html+='<select id="step-cfg-length" onchange="wbSteps['+idx+'].config.length=this.value;wbDirty=true">';
+      ['short','medium','long','x-long'].forEach(l => {
+        html+='<option value="'+l+'"'+(s.config?.length===l?' selected':'')+'>'+l+'</option>';
+      });
+      html+='</select>';
+      break;
+    case 'webhook':
+      html+='<label style="font-size:11px;color:var(--text2)">HTTP Method</label>';
+      html+='<select id="step-cfg-http-method" onchange="wbSteps['+idx+'].config.method=this.value;wbDirty=true" style="margin-bottom:8px">';
+      ['GET','POST','PUT','PATCH','DELETE'].forEach(m => {
+        html+='<option value="'+m+'"'+(s.config?.method===m?' selected':'')+'>'+m+'</option>';
+      });
+      html+='</select>';
+      html+='<label style="font-size:11px;color:var(--text2)">URL</label>';
+      html+='<input id="step-cfg-url" value="'+esc(s.config?.url||'')+'" onchange="wbSteps['+idx+'].config.url=this.value;wbDirty=true" placeholder="https://api.example.com/endpoint" style="margin-bottom:8px">';
+      html+='<label style="font-size:11px;color:var(--text2)">Headers (JSON, optional)</label>';
+      html+='<textarea id="step-cfg-headers" rows="2" onchange="try{wbSteps['+idx+'].config.headers=JSON.parse(this.value);wbDirty=true}catch(e){showToast("Invalid JSON headers","error")}" style="margin-bottom:8px;font-family:monospace;font-size:12px">'+esc(JSON.stringify(s.config?.headers||{}, null, 2))+'</textarea>';
+      html+='<label style="font-size:11px;color:var(--text2)">Body (JSON, optional)</label>';
+      html+='<textarea id="step-cfg-body" rows="3" onchange="try{wbSteps['+idx+'].config.body=JSON.parse(this.value);wbDirty=true}catch(e){showToast("Invalid JSON body","error")}" style="font-family:monospace;font-size:12px">'+esc(JSON.stringify(s.config?.body||{}, null, 2))+'</textarea>';
+      break;
+    case 'condition':
+      html+='<p style="font-size:12px;color:var(--text2);margin-bottom:8px">Workflow branches based on a condition on the current data.</p>';
+      html+='<label style="font-size:11px;color:var(--text2)">Field (JSONPath in data)</label>';
+      html+='<input id="step-cfg-field" value="'+esc(s.config?.field||'')+'" onchange="wbSteps['+idx+'].config.field=this.value;wbDirty=true" placeholder="data.count" style="margin-bottom:8px">';
+      html+='<label style="font-size:11px;color:var(--text2)">Operator</label>';
+      html+='<select id="step-cfg-operator" onchange="wbSteps['+idx+'].config.operator=this.value;wbDirty=true" style="margin-bottom:8px">';
+      ['equals','not_equals','greater_than','less_than','contains','exists','not_exists'].forEach(op => {
+        html+='<option value="'+op+'"'+(s.config?.operator===op?' selected':'')+'>'+op.replace('_',' ')+'</option>';
+      });
+      html+='</select>';
+      html+='<label style="font-size:11px;color:var(--text2)">Value</label>';
+      html+='<input id="step-cfg-value" value="'+esc(s.config?.value||'')+'" onchange="wbSteps['+idx+'].config.value=this.value;wbDirty=true" placeholder="Expected value" style="margin-bottom:8px">';
+      html+='<div style="background:var(--surface);padding:8px;border-radius:6px;font-size:12px;color:var(--text2);margin-top:8px">';
+      html+='✅ True branch: continues normal flow<br>';
+      html+='❌ False branch: skips to "Manual Review" or ends workflow';
+      html+='</div>';
+      break;
+    case 'loop':
+      html+='<p style="font-size:12px;color:var(--text2);margin-bottom:8px">Repeat steps for each item in an array, or a set number of times.</p>';
+      html+='<label style="font-size:11px;color:var(--text2)">Loop Type</label>';
+      html+='<select id="step-cfg-loop-type" onchange="wbSteps['+idx+'].config.loop_type=this.value;wbDirty=true" style="margin-bottom:8px">';
+      ['for_each','repeat_n','while'].forEach(lt => {
+        html+='<option value="'+lt+'"'+(s.config?.loop_type===lt?' selected':'')+'>'+lt.replace('_',' ')+'</option>';
+      });
+      html+='</select>';
+      html+='<label style="font-size:11px;color:var(--text2)">Source Array (JSONPath, for "for each")</label>';
+      html+='<input id="step-cfg-source" value="'+esc(s.config?.source_array||'')+'" onchange="wbSteps['+idx+'].config.source_array=this.value;wbDirty=true" placeholder="data.items" style="margin-bottom:8px">';
+      html+='<label style="font-size:11px;color:var(--text2)">Count (for "repeat N")</label>';
+      html+='<input id="step-cfg-count" type="number" value="'+(s.config?.count||3)+'" onchange="wbSteps['+idx+'].config.count=Number(this.value);wbDirty=true" style="margin-bottom:8px">';
+      break;
+    case 'manual':
+      html+='<p style="font-size:12px;color:var(--text2);margin-bottom:8px">Workflow pauses here for human review before continuing.</p>';
+      html+='<label style="font-size:11px;color:var(--text2)">Instructions for reviewer</label>';
+      html+='<textarea id="step-cfg-instructions" rows="3" onchange="wbSteps['+idx+'].config.instructions=this.value;wbDirty=true" style="margin-bottom:8px" placeholder="What should the reviewer check?">'+esc(s.config?.instructions||'')+'</textarea>';
+      html+='<label style="font-size:11px;color:var(--text2)">Assign to user email (optional)</label>';
+      html+='<input id="step-cfg-assign" value="'+esc(s.config?.assigned_to||'')+'" onchange="wbSteps['+idx+'].config.assigned_to=this.value;wbDirty=true" placeholder="user@example.com" style="margin-bottom:8px">';
+      html+='<label style="font-size:11px;color:var(--text2)">Timeout (hours, 0 = no timeout)</label>';
+      html+='<input id="step-cfg-timeout" type="number" value="'+(s.config?.timeout_hours||48)+'" onchange="wbSteps['+idx+'].config.timeout_hours=Number(this.value);wbDirty=true">';
       break;
   }
   
@@ -783,17 +1065,29 @@ async function saveWorkflowFromBuilder(){
   if(btn){btn.textContent='💾 Saving...';btn.disabled=true;}
   
   try{
+    const triggerConfig=collectTriggerConfig();
     let wf;
     if(wbWorkflowId){
       // Update existing
-      wf=await api('/workflows/'+wbWorkflowId,{method:'PUT',body:JSON.stringify({name:nameEl.value,description:descEl?.value||''})});
+      wf=await api('/workflows/'+wbWorkflowId,{method:'PUT',body:JSON.stringify({
+        name:nameEl.value,
+        description:descEl?.value||'',
+        trigger_type:triggerConfig.type||'manual',
+        trigger_config:triggerConfig
+      })});
     } else {
       // Create new
-      wf=await api('/workflows',{method:'POST',body:JSON.stringify({name:nameEl.value,description:descEl?.value||'',category:''})});
+      wf=await api('/workflows',{method:'POST',body:JSON.stringify({
+        name:nameEl.value,
+        description:descEl?.value||'',
+        category:'',
+        trigger_type:triggerConfig.type||'manual',
+        trigger_config:triggerConfig
+      })});
       wbWorkflowId=wf.workflow?.id||wf.id;
     }
     
-    // Save steps — for new steps, create them; for existing, update
+    // Save steps -- for new steps, create them; for existing, update
     for(let i=0;i<wbSteps.length;i++){
       const s=wbSteps[i];
       if(s.id && !s.id.startsWith('new_')){
@@ -846,7 +1140,7 @@ function renderWorkflowsTable(){
     +'<select onchange="wfSurface=this.value;wfPage=1;renderWorkflowsTable()" style="max-width:200px"><option value="all">All Surfaces</option><option value="none">No Surface</option>'+(surfaces.map(s=>'<option value="'+esc(s.id)+'"'+(wfSurface===s.id?' selected':'')+'>'+esc(s.name)+'</option>').join(''))+'</select></div>'
     +'<div class="card" style="padding:0;overflow-x:auto"><table>'
     +'<tr><th>Name</th><th>Status</th><th>Template</th><th>Steps</th><th>Created</th><th>Actions</th></tr>'
-    +page.map(w=>'<tr><td>'+esc(w.name||w.title||'—')+'</td><td><span class="badge badge-'+((w.status==='active'||w.status==='published')?'active':'inactive')+'">'+esc(w.status||'draft')+'</span></td><td>'+esc(w.template_name||'—')+'</td><td>'+(w.step_count||0)+'</td><td>'+(w.created_at?new Date(w.created_at).toLocaleDateString():'—')+'</td><td><button class="btn-secondary btn-sm" onclick="editWorkflow(\''+(w.id||'')+'\')">Edit</button> <button class="btn-danger btn-sm" onclick="deleteWorkflow(\''+(w.id||'')+'\')">Del</button></td></tr>').join('')
+    +page.map(w=>'<tr><td>'+esc(w.name||w.title||'--')+'</td><td><span class="badge badge-'+((w.status==='active'||w.status==='published')?'active':'inactive')+'">'+esc(w.status||'draft')+'</span></td><td>'+esc(w.template_name||'--')+'</td><td>'+(w.step_count||0)+'</td><td>'+(w.created_at?new Date(w.created_at).toLocaleDateString():'--')+'</td><td><button class="btn-secondary btn-sm" onclick="editWorkflow(\''+(w.id||'')+'\')">Edit</button> <button class="btn-danger btn-sm" onclick="deleteWorkflow(\''+(w.id||'')+'\')">Del</button></td></tr>').join('')
     +'</table></div>'
     +'<div class="pagination"><button onclick="wfPage=Math.max(1,wfPage-1);renderWorkflowsTable()" '+(wfPage<=1?'disabled':'')+'>← Prev</button><span>Page '+wfPage+' of '+totalPages+'</span><button onclick="wfPage=Math.min(totalPages,wfPage+1);renderWorkflowsTable()" '+(wfPage>=totalPages?'disabled':'')+'>Next →</button></div>';
 }
@@ -1046,7 +1340,7 @@ async function showConnectWorkflowModal(sourceType, sourceId){
     +'</select>'
     +'<label>Step (optional)</label><input id="connect-step" placeholder="e.g. analyze_data">'
     +'<div class="actions"><button class="btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
-    +'<button class="btn-primary" onclick="submitConnectWorkflow(this,\'"+sourceType+"\',\'"+sourceId+"')">Connect</button></div></div>';
+    +'<button class="btn-primary" onclick="submitConnectWorkflow(this,sourceType,sourceId)">Connect</button></div></div>';
   document.body.appendChild(overlay);
 }
 
@@ -1364,7 +1658,7 @@ function renderClientsTable(){
     +'<div style="margin-bottom:12px"><input placeholder="Search clients..." oninput="clSearch=this.value;clPage=1;renderClientsTable()" style="max-width:300px"></div>'
     +'<div class="card" style="padding:0;overflow-x:auto"><table>'
     +'<tr><th>Name</th><th>Email</th><th>Company</th><th>Status</th><th>Created</th></tr>'
-    +page.map(c=>'<tr><td>'+esc(c.name||'—')+'</td><td>'+esc(c.email||'—')+'</td><td>'+esc(c.company||c.company_name||'—')+'</td><td><span class="badge badge-'+(c.status==='active'?'active':'inactive')+'">'+esc(c.status||'active')+'</span></td><td>'+(c.created_at?new Date(c.created_at).toLocaleDateString():'—')+'</td></tr>').join('')
+    +page.map(c=>'<tr><td>'+esc(c.name||'--')+'</td><td>'+esc(c.email||'--')+'</td><td>'+esc(c.company||c.company_name||'--')+'</td><td><span class="badge badge-'+(c.status==='active'?'active':'inactive')+'">'+esc(c.status||'active')+'</span></td><td>'+(c.created_at?new Date(c.created_at).toLocaleDateString():'--')+'</td></tr>').join('')
     +'</table></div>'
     +'<div class="pagination"><button onclick="clPage=Math.max(1,clPage-1);renderClientsTable()" '+(clPage<=1?'disabled':'')+'>← Prev</button><span>Page '+clPage+' of '+tp+'</span><button onclick="clPage=Math.min(tp,clPage+1);renderClientsTable()" '+(clPage>=tp?'disabled':'')+'>Next →</button></div>';
 }
@@ -1384,7 +1678,7 @@ function renderInvoicesTable(){
   mc.innerHTML='<div class="top-bar"><h1>💰 Invoices</h1></div>'
     +'<div class="card" style="padding:0;overflow-x:auto"><table>'
     +'<tr><th>#</th><th>Client</th><th>Amount</th><th>Status</th><th>Due Date</th></tr>'
-    +page.map(i=>'<tr><td>'+esc(i.invoice_number||i.id?.slice(0,8)||'—')+'</td><td>'+esc(i.client_name||i.client?.name||'—')+'</td><td>'+(i.amount? '$'+Number(i.amount).toFixed(2):'—')+'</td><td><span class="badge badge-'+(i.status==='paid'?'active':i.status==='overdue'?'inactive':'pending')+'">'+esc(i.status||'pending')+'</span></td><td>'+(i.due_date?new Date(i.due_date).toLocaleDateString():'—')+'</td></tr>').join('')
+    +page.map(i=>'<tr><td>'+esc(i.invoice_number||i.id?.slice(0,8)||'--')+'</td><td>'+esc(i.client_name||i.client?.name||'--')+'</td><td>'+(i.amount? '$'+Number(i.amount).toFixed(2):'--')+'</td><td><span class="badge badge-'+(i.status==='paid'?'active':i.status==='overdue'?'inactive':'pending')+'">'+esc(i.status||'pending')+'</span></td><td>'+(i.due_date?new Date(i.due_date).toLocaleDateString():'--')+'</td></tr>').join('')
     +'</table></div>'
     +'<div class="pagination"><button onclick="invPage=Math.max(1,invPage-1);renderInvoicesTable()" '+(invPage<=1?'disabled':'')+'>← Prev</button><span>Page '+invPage+' of '+tp+'</span><button onclick="invPage=Math.min(tp,invPage+1);renderInvoicesTable()" '+(invPage>=tp?'disabled':'')+'>Next →</button></div>';
 }
@@ -1418,7 +1712,7 @@ function renderInstancesTable(){
   mc.innerHTML='<div class="top-bar"><h1>📦 Workflow Instances</h1></div>'
     +'<div class="card" style="padding:0;overflow-x:auto"><table>'
     +'<tr><th>ID</th><th>Workflow</th><th>Status</th><th>Step</th><th>Started</th></tr>'
-    +page.map(i=>'<tr><td>'+esc(i.id?.slice(0,8)||'—')+'</td><td>'+esc(i.workflow_name||i.workflow?.name||'—')+'</td><td><span class="badge badge-'+(i.status==='completed'?'active':i.status==='failed'?'inactive':'pending')+'">'+esc(i.status||'running')+'</span></td><td>'+(i.current_step||i.step||0)+'</td><td>'+(i.created_at?new Date(i.created_at).toLocaleDateString():'—')+'</td></tr>').join('')
+    +page.map(i=>'<tr><td>'+esc(i.id?.slice(0,8)||'--')+'</td><td>'+esc(i.workflow_name||i.workflow?.name||'--')+'</td><td><span class="badge badge-'+(i.status==='completed'?'active':i.status==='failed'?'inactive':'pending')+'">'+esc(i.status||'running')+'</span></td><td>'+(i.current_step||i.step||0)+'</td><td>'+(i.created_at?new Date(i.created_at).toLocaleDateString():'--')+'</td></tr>').join('')
     +'</table></div>'
     +'<div class="pagination"><button onclick="instPage=Math.max(1,instPage-1);renderInstancesTable()" '+(instPage<=1?'disabled':'')+'>← Prev</button><span>Page '+instPage+' of '+tp+'</span><button onclick="instPage=Math.min(tp,instPage+1);renderInstancesTable()" '+(instPage>=tp?'disabled':'')+'>Next →</button></div>';
 }
@@ -1430,7 +1724,7 @@ let userIntegrations=[];
 async function renderIntegrations(){
   const mc=$('main-content');
   mc.innerHTML='<h1>🔗 Integration Center</h1>\n'
-    +'<p style="font-size:13px;color:var(--text2);margin-bottom:16px">Connect your own API keys and engines. WorkflowSwift automatically uses your keys when available — otherwise it falls back to the system default at standard credit rates.</p>';
+    +'<p style="font-size:13px;color:var(--text2);margin-bottom:16px">Connect your own API keys and engines. WorkflowSwift automatically uses your keys when available -- otherwise it falls back to the system default at standard credit rates.</p>';
 
   try{
     const res=await api('/integrations');
@@ -1449,11 +1743,11 @@ async function renderIntegrations(){
 
   // Available providers checklist for adding
   const availableProviders={
-    'openai':{name:'OpenAI',icon:'🤖',desc:'LLM calls — GPT-4, GPT-3.5',requiresBaseUrl:false},
-    'anthropic':{name:'Anthropic',icon:'🧠',desc:'LLM calls — Claude 3, Claude 3.5 Sonnet',requiresBaseUrl:false},
-    'deepseek':{name:'DeepSeek',icon:'🔍',desc:'LLM calls — DeepSeek models',requiresBaseUrl:false},
-    'gemini':{name:'Gemini',icon:'🌟',desc:'LLM calls — Google Gemini Pro',requiresBaseUrl:false},
-    'sendgrid':{name:'SendGrid',icon:'📧',desc:'Email delivery — transactional and marketing',requiresBaseUrl:false},
+    'openai':{name:'OpenAI',icon:'🤖',desc:'LLM calls -- GPT-4, GPT-3.5',requiresBaseUrl:false},
+    'anthropic':{name:'Anthropic',icon:'🧠',desc:'LLM calls -- Claude 3, Claude 3.5 Sonnet',requiresBaseUrl:false},
+    'deepseek':{name:'DeepSeek',icon:'🔍',desc:'LLM calls -- DeepSeek models',requiresBaseUrl:false},
+    'gemini':{name:'Gemini',icon:'🌟',desc:'LLM calls -- Google Gemini Pro',requiresBaseUrl:false},
+    'sendgrid':{name:'SendGrid',icon:'📧',desc:'Email delivery -- transactional and marketing',requiresBaseUrl:false},
     'smtp':{name:'SMTP (Custom)',icon:'📨',desc:'Custom SMTP for email',requiresBaseUrl:true},
     'mailchimp':{name:'Mailchimp',icon:'🐵',desc:'Email marketing and audiences',requiresBaseUrl:false},
     'activecampaign':{name:'ActiveCampaign',icon:'🎯',desc:'Marketing automation and CRM',requiresBaseUrl:false},
@@ -1476,7 +1770,7 @@ async function renderIntegrations(){
   if(native && native.length){
     html+='<div class="card" style="margin-bottom:16px">';
     html+='<h3 style="margin-bottom:12px">⚡ Native SwiftSoftware</h3>';
-    html+='<p style="font-size:12px;color:var(--text2);margin-bottom:12px">Built-in products — no setup needed. Toggle on to enable.</p>';
+    html+='<p style="font-size:12px;color:var(--text2);margin-bottom:12px">Built-in products -- no setup needed. Toggle on to enable.</p>';
     html+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:8px">';
     native.forEach(n=>{
       const icon=n.icon||'🔗';
@@ -1485,7 +1779,7 @@ async function renderIntegrations(){
       html+='<div style="flex:1"><div style="font-weight:600;font-size:13px">'+esc(n.name||n.provider)+'</div>';
       html+='<div style="font-size:11px;color:var(--text2)">'+(n.description||'')+'</div></div>';
       html+='<label style="position:relative;display:inline-block;width:44px;height:24px">';
-      html+='<input type="checkbox" '+(n.enabled?'checked':'')+' style="opacity:0;width:0;height:0" onchange="toggleNativeIntegration(\\''+esc(n.provider)+'\\',this.checked)">';
+      html+='<input type="checkbox" '+(n.enabled?'checked':'')+' style="opacity:0;width:0;height:0" onchange="toggleNativeIntegration(\''+esc(n.provider)+'\\\',this.checked)">';
       html+='<span style="position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;background:'+(n.enabled?'var(--accent)':'var(--border)')+';border-radius:12px;transition:.3s">';
       html+='<span style="position:absolute;content:\\"\\";height:18px;width:18px;left:'+(n.enabled?'24px':'3px')+';bottom:3px;background:white;border-radius:50%;transition:.3s"></span></span></label>';
       html+='</div>';
@@ -1516,11 +1810,11 @@ async function renderIntegrations(){
       html+='<div style="margin-top:4px"><span class="badge '+healthClass+'">'+healthLabel+'</span>';
       if(c.credit_cost===0) html+=' <span class="badge badge-active" style="background:rgba(52,211,153,.15);color:var(--green)">0 credits</span>';
       html+='</div></div>';
-      html+='<button class="btn-danger btn-sm" onclick="deleteIntegration(\\''+esc(c.provider)+'\\')" title="Disconnect">✕</button>';
+      html+='<button class="btn-danger btn-sm" onclick="deleteIntegration(\''+esc(c.provider)+'\\\')" title="Disconnect">✕</button>';
       html+='</div>';
       html+='<div style="margin-top:8px;display:flex;gap:6px">';
-      html+='<button class="btn-secondary btn-sm" onclick="testIntegrationHealth(\\''+esc(c.provider)+'\\')">🔄 Test</button>';
-      html+='<button class="btn-secondary btn-sm" onclick="editIntegration(\\''+esc(c.provider)+'\\')">✏️ Edit</button>';
+      html+='<button class="btn-secondary btn-sm" onclick="testIntegrationHealth(\''+esc(c.provider)+'\\\')">🔄 Test</button>';
+      html+='<button class="btn-secondary btn-sm" onclick="editIntegration(\''+esc(c.provider)+'\\\')">✏️ Edit</button>';
       html+='</div></div>';
     });
     html+='</div>';
@@ -1531,11 +1825,11 @@ async function renderIntegrations(){
   html+='<div class="card">';
   html+='<h3 style="margin-bottom:8px">💳 How Credits Work</h3>';
   html+='<div style="font-size:12px;color:var(--text2);line-height:1.7">';
-  html+='<div>✅ <strong>Your API key = 0 credits</strong> — steps automatically use your connected keys</div>';
-  html+='<div>⚡ <strong>System default</strong> — 1 credit per step when no key is connected</div>';
-  html+='<div>🔍 <strong>Browser automation</strong> — always system-owned, consumed from your credit balance</div>';
-  html+='<div>📊 <strong>Dashboard display</strong> — 0 credits (included with your plan)</div>';
-  html+='<div>💰 <strong>Unused credits</strong> — roll over month to month</div>';
+  html+='<div>✅ <strong>Your API key = 0 credits</strong> -- steps automatically use your connected keys</div>';
+  html+='<div>⚡ <strong>System default</strong> -- 1 credit per step when no key is connected</div>';
+  html+='<div>🔍 <strong>Browser automation</strong> -- always system-owned, consumed from your credit balance</div>';
+  html+='<div>📊 <strong>Dashboard display</strong> -- 0 credits (included with your plan)</div>';
+  html+='<div>💰 <strong>Unused credits</strong> -- roll over month to month</div>';
   html+='</div></div>';
 
   mc.innerHTML=html;
@@ -1568,10 +1862,10 @@ function showAddIntegrationModal(){
   overlay.className='modal-overlay';
   overlay.onclick=e=>{if(e.target===overlay)overlay.remove()};
   let html='<div class="modal" style="max-width:500px"><h2>🔗 Connect API</h2>'
-    +'<p style="font-size:12px;color:var(--text2);margin-bottom:12px">Select a provider and enter your API key. WorkflowSwift will use your key instead of the system default — saving you credits.</p>'
+    +'<p style="font-size:12px;color:var(--text2);margin-bottom:12px">Select a provider and enter your API key. WorkflowSwift will use your key instead of the system default -- saving you credits.</p>'
     +'<label>Provider</label>'
     +'<select id="integ-provider" onchange="updateIntegrationForm()" style="margin-bottom:8px">'
-    +'<option value="">— Select —</option>';
+    +'<option value="">-- Select --</option>';
   Object.entries(availableProviders).forEach(([key,p])=>{
     html+='<option value="'+key+'">'+p.icon+' '+p.name+'</option>';
   });
@@ -1579,7 +1873,7 @@ function showAddIntegrationModal(){
     +'<div id="integ-form-details">'
     +'<div style="font-size:12px;color:var(--text2);padding:12px;text-align:center">Select a provider above</div>'
     +'</div>'
-    +'<div class="actions"><button class="btn-secondary" onclick="this.closest(\\'.modal-overlay\\').remove()">Cancel</button>'
+    +'<div class="actions"><button class="btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
     +'<button class="btn-primary" id="integ-save-btn" onclick="saveNewIntegration(this)" disabled>Save Connection</button></div></div>';
   overlay.innerHTML=html;
   document.body.appendChild(overlay);
@@ -1629,7 +1923,7 @@ function updateIntegrationForm(){
 }
 
 function validateIntegrationForm(){
-  // Just a UX helper — real validation on save
+  // Just a UX helper -- real validation on save
 }
 
 async function saveNewIntegration(btn){
@@ -1683,8 +1977,8 @@ function editIntegration(provider){
     +'<label>API Key (leave blank to keep current)</label>'
     +'<input id="edit-integ-key" type="password" placeholder="New key or leave empty" style="margin-bottom:8px">'
     +(integration.base_url?'<label>Base URL</label><input id="edit-integ-url" value="'+esc(integration.base_url)+'" style="margin-bottom:8px">':'')
-    +'<div class="actions"><button class="btn-secondary" onclick="this.closest(\\'.modal-overlay\\').remove()">Cancel</button>'
-    +'<button class="btn-primary" onclick="saveEditedIntegration(\\''+esc(integration.provider)+'\\',this)">Save</button></div></div>';
+    +'<div class="actions"><button class="btn-secondary" onclick="this.closest(\'.modal-overlay\').remove()">Cancel</button>'
+    +'<button class="btn-primary" onclick="saveEditedIntegration(\''+esc(integration.provider)+'\\\',this)">Save</button></div></div>';
   document.body.appendChild(overlay);
 }
 
@@ -1741,14 +2035,14 @@ function renderExtension(){
     +    '<div style="font-size:40px;margin-bottom:8px">??</div>'
     +    '<div style="font-weight:600;font-size:14px">Supported Sites</div>'
     +    '<div style="font-size:12px;color:var(--text2);margin-top:8px;text-align:left;line-height:2">'
-    +    '<div>?? <strong>Etsy</strong> — Product research</div>'
-    +    '<div>?? <strong>Pinterest</strong> — Trend analysis</div>'
-    +    '<div>?? <strong>TikTok</strong> — Viral content</div>'
-    +    '<div>?? <strong>Yelp</strong> — Reviews & ratings</div>'
-    +    '<div>?? <strong>Google Maps</strong> — Local business data</div>'
-    +    '<div>?? <strong>Instagram</strong> — Social presence</div>'
-    +    '<div>?? <strong>Amazon</strong> — Product listings</div>'
-    +    '<div>?? <strong>eBay</strong> — Marketplace data</div>'
+    +    '<div>?? <strong>Etsy</strong> -- Product research</div>'
+    +    '<div>?? <strong>Pinterest</strong> -- Trend analysis</div>'
+    +    '<div>?? <strong>TikTok</strong> -- Viral content</div>'
+    +    '<div>?? <strong>Yelp</strong> -- Reviews & ratings</div>'
+    +    '<div>?? <strong>Google Maps</strong> -- Local business data</div>'
+    +    '<div>?? <strong>Instagram</strong> -- Social presence</div>'
+    +    '<div>?? <strong>Amazon</strong> -- Product listings</div>'
+    +    '<div>?? <strong>eBay</strong> -- Marketplace data</div>'
     +    '</div>'
     +  '</div>'
     +  '<div class="card" style="text-align:center">'
@@ -1942,7 +2236,7 @@ async function renderAutomations(){
   }
   mc.innerHTML='<h1>🤖 Automations</h1><div class="card" style="padding:0;overflow-x:auto"><table>'
     +'<tr><th>Name</th><th>Type</th><th>Status</th><th>Actions</th></tr>'
-    +data.map(a=>'<tr><td>'+esc(a.name||'—')+'</td><td>'+esc(a.automation_type||'—')+'</td><td><span class="badge badge-'+(a.is_active?'active':'inactive')+'">'+(a.is_active?'Active':'Inactive')+'</span></td><td><button class="btn-secondary btn-sm" onclick="runAutomation(\''+esc(a.id)+'\')">▶ Run</button></td></tr>').join('')
+    +data.map(a=>'<tr><td>'+esc(a.name||'--')+'</td><td>'+esc(a.automation_type||'--')+'</td><td><span class="badge badge-'+(a.is_active?'active':'inactive')+'">'+(a.is_active?'Active':'Inactive')+'</span></td><td><button class="btn-secondary btn-sm" onclick="runAutomation(\''+esc(a.id)+'\')">▶ Run</button></td></tr>').join('')
     +'</table></div>';
 }
 
@@ -1962,7 +2256,7 @@ async function renderDeals(){
   if(data.length===0){mc.innerHTML='<h1>💎 Deals</h1><div class="empty">No deals yet</div>';return;}
   mc.innerHTML='<h1>💎 Deals</h1><div class="card" style="padding:0;overflow-x:auto"><table>'
     +'<tr><th>Name</th><th>Value</th><th>Stage</th><th>Contact</th></tr>'
-    +data.map(d=>'<tr><td>'+esc(d.name||d.title||'—')+'</td><td>'+(d.value?'$'+Number(d.value).toLocaleString():'—')+'</td><td>'+esc(d.stage||'—')+'</td><td>'+esc(d.contact_name||'—')+'</td></tr>').join('')
+    +data.map(d=>'<tr><td>'+esc(d.name||d.title||'--')+'</td><td>'+(d.value?'$'+Number(d.value).toLocaleString():'--')+'</td><td>'+esc(d.stage||'--')+'</td><td>'+esc(d.contact_name||'--')+'</td></tr>').join('')
     +'</table></div>';
 }
 
@@ -1975,7 +2269,7 @@ async function renderLeads(){
   if(data.length===0){mc.innerHTML='<h1>🎯 Leads</h1><div class="empty">No leads yet</div>';return;}
   mc.innerHTML='<h1>🎯 Leads</h1><div class="card" style="padding:0;overflow-x:auto"><table>'
     +'<tr><th>Name</th><th>Email</th><th>Source</th><th>Status</th></tr>'
-    +data.map(l=>'<tr><td>'+esc(l.name||'—')+'</td><td>'+esc(l.email||'—')+'</td><td>'+esc(l.source||'—')+'</td><td><span class="badge badge-'+(l.status==='converted'?'active':'pending')+'">'+esc(l.status||'new')+'</span></td></tr>').join('')
+    +data.map(l=>'<tr><td>'+esc(l.name||'--')+'</td><td>'+esc(l.email||'--')+'</td><td>'+esc(l.source||'--')+'</td><td><span class="badge badge-'+(l.status==='converted'?'active':'pending')+'">'+esc(l.status||'new')+'</span></td></tr>').join('')
     +'</table></div>';
 }
 
@@ -1988,7 +2282,7 @@ async function renderCampaigns(){
   if(data.length===0){mc.innerHTML='<h1>📣 Campaigns</h1><div class="empty">No campaigns yet</div>';return;}
   mc.innerHTML='<h1>📣 Campaigns</h1><div class="card" style="padding:0;overflow-x:auto"><table>'
     +'<tr><th>Name</th><th>Type</th><th>Budget</th><th>Status</th></tr>'
-    +data.map(c=>'<tr><td>'+esc(c.name||c.title||'—')+'</td><td>'+esc(c.campaign_type||'—')+'</td><td>'+(c.budget?'$'+Number(c.budget).toLocaleString():'—')+'</td><td><span class="badge badge-'+(c.status==='active'?'active':'inactive')+'">'+esc(c.status||'draft')+'</span></td></tr>').join('')
+    +data.map(c=>'<tr><td>'+esc(c.name||c.title||'--')+'</td><td>'+esc(c.campaign_type||'--')+'</td><td>'+(c.budget?'$'+Number(c.budget).toLocaleString():'--')+'</td><td><span class="badge badge-'+(c.status==='active'?'active':'inactive')+'">'+esc(c.status||'draft')+'</span></td></tr>').join('')
     +'</table></div>';
 }
 
@@ -2001,7 +2295,7 @@ async function renderTickets(){
   if(data.length===0){mc.innerHTML='<h1>🎫 Support Tickets</h1><div class="empty">No tickets</div>';return;}
   mc.innerHTML='<h1>🎫 Tickets</h1><div class="card" style="padding:0;overflow-x:auto"><table>'
     +'<tr><th>Title</th><th>Status</th><th>Priority</th><th>Assigned</th></tr>'
-    +data.map(t=>'<tr><td>'+esc(t.title||t.subject||'—')+'</td><td><span class="badge badge-'+(t.status==='open'||t.status==='in_progress'?'pending':t.status==='resolved'||t.status==='closed'?'active':'inactive')+'">'+esc(t.status||'open')+'</span></td><td>'+esc(t.priority||'—')+'</td><td>'+esc(t.assigned_to||'—')+'</td></tr>').join('')
+    +data.map(t=>'<tr><td>'+esc(t.title||t.subject||'--')+'</td><td><span class="badge badge-'+(t.status==='open'||t.status==='in_progress'?'pending':t.status==='resolved'||t.status==='closed'?'active':'inactive')+'">'+esc(t.status||'open')+'</span></td><td>'+esc(t.priority||'--')+'</td><td>'+esc(t.assigned_to||'--')+'</td></tr>').join('')
     +'</table></div>';
 }
 
@@ -2065,8 +2359,8 @@ async function loadPlanList(){
     +plans.map(p=>'<tr>'
       +'<td><strong>'+esc(p.name)+'</strong>'+(p.description?'<br><span style="font-size:11px;color:var(--text2)">'+esc(p.description)+'</span>':'')+'</td>'
       +'<td>'+esc(p.slug)+'</td>'
-      +'<td>'+(p.price_monthly||'—')+'</td>'
-      +'<td>'+(p.price_yearly||'—')+'</td>'
+      +'<td>'+(p.price_monthly||'--')+'</td>'
+      +'<td>'+(p.price_yearly||'--')+'</td>'
       +'<td>'+(p.max_workflows||0)+'</td>'
       +'<td>'+(p.max_users||0)+'</td>'
       +'<td>'+(p.retention_days||30)+'d</td>'
@@ -2252,7 +2546,7 @@ async function loadSettingsTab(tab){
     let html='';
     Object.keys(cats).forEach(cat=>{
       html+='<div class="card"><h3>'+esc(cat.charAt(0).toUpperCase()+cat.slice(1))+'</h3><table><tr><th>Key</th><th>Label</th><th>Type</th><th>Default</th><th>Unit</th></tr>'
-        +cats[cat].map(f=>'<tr><td><code>'+esc(f.key)+'</code></td><td>'+esc(f.label)+'</td><td>'+esc(f.value_type)+'</td><td>'+esc(String(f.default_value))+'</td><td>'+(f.unit||'—')+'</td></tr>').join('')
+        +cats[cat].map(f=>'<tr><td><code>'+esc(f.key)+'</code></td><td>'+esc(f.label)+'</td><td>'+esc(f.value_type)+'</td><td>'+esc(String(f.default_value))+'</td><td>'+(f.unit||'--')+'</td></tr>').join('')
         +'</table></div>';
     });
     el.innerHTML=html;
@@ -2262,7 +2556,7 @@ async function loadSettingsTab(tab){
     if(!accounts.length){el.innerHTML='<div class="empty">No accounts found</div>';return}
     el.innerHTML='<div class="card" style="padding:0;overflow-x:auto"><table>'
       +'<tr><th>Name</th><th>Email</th><th>Plan</th><th>Retention</th><th>Override</th></tr>'
-      +accounts.map(a=>'<tr><td>'+esc(a.name||'—')+'</td><td>'+esc(a.email||'—')+'</td><td>'+(a.plan?esc(a.plan.name):'—')+'</td><td>'+(a.retention_days||'Default')+'d'+(a.retention_purge_at?' <span style="color:var(--orange)">(purging)</span>':'')+'</td>'
+      +accounts.map(a=>'<tr><td>'+esc(a.name||'--')+'</td><td>'+esc(a.email||'--')+'</td><td>'+(a.plan?esc(a.plan.name):'--')+'</td><td>'+(a.retention_days||'Default')+'d'+(a.retention_purge_at?' <span style="color:var(--orange)">(purging)</span>':'')+'</td>'
         +'<td><input id="ret-acc-'+a.id+'" type="number" min="1" style="width:70px;display:inline-block" value="'+(a.retention_days||90)+'"> <button class="btn-sm btn-primary" onclick="overrideAccountRetention(\''+a.id+'\')">Set</button></td></tr>').join('')
       +'</table></div>';
   }else{
@@ -2386,11 +2680,11 @@ async function renderAdminIntegrations(){
   let html='<h1>🔌 Integrations</h1>';
   html+='<div class="card"><h3>Available Integrations</h3>';
   if(!available.length) html+='<div class="empty">No integrations configured</div>';
-  else{html+='<table><tr><th>Provider</th><th>Type</th></tr>'+available.map(a=>'<tr><td>'+esc(a.provider||a.name||'—')+'</td><td>'+esc(a.integration_type||'—')+'</td></tr>').join('')+'</table>';}
+  else{html+='<table><tr><th>Provider</th><th>Type</th></tr>'+available.map(a=>'<tr><td>'+esc(a.provider||a.name||'--')+'</td><td>'+esc(a.integration_type||'--')+'</td></tr>').join('')+'</table>';}
   html+='</div>';
   html+='<div class="card"><h3>Integration Targets</h3>';
   if(!targets.length) html+='<div class="empty">No targets configured</div>';
-  else{html+='<table><tr><th>Name</th><th>Type</th><th>Endpoint</th></tr>'+targets.map(t=>'<tr><td>'+esc(t.name||'—')+'</td><td>'+esc(t.target_type||'—')+'</td><td>'+esc(t.endpoint_url||'—')+'</td></tr>').join('')+'</table>';}
+  else{html+='<table><tr><th>Name</th><th>Type</th><th>Endpoint</th></tr>'+targets.map(t=>'<tr><td>'+esc(t.name||'--')+'</td><td>'+esc(t.target_type||'--')+'</td><td>'+esc(t.endpoint_url||'--')+'</td></tr>').join('')+'</table>';}
   html+='</div>';
   mc.innerHTML=html;
 }

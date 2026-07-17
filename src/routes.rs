@@ -47,7 +47,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/{id}/steps/reorder", put(handlers::workflow_handler::reorder_workflow_steps))
         .route("/{id}/steps/{step_id}", put(handlers::workflow_handler::update_workflow_step).delete(handlers::workflow_handler::delete_workflow_step))
         .route("/{id}/deploy", post(handlers::workflow_handler::deploy_workflow_to_n8n))
-        .route("/{id}/run", post(handlers::workflow_handler::run_workflow));
+        .route("/{id}/run", post(handlers::workflow_handler::run_workflow))
+        .route("/validate-steps", post(handlers::workflow_handler::validate_workflow_steps));
 
     let instance_routes = Router::new()
         .route("/", get(handlers::instance_handler::list_instances))
@@ -382,6 +383,7 @@ pub fn create_router(state: AppState) -> Router {
         .merge(protected_routes);
 
     Router::new()
+        .route("/", get(health_check))
         .nest("/api/v1", api_v1)
         .with_state(state)
 }

@@ -194,6 +194,65 @@ pub async fn push_dashboard_data(
     .await
     .ok();
 
+    // ── Check for dashboard-triggered workflows ──
+    // If any active workflow has trigger_type='dashboard_data' and
+    // trigger_config->>'metric_key' matches this dashboard_type,
+    // automatically start a new workflow instance.
+    let metric_key = format!("n8n_{}", dashboard_type);
+    tracing::info!("Checking dashboard triggers for aid={} metric_key={}", aid.to_string(), metric_key);
+    let matching_workflows: Vec<Uuid> = match sqlx::query_as::<_, (Uuid,)>(
+        r#"SELECT id FROM workflows
+           WHERE aid = $1
+             AND is_active = true
+             AND trigger_type = 'dashboard_data'
+             AND trigger_config->>'metric_key' = $2"#
+    )
+    .bind(aid)
+    .bind(&metric_key)
+    .fetch_all(&state.db)
+    .await
+    {
+        Ok(rows) => {
+            let ids: Vec<Uuid> = rows.into_iter().map(|r| r.0).collect();
+            tracing::info!("Found {} matching workflows for trigger metric_key={}", ids.len(), metric_key);
+            ids
+        },
+        Err(e) => {
+            tracing::error!("Dashboard trigger query for aid={} metric_key={} failed: {}", aid.to_string(), metric_key, e);
+            Vec::new()
+        }
+    };
+
+    let mut triggered_ids: Vec<String> = Vec::new();
+    for wf_id in matching_workflows {
+        // Create a simple trigger payload
+        let trigger_payload = serde_json::json!({
+            "data": data,
+            "source": "dashboard_trigger",
+            "metric_key": metric_key,
+        });
+
+        // Create a workflow instance
+        let instance_id = Uuid::new_v4();
+        let placeholder_client_id = Uuid::new_v4();
+        let instance_result = sqlx::query(
+            r#"INSERT INTO workflow_instances (id, workflow_id, client_id, aid, name, status, current_step_order, context)
+               VALUES ($1, $2, $3, $4, $5, 'active', 0, $6::jsonb)"#
+        )
+        .bind(instance_id)
+        .bind(wf_id)
+        .bind(placeholder_client_id)
+        .bind(aid)
+        .bind(format!("Auto-triggered from dashboard: {}", dashboard_type))
+        .bind(&trigger_payload)
+        .execute(&state.db)
+        .await;
+
+        if instance_result.is_ok() {
+            triggered_ids.push(instance_id.to_string());
+        }
+    }
+
     let new_balance: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
     )
@@ -209,6 +268,7 @@ pub async fn push_dashboard_data(
         "dashboard_type": dashboard_type,
         "credits_used": DASHBOARD_DATA_COST,
         "balance": new_balance,
+        "triggered_workflows": triggered_ids,
         "message": "Dashboard data stored successfully"
     })))
 }

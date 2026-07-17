@@ -710,6 +710,403 @@ fn convert_user_steps(
                 nodes.push(node);
             }
 
+            // ===== Generate: LLM text/image generation (calls OpenAI/Anthropic) =====
+            "generate" => {
+                let provider = config.get("provider")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("openai");
+                let prompt = config.get("prompt")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let model = config.get("model")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("gpt-4");
+
+                // Route through WorkflowSwift's provider-key resolution
+                let node = json!({
+                    "id": node_id,
+                    "name": step_name,
+                    "type": "n8n-nodes-base.httpRequest",
+                    "typeVersion": 4.2,
+                    "position": [x_pos, y_base],
+                    "parameters": {
+                        "method": "POST",
+                        "url": format!("{}/api/v1/provider-keys/{}/generate",
+                            callback_base_url.trim_end_matches('/'), provider),
+                        "authentication": "genericCredentialType",
+                        "genericAuthType": "httpHeaderAuth",
+                        "sendHeaders": true,
+                        "headerParameters": {
+                            "parameters": [
+                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Content-Type", "value": "application/json" }
+                            ]
+                        },
+                        "sendBody": true,
+                        "bodyParameters": {
+                            "parameters": [
+                                { "name": "model", "value": model },
+                                { "name": "prompt", "value": prompt },
+                                { "name": "temperature", "value": config.get("temperature").and_then(|v| v.as_f64()).unwrap_or(0.7) }
+                            ]
+                        },
+                        "options": {
+                            "timeout": 120000
+                        }
+                    }
+                });
+                nodes.push(node);
+            }
+
+            // ===== Format: Transform content for a specific platform =====
+            "format" => {
+                let platform = config.get("platform")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("web");
+                let content = config.get("input_content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("={{ $json }}");
+                let format_type = config.get("format_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("auto");
+
+                // Use n8n Code node for formatting transformations
+                let node = json!({
+                    "id": node_id,
+                    "name": step_name,
+                    "type": "n8n-nodes-base.code",
+                    "typeVersion": 2,
+                    "position": [x_pos, y_base],
+                    "parameters": {
+                        "language": "javaScript",
+                        "code": format!(r#"// Format step: {} platform
+// Config format_type: {}
+const input = $json;
+const content = {};
+
+// Apply platform-specific formatting
+const output = {{
+  original: content,
+  platform: "{}",
+  formatted: String(content),
+  format_type: "{}",
+  timestamp: new Date().toISOString(),
+  metadata: {{
+    char_count: String(content).length,
+    platform: "{}"
+  }}
+}};
+
+return output;
+"#, step_name, format_type, content, platform, format_type, platform),
+                        "mode": "runOnceForAllItems"
+                    }
+                });
+                nodes.push(node);
+            }
+
+            // ===== Design: Create visuals/assets (calls provider API) =====
+            "design" => {
+                let provider = config.get("provider")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("artistly");
+                let prompt = config.get("prompt")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let design_type = config.get("design_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("graphic");
+
+                let node = json!({
+                    "id": node_id,
+                    "name": step_name,
+                    "type": "n8n-nodes-base.httpRequest",
+                    "typeVersion": 4.2,
+                    "position": [x_pos, y_base],
+                    "parameters": {
+                        "method": "POST",
+                        "url": format!("{}/api/v1/provider-keys/{}/design/{}",
+                            callback_base_url.trim_end_matches('/'), provider, design_type),
+                        "authentication": "genericCredentialType",
+                        "genericAuthType": "httpHeaderAuth",
+                        "sendHeaders": true,
+                        "headerParameters": {
+                            "parameters": [
+                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Content-Type", "value": "application/json" }
+                            ]
+                        },
+                        "sendBody": true,
+                        "bodyParameters": {
+                            "parameters": [
+                                { "name": "prompt", "value": prompt },
+                                { "name": "design_type", "value": design_type },
+                                { "name": "style", "value": config.get("style").and_then(|v| v.as_str()).unwrap_or("modern") },
+                                { "name": "size", "value": config.get("size").and_then(|v| v.as_str()).unwrap_or("1024x1024") }
+                            ]
+                        },
+                        "options": {
+                            "timeout": 180000
+                        }
+                    }
+                });
+                nodes.push(node);
+            }
+
+            // ===== Publish: Post via Buffer (white-hat only) =====
+            "publish" => {
+                let platform = config.get("platform")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("twitter");
+                let content = config.get("content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("={{ $json }}");
+                let schedule_time = config.get("schedule_time")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                // White-hat: always routes through Buffer API
+                let node = json!({
+                    "id": node_id,
+                    "name": step_name,
+                    "type": "n8n-nodes-base.httpRequest",
+                    "typeVersion": 4.2,
+                    "position": [x_pos, y_base],
+                    "parameters": {
+                        "method": "POST",
+                        "url": format!("{}/api/v1/bridge/commands/publish",
+                            callback_base_url.trim_end_matches('/')),
+                        "authentication": "genericCredentialType",
+                        "genericAuthType": "httpHeaderAuth",
+                        "sendHeaders": true,
+                        "headerParameters": {
+                            "parameters": [
+                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Content-Type", "value": "application/json" }
+                            ]
+                        },
+                        "sendBody": true,
+                        "bodyParameters": {
+                            "parameters": [
+                                { "name": "platform", "value": platform },
+                                { "name": "content", "value": content },
+                                { "name": "schedule_time", "value": schedule_time }
+                            ]
+                        }
+                    }
+                });
+                nodes.push(node);
+            }
+
+            // ===== Loop: Repeat steps until condition =====
+            "loop" => {
+                let max_iterations = config.get("max_iterations")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(5);
+                let condition_field = config.get("condition_field")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("$json");
+                let stop_value = config.get("stop_value")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                // Loop is represented as an n8n Switch + Trigger combination
+                // First: an IF node to check loop continuation condition
+                // The actual iteration count management happens via WorkflowSwift callback
+                let node = json!({
+                    "id": node_id,
+                    "name": step_name,
+                    "type": "n8n-nodes-base.httpRequest",
+                    "typeVersion": 4.2,
+                    "position": [x_pos, y_base],
+                    "parameters": {
+                        "method": "POST",
+                        "url": format!("{}/api/v1/instances/loop-check",
+                            callback_base_url.trim_end_matches('/')),
+                        "authentication": "genericCredentialType",
+                        "genericAuthType": "httpHeaderAuth",
+                        "sendHeaders": true,
+                        "headerParameters": {
+                            "parameters": [
+                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Content-Type", "value": "application/json" }
+                            ]
+                        },
+                        "sendBody": true,
+                        "bodyParameters": {
+                            "parameters": [
+                                { "name": "max_iterations", "value": max_iterations },
+                                { "name": "condition_field", "value": condition_field },
+                                { "name": "stop_value", "value": stop_value },
+                                { "name": "current_data", "value": "={{ $json }}" }
+                            ]
+                        }
+                    }
+                });
+                nodes.push(node);
+            }
+
+            // ===== Condition: If/else routing =====
+            "condition" => {
+                let field = config.get("field")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("$json");
+                let operator = config.get("operator")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("equals");
+                let value = config.get("value")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                // Determine the operator type in Rust (not in JSON template)
+                let is_string_op = matches!(operator, "equals" | "contains" | "startsWith" | "endsWith");
+                let is_number_op = matches!(operator, "larger" | "smaller" | "equals");
+                let is_boolean_op = operator == "isTrue" || operator == "isFalse";
+
+                let node = json!({
+                    "id": node_id,
+                    "name": step_name,
+                    "type": "n8n-nodes-base.if",
+                    "typeVersion": 2,
+                    "position": [x_pos, y_base],
+                    "parameters": {
+                        "conditions": {
+                            "options": {
+                                "caseSensitive": true,
+                                "typeValidation": "strict"
+                            },
+                            "conditions": [
+                                {
+                                    "id": "cond_0",
+                                    "leftValue": field,
+                                    "rightValue": value,
+                                    "operator": {
+                                        "string": is_string_op,
+                                        "number": is_number_op,
+                                        "boolean": is_boolean_op
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                });
+                nodes.push(node);
+            }
+
+            // ===== Manual Review: Pause for human approval =====
+            "manual" => {
+                let instructions = config.get("instructions")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Review the workflow output and approve or reject.");
+                let timeout_hours = config.get("timeout_hours")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(24);
+
+                // Manual review = n8n Wait node + callback to WorkflowSwift for notification
+                let node = json!({
+                    "id": node_id,
+                    "name": step_name,
+                    "type": "n8n-nodes-base.wait",
+                    "typeVersion": 1,
+                    "position": [x_pos, y_base],
+                    "parameters": {
+                        "resume": "webhook",
+                        "options": {
+                            "maxTime": timeout_hours * 3600000
+                        },
+                        "notes": instructions
+                    }
+                });
+                nodes.push(node);
+
+                // Also send a notification to the user that manual review is needed
+                let notify_id = format!("{}_notify", node_id);
+                let notify_node = json!({
+                    "id": notify_id,
+                    "name": format!("Notify: {}", step_name),
+                    "type": "n8n-nodes-base.httpRequest",
+                    "typeVersion": 4.2,
+                    "position": [x_pos + 200, y_base],
+                    "parameters": {
+                        "method": "POST",
+                        "url": format!("{}/api/v1/notifications/manual-review",
+                            callback_base_url.trim_end_matches('/')),
+                        "authentication": "genericCredentialType",
+                        "genericAuthType": "httpHeaderAuth",
+                        "sendHeaders": true,
+                        "headerParameters": {
+                            "parameters": [
+                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Content-Type", "value": "application/json" }
+                            ]
+                        },
+                        "sendBody": true,
+                        "bodyParameters": {
+                            "parameters": [
+                                { "name": "type", "value": "manual_review" },
+                                { "name": "instructions", "value": instructions },
+                                { "name": "timeout_hours", "value": timeout_hours }
+                            ]
+                        }
+                    }
+                });
+                nodes.push(notify_node);
+
+                // Wire wait → notify
+                let mut conn = serde_json::Map::new();
+                conn.insert("main".to_string(), json!([[{"node": notify_id, "type": "main", "index": 0}]]));
+                connections_map.insert(node_id.to_string(), Value::Object(conn));
+
+                step_last_node_id = Some(notify_id);
+            }
+
+            // ===== Research: Data scraping/enrichment (Hexomatic, Google Places, Apollo) =====
+            "research" => {
+                let provider = config.get("provider")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("hexomatic");
+                let query = config.get("query")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let research_type = config.get("research_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("search");
+
+                let node = json!({
+                    "id": node_id,
+                    "name": step_name,
+                    "type": "n8n-nodes-base.httpRequest",
+                    "typeVersion": 4.2,
+                    "position": [x_pos, y_base],
+                    "parameters": {
+                        "method": "POST",
+                        "url": format!("{}/api/v1/provider-keys/{}/research/{}",
+                            callback_base_url.trim_end_matches('/'), provider, research_type),
+                        "authentication": "genericCredentialType",
+                        "genericAuthType": "httpHeaderAuth",
+                        "sendHeaders": true,
+                        "headerParameters": {
+                            "parameters": [
+                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Content-Type", "value": "application/json" }
+                            ]
+                        },
+                        "sendBody": true,
+                        "bodyParameters": {
+                            "parameters": [
+                                { "name": "query", "value": query },
+                                { "name": "research_type", "value": research_type },
+                                { "name": "params", "value": "={{ $json }}" }
+                            ]
+                        },
+                        "options": {
+                            "timeout": 180000
+                        }
+                    }
+                });
+                nodes.push(node);
+            }
+
             _ => {
                 // Unknown step type — add a comment/placeholder node
                 let node = json!({
