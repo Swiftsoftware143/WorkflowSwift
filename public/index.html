@@ -174,6 +174,7 @@ tr:hover{background:rgba(79,134,247,.04)}
 <a href="#" onclick="showPage('leads')" data-page="leads"><span>🎯</span><span>Leads</span></a>
 <a href="#" onclick="showPage('campaigns')" data-page="campaigns"><span>📣</span><span>Campaigns</span></a>
 <a href="#" onclick="showPage('tickets')" data-page="tickets"><span>🎫</span><span>Tickets</span></a>
+<a href="#" onclick="showPage('portfolio')" data-page="portfolio"><span>🏢</span><span>Portfolio Companies</span></a>
 
 <!-- ADMIN accordion -->
 <hr class="admin-divider">
@@ -352,6 +353,7 @@ async function showPage(page){
     integrations:renderIntegrations,
     extension:renderExtension,
     // Admin pages
+    portfolio:renderPortfolio,
     'admin-dashboard':renderAdminDashboard,
     'admin-tenants':renderAdminTenants,
     'admin-users':renderAdminUsers,
@@ -2310,6 +2312,180 @@ function genericAdminPage(title, icon, endpoint, key){
     const keys=Object.keys(data[0]||{});
     mc.innerHTML='<h1>'+icon+' '+esc(title)+'</h1><div class="card" style="padding:0;overflow-x:auto"><table><tr>'+keys.map(k=>'<th>'+esc(k).replace(/_/g,' ')+'</th>').join('')+'</tr>'+data.map(r=>'<tr>'+keys.map(k=>'<td>'+esc(String(r[k]??'')).slice(0,80)+'</td>').join('')+'</tr>').join('')+'</table></div>';
   };
+}
+
+// ── Portfolio Companies ──
+async function renderPortfolio(){
+  const mc=$('main-content');
+  mc.innerHTML='<h1>🏢 Portfolio Companies</h1><div class="top-bar"><div></div><button class="btn-primary" onclick="showPortfolioForm()">+ Add Company</button></div><div id="portfolio-list"><div class="loading">Loading...</div></div>';
+  await loadPortfolioList();
+}
+
+async function loadPortfolioList(){
+  const el=$('portfolio-list');
+  let data;
+  try{data=await api('/portfolio-companies')}catch(e){el.innerHTML='<div class="error">Failed to load portfolio companies</div>';return}
+  const companies=data?.portfolio_companies||[];
+  if(!companies.length){el.innerHTML='<div class="empty">No portfolio companies yet. Click + Add Company to create one.</div>';return}
+  el.innerHTML='<div class="card" style="padding:0;overflow-x:auto"><table>'
+    +'<tr><th>Name</th><th>Slug</th><th>Actions</th></tr>'
+    +companies.map(c=>'<tr>'
+      +'<td><strong>'+esc(c.name)+'</strong></td>'
+      +'<td><code>'+esc(c.slug)+'</code></td>'
+      +'<td><button class="btn-secondary btn-sm" onclick="editPortfolioCompany(\''+c.id+'\')">✏️</button> <button class="btn-danger btn-sm" onclick="deletePortfolioCompany(\''+c.id+'\',\''+esc(c.name)+'\')">🗑️</button></td>'
+      +'</tr>').join('')
+    +'</table></div>';
+}
+
+async function showPortfolioForm(id){
+  let company={};
+  if(id){
+    try{
+      const data=await api('/portfolio-companies');
+      const found=data?.portfolio_companies?.find(c=>c.id===id);
+      if(found)company=found;
+    }catch(e){}
+  }
+  const isEdit=!!id;
+  const title=isEdit?'Edit Company: '+esc(company.name):'Add Portfolio Company';
+  let html='<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
+    +'<h2>'+title+'</h2>'
+    +'<label>Company Name</label><input id="pf-name" value="'+esc(company.name||'')+'" placeholder="e.g. SwiftImpact">'
+    +'<label>Slug</label><input id="pf-slug" value="'+esc(company.slug||'')+'" placeholder="e.g. swift-impact">'
+    +'<div class="actions">'
+    +'<button class="btn-secondary" onclick="closeModal()">Cancel</button>'
+    +'<button class="btn-primary" onclick="savePortfolioCompany(\''+(id||'')+'\')">'+(isEdit?'Update':'Create')+'</button>'
+    +'</div></div></div>';
+  mc.insertAdjacentHTML('beforeend',html);
+}
+
+async function savePortfolioCompany(id){
+  const name=$('pf-name')?.value;
+  if(!name){showToast('Company name is required','error');return}
+  const slug=$('pf-slug')?.value||name.toLowerCase().replace(/\s+/g,'-');
+  const payload={name,slug};
+  try{
+    if(id){
+      await api('/portfolio-companies/'+id,{method:'PUT',body:JSON.stringify(payload)});
+      showToast('Company updated');
+    }else{
+      await api('/portfolio-companies',{method:'POST',body:JSON.stringify(payload)});
+      showToast('Company created');
+    }
+    closeModal();
+    await loadPortfolioList();
+  }catch(e){showToast(e.message,'error')}
+}
+
+async function deletePortfolioCompany(id,name){
+  if(!confirm('Delete portfolio company "'+name+'"?'))return;
+  try{
+    await api('/portfolio-companies/'+id,{method:'DELETE'});
+    showToast('Company deleted');
+    await loadPortfolioList();
+  }catch(e){showToast(e.message,'error')}
+}
+
+// ── Admin Tenants ──
+async function renderAdminTenants(){
+  const mc=$('main-content');
+  mc.innerHTML='<h1>🏢 Tenants</h1><div class="top-bar"><div></div><button class="btn-primary" onclick="showTenantForm()">+ New Tenant</button></div><div id="tenants-list"><div class="loading">Loading...</div></div>';
+  await loadTenantsList();
+}
+
+async function loadTenantsList(){
+  const el=$('tenants-list');
+  let data;
+  try{data=await api('/admin/accounts')}catch(e){el.innerHTML='<div class="error">Failed to load tenants</div>';return}
+  const tenants=data?.accounts||[];
+  if(!tenants.length){el.innerHTML='<div class="empty">No tenants yet</div>';return}
+  el.innerHTML='<div class="card" style="padding:0;overflow-x:auto"><table>'
+    +'<tr><th>Name</th><th>Slug</th><th>Plan</th><th>Retention</th><th>Active</th><th>Created</th><th>Actions</th></tr>'
+    +tenants.map(t=>'<tr>'
+      +'<td><strong>'+esc(t.name)+'</strong></td>'
+      +'<td><code>'+esc(t.slug)+'</code></td>'
+      +'<td>'+(t.plan?esc(t.plan.name):'<span style="color:var(--text2)">None</span>')+'</td>'
+      +'<td>'+(t.retention_days||90)+'d</td>'
+      +'<td><span class="badge '+(t.is_active?'badge-active':'badge-inactive')+'">'+(t.is_active?'Active':'Inactive')+'</span></td>'
+      +'<td style="font-size:11px">'+new Date(t.created_at).toLocaleDateString()+'</td>'
+      +'<td><button class="btn-secondary btn-sm" onclick="showTenantForm(\''+t.id+'\')">✏️</button></td>'
+      +'</tr>').join('')
+    +'</table></div>';
+}
+
+async function showTenantForm(id){
+  let tenant={};
+  if(id){
+    try{
+      const data=await api('/admin/accounts');
+      const found=data?.accounts?.find(t=>t.id===id);
+      if(found)tenant=found;
+    }catch(e){}
+  }
+  const isEdit=!!id;
+  let html='<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
+    +'<h2>'+(isEdit?'Edit Tenant: '+esc(tenant.name):'Create New Tenant')+'</h2>'
+    +'<label>Tenant Name</label><input id="ten-name" value="'+esc(tenant.name||'')+'" placeholder="e.g. Acme Corp">'
+    +'<label>Slug</label><input id="ten-slug" value="'+esc(tenant.slug||'')+'" placeholder="e.g. acme-corp">'
+    +'<div class="actions">'
+    +'<button class="btn-secondary" onclick="closeModal()">Cancel</button>'
+    +'<button class="btn-primary" onclick="saveTenant(\''+(id||'')+'\')">'+(isEdit?'Update':'Create')+'</button>'
+    +'</div></div></div>';
+  mc.insertAdjacentHTML('beforeend',html);
+}
+
+async function saveTenant(id){
+  const name=$('ten-name')?.value;
+  if(!name){showToast('Tenant name is required','error');return}
+  const slug=$('ten-slug')?.value||name.toLowerCase().replace(/\s+/g,'-');
+  const payload={name,slug};
+  try{
+    if(id){
+      await api('/admin/accounts/'+id,{method:'PUT',body:JSON.stringify(payload)});
+      showToast('Tenant updated');
+    }else{
+      await api('/admin/accounts/create',{method:'POST',body:JSON.stringify(payload)});
+      showToast('Tenant created');
+    }
+    closeModal();
+    await loadTenantsList();
+  }catch(e){showToast(e.message,'error')}
+}
+
+// ── Admin Users ──
+async function renderAdminUsers(){
+  const mc=$('main-content');
+  mc.innerHTML='<h1>👤 Users</h1><div id="users-list"><div class="loading">Loading...</div></div>';
+  await loadUsersList();
+}
+
+async function loadUsersList(){
+  const el=$('users-list');
+  let data;
+  try{data=await api('/users')}catch(e){el.innerHTML='<div class="error">Failed to load users</div>';return}
+  const users=data?.users||[];
+  if(!users.length){el.innerHTML='<div class="empty">No users found</div>';return}
+  el.innerHTML='<div class="card" style="padding:0;overflow-x:auto"><table>'
+    +'<tr><th>Name</th><th>Email</th><th>Role</th><th>Active</th><th>Actions</th></tr>'
+    +users.map(u=>'<tr>'
+      +'<td><strong>'+esc(u.name||'--')+'</strong></td>'
+      +'<td>'+esc(u.email)+'</td>'
+      +'<td><span class="badge '+(u.role==='admin'?'badge-active':'badge-inactive')+'">'+esc(u.role||'user')+'</span></td>'
+      +'<td><span style="color:'+(u.is_active?'var(--green)':'var(--red)')+'">'+(u.is_active?'✅':'❌')+'</span></td>'
+      +'<td><button class="btn-secondary btn-sm" onclick="editUserRole(\''+u.id+'\',\''+esc(u.name||'')+'\',\''+u.role+'\')">🔑 Role</button></td>'
+      +'</tr>').join('')
+    +'</table></div>';
+}
+
+async function editUserRole(id,name,currentRole){
+  const newRole=confirm('User: '+name+'\nCurrent role: '+currentRole+'\n\nClick OK to toggle to '+(currentRole==='admin'?'user':'admin')+', Cancel to skip.');
+  if(!newRole)return;
+  const targetRole=currentRole==='admin'?'user':'admin';
+  try{
+    await api('/users/'+id+'/role',{method:'PUT',body:JSON.stringify({role:targetRole})});
+    showToast(name+' role changed to '+targetRole);
+    await loadUsersList();
+  }catch(e){showToast(e.message,'error')}
 }
 
 // ── Admin Dashboard (stats tiles) ──
