@@ -125,7 +125,7 @@ pub fn convert_steps_to_n8n(
 
     // Build connection chains
     let mut prev_node_id = "balance_check";
-    let mut prev_output_index = 0; // 0 = success branch, 1 = failure branch
+    let prev_output_index = 0; // 0 = success branch, 1 = failure branch
 
     // ===== Node 3: Deduct Credit =====
     let deduct_node = json!({
@@ -260,7 +260,7 @@ fn convert_user_steps(
     let mut nodes: Vec<Value> = Vec::new();
     // Track the last (output) node ID for each step
     let mut step_output_ids: Vec<String> = Vec::new();
-    let aid_prefix = &aid.to_string()[..8];
+    let _aid_prefix = &aid.to_string()[..8];
     let _wf_short = &workflow_id.to_string()[..8];
 
     for (i, step) in steps.iter().enumerate() {
@@ -793,7 +793,7 @@ fn convert_user_steps(
                 nodes.push(node);
             }
 
-            "report" | "data-card" => {
+            "report" => {
                 // Push data to dashboard widget
                 let metric_key = config.get("metric_key")
                     .and_then(|v| v.as_str())
@@ -833,7 +833,7 @@ fn convert_user_steps(
                 nodes.push(node);
             }
 
-            "alert" | "notify" => {
+            "alert" => {
                 // Notification/alert step (already handled below, but capture here too)
                 // Fall through to the existing notify handler by re-matching
                 // We'll replicate the notify logic here for completeness
