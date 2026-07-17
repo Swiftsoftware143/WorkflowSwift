@@ -37,6 +37,9 @@ pub enum AppError {
     #[error("Internal server error: {0}")]
     Internal(String),
 
+    #[error("Too many requests: {0}")]
+    TooManyRequests(String),
+
     #[error("JWT error: {0}")]
     Jwt(#[from] jsonwebtoken::errors::Error),
 }
@@ -63,6 +66,7 @@ impl IntoResponse for AppError {
                 tracing::error!(error = %e, "Database error");
                 (StatusCode::INTERNAL_SERVER_ERROR, "Database error".to_string())
             }
+            AppError::TooManyRequests(msg) => (StatusCode::TOO_MANY_REQUESTS, msg.clone()),
             AppError::Jwt(e) => {
                 tracing::warn!(error = %e, "JWT error");
                 (StatusCode::UNAUTHORIZED, "Invalid token".to_string())

@@ -179,8 +179,12 @@ pub async fn advance_instance(
     let current_order: i32 = req.get("current_step_order").and_then(|v| v.as_i64()).map(|n| n as i32).unwrap_or(0);
 
     // Check if there's an integration target bound to this step
+    // Also fetch security fields: allowed_domains and daily_limit
     let integration_rows = sqlx::query(
-        "SELECT wsi.integration_target_id::text, it.provider_preset, it.webhook_url, it.api_key
+        "SELECT wsi.integration_target_id::text, it.provider_preset, it.webhook_url, it.api_key,
+                COALESCE(it.allowed_domains, ARRAY[]::TEXT[])::text[] as allowed_domains,
+                COALESCE(it.daily_limit, 1000)::int as daily_limit,
+                it.id as raw_id
          FROM workflow_step_integrations wsi
          JOIN integration_targets it ON it.id = wsi.integration_target_id AND it.is_active = true
          WHERE wsi.step_id IN (
@@ -204,10 +208,33 @@ pub async fn advance_instance(
         let provider_preset: Option<String> = row.try_get("provider_preset").unwrap_or(None);
         let webhook_url: Option<String> = row.try_get("webhook_url").unwrap_or(None);
         let api_key: Option<String> = row.try_get("api_key").unwrap_or(None);
+        let allowed_domains: Vec<String> = row.try_get("allowed_domains").unwrap_or_default();
+        let daily_limit: i32 = row.try_get("daily_limit").unwrap_or(1000);
+        let raw_target_id: uuid::Uuid = row.try_get("raw_id").unwrap_or(uuid::Uuid::nil());
+
+        // Security check: domain allowlist + daily rate limit before firing
+        if let Some(ref url) = webhook_url {
+            if !url.is_empty() {
+                if let Err(e) = crate::security::webhook_security::check_webhook_security(
+                    &state.db,
+                    &raw_target_id,
+                    url,
+                    &allowed_domains,
+                    daily_limit,
+                ).await {
+                    dispatch_results.push(json!({
+                        "target_id": target_id,
+                        "status": "blocked",
+                        "error": format!("Blocked by security policy: {}", e),
+                    }));
+                    continue;
+                }
+            } else { continue; }
+        } else { continue; }
 
         // Build the target URL from webhook_url or provider preset base_url
         let target_url = if let Some(ref url) = webhook_url {
-            if !url.is_empty() { url.clone() } else { continue; }
+            url.clone()
         } else {
             // Try to look up the preset base URL
             let base: Option<String> = if let Some(ref preset) = provider_preset {

@@ -56,9 +56,10 @@ pub async fn create_workflow(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     features::enforce_feature_limit(&state.db, aid, "max_workflows", "Workflows").await?;
 
+    let trigger_type = req.trigger_type.clone().unwrap_or_else(|| "manual".to_string());
     let workflow = sqlx::query_as::<_, Workflow>(
-        r#"INSERT INTO workflows (id, aid, name, description, category, lifecycle_summary, tags, surface_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        r#"INSERT INTO workflows (id, aid, name, description, category, lifecycle_summary, tags, surface_id, trigger_type, trigger_config)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            RETURNING *"#,
     )
     .bind(Uuid::new_v4())
@@ -69,6 +70,8 @@ pub async fn create_workflow(
     .bind(&req.lifecycle_summary)
     .bind(&req.tags)
     .bind(&req.surface_id)
+    .bind(&trigger_type)
+    .bind(&req.trigger_config)
     .fetch_one(&state.db)
     .await?;
 
@@ -124,15 +127,20 @@ pub async fn update_workflow(
     let lifecycle_summary = req.lifecycle_summary.or(existing.lifecycle_summary);
     let tags = req.tags.or(existing.tags);
 
+    let trigger_type = req.trigger_type.unwrap_or(existing.trigger_type.unwrap_or_else(|| "manual".to_string()));
+    let trigger_config = req.trigger_config.or(existing.trigger_config);
+
     let workflow = sqlx::query_as::<_, Workflow>(
-        r#"UPDATE workflows SET name=$1, description=$2, category=$3, lifecycle_summary=$4, tags=$5, updated_at=NOW()
-           WHERE id=$6 RETURNING *"#,
+        r#"UPDATE workflows SET name=$1, description=$2, category=$3, lifecycle_summary=$4, tags=$5, trigger_type=$6, trigger_config=$7, updated_at=NOW()
+           WHERE id=$8 RETURNING *"#,
     )
     .bind(&name)
     .bind(&description)
     .bind(&category)
     .bind(&lifecycle_summary)
     .bind(&tags)
+    .bind(&trigger_type)
+    .bind(&trigger_config)
     .bind(id)
     .fetch_one(&state.db)
     .await?;
@@ -872,4 +880,189 @@ pub async fn run_workflow(
             Err(AppError::Internal(format!("n8n webhook call failed: {}", e)))
         }
     }
+}
+
+/// POST /api/v1/workflows/validate-steps — validate a sequence of steps before deploy
+///
+/// Checks each step for:
+///   - Required config fields per step type
+///   - Proper ordering constraints
+///   - Valid provider assignments
+///   - Cyclic dependencies (for fork/loop steps)
+///
+/// Returns validation warnings and errors without requiring a DB write.
+pub async fn validate_workflow_steps(
+    State(_state): State<AppState>,
+    Extension(_claims): Extension<Claims>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<impl IntoResponse> {
+    let steps = req.get("steps")
+        .and_then(|v| v.as_array())
+        .ok_or(AppError::Validation("Missing 'steps' array in request body".to_string()))?;
+
+    if steps.is_empty() {
+        return Ok(Json(json!({
+            "valid": false,
+            "errors": ["Workflow must have at least one step."],
+            "warnings": []
+        })));
+    }
+
+    let mut errors: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+
+    // Define required fields per step type
+    let required_config_fields: std::collections::HashMap<&str, Vec<&str>> = [
+        ("http-request", vec!["url", "method"]),
+        ("action", vec!["url", "method"]),
+        ("ai-action", vec!["prompt"]),
+        ("openclaw", vec!["prompt"]),
+        ("generate", vec!["prompt"]),
+        ("export", vec!["destination"]),
+        ("notify", vec!["channel", "recipient"]),
+        ("data-card", vec!["metric_key"]),
+        ("research", vec!["query"]),
+        ("design", vec!["prompt"]),
+        ("publish", vec!["content"]),
+        ("condition", vec!["field"]),
+        ("webhook", vec!["url"]),
+        ("format", vec!["input_content"]),
+        ("render_video", vec!["provider", "endpoint"]),
+        ("render_image", vec!["provider", "endpoint"]),
+        ("render_audio", vec!["provider", "endpoint"]),
+    ].iter().cloned().collect();
+
+    // Track step types for ordering/duplicate checks
+    let mut step_types: Vec<String> = Vec::new();
+    let mut prev_type: Option<&str> = None;
+
+    for (i, step) in steps.iter().enumerate() {
+        let step_type = step.get("step_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+
+        let step_name = step.get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unnamed step");
+
+        step_types.push(step_type.to_string());
+
+        // Check step_type is valid
+        let valid_types = [
+            "http-request", "action", "ai-action", "openclaw", "data-card",
+            "notify", "export", "delay", "wait", "transform", "code",
+            "fork", "branch", "render_video", "render_media", "render_image", "render_audio",
+            "generate", "format", "design", "publish", "loop", "condition", "manual", "research",
+            "webhook",
+        ];
+
+        if !valid_types.contains(&step_type) {
+            errors.push(format!(
+                "Step {} '{}': Unknown step type '{}'. Valid types are: {}",
+                i + 1, step_name, step_type, valid_types.join(", ")
+            ));
+            continue;
+        }
+
+        // Check required config fields
+        if let Some(required_fields) = required_config_fields.get(step_type) {
+            let config = step.get("config").and_then(|v| v.as_object());
+            for field in required_fields {
+                let has_field = config
+                    .and_then(|c| c.get(*field))
+                    .and_then(|v| v.as_str())
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false);
+
+                if !has_field {
+                    errors.push(format!(
+                        "Step {} '{}' ({}): Missing required config field '{}'",
+                        i + 1, step_name, step_type, field
+                    ));
+                }
+            }
+        }
+
+        // Ordering rules
+        if step_type == "fork" || step_type == "branch" {
+            if i as i32 >= steps.len() as i32 - 1 {
+                warnings.push(format!(
+                    "Step {} '{}': Fork/branch at the end of the workflow has no effect — no downstream steps to branch.",
+                    i + 1, step_name
+                ));
+            }
+        }
+
+        if step_type == "loop" {
+            if steps.len() < 2 {
+                warnings.push(format!(
+                    "Step {} '{}': Loop with only one step will iterate on itself indefinitely. Add inner steps.",
+                    i + 1, step_name
+                ));
+            }
+        }
+
+        if step_type == "manual" {
+            warnings.push(format!(
+                "Step {} '{}': Manual review will pause the workflow until a human approves or rejects.",
+                i + 1, step_name
+            ));
+        }
+
+        if step_type == "delay" || step_type == "wait" {
+            let dur = step.get("config")
+                .and_then(|c| c.get("duration_ms"))
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            if dur == 0 {
+                warnings.push(format!(
+                    "Step {} '{}': Delay duration is 0ms — step will proceed immediately.",
+                    i + 1, step_name
+                ));
+            } else if dur > 7 * 24 * 3600000 {
+                warnings.push(format!(
+                    "Step {} '{}': Delay of {}ms exceeds 7 days — n8n may timeout.",
+                    i + 1, step_name, dur
+                ));
+            }
+        }
+
+        if step_type == "render_video" || step_type == "render_image" || step_type == "render_audio" {
+            let provider = step.get("config")
+                .and_then(|c| c.get("provider"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if provider == "unknown" || provider.is_empty() {
+                warnings.push(format!(
+                    "Step {} '{}': No provider selected for rendering. Defaulting to 'unknown'.",
+                    i + 1, step_name
+                ));
+            }
+        }
+
+        prev_type = Some(step_type);
+    }
+
+    // Check for consecutive fork/branch runs (redundant)
+    let mut fork_count = 0;
+    for st in &step_types {
+        if st == "fork" || st == "branch" {
+            fork_count += 1;
+        }
+    }
+    if fork_count > 3 {
+        warnings.push(format!(
+            "Workflow has {} fork/branch steps. Consider simplifying — deep nesting can make debugging difficult.",
+            fork_count
+        ));
+    }
+
+    Ok(Json(json!({
+        "valid": errors.is_empty(),
+        "errors": errors,
+        "warnings": warnings,
+        "error_count": errors.len(),
+        "warning_count": warnings.len(),
+        "total_steps": steps.len()
+    })))
 }

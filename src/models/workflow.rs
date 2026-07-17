@@ -14,6 +14,8 @@ pub struct Workflow {
     pub tags: Option<serde_json::Value>,
     pub is_active: bool,
     pub surface_id: Option<Uuid>,
+    pub trigger_type: Option<String>,
+    pub trigger_config: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -38,6 +40,8 @@ pub struct CreateWorkflowRequest {
     pub lifecycle_summary: Option<String>,
     pub tags: Option<serde_json::Value>,
     pub surface_id: Option<Uuid>,
+    pub trigger_type: Option<String>,
+    pub trigger_config: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -47,6 +51,8 @@ pub struct UpdateWorkflowRequest {
     pub category: Option<String>,
     pub lifecycle_summary: Option<String>,
     pub tags: Option<serde_json::Value>,
+    pub trigger_type: Option<String>,
+    pub trigger_config: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]

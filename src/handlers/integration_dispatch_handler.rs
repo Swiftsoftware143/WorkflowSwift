@@ -7,6 +7,7 @@ use crate::AppState;
 use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;
 use crate::handlers::provider_keys_handler;
+use crate::security::webhook_security;
 
 /// List available provider presets
 pub async fn list_provider_presets(
@@ -40,6 +41,20 @@ pub async fn dispatch_integration(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let target_id_str = params.get("target_id").ok_or_else(|| AppError::BadRequest("target_id required".into()))?;
     let target_id = Uuid::parse_str(target_id_str).map_err(|_| AppError::BadRequest("Invalid target_id".into()))?;
+
+    // Security check before dispatching
+    let (webhook_url, allowed_domains, daily_limit): (String, Vec<String>, i32) = sqlx::query_as::<_, (String, Vec<String>, i32)>(
+        "SELECT COALESCE(webhook_url, ''), COALESCE(allowed_domains, ARRAY[]::TEXT[])::text[], COALESCE(daily_limit, 1000)
+         FROM integration_targets WHERE id = $1 AND aid = $2 AND is_active = true"
+    )
+    .bind(target_id)
+    .bind(aid)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?
+    .ok_or_else(|| AppError::NotFound("Integration target not found or inactive".into()))?;
+
+    webhook_security::check_webhook_security(&state.db, &target_id, &webhook_url, &allowed_domains, daily_limit).await?;
 
     let result = forward_dispatch(&state.db, target_id, aid, &payload).await
         .map_err(|e| AppError::Internal(format!("Dispatch failed: {}", e)))?;

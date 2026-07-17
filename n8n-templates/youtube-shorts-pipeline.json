@@ -1,0 +1,245 @@
+{
+  "name": "YouTube Shorts Pipeline — Auto Video Generator",
+  "nodes": [
+    {
+      "id": "cronTrigger",
+      "name": "Weekly Trigger (Cron)",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            { "mode": "everyWeek", "hour": 3, "minute": 0, "weekday": 1 }
+          ]
+        }
+      }
+    },
+    {
+      "id": "manualTrigger",
+      "name": "Manual Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 500],
+      "parameters": {
+        "path": "youtube-shorts/generate",
+        "options": {}
+      },
+      "webhookId": "yt-shorts-trigger"
+    },
+    {
+      "id": "mergeTriggers",
+      "name": "Merge Triggers",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [450, 300],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition"
+      }
+    },
+    {
+      "id": "fetchPages",
+      "name": "Fetch Trap Door Pages (Batch)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [650, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "http://localhost:3001/api/v1/directories/{{ $json.directory_id }}/trap-doors/pages?status=published&limit=100&offset={{ $json.offset || 0 }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $json.token }}" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "paginate",
+      "name": "Paginate (Loop)",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 2,
+      "position": [850, 300],
+      "parameters": {
+        "batchSize": 50
+      }
+    },
+    {
+      "id": "generateScript",
+      "name": "Generate Script (LLM)",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 4,
+      "position": [1050, 300],
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "prompt": "Write a 30-second YouTube Shorts script for the following topic. Use this exact structure:\n\n---\n[Hook - 5 seconds]: One sentence that grabs attention about {{ $json.title }}\n[Body - 20 seconds]: Useful local insight about {{ $json.title }}\n[CTA - 5 seconds]: Check out the full directory at yourdirectory.com for more {{ $json.service_name || 'providers' }} in {{ $json.city || 'your city' }}.\n---\n\nKeep it under 60 words total. Conversational tone. No music cues. Just the spoken script.",
+        "options": {
+          "maxTokens": 200,
+          "temperature": 0.7
+        }
+      }
+    },
+    {
+      "id": "cleanScript",
+      "name": "Clean & Format Script Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300],
+      "parameters": {
+        "jsCode": "const items = $input.all();\nreturn items.map(item => ({\n  json: {\n    slug: item.json.slug,\n    title: item.json.title,\n    script: item.json.choices?.[0]?.message?.content || item.json.response || item.json.script || item.json.output,\n    service: item.json.service_name || item.json.service || '',\n    city: item.json.city || '',\n    day: item.json.day_tags?.[0] || '',\n    time: item.json.time_tags?.[0] || ''\n  }\n}));"
+      }
+    },
+    {
+      "id": "checkCredits",
+      "name": "Check WorkflowSwift Credits",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1450, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "http://workflowswift:8085/api/credits/balance",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "Authorization", "value": "Bearer {{ $json.headers.authorization }}" }]
+        }
+      }
+    },
+    {
+      "id": "deductCredit",
+      "name": "Deduct 1 Credit",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1650, 200],
+      "parameters": {
+        "method": "POST",
+        "url": "http://workflowswift:8085/api/credits/deduct",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Authorization", "value": "Bearer {{ $json.auth_header }}" }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [{ "name": "amount", "value": 1 }]
+        }
+      }
+    },
+    {
+      "id": "elevenlabsAudio",
+      "name": "ElevenLabs TTS (Audio Generation)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1850, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.elevenlabs.io/v1/text-to-speech/{{ $json.voice_id || '21m00Tcm4TlvDq8ikWAM' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [{ "name": "xi-api-key", "value": "={{ $json.elevenlabs_key }}" }]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            { "name": "text", "value": "={{ $json.script }}" },
+            { "name": "model_id", "value": "eleven_monolingual_v1" },
+            { "name": "voice_settings", "value": "{\"stability\":0.5,\"similarity_boost\":0.75}" }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "saveAudioLocal",
+      "name": "Save Audio to Disk",
+      "type": "n8n-nodes-base.writeBinaryFile",
+      "typeVersion": 1,
+      "position": [2050, 300],
+      "parameters": {
+        "fileName": "=/var/www/funnelswift/yt-shorts/audio/{{ $json.slug }}.mp3",
+        "dataPropertyName": "data"
+      }
+    },
+    {
+      "id": "compileVideo",
+      "name": "Compile Video (SSH/FFmpeg)",
+      "type": "n8n-nodes-base.ssh",
+      "typeVersion": 1,
+      "position": [2250, 300],
+      "parameters": {
+        "command": "ffmpeg -y -i /var/www/funnelswift/yt-shorts/templates/background.mp4 -i /var/www/funnelswift/yt-shorts/audio/{{ $json.slug }}.mp3 -vf \"drawtext=text='{{ $json.title }}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf:fontsize=28:fontcolor=white:x=(w-text_w)/2:y=50:enable='between(t,0,3)',drawtext=text='{{ $json.service }} in {{ $json.city }}':fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf:fontsize=20:fontcolor=white:x=(w-text_w)/2:y=(h-text_h)-50:enable='between(t,28,30)'\" -c:v libx264 -c:a aac -shortest -preset ultrafast /var/www/funnelswift/yt-shorts/videos/{{ $json.slug }}.mp4 2>&1",
+        "timeout": 120
+      }
+    },
+    {
+      "id": "uploadYouTube",
+      "name": "Upload to YouTube",
+      "type": "n8n-nodes-base.youtube",
+      "typeVersion": 2,
+      "position": [2450, 300],
+      "parameters": {
+        "videoCategoryId": "22",
+        "title": "={{ $json.title }}",
+        "description": "=Find {{ $json.service }} providers in {{ $json.city }} open {{ $json.time }} on {{ $json.day }}. Browse the full directory at yourdirectory.com.\n\n#{{ $json.service.replace(' ','') }} #{{ $json.city.replace(' ','') }} #{{ $json.day }}Hours",
+        "tags": "={{ $json.service }},{{ $json.city }},local services,{{ $json.day }},{{ $json.time }},business directory",
+        "privacyStatus": "public",
+        "madeForKids": false,
+        "binaryData": true,
+        "binaryPropertyName": "data",
+        "options": {
+          "selfDeclaredMadeForKids": false,
+          "notifySubscribers": false
+        }
+      }
+    },
+    {
+      "id": "updateDbStatus",
+      "name": "Update DB — Video Generated",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2650, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3001/api/v1/programmatic-pages/{{ $json.slug }}/track",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [{ "name": "event", "value": "video_generated" }]
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Weekly Trigger (Cron)": { "main": [[ { "node": "Merge Triggers", "type": "main", "index": 0 } ]] },
+    "Manual Webhook": { "main": [[ { "node": "Merge Triggers", "type": "main", "index": 1 } ]] },
+    "Merge Triggers": { "main": [[ { "node": "Fetch Trap Door Pages (Batch)", "type": "main", "index": 0 } ]] },
+    "Fetch Trap Door Pages (Batch)": { "main": [[ { "node": "Paginate (Loop)", "type": "main", "index": 0 } ]] },
+    "Paginate (Loop)": { "main": [[ { "node": "Generate Script (LLM)", "type": "main", "index": 0 } ]] },
+    "Generate Script (LLM)": { "main": [[ { "node": "Clean & Format Script Output", "type": "main", "index": 0 } ]] },
+    "Clean & Format Script Output": { "main": [[ { "node": "Check WorkflowSwift Credits", "type": "main", "index": 0 } ]] },
+    "Check WorkflowSwift Credits": { "main": [[ { "node": "Deduct 1 Credit", "type": "main", "index": 0 } ]] },
+    "Deduct 1 Credit": { "main": [[ { "node": "ElevenLabs TTS (Audio Generation)", "type": "main", "index": 0 } ]] },
+    "ElevenLabs TTS (Audio Generation)": { "main": [[ { "node": "Save Audio to Disk", "type": "main", "index": 0 } ]] },
+    "Save Audio to Disk": { "main": [[ { "node": "Compile Video (SSH/FFmpeg)", "type": "main", "index": 0 } ]] },
+    "Compile Video (SSH/FFmpeg)": { "main": [[ { "node": "Upload to YouTube", "type": "main", "index": 0 } ]] },
+    "Upload to YouTube": { "main": [[ { "node": "Update DB — Video Generated", "type": "main", "index": 0 } ]] }
+  },
+  "tags": ["youtube", "shorts", "seo", "video", "automation", "trap-doors"]
+}
