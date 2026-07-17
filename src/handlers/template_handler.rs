@@ -79,13 +79,14 @@ pub async fn list_templates(
     }
 
     // For account-owned templates, combine with plan capabilities
-    // Plan capabilities control which public templates are visible/usable
+    // Also include PUBLIC templates (General category) that show for everyone
     let templates = if let Some(ref industry_slug) = query.industry {
-        if let Some(surface_id) = query.surface {
+        let templates: Vec<WorkflowTemplate> = if let Some(surface_id) = query.surface {
             sqlx::query_as::<_, WorkflowTemplate>(
-                r#"SELECT wt.* FROM workflow_templates wt
+                r#"SELECT DISTINCT wt.* FROM workflow_templates wt
                    INNER JOIN industry_templates it ON it.template_id = wt.id
-                   WHERE wt.aid = $1 AND it.industry_slug = $2
+                   WHERE (wt.aid = $1 OR (wt.is_public = true AND wt.category = 'general'))
+                   AND it.industry_slug = $2
                    AND (wt.surface_id = $3 OR wt.surface_id IS NULL)
                    ORDER BY wt.name ASC"#
             )
@@ -96,19 +97,21 @@ pub async fn list_templates(
             .await?
         } else {
             sqlx::query_as::<_, WorkflowTemplate>(
-                r#"SELECT wt.* FROM workflow_templates wt
+                r#"SELECT DISTINCT wt.* FROM workflow_templates wt
                    INNER JOIN industry_templates it ON it.template_id = wt.id
-                   WHERE wt.aid = $1 AND it.industry_slug = $2
+                   WHERE (wt.aid = $1 OR (wt.is_public = true AND wt.category = 'general'))
+                   AND it.industry_slug = $2
                    ORDER BY wt.name ASC"#
             )
             .bind(aid)
             .bind(industry_slug)
             .fetch_all(&state.db)
             .await?
-        }
+        };
+        templates
     } else if let Some(surface_id) = query.surface {
         sqlx::query_as::<_, WorkflowTemplate>(
-            "SELECT * FROM workflow_templates WHERE aid = $1 AND (surface_id = $2 OR surface_id IS NULL) ORDER BY name ASC",
+            "SELECT DISTINCT * FROM workflow_templates WHERE (aid = $1 OR (is_public = true AND category = 'general')) AND (surface_id = $2 OR surface_id IS NULL) ORDER BY name ASC",
         )
         .bind(aid)
         .bind(surface_id)
@@ -116,14 +119,14 @@ pub async fn list_templates(
         .await?
     } else {
         sqlx::query_as::<_, WorkflowTemplate>(
-            "SELECT * FROM workflow_templates WHERE aid = $1 ORDER BY name ASC",
+            "SELECT DISTINCT * FROM workflow_templates WHERE aid = $1 OR (is_public = true AND category = 'general') ORDER BY name ASC",
         )
         .bind(aid)
         .fetch_all(&state.db)
         .await?
     };
 
-    // Also attach what public templates are available based on the user's plan + industries
+    // Also attach what public templates are available based on the plan + industries    // Also attach what public templates are available based on the user's plan + industries
     let available_public: Vec<serde_json::Value> = if let Some(pid) = plan_id {
         sqlx::query(
             r#"SELECT wt.id::text, wt.name, wt.description, wt.category, tc.name as industry_name
