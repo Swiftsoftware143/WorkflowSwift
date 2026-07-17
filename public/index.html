@@ -1643,7 +1643,7 @@ async function deleteProspectingSearch(id){
   catch(e){showToast(e.message,'error')}
 }
 
-/* ===== CLIENTS ===== */
+/* ===== CLIENTS (full CRUD) ===== */
 let clients=[],clPage=1,clSearch='';
 async function renderClients(){
   try{clients=await api('/clients')}catch(e){clients=[]}
@@ -1656,16 +1656,54 @@ function renderClientsTable(){
   const page=filtered.slice(start,start+20);
   const tp=Math.ceil(filtered.length/20)||1;
   const mc=$('main-content');
-  mc.innerHTML='<div class="top-bar"><h1>👥 Clients</h1></div>'
+  mc.innerHTML='<div class="top-bar"><h1>👥 Clients</h1><button class="btn-primary" onclick="showClientForm()">+ Add Client</button></div>'
     +'<div style="margin-bottom:12px"><input placeholder="Search clients..." oninput="clSearch=this.value;clPage=1;renderClientsTable()" style="max-width:300px"></div>'
     +'<div class="card" style="padding:0;overflow-x:auto"><table>'
-    +'<tr><th>Name</th><th>Email</th><th>Company</th><th>Status</th><th>Created</th></tr>'
-    +page.map(c=>'<tr><td>'+esc(c.name||'--')+'</td><td>'+esc(c.email||'--')+'</td><td>'+esc(c.company||c.company_name||'--')+'</td><td><span class="badge badge-'+(c.status==='active'?'active':'inactive')+'">'+esc(c.status||'active')+'</span></td><td>'+(c.created_at?new Date(c.created_at).toLocaleDateString():'--')+'</td></tr>').join('')
+    +'<tr><th>Name</th><th>Email</th><th>Company</th><th>Status</th><th>Created</th><th>Actions</th></tr>'
+    +page.map(c=>'<tr><td>'+esc(c.name||'--')+'</td><td>'+esc(c.email||'--')+'</td><td>'+esc(c.company||c.company_name||'--')+'</td><td><span class="badge badge-'+(c.status==='active'?'active':'inactive')+'">'+esc(c.status||'active')+'</span></td><td>'+(c.created_at?new Date(c.created_at).toLocaleDateString():'--')+'</td>'
+      +'<td><button class="btn-secondary btn-sm" onclick="showClientForm(\''+c.id+'\')">✏️</button> <button class="btn-danger btn-sm" onclick="deleteClient(\''+c.id+'\',\''+esc(c.name)+'\')">🗑️</button></td>'
+      +'</tr>').join('')
     +'</table></div>'
     +'<div class="pagination"><button onclick="clPage=Math.max(1,clPage-1);renderClientsTable()" '+(clPage<=1?'disabled':'')+'>← Prev</button><span>Page '+clPage+' of '+tp+'</span><button onclick="clPage=Math.min(tp,clPage+1);renderClientsTable()" '+(clPage>=tp?'disabled':'')+'>Next →</button></div>';
 }
 
-/* ===== INVOICES ===== */
+async function showClientForm(id){
+  let c={};
+  if(id){
+    try{
+      const data=await api('/clients');
+      const found=(data?.clients||data?.data||data||[]).find(x=>x.id===id);
+      if(found)c=found;
+    }catch(e){}
+  }
+  const isEdit=!!id;
+  const mc=$('main-content');
+  mc.insertAdjacentHTML('beforeend','<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
+    +'<h2>'+(isEdit?'Edit Client: '+esc(c.name):'Add New Client')+'</h2>'
+    +'<label>Name</label><input id="cl-name" value="'+esc(c.name||'')+'" placeholder="Client name">'
+    +'<label>Email</label><input id="cl-email" value="'+esc(c.email||'')+'" placeholder="client@example.com">'
+    +'<label>Company</label><input id="cl-company" value="'+esc(c.company||c.company_name||'')+'" placeholder="Company name">'
+    +'<label>Status</label><select id="cl-status"><option value="active" '+(c.status==='active'?'selected':'')+'>Active</option><option value="inactive" '+(c.status==='inactive'?'selected':'')+'>Inactive</option></select>'
+    +'<div class="actions"><button class="btn-secondary" onclick="closeModal()">Cancel</button><button class="btn-primary" onclick="saveClient(\''+(id||'')+'\')">'+(isEdit?'Update':'Create')+'</button></div></div></div>');
+}
+
+async function saveClient(id){
+  const name=$('cl-name')?.value; if(!name){showToast('Name required','error');return}
+  const payload={name,email:$('cl-email')?.value,company:$('cl-company')?.value,status:$('cl-status')?.value||'active'};
+  try{
+    if(id){await api('/clients/'+id,{method:'PUT',body:JSON.stringify(payload)});showToast('Client updated')}
+    else{await api('/clients',{method:'POST',body:JSON.stringify(payload)});showToast('Client created')}
+    closeModal(); await renderClients();
+  }catch(e){showToast(e.message,'error')}
+}
+
+async function deleteClient(id,name){
+  if(!confirm('Delete client "'+name+'"?'))return;
+  try{await api('/clients/'+id,{method:'DELETE'});showToast('Client deleted');await renderClients()}
+  catch(e){showToast(e.message,'error')}
+}
+
+/* ===== INVOICES (full CRUD) ===== */
 let invoices=[],invPage=1;
 async function renderInvoices(){
   try{invoices=await api('/invoices')}catch(e){invoices=[]}
@@ -1677,29 +1715,110 @@ function renderInvoicesTable(){
   const page=invoices.slice(start,start+20);
   const tp=Math.ceil(invoices.length/20)||1;
   const mc=$('main-content');
-  mc.innerHTML='<div class="top-bar"><h1>💰 Invoices</h1></div>'
+  mc.innerHTML='<div class="top-bar"><h1>💰 Invoices</h1><button class="btn-primary" onclick="showInvoiceForm()">+ New Invoice</button></div>'
     +'<div class="card" style="padding:0;overflow-x:auto"><table>'
-    +'<tr><th>#</th><th>Client</th><th>Amount</th><th>Status</th><th>Due Date</th></tr>'
-    +page.map(i=>'<tr><td>'+esc(i.invoice_number||i.id?.slice(0,8)||'--')+'</td><td>'+esc(i.client_name||i.client?.name||'--')+'</td><td>'+(i.amount? '$'+Number(i.amount).toFixed(2):'--')+'</td><td><span class="badge badge-'+(i.status==='paid'?'active':i.status==='overdue'?'inactive':'pending')+'">'+esc(i.status||'pending')+'</span></td><td>'+(i.due_date?new Date(i.due_date).toLocaleDateString():'--')+'</td></tr>').join('')
+    +'<tr><th>#</th><th>Client</th><th>Amount</th><th>Status</th><th>Due Date</th><th>Actions</th></tr>'
+    +page.map(i=>'<tr><td>'+esc(i.invoice_number||i.id?.slice(0,8)||'--')+'</td><td>'+esc(i.client_name||i.client?.name||'--')+'</td><td>'+(i.amount?'$'+Number(i.amount).toFixed(2):'--')+'</td><td><span class="badge badge-'+(i.status==='paid'?'active':i.status==='overdue'?'inactive':'pending')+'">'+esc(i.status||'pending')+'</span></td><td>'+(i.due_date?new Date(i.due_date).toLocaleDateString():'--')+'</td>'
+      +'<td><button class="btn-secondary btn-sm" onclick="showInvoiceForm(\''+i.id+'\')">✏️</button> <button class="btn-danger btn-sm" onclick="deleteInvoice(\''+i.id+'\')">🗑️</button></td>'
+      +'</tr>').join('')
     +'</table></div>'
     +'<div class="pagination"><button onclick="invPage=Math.max(1,invPage-1);renderInvoicesTable()" '+(invPage<=1?'disabled':'')+'>← Prev</button><span>Page '+invPage+' of '+tp+'</span><button onclick="invPage=Math.min(tp,invPage+1);renderInvoicesTable()" '+(invPage>=tp?'disabled':'')+'>Next →</button></div>';
 }
 
-/* ===== CREDITS ===== */
-async function renderCredits(){
-  let creditData;
-  try{creditData=await api('/credits/balance')}catch(e){creditData=null}
+async function showInvoiceForm(id){
+  let inv={};
+  if(id){
+    try{const data=await api('/invoices');const found=(data?.invoices||data?.data||data||[]).find(x=>x.id===id);if(found)inv=found}catch(e){}
+  }
   const mc=$('main-content');
-  mc.innerHTML='<h1>⭐ Credit Management</h1>'
-    +'<div class="grid-4">'
-    +  '<div class="card stat-card"><div class="num">'+(creditData?.balance||0)+'</div><div class="label">Total Credits</div></div>'
-    +  '<div class="card stat-card"><div class="num">'+(creditData?.used||0)+'</div><div class="label">Used</div></div>'
-    +  '<div class="card stat-card"><div class="num">'+(creditData?.available||creditData?.balance||0)+'</div><div class="label">Available</div></div>'
-    +'</div>'
-    +'<div class="card"><p class="empty">Credit transactions and management coming soon</p></div>';
+  mc.insertAdjacentHTML('beforeend','<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
+    +'<h2>'+(id?'Edit Invoice':'New Invoice')+'</h2>'
+    +'<label>Client Name</label><input id="inv-client" value="'+esc(inv.client_name||'')+'" placeholder="Client name">'
+    +'<label>Amount</label><input id="inv-amount" type="number" step="0.01" value="'+(inv.amount||'')+'" placeholder="0.00">'
+    +'<label>Status</label><select id="inv-status"><option value="pending" '+(inv.status==='pending'?'selected':'')+'>Pending</option><option value="paid" '+(inv.status==='paid'?'selected':'')+'>Paid</option><option value="overdue" '+(inv.status==='overdue'?'selected':'')+'>Overdue</option><option value="cancelled" '+(inv.status==='cancelled'?'selected':'')+'>Cancelled</option></select>'
+    +'<label>Due Date</label><input id="inv-due" type="date" value="'+(inv.due_date?inv.due_date.slice(0,10):'')+'">'
+    +'<label>Invoice #</label><input id="inv-number" value="'+esc(inv.invoice_number||'')+'" placeholder="INV-001">'
+    +'<div class="actions"><button class="btn-secondary" onclick="closeModal()">Cancel</button><button class="btn-primary" onclick="saveInvoice(\''+(id||'')+'\')">'+(id?'Update':'Create')+'</button></div></div></div>');
 }
 
-/* ===== INSTANCES ===== */
+async function saveInvoice(id){
+  const payload={client_name:$('inv-client')?.value,amount:parseFloat($('inv-amount')?.value)||0,status:$('inv-status')?.value||'pending',due_date:$('inv-due')?.value||null,invoice_number:$('inv-number')?.value||null};
+  if(!payload.client_name){showToast('Client name required','error');return}
+  try{
+    if(id){await api('/invoices/'+id,{method:'PUT',body:JSON.stringify(payload)});showToast('Invoice updated')}
+    else{await api('/invoices',{method:'POST',body:JSON.stringify(payload)});showToast('Invoice created')}
+    closeModal();await renderInvoices();
+  }catch(e){showToast(e.message,'error')}
+}
+
+async function deleteInvoice(id){
+  if(!confirm('Delete this invoice?'))return;
+  try{await api('/invoices/'+id,{method:'DELETE'});showToast('Invoice deleted');await renderInvoices()}
+  catch(e){showToast(e.message,'error')}
+}
+
+/* ===== CREDITS (full management) ===== */
+async function renderCredits(){
+  let creditData,pkgs=[],txns=[];
+  try{creditData=await api('/credits/balance')}catch(e){creditData=null}
+  try{const d=await api('/credits/packages');pkgs=d?.packages||d?.data||[]}catch(e){}
+  try{const d=await api('/credits/transactions');txns=d?.transactions||d?.data||d||[]}catch(e){}
+  if(!Array.isArray(txns))txns=[];
+  const mc=$('main-content');
+  let html='<h1>⭐ Credit Management</h1><div class="grid-4">'
+    +'<div class="card stat-card"><div class="num">'+(creditData?.balance||0)+'</div><div class="label">Total Credits</div></div>'
+    +'<div class="card stat-card"><div class="num">'+(creditData?.used||0)+'</div><div class="label">Used</div></div>'
+    +'<div class="card stat-card"><div class="num">'+(creditData?.available||creditData?.balance||0)+'</div><div class="label">Available</div></div>'
+    +'</div>';
+  // Packages
+  if(pkgs.length){
+    html+='<div class="card"><h3>📦 Credit Packages</h3><table><tr><th>Name</th><th>Credits</th><th>Price</th></tr>'
+      +pkgs.map(p=>'<tr><td>'+esc(p.name)+'</td><td>'+p.credits+'</td><td>$'+Number(p.price).toFixed(2)+'</td></tr>').join('')+'</table></div>';
+  }else{
+    html+='<div class="card"><div class="top-bar" style="margin:0 0 12px 0"><h3 style="margin:0">📦 Credit Packages</h3><button class="btn-primary btn-sm" onclick="showCreditPackageForm()">+ Add Package</button></div><div class="empty">No packages configured. Create one.</div></div>';
+  }
+  // Transactions
+  html+='<div class="card" style="padding:0;overflow-x:auto"><h3 style="padding:16px 20px 0;margin:0">📋 Transaction History</h3><table>'
+    +'<tr><th>Type</th><th>Amount</th><th>Description</th><th>Date</th></tr>'
+    +(txns.length?txns.map(t=>'<tr><td>'+esc(t.transaction_type||t.type||'--')+'</td><td>'+(t.amount?Number(t.amount).toLocaleString():'--')+'</td><td>'+esc(t.description||'--')+'</td><td>'+(t.created_at?new Date(t.created_at).toLocaleDateString():'--')+'</td></tr>').join(''):'<tr><td colspan="4" class="empty">No transactions yet</td></tr>')
+    +'</table></div>';
+  html+='<div class="card"><button class="btn-primary" onclick="showCreditPackageForm()">+ Add Package</button> <button class="btn-secondary" onclick="showDeductCreditsModal()">− Deduct Credits</button></div>';
+  mc.innerHTML=html;
+}
+
+async function showCreditPackageForm(){
+  const mc=$('main-content');
+  mc.insertAdjacentHTML('beforeend','<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
+    +'<h2>Add Credit Package</h2>'
+    +'<label>Package Name</label><input id="cp-name" placeholder="e.g. Starter 100">'
+    +'<label>Credits</label><input id="cp-credits" type="number" min="1" placeholder="100">'
+    +'<label>Price ($)</label><input id="cp-price" type="number" step="0.01" placeholder="9.99">'
+    +'<div class="actions"><button class="btn-secondary" onclick="closeModal()">Cancel</button><button class="btn-primary" onclick="saveCreditPackage()">Create</button></div></div></div>');
+}
+
+async function saveCreditPackage(){
+  const payload={name:$('cp-name')?.value,credits:parseInt($('cp-credits')?.value)||0,price:parseFloat($('cp-price')?.value)||0};
+  if(!payload.name||!payload.credits){showToast('Name and credits required','error');return}
+  try{await api('/credits/package',{method:'POST',body:JSON.stringify(payload)});showToast('Package created');closeModal();await renderCredits()}catch(e){showToast(e.message,'error')}
+}
+
+async function showDeductCreditsModal(){
+  const mc=$('main-content');
+  mc.insertAdjacentHTML('beforeend','<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
+    +'<h2>Deduct Credits</h2>'
+    +'<label>Amount</label><input id="deduct-amount" type="number" min="1" placeholder="10">'
+    +'<label>Reason</label><input id="deduct-reason" placeholder="e.g. Workflow execution">'
+    +'<div class="actions"><button class="btn-secondary" onclick="closeModal()">Cancel</button><button class="btn-primary" onclick="submitDeductCredits()">Deduct</button></div></div></div>');
+}
+
+async function submitDeductCredits(){
+  const amount=parseInt($('deduct-amount')?.value)||0;
+  if(!amount){showToast('Amount required','error');return}
+  const description=$('deduct-reason')?.value||'Manual deduction';
+  try{await api('/credits/deduct',{method:'POST',body:JSON.stringify({amount,description})});showToast(amount+' credits deducted');closeModal();await renderCredits()}catch(e){showToast(e.message,'error')}
+}
+
+/* ===== INSTANCES (with detail view) ===== */
 let instances=[],instPage=1;
 async function renderInstances(){
   try{instances=await api('/instances')}catch(e){instances=[]}
@@ -1713,10 +1832,26 @@ function renderInstancesTable(){
   const mc=$('main-content');
   mc.innerHTML='<div class="top-bar"><h1>📦 Workflow Instances</h1></div>'
     +'<div class="card" style="padding:0;overflow-x:auto"><table>'
-    +'<tr><th>ID</th><th>Workflow</th><th>Status</th><th>Step</th><th>Started</th></tr>'
-    +page.map(i=>'<tr><td>'+esc(i.id?.slice(0,8)||'--')+'</td><td>'+esc(i.workflow_name||i.workflow?.name||'--')+'</td><td><span class="badge badge-'+(i.status==='completed'?'active':i.status==='failed'?'inactive':'pending')+'">'+esc(i.status||'running')+'</span></td><td>'+(i.current_step||i.step||0)+'</td><td>'+(i.created_at?new Date(i.created_at).toLocaleDateString():'--')+'</td></tr>').join('')
+    +'<tr><th>ID</th><th>Workflow</th><th>Status</th><th>Step</th><th>Started</th><th>Actions</th></tr>'
+    +page.map(i=>'<tr><td>'+esc(i.id?.slice(0,8)||'--')+'</td><td>'+esc(i.workflow_name||i.workflow?.name||'--')+'</td><td><span class="badge badge-'+(i.status==='completed'?'active':i.status==='failed'?'inactive':'pending')+'">'+esc(i.status||'running')+'</span></td><td>'+(i.current_step||i.step||0)+'</td><td>'+(i.created_at?new Date(i.created_at).toLocaleDateString():'--')+'</td>'
+      +'<td><button class="btn-secondary btn-sm" onclick="showInstanceDetail(\''+i.id+'\')">👁️</button></td>'
+      +'</tr>').join('')
     +'</table></div>'
     +'<div class="pagination"><button onclick="instPage=Math.max(1,instPage-1);renderInstancesTable()" '+(instPage<=1?'disabled':'')+'>← Prev</button><span>Page '+instPage+' of '+tp+'</span><button onclick="instPage=Math.min(tp,instPage+1);renderInstancesTable()" '+(instPage>=tp?'disabled':'')+'>Next →</button></div>';
+}
+
+async function showInstanceDetail(id){
+  let inst;
+  try{const data=await api('/instances/'+id);inst=data?.instance||data}catch(e){showToast('Failed to load instance','error');return}
+  const mc=$('main-content');
+  mc.insertAdjacentHTML('beforeend','<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
+    +'<h2>Instance: '+esc(inst.id?.slice(0,8)||'')+'</h2>'
+    +'<label>Workflow</label><div style="font-size:13px;color:var(--text)">'+esc(inst.workflow_name||inst.workflow?.name||'--')+'</div>'
+    +'<label>Status</label><div style="font-size:13px"><span class="badge badge-'+(inst.status==='completed'?'active':inst.status==='failed'?'inactive':'pending')+'">'+esc(inst.status||'--')+'</span></div>'
+    +'<label>Current Step</label><div style="font-size:13px">'+(inst.current_step||inst.step||0)+'/'+(inst.total_steps||'?')+'</div>'
+    +'<label>Started</label><div style="font-size:13px">'+(inst.created_at?new Date(inst.created_at).toLocaleString():'--')+'</div>'
+    +'<label>Output / Result</label><pre style="background:var(--bg);padding:12px;border-radius:var(--radius);font-size:11px;overflow-x:auto;max-height:200px;margin-top:4px">'+esc(JSON.stringify(inst.output||inst.result||inst.step_data||{},null,2))+'</pre>'
+    +'<div class="actions"><button class="btn-secondary" onclick="closeModal()">Close</button></div></div></div>');
 }
 
 /* ===== EXTENSION ===== */
@@ -2232,87 +2367,356 @@ async function renderAutomations(){
   let data;
   try{data=await api('/automations')}catch(e){data=[]}
   if(!Array.isArray(data))data=data?.data||data?.automations||[];
-  if(data.length===0){
-    mc.innerHTML='<h1>🤖 Automations</h1><div class="empty">No automations defined yet</div>';
-    return;
-  }
-  mc.innerHTML='<h1>🤖 Automations</h1><div class="card" style="padding:0;overflow-x:auto"><table>'
-    +'<tr><th>Name</th><th>Type</th><th>Status</th><th>Actions</th></tr>'
-    +data.map(a=>'<tr><td>'+esc(a.name||'--')+'</td><td>'+esc(a.automation_type||'--')+'</td><td><span class="badge badge-'+(a.is_active?'active':'inactive')+'">'+(a.is_active?'Active':'Inactive')+'</span></td><td><button class="btn-secondary btn-sm" onclick="runAutomation(\''+esc(a.id)+'\')">▶ Run</button></td></tr>').join('')
-    +'</table></div>';
+  mc.innerHTML='<div class="top-bar"><h1>🤖 Automations</h1><button class="btn-primary" onclick="showAutomationForm()">+ New Automation</button></div>'
+    +(data.length===0?'<div class="empty">No automations defined yet</div>':'<div class="card" style="padding:0;overflow-x:auto"><table><tr><th>Name</th><th>Type</th><th>Status</th><th>Actions</th></tr>'
+    +data.map(a=>'<tr><td><strong>'+esc(a.name||'--')+'</strong></td><td>'+esc(a.automation_type||'--')+'</td><td><span class="badge badge-'+(a.is_active?'active':'inactive')+'">'+(a.is_active?'Active':'Inactive')+'</span></td>'
+      +'<td><button class="btn-secondary btn-sm" onclick="showAutomationForm(\''+a.id+'\')">✏️</button> <button class="btn-primary btn-sm" onclick="runAutomation(\''+a.id+'\')">▶ Run</button> <button class="btn-danger btn-sm" onclick="deleteAutomation(\''+a.id+'\')">🗑️</button></td></tr>').join('')+'</table></div>');
 }
+
+async function showAutomationForm(id){
+  let a={};
+  if(id){try{const data=await api('/automations');const found=(data?.automations||data?.data||data||[]).find(x=>x.id===id);if(found)a=found}catch(e){}}
+  const mc=$('main-content');
+  mc.insertAdjacentHTML('beforeend','<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
+    +'<h2>'+(id?'Edit Automation':'New Automation')+'</h2>'
+    +'<label>Name</label><input id="auto-name" value="'+esc(a.name||'')+'" placeholder="Automation name">'
+    +'<label>Type</label><input id="auto-type" value="'+esc(a.automation_type||'')+'" placeholder="e.g. daily_report, lead_alert">'
+    +'<label>Active</label><label style="display:flex;align-items:center;gap:8px;margin-top:4px"><input type="checkbox" id="auto-active" '+(a.is_active!==false?'checked':'')+'> Enabled</label>'
+    +'<div class="actions"><button class="btn-secondary" onclick="closeModal()">Cancel</button><button class="btn-primary" onclick="saveAutomation(\''+(id||'')+'\')">'+(id?'Update':'Create')+'</button></div></div></div>');
+}
+
+async function saveAutomation(id){
+  const payload={name:$('auto-name')?.value,automation_type:$('auto-type')?.value,is_active:!!$('auto-active')?.checked};
+  if(!payload.name){showToast('Name required','error');return}
+  try{
+    if(id){await api('/automations/'+id,{method:'PUT',body:JSON.stringify(payload)});showToast('Automation updated')}
+    else{await api('/automations',{method:'POST',body:JSON.stringify(payload)});showToast('Automation created')}
+    closeModal();await renderAutomations();
+  }catch(e){showToast(e.message,'error')}
+}
+
+async function deleteAutomation(id){if(!confirm('Delete this automation?'))return;try{await api('/automations/'+id,{method:'DELETE'});showToast('Automation deleted');await renderAutomations()}catch(e){showToast(e.message,'error')}}
 
 async function runAutomation(id){
-  try{
-    const res=await api('/automations/'+id+'/run',{method:'POST'});
-    showToast('Automation triggered!');
-  }catch(e){showToast(e.message,'error');}
+  try{await api('/automations/'+id+'/run',{method:'POST'});showToast('Automation triggered!')}catch(e){showToast(e.message,'error')}
 }
 
-// Deals
+// Deals (full CRUD)
 async function renderDeals(){
   const mc=$('main-content');
   let data;
   try{data=await api('/deals')}catch(e){data=[]}
   if(!Array.isArray(data))data=data?.data||data?.deals||[];
-  if(data.length===0){mc.innerHTML='<h1>💎 Deals</h1><div class="empty">No deals yet</div>';return;}
-  mc.innerHTML='<h1>💎 Deals</h1><div class="card" style="padding:0;overflow-x:auto"><table>'
-    +'<tr><th>Name</th><th>Value</th><th>Stage</th><th>Contact</th></tr>'
-    +data.map(d=>'<tr><td>'+esc(d.name||d.title||'--')+'</td><td>'+(d.value?'$'+Number(d.value).toLocaleString():'--')+'</td><td>'+esc(d.stage||'--')+'</td><td>'+esc(d.contact_name||'--')+'</td></tr>').join('')
-    +'</table></div>';
+  mc.innerHTML='<div class="top-bar"><h1>💎 Deals</h1><button class="btn-primary" onclick="showDealForm()">+ New Deal</button></div>'
+    +(data.length===0?'<div class="empty">No deals yet</div>':'<div class="card" style="padding:0;overflow-x:auto"><table><tr><th>Name</th><th>Value</th><th>Stage</th><th>Contact</th><th>Actions</th></tr>'
+    +data.map(d=>'<tr><td><strong>'+esc(d.name||d.title||'--')+'</strong></td><td>'+(d.value?'$'+Number(d.value).toLocaleString():'--')+'</td><td><span class="badge badge-'+(d.stage==='closed_won'?'active':d.stage==='closed_lost'?'inactive':'pending')+'">'+esc(d.stage||'lead')+'</span></td><td>'+esc(d.contact_name||'--')+'</td>'
+      +'<td><button class="btn-secondary btn-sm" onclick="showDealForm(\''+d.id+'\')">✏️</button> <button class="btn-danger btn-sm" onclick="deleteDeal(\''+d.id+'\')">🗑️</button></td></tr>').join('')+'</table></div>');
 }
 
-// Leads
+async function showDealForm(id){
+  let d={};
+  if(id){try{const data=await api('/deals');const found=(data?.deals||data?.data||data||[]).find(x=>x.id===id);if(found)d=found}catch(e){}}
+  const mc=$('main-content');
+  mc.insertAdjacentHTML('beforeend','<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
+    +'<h2>'+(id?'Edit Deal':'New Deal')+'</h2>'
+    +'<label>Deal Name</label><input id="dl-name" value="'+esc(d.name||d.title||'')+'" placeholder="Deal name">'
+    +'<label>Value ($)</label><input id="dl-value" type="number" step="0.01" value="'+(d.value||'')+'" placeholder="0.00">'
+    +'<label>Stage</label><select id="dl-stage"><option value="lead" '+(d.stage==='lead'?'selected':'')+'>Lead</option><option value="qualified" '+(d.stage==='qualified'?'selected':'')+'>Qualified</option><option value="proposal" '+(d.stage==='proposal'?'selected':'')+'>Proposal</option><option value="negotiation" '+(d.stage==='negotiation'?'selected':'')+'>Negotiation</option><option value="closed_won" '+(d.stage==='closed_won'?'selected':'')+'>Closed Won</option><option value="closed_lost" '+(d.stage==='closed_lost'?'selected':'')+'>Closed Lost</option></select>'
+    +'<label>Contact Name</label><input id="dl-contact" value="'+esc(d.contact_name||'')+'" placeholder="Contact name">'
+    +'<div class="actions"><button class="btn-secondary" onclick="closeModal()">Cancel</button><button class="btn-primary" onclick="saveDeal(\''+(id||'')+'\')">'+(id?'Update':'Create')+'</button></div></div></div>');
+}
+
+async function saveDeal(id){
+  const payload={name:$('dl-name')?.value,value:parseFloat($('dl-value')?.value)||0,stage:$('dl-stage')?.value||'lead',contact_name:$('dl-contact')?.value};
+  if(!payload.name){showToast('Name required','error');return}
+  try{
+    if(id){await api('/deals/'+id,{method:'PUT',body:JSON.stringify(payload)});showToast('Deal updated')}
+    else{await api('/deals',{method:'POST',body:JSON.stringify(payload)});showToast('Deal created')}
+    closeModal();await renderDeals();
+  }catch(e){showToast(e.message,'error')}
+}
+
+async function deleteDeal(id){if(!confirm('Delete this deal?'))return;try{await api('/deals/'+id,{method:'DELETE'});showToast('Deal deleted');await renderDeals()}catch(e){showToast(e.message,'error')}}
+
+// Leads (full CRUD)
 async function renderLeads(){
   const mc=$('main-content');
   let data;
   try{data=await api('/leads')}catch(e){data=[]}
   if(!Array.isArray(data))data=data?.data||data?.leads||[];
-  if(data.length===0){mc.innerHTML='<h1>🎯 Leads</h1><div class="empty">No leads yet</div>';return;}
-  mc.innerHTML='<h1>🎯 Leads</h1><div class="card" style="padding:0;overflow-x:auto"><table>'
-    +'<tr><th>Name</th><th>Email</th><th>Source</th><th>Status</th></tr>'
-    +data.map(l=>'<tr><td>'+esc(l.name||'--')+'</td><td>'+esc(l.email||'--')+'</td><td>'+esc(l.source||'--')+'</td><td><span class="badge badge-'+(l.status==='converted'?'active':'pending')+'">'+esc(l.status||'new')+'</span></td></tr>').join('')
-    +'</table></div>';
+  mc.innerHTML='<div class="top-bar"><h1>🎯 Leads</h1><button class="btn-primary" onclick="showLeadForm()">+ Add Lead</button></div>'
+    +(data.length===0?'<div class="empty">No leads yet</div>':'<div class="card" style="padding:0;overflow-x:auto"><table><tr><th>Name</th><th>Email</th><th>Source</th><th>Status</th><th>Actions</th></tr>'
+    +data.map(l=>'<tr><td><strong>'+esc(l.name||'--')+'</strong></td><td>'+esc(l.email||'--')+'</td><td>'+esc(l.source||'--')+'</td><td><span class="badge badge-'+(l.status==='converted'?'active':l.status==='lost'?'inactive':'pending')+'">'+esc(l.status||'new')+'</span></td>'
+      +'<td><button class="btn-secondary btn-sm" onclick="showLeadForm(\''+l.id+'\')">✏️</button> <button class="btn-danger btn-sm" onclick="deleteLead(\''+l.id+'\')">🗑️</button></td></tr>').join('')+'</table></div>');
 }
 
-// Campaigns
+async function showLeadForm(id){
+  let l={};
+  if(id){try{const data=await api('/leads');const found=(data?.leads||data?.data||data||[]).find(x=>x.id===id);if(found)l=found}catch(e){}}
+  const mc=$('main-content');
+  mc.insertAdjacentHTML('beforeend','<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
+    +'<h2>'+(id?'Edit Lead':'New Lead')+'</h2>'
+    +'<label>Name</label><input id="ld-name" value="'+esc(l.name||'')+'" placeholder="Lead name">'
+    +'<label>Email</label><input id="ld-email" value="'+esc(l.email||'')+'" placeholder="email@example.com">'
+    +'<label>Source</label><input id="ld-source" value="'+esc(l.source||'')+'" placeholder="e.g. Website, Referral">'
+    +'<label>Status</label><select id="ld-status"><option value="new" '+(l.status==='new'?'selected':'')+'>New</option><option value="contacted" '+(l.status==='contacted'?'selected':'')+'>Contacted</option><option value="qualified" '+(l.status==='qualified'?'selected':'')+'>Qualified</option><option value="converted" '+(l.status==='converted'?'selected':'')+'>Converted</option><option value="lost" '+(l.status==='lost'?'selected':'')+'>Lost</option></select>'
+    +'<div class="actions"><button class="btn-secondary" onclick="closeModal()">Cancel</button><button class="btn-primary" onclick="saveLead(\''+(id||'')+'\')">'+(id?'Update':'Create')+'</button></div></div></div>');
+}
+
+async function saveLead(id){
+  const payload={name:$('ld-name')?.value,email:$('ld-email')?.value,source:$('ld-source')?.value,status:$('ld-status')?.value||'new'};
+  if(!payload.name){showToast('Name required','error');return}
+  try{
+    if(id){await api('/leads/'+id,{method:'PUT',body:JSON.stringify(payload)});showToast('Lead updated')}
+    else{await api('/leads',{method:'POST',body:JSON.stringify(payload)});showToast('Lead created')}
+    closeModal();await renderLeads();
+  }catch(e){showToast(e.message,'error')}
+}
+
+async function deleteLead(id){if(!confirm('Delete this lead?'))return;try{await api('/leads/'+id,{method:'DELETE'});showToast('Lead deleted');await renderLeads()}catch(e){showToast(e.message,'error')}}
+
+// Campaigns (full CRUD)
 async function renderCampaigns(){
   const mc=$('main-content');
   let data;
   try{data=await api('/campaigns')}catch(e){data=[]}
   if(!Array.isArray(data))data=data?.data||data?.campaigns||[];
-  if(data.length===0){mc.innerHTML='<h1>📣 Campaigns</h1><div class="empty">No campaigns yet</div>';return;}
-  mc.innerHTML='<h1>📣 Campaigns</h1><div class="card" style="padding:0;overflow-x:auto"><table>'
-    +'<tr><th>Name</th><th>Type</th><th>Budget</th><th>Status</th></tr>'
-    +data.map(c=>'<tr><td>'+esc(c.name||c.title||'--')+'</td><td>'+esc(c.campaign_type||'--')+'</td><td>'+(c.budget?'$'+Number(c.budget).toLocaleString():'--')+'</td><td><span class="badge badge-'+(c.status==='active'?'active':'inactive')+'">'+esc(c.status||'draft')+'</span></td></tr>').join('')
-    +'</table></div>';
+  mc.innerHTML='<div class="top-bar"><h1>📣 Campaigns</h1><button class="btn-primary" onclick="showCampaignForm()">+ New Campaign</button></div>'
+    +(data.length===0?'<div class="empty">No campaigns yet</div>':'<div class="card" style="padding:0;overflow-x:auto"><table><tr><th>Name</th><th>Type</th><th>Budget</th><th>Status</th><th>Actions</th></tr>'
+    +data.map(c=>'<tr><td><strong>'+esc(c.name||c.title||'--')+'</strong></td><td>'+esc(c.campaign_type||'--')+'</td><td>'+(c.budget?'$'+Number(c.budget).toLocaleString():'--')+'</td><td><span class="badge badge-'+(c.status==='active'?'active':'inactive')+'">'+esc(c.status||'draft')+'</span></td>'
+      +'<td><button class="btn-secondary btn-sm" onclick="showCampaignForm(\''+c.id+'\')">✏️</button> <button class="btn-danger btn-sm" onclick="deleteCampaign(\''+c.id+'\')">🗑️</button></td></tr>').join('')+'</table></div>');
 }
 
-// Tickets
+async function showCampaignForm(id){
+  let c={};
+  if(id){try{const data=await api('/campaigns');const found=(data?.campaigns||data?.data||data||[]).find(x=>x.id===id);if(found)c=found}catch(e){}}
+  const mc=$('main-content');
+  mc.insertAdjacentHTML('beforeend','<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
+    +'<h2>'+(id?'Edit Campaign':'New Campaign')+'</h2>'
+    +'<label>Campaign Name</label><input id="cmp-name" value="'+esc(c.name||c.title||'')+'" placeholder="Campaign name">'
+    +'<label>Type</label><select id="cmp-type"><option value="email" '+(c.campaign_type==='email'?'selected':'')+'>Email</option><option value="social" '+(c.campaign_type==='social'?'selected':'')+'>Social</option><option value="ads" '+(c.campaign_type==='ads'?'selected':'')+'>Ads</option><option value="content" '+(c.campaign_type==='content'?'selected':'')+'>Content</option><option value="other" '+(c.campaign_type==='other'?'selected':'')+'>Other</option></select>'
+    +'<label>Budget ($)</label><input id="cmp-budget" type="number" step="0.01" value="'+(c.budget||'')+'" placeholder="0.00">'
+    +'<label>Status</label><select id="cmp-status"><option value="draft" '+(c.status==='draft'?'selected':'')+'>Draft</option><option value="active" '+(c.status==='active'?'selected':'')+'>Active</option><option value="paused" '+(c.status==='paused'?'selected':'')+'>Paused</option><option value="completed" '+(c.status==='completed'?'selected':'')+'>Completed</option></select>'
+    +'<div class="actions"><button class="btn-secondary" onclick="closeModal()">Cancel</button><button class="btn-primary" onclick="saveCampaign(\''+(id||'')+'\')">'+(id?'Update':'Create')+'</button></div></div></div>');
+}
+
+async function saveCampaign(id){
+  const payload={name:$('cmp-name')?.value,campaign_type:$('cmp-type')?.value||'email',budget:parseFloat($('cmp-budget')?.value)||0,status:$('cmp-status')?.value||'draft'};
+  if(!payload.name){showToast('Name required','error');return}
+  try{
+    if(id){await api('/campaigns/'+id,{method:'PUT',body:JSON.stringify(payload)});showToast('Campaign updated')}
+    else{await api('/campaigns',{method:'POST',body:JSON.stringify(payload)});showToast('Campaign created')}
+    closeModal();await renderCampaigns();
+  }catch(e){showToast(e.message,'error')}
+}
+
+async function deleteCampaign(id){if(!confirm('Delete this campaign?'))return;try{await api('/campaigns/'+id,{method:'DELETE'});showToast('Campaign deleted');await renderCampaigns()}catch(e){showToast(e.message,'error')}}
+
+// Tickets (full CRUD)
 async function renderTickets(){
   const mc=$('main-content');
   let data;
   try{data=await api('/tickets')}catch(e){data=[]}
   if(!Array.isArray(data))data=data?.data||data?.tickets||[];
-  if(data.length===0){mc.innerHTML='<h1>🎫 Support Tickets</h1><div class="empty">No tickets</div>';return;}
-  mc.innerHTML='<h1>🎫 Tickets</h1><div class="card" style="padding:0;overflow-x:auto"><table>'
-    +'<tr><th>Title</th><th>Status</th><th>Priority</th><th>Assigned</th></tr>'
-    +data.map(t=>'<tr><td>'+esc(t.title||t.subject||'--')+'</td><td><span class="badge badge-'+(t.status==='open'||t.status==='in_progress'?'pending':t.status==='resolved'||t.status==='closed'?'active':'inactive')+'">'+esc(t.status||'open')+'</span></td><td>'+esc(t.priority||'--')+'</td><td>'+esc(t.assigned_to||'--')+'</td></tr>').join('')
-    +'</table></div>';
+  mc.innerHTML='<div class="top-bar"><h1>🎫 Support Tickets</h1><button class="btn-primary" onclick="showTicketForm()">+ New Ticket</button></div>'
+    +(data.length===0?'<div class="empty">No tickets</div>':'<div class="card" style="padding:0;overflow-x:auto"><table><tr><th>Title</th><th>Status</th><th>Priority</th><th>Assigned</th><th>Actions</th></tr>'
+    +data.map(t=>'<tr><td><strong>'+esc(t.title||t.subject||'--')+'</strong></td><td><span class="badge badge-'+(t.status==='open'||t.status==='in_progress'?'pending':t.status==='resolved'||t.status==='closed'?'active':'inactive')+'">'+esc(t.status||'open')+'</span></td><td>'+esc(t.priority||'--')+'</td><td>'+esc(t.assigned_to||'--')+'</td>'
+      +'<td><button class="btn-secondary btn-sm" onclick="showTicketForm(\''+t.id+'\')">✏️</button> <button class="btn-danger btn-sm" onclick="deleteTicket(\''+t.id+'\')">🗑️</button></td></tr>').join('')+'</table></div>');
 }
 
-/* ===== ADMIN PAGES ===== */
-function genericAdminPage(title, icon, endpoint, key){
-  return async function(){
-    const mc=$('main-content');
-    let data;
-    try{data=await api(endpoint)}catch(e){data=[]}
-    if(!Array.isArray(data))data=data?.data||data?.[key]||data?.items||[];
-    if(data.length===0){mc.innerHTML='<h1>'+icon+' '+esc(title)+'</h1><div class="empty">No items found</div>';return;}
-    const keys=Object.keys(data[0]||{});
-    mc.innerHTML='<h1>'+icon+' '+esc(title)+'</h1><div class="card" style="padding:0;overflow-x:auto"><table><tr>'+keys.map(k=>'<th>'+esc(k).replace(/_/g,' ')+'</th>').join('')+'</tr>'+data.map(r=>'<tr>'+keys.map(k=>'<td>'+esc(String(r[k]??'')).slice(0,80)+'</td>').join('')+'</tr>').join('')+'</table></div>';
-  };
+async function showTicketForm(id){
+  let t={};
+  if(id){try{const data=await api('/tickets');const found=(data?.tickets||data?.data||data||[]).find(x=>x.id===id);if(found)t=found}catch(e){}}
+  const mc=$('main-content');
+  mc.insertAdjacentHTML('beforeend','<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
+    +'<h2>'+(id?'Edit Ticket':'New Ticket')+'</h2>'
+    +'<label>Title</label><input id="tk-title" value="'+esc(t.title||t.subject||'')+'" placeholder="Ticket title">'
+    +'<label>Priority</label><select id="tk-priority"><option value="low" '+(t.priority==='low'?'selected':'')+'>Low</option><option value="medium" '+(t.priority==='medium'?'selected':'')+'>Medium</option><option value="high" '+(t.priority==='high'?'selected':'')+'>High</option><option value="critical" '+(t.priority==='critical'?'selected':'')+'>Critical</option></select>'
+    +'<label>Status</label><select id="tk-status"><option value="open" '+(t.status==='open'?'selected':'')+'>Open</option><option value="in_progress" '+(t.status==='in_progress'?'selected':'')+'>In Progress</option><option value="resolved" '+(t.status==='resolved'?'selected':'')+'>Resolved</option><option value="closed" '+(t.status==='closed'?'selected':'')+'>Closed</option></select>'
+    +'<label>Assigned To</label><input id="tk-assigned" value="'+esc(t.assigned_to||'')+'" placeholder="Assignee name">'
+    +'<label>Description</label><textarea id="tk-desc" rows="3">'+esc(t.description||'')+'</textarea>'
+    +'<div class="actions"><button class="btn-secondary" onclick="closeModal()">Cancel</button><button class="btn-primary" onclick="saveTicket(\''+(id||'')+'\')">'+(id?'Update':'Create')+'</button></div></div></div>');
 }
+
+async function saveTicket(id){
+  const payload={title:$('tk-title')?.value,priority:$('tk-priority')?.value||'medium',status:$('tk-status')?.value||'open',assigned_to:$('tk-assigned')?.value,description:$('tk-desc')?.value};
+  if(!payload.title){showToast('Title required','error');return}
+  try{
+    if(id){await api('/tickets/'+id,{method:'PUT',body:JSON.stringify(payload)});showToast('Ticket updated')}
+    else{await api('/tickets',{method:'POST',body:JSON.stringify(payload)});showToast('Ticket created')}
+    closeModal();await renderTickets();
+  }catch(e){showToast(e.message,'error')}
+}
+
+async function deleteTicket(id){if(!confirm('Delete this ticket?'))return;try{await api('/tickets/'+id,{method:'DELETE'});showToast('Ticket deleted');await renderTickets()}catch(e){showToast(e.message,'error')}}
+
+/* ===== ADMIN PAGES (dynamic CRUD) ===== */
+function makeAdminCRUD(title, icon, endpoint, key, fields, idField, createEndpoint){
+  /* fields = [{key,label,type,options,required}] */
+  idField=idField||'id';
+  createEndpoint=createEndpoint||endpoint;
+  let data=[];
+  async function load(){
+    try{const d=await api(endpoint);data=Array.isArray(d)?d:d?.data||d?.[key]||d?.items||[]}catch(e){data=[]}
+    return data;
+  }
+  async function render(){
+    await load();
+    const mc=$('main-content');
+    mc.innerHTML='<div class="top-bar"><h1>'+icon+' '+esc(title)+'</h1><button class="btn-primary" onclick="render'+key+'Form()">+ New</button></div>'
+      +(data.length===0?'<div class="empty">No items found</div>':'<div class="card" style="padding:0;overflow-x:auto"><table>'
+        +'<tr>'+fields.map(f=>'<th>'+esc(f.label)+'</th>').join('')+'<th>Actions</th></tr>'
+        +data.map(r=>'<tr>'+fields.map(f=>{
+          const val=r[f.key]??'';
+          if(f.type==='boolean') return '<td>'+(val?'✅':'❌')+'</td>';
+          if(f.type==='color'||f.key.includes('color')||f.key.includes('colour')) return '<td><span style="display:inline-block;width:16px;height:16px;border-radius:4px;background:'+esc(String(val))+';vertical-align:middle"></span> '+esc(String(val))+'</td>';
+          return '<td>'+esc(String(val).slice(0,80))+'</td>';
+        }).join('')+'<td><button class="btn-secondary btn-sm" onclick="edit'+key+'(\''+r[idField]+'\')">✏️</button> <button class="btn-danger btn-sm" onclick="delete'+key+'(\''+r[idField]+'\')">🗑️</button></td></tr>').join('')+'</table></div>');
+  }
+  // Define form and save on window for onclick
+  window['render'+key+'Form'] = function(id){
+    let item={};
+    if(id){item=data.find(r=>r[idField]===id)||{}}
+    const mc=$('main-content');
+    mc.insertAdjacentHTML('beforeend','<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">'
+      +'<h2>'+(id?'Edit '+title:'New '+title)+'</h2>'
+      +fields.map(f=>{
+        const val=item[f.key]??'';
+        if(f.type==='select'||f.options){
+          return '<label>'+esc(f.label)+'</label><select id="field-'+f.key+'">'
+            +(f.options||[]).map(o=>'<option value="'+esc(o.value||o)+'" '+(val===o||val===o.value?'selected':'')+'>'+esc(o.label||o)+'</option>').join('')+'</select>';
+        }else if(f.type==='boolean'||f.type==='checkbox'){
+          return '<label style="display:flex;align-items:center;gap:8px;margin-top:12px"><input type="checkbox" id="field-'+f.key+'" '+(val?'checked':'')+'> '+esc(f.label)+'</label>';
+        }else if(f.type==='textarea'){
+          return '<label>'+esc(f.label)+'</label><textarea id="field-'+f.key+'" rows="3">'+esc(String(val))+'</textarea>';
+        }else if(f.type==='number'){
+          return '<label>'+esc(f.label)+'</label><input id="field-'+f.key+'" type="number" step="0.01" value="'+val+'">';
+        }else{
+          return '<label>'+esc(f.label)+(f.required?' <span style="color:var(--red)">*</span>':'')+'</label><input id="field-'+f.key+'" value="'+esc(String(val))+'" placeholder="'+esc(f.label)+'">';
+        }
+      }).join('')
+      +'<div class="actions"><button class="btn-secondary" onclick="closeModal()">Cancel</button><button class="btn-primary" onclick="save'+key+'(\''+(id||'')+'\')">'+(id?'Update':'Create')+'</button></div></div></div>');
+  };
+  window['save'+key] = async function(id){
+    const payload={};
+    for(const f of fields){
+      const el=$('field-'+f.key);
+      if(!el) continue;
+      if(f.type==='boolean'||f.type==='checkbox') payload[f.key]=el.checked;
+      else if(f.type==='number') payload[f.key]=parseFloat(el.value)||0;
+      else payload[f.key]=el.value;
+    }
+    // Validate required
+    const missing=fields.filter(f=>f.required && !payload[f.key]);
+    if(missing.length){showToast(missing[0].label+' is required','error');return}
+    try{
+      if(id){await api(createEndpoint+'/'+id,{method:'PUT',body:JSON.stringify(payload)});showToast(title+' updated')}
+      else{await api(createEndpoint,{method:'POST',body:JSON.stringify(payload)});showToast(title+' created')}
+      closeModal();await render();
+    }catch(e){showToast(e.message,'error')}
+  };
+  window['delete'+key] = async function(id){
+    const item=data.find(r=>r[idField]===id);
+    if(!confirm('Delete '+title.toLowerCase()+' "'+(item?esc(item.name||item.title||item.label||id):'')+'"?'))return;
+    try{await api(createEndpoint+'/'+id,{method:'DELETE'});showToast(title+' deleted');await render()}
+    catch(e){showToast(e.message,'error')}
+  };
+  window['edit'+key] = async function(id){ window['render'+key+'Form'](id); };
+  window['delete'+key] = async function(id){ 
+    const item=data.find(r=>r[idField]===id);
+    if(!confirm('Delete '+title.toLowerCase()+' "'+(item?esc(item.name||item.title||item.label||id):'')+'"?'))return;
+    try{await api(createEndpoint+'/'+id,{method:'DELETE'});showToast(title+' deleted');await render()}
+    catch(e){showToast(e.message,'error')}
+  };
+  return render;
+}
+
+/* ===== Admin page definitions with field configs ===== */
+const renderAdminProviderKeys = makeAdminCRUD('Provider Keys','🔗','/provider-keys','provider_keys',[
+  {key:'provider',label:'Provider',required:true},
+  {key:'key_type',label:'Type'},
+  {key:'is_active',label:'Active',type:'boolean'},
+  {key:'created_at',label:'Created'}
+]);
+const renderAdminAffiliates = makeAdminCRUD('Affiliates','🤝','/affiliates','affiliates',[
+  {key:'name',label:'Name',required:true},
+  {key:'code',label:'Code'},
+  {key:'commission_rate',label:'Rate',type:'number'},
+  {key:'is_active',label:'Active',type:'boolean'}
+]);
+const renderAdminWebhooks = makeAdminCRUD('Webhooks','🪝','/webhooks','webhooks',[
+  {key:'name',label:'Name',required:true},
+  {key:'url',label:'URL'},
+  {key:'events',label:'Events'},
+  {key:'is_active',label:'Active',type:'boolean'}
+]);
+const renderAdminReviews = makeAdminCRUD('Reviews','⭐','/reviews','reviews',[
+  {key:'rating',label:'Rating',type:'number'},
+  {key:'reviewer',label:'Reviewer'},
+  {key:'content',label:'Content'},
+  {key:'is_approved',label:'Approved',type:'boolean'}
+]);
+const renderAdminSurfaces = makeAdminCRUD('Surfaces','📱','/surfaces','surfaces',[
+  {key:'name',label:'Name',required:true},
+  {key:'slug',label:'Slug'},
+  {key:'is_active',label:'Active',type:'boolean'}
+]);
+const renderAdminCategories = makeAdminCRUD('Categories','📂','/categories','categories',[
+  {key:'name',label:'Name',required:true},
+  {key:'slug',label:'Slug'},
+  {key:'icon',label:'Icon'},
+  {key:'is_active',label:'Active',type:'boolean'}
+]);
+const renderAdminTagGroups = makeAdminCRUD('Tag Groups','🏷️','/tag-groups','tag_groups',[
+  {key:'name',label:'Name',required:true},
+  {key:'slug',label:'Slug'},
+  {key:'is_active',label:'Active',type:'boolean'}
+]);
+const renderAdminEmailTemplates = makeAdminCRUD('Email Templates','📧','/email-templates','email_templates',[
+  {key:'name',label:'Name',required:true},
+  {key:'subject',label:'Subject'},
+  {key:'type',label:'Type'},
+  {key:'is_active',label:'Active',type:'boolean'}
+]);
+const renderAdminExportTemplates = makeAdminCRUD('Export Templates','📤','/export-templates','export_templates',[
+  {key:'name',label:'Name',required:true},
+  {key:'format',label:'Format'},
+  {key:'is_default',label:'Default',type:'boolean'}
+]);
+const renderAdminReports = makeAdminCRUD('Reports','📈','/reports','reports',[
+  {key:'name',label:'Name',required:true},
+  {key:'type',label:'Type'},
+  {key:'is_scheduled',label:'Scheduled',type:'boolean'}
+]);
+const renderAdminKnowledgeBase = makeAdminCRUD('Knowledge Base','📖','/knowledge-base','knowledge_base',[
+  {key:'title',label:'Title',required:true},
+  {key:'category',label:'Category'},
+  {key:'is_published',label:'Published',type:'boolean'}
+]);
+const renderAdminCallLogs = makeAdminCRUD('Call Logs','📞','/call-logs','call_logs',[
+  {key:'caller',label:'Caller'},
+  {key:'duration',label:'Duration (s)',type:'number'},
+  {key:'direction',label:'Direction'},
+  {key:'notes',label:'Notes'}
+]);
+const renderAdminCalendar = makeAdminCRUD('Calendar Events','📅','/calendar-events','calendar_events',[
+  {key:'title',label:'Title',required:true},
+  {key:'event_type',label:'Type'},
+  {key:'start_time',label:'Start'},
+  {key:'end_time',label:'End'},
+  {key:'is_all_day',label:'All Day',type:'boolean'}
+]);
+const renderAdminImportLogs = makeAdminCRUD('Import Logs','📥','/import-logs','import_logs',[
+  {key:'filename',label:'File'},
+  {key:'status',label:'Status'},
+  {key:'rows_imported',label:'Rows',type:'number'},
+  {key:'errors',label:'Errors'}
+]);
+const renderAdminBridge = makeAdminCRUD('Bridge','🌉','/bridge/commands','commands',[
+  {key:'command',label:'Command',required:true},
+  {key:'status',label:'Status'},
+  {key:'result',label:'Result'}
+]);
 
 // ── Portfolio Companies ──
 async function renderPortfolio(){
@@ -2514,8 +2918,6 @@ async function renderAdminDashboard(){
     +'</div></div>';
 }
 
-const renderAdminTenants=genericAdminPage('Accounts','🏢','/admin/accounts','accounts');
-const renderAdminUsers=genericAdminPage('Users','👤','/users','users');
 
 // ── Admin Plans (full CRUD with feature editor) ──
 async function renderAdminPlans(){
