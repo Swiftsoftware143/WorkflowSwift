@@ -85,7 +85,7 @@ pub async fn list_templates(
             sqlx::query_as::<_, WorkflowTemplate>(
                 r#"SELECT DISTINCT wt.* FROM workflow_templates wt
                    INNER JOIN industry_templates it ON it.template_id = wt.id
-                   WHERE (wt.aid = $1 OR (wt.is_public = true AND wt.category = 'general'))
+                   WHERE (wt.aid = $1 OR (wt.is_public = true))
                    AND it.industry_slug = $2
                    AND (wt.surface_id = $3 OR wt.surface_id IS NULL)
                    ORDER BY wt.name ASC"#
@@ -99,7 +99,7 @@ pub async fn list_templates(
             sqlx::query_as::<_, WorkflowTemplate>(
                 r#"SELECT DISTINCT wt.* FROM workflow_templates wt
                    INNER JOIN industry_templates it ON it.template_id = wt.id
-                   WHERE (wt.aid = $1 OR (wt.is_public = true AND wt.category = 'general'))
+                   WHERE (wt.aid = $1 OR (wt.is_public = true))
                    AND it.industry_slug = $2
                    ORDER BY wt.name ASC"#
             )
@@ -111,7 +111,7 @@ pub async fn list_templates(
         templates
     } else if let Some(surface_id) = query.surface {
         sqlx::query_as::<_, WorkflowTemplate>(
-            "SELECT DISTINCT * FROM workflow_templates WHERE (aid = $1 OR (is_public = true AND category = 'general')) AND (surface_id = $2 OR surface_id IS NULL) ORDER BY name ASC",
+            "SELECT DISTINCT * FROM workflow_templates WHERE (aid = $1 OR (is_public = true)) AND (surface_id = $2 OR surface_id IS NULL) ORDER BY name ASC",
         )
         .bind(aid)
         .bind(surface_id)
@@ -119,7 +119,7 @@ pub async fn list_templates(
         .await?
     } else {
         sqlx::query_as::<_, WorkflowTemplate>(
-            "SELECT DISTINCT * FROM workflow_templates WHERE aid = $1 OR (is_public = true AND category = 'general') ORDER BY name ASC",
+            "SELECT DISTINCT * FROM workflow_templates WHERE aid = $1 OR (is_public = true) ORDER BY name ASC",
         )
         .bind(aid)
         .fetch_all(&state.db)
