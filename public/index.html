@@ -3289,18 +3289,30 @@ function renderGuide(){
   var mc = document.getElementById('main-content');
   if(!mc) return;
   var data = [
-    {h:'Overview',b:'WorkflowSwift automates business processes visually.'},
-    {h:'Dashboard',b:'Total workflows, active runs, completions.'},
-    {h:'Workflows',b:'View, create, edit. Trigger types and status.'},
-    {h:'Builder',b:'11 step types. Card-based visual editor.'},
-    {h:'Templates',b:'Pre-built: Brand Monitor, Lead Finder.'},
-    {h:'Run History',b:'Execution logs for debugging.'},
-    {h:'Integrations',b:'Connect with other platforms.'}
+    {i:'📊',h:'Dashboard',b:'Key metrics, activity feed, industry widgets, and quick actions. Main hub for monitoring your business.'},
+    {i:'🔄',h:'Workflows',b:'Create, edit, and manage visual automation pipelines. Each workflow has steps, triggers, and status.'},
+    {i:'🔧',h:'Builder',b:'Card-based visual editor with 11+ step types. Add, remove, reorder, and configure each action.'},
+    {i:'📋',h:'Templates (58)',b:'Pre-built workflows across 15+ industries. Filter by industry, search by name, install with one click.'},
+    {i:'📦',h:'Instances',b:'Deployed workflow instances. View execution history, status, and error details.'},
+    {i:'🤖',h:'Automations',b:'Automated triggers and scheduled tasks. Create, run on demand, and manage automation rules.'},
+    {i:'👥',h:'Clients',b:'Contact management. Add, edit, and organize client records with company details.'},
+    {i:'💰',h:'Invoices',b:'Create and track invoices. Set amounts, statuses, due dates, and descriptions.'},
+    {i:'⭐',h:'Credits',b:'Credit balance, packages, transaction history, and manual deductions.'},
+    {i:'💎',h:'Deals',b:'Sales pipeline tracking. Move deals through Lead → Qualified → Proposal → Negotiation → Closed.'},
+    {i:'🎯',h:'Leads',b:'Lead management with status tracking: New, Contacted, Qualified, Converted, Lost.'},
+    {i:'📣',h:'Campaigns',b:'Marketing campaigns with budget tracking. Types: Email, Social, Ads, Content.'},
+    {i:'🎫',h:'Tickets',b:'Support ticket system. Priority levels, status workflow, assignee tracking.'},
+    {i:'🔍',h:'Prospecting',b:'Search and enrich business data by query, location, and industry.'},
+    {i:'📡',h:'Brand Monitor',b:'Track brand mentions with keyword alerts across platforms.'},
+    {i:'🏆',h:'Competitor Watch',b:'Monitor competitor websites for changes and updates.'},
+    {i:'🏢',h:'Portfolio Companies',b:'Manage your portfolio of companies and brands.'},
+    {i:'🤝',h:'Integrations',b:'Connect external tools: Nexweave, Hexomatic, Mailgun, AI providers, and more.'},
+    {i:'🛡️',h:'Admin (Admin Only)',b:'Manage tenants, users, plans, API keys, provider keys, webhooks, email templates, categories, tags, surfaces, and system settings.'}
   ];
-  var h = '<div style="max-width:600px;margin:40px auto;padding:24px"><h2 style="margin-bottom:4px">? WorkflowSwift Guide</h2><p style="font-size:.8rem;color:var(--text2);margin-bottom:16px">'+data.length+' topics</p>';
+  var h = '<div style="max-width:650px;margin:40px auto;padding:24px"><h2 style="margin-bottom:4px">? WorkflowSwift Guide</h2><p style="font-size:.8rem;color:var(--text2);margin-bottom:16px">Topics — click the ? button on any page for a walkthrough</p>';
   for(var i=0;i<data.length;i++){
     var s = data[i];
-    h += '<div style="display:flex;gap:10px;margin-bottom:12px;padding:10px;border:1px solid var(--border);border-radius:8px;background:var(--bg)"><div style="width:24px;height:24px;border-radius:50%;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:700;flex-shrink:0">'+(i+1)+'</div><div><strong style="font-size:.85rem">'+s.h+'</strong><p style="font-size:.8rem;color:var(--text2);margin-top:2px">'+s.b+'</p></div></div>';
+    h += '<div style="display:flex;gap:10px;margin-bottom:8px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg);align-items:flex-start"><div style="font-size:1.1rem;flex-shrink:0;width:28px;text-align:center">'+s.i+'</div><div><strong style="font-size:.85rem">'+s.h+'</strong><p style="font-size:.78rem;color:var(--text2);margin-top:2px">'+s.b+'</p></div></div>';
   }
   h += '</div>';
   mc.innerHTML = h;
@@ -3310,36 +3322,103 @@ function renderGuide(){
 (function(){
   var wtData = {
     dashboard:{title:"Dashboard",icon:"\uD83D\uDCCA",steps:[
-      {h:"Welcome to WorkflowSwift",b:"Build visual automation pipelines. Connect apps, trigger actions, and display data on live dashboards."},
-      {h:"Key Metrics",b:"Total workflows, active runs, recent completions, and failure rates."},
-      {h:"Quick Actions",b:"Create a new workflow, browse templates, or check run history."}
+      {h:"Welcome to WorkflowSwift",b:"Automation platform. Build visual workflows, manage clients, track sales, and more — all from one dashboard."},
+      {h:"Key Metrics",b:"Total workflows, active runs, recent completions, and failure rates at a glance."},
+      {h:"Activity Feed",b:"Recent actions across the platform: new deals, completed workflows, triggered automations."},
+      {h:"Quick Actions",b:"Create a new workflow, browse industry templates, or check automation status."},
+      {h:"Industry Widgets",b:"Dashboard adapts to your selected industry. Shows relevant KPIs and data cards."}
     ]},
     workflows:{title:"Workflows",icon:"\u26A1",steps:[
-      {h:"Workflow List",b:"View all your workflows. Each shows name, status (active/paused), last run, and trigger type."},
-      {h:"Create Workflow",b:"Click New Workflow. Choose a name, trigger type (webhook, schedule, manual), and start building."},
-      {h:"Edit & Delete",b:"Click any workflow to edit steps. Delete or archive workflows you no longer need."}
+      {h:"Workflow List",b:"View all workflows. Each shows name, status (active/paused), trigger type, and last run time."},
+      {h:"Create Workflow",b:"Click + New Workflow. Choose a name, trigger type (webhook, schedule, manual), and start adding steps."},
+      {h:"Edit Workflows",b:"Click the pencil icon on any workflow to edit its steps in the Builder. Toggle Active/Paused."},
+      {h:"Delete Workflows",b:"Remove workflows you no longer need with the delete button. This cannot be undone."}
     ]},
     builder:{title:"Workflow Builder",icon:"\uD83D\uDCE0",steps:[
-      {h:"Visual Builder",b:"Drag-free card-based editor. Add, remove, reorder, and configure steps visually."},
-      {h:"Step Types",b:"11 step types: Webhook Trigger, Schedule, Manual Form, HTTP Request, Send Email, Condition/Branch, Dashboard Widget, Math/Transform, Output Variable, File Storage, Custom API Action."},
-      {h:"Test & Deploy",b:"Run a test execution to verify your workflow. Once confirmed, toggle Active to deploy."}
+      {h:"Visual Card-Based Editor",b:"Each step is a card. Click to configure. Add/remove/reorder as needed."},
+      {h:"Step Types",b:"11+ types: Webhook Trigger, Schedule, Manual Form, HTTP Request, Send Email, Condition/Branch, Dashboard Widget, Math/Transform, Output Variable, File Storage, Custom API Action."},
+      {h:"Configure Steps",b:"Click a step card to open its config modal. Set endpoint, body, headers, or conditions. Each step type has its own form."},
+      {h:"Test & Deploy",b:"Run a test execution to verify. Once confirmed, toggle Active to deploy the workflow."}
     ]},
     templates:{title:"Templates",icon:"\uD83D\uDCCB",steps:[
-      {h:"Browse Templates",b:"Pre-built workflows for common tasks: Brand Mention Monitor, Competitor Site Checker, Lead Finder, Email Alerts, and more."},
-      {h:"Use Template",b:"Click any template to clone it. Customize steps to fit your needs."}
+      {h:"Browse 58 Templates",b:"Pre-built workflows across 15+ industries: Site Flipping, Government Contracting, E-Commerce, Healthcare, Education, Marketing, and more."},
+      {h:"Filter by Industry",b:"Use the industry dropdown to filter templates by your business vertical."},
+      {h:"Search Templates",b:"Search by name to quickly find what you need."},
+      {h:"Install a Template",b:"Click any template card to view details and steps. Click Install to clone it as your own workflow, then customize."},
+      {h:"My Workflows",b:"Switch to the My Workflows tab to see workflows you've created or installed from templates."}
     ]},
-    dashboard:{title:"Dashboard Widgets",icon:"\uD83D\uDCCA",steps:[
-      {h:"Live Dashboards",b:"Push workflow data to real-time dashboard widgets. Display as cards, tables, or charts."},
-      {h:"Create Widget",b:"Add a Dashboard Widget step in your workflow. Configure data source and display format."}
+    instances:{title:"Instances",icon:"\uD83D\uDCE6",steps:[
+      {h:"Workflow Instances",b:"View all deployed instances of templates and workflows. See status, last run, and error states."},
+      {h:"Instance Details",b:"Click an instance to view full details including execution history."},
+      {h:"Manage Instances",b:"Delete old or failed instances to keep your workspace clean."}
     ]},
-    runs:{title:"Run History",icon:"\uD83D\uDD04",steps:[
-      {h:"Execution Logs",b:"View every workflow execution. See start time, duration, success/failure, and step-by-step logs."},
-      {h:"Debug",b:"Click any run to inspect step outputs. Great for debugging failed workflows."}
+    automations:{title:"Automations",icon:"\uD83E\uDD16",steps:[
+      {h:"Automation List",b:"View all automations. Each has a name, type, and active status."},
+      {h:"Create Automation",b:"Click + New Automation. Give it a name and type, then toggle Active when ready."},
+      {h:"Run on Demand",b:"Click the Run button on any automation to trigger it immediately."},
+      {h:"Edit & Delete",b:"Update automation settings or remove automations you no longer need."}
     ]},
-    settings:{title:"Settings",icon:"\u2699\uFE0F",steps:[
-      {h:"Account",b:"Update profile, change password, and manage preferences."},
-      {h:"API Keys",b:"Generate and manage API keys for programmatic access to the WorkflowSwift API."},
-      {h:"Webhooks",b:"View all registered webhook URLs for incoming triggers."}
+    clients:{title:"Clients",icon:"\uD83D\uDC65",steps:[
+      {h:"Client Records",b:"View all client contacts in a sortable table. Name, email, phone, company."},
+      {h:"Add Client",b:"Click + New Client. Fill in name, email, phone, company, and notes."},
+      {h:"Manage Clients",b:"Edit client details or delete records as needed."}
+    ]},
+    invoices:{title:"Invoices",icon:"\uD83D\uDCB0",steps:[
+      {h:"Invoice List",b:"View all invoices with client, amount, status, and due date."},
+      {h:"Create Invoice",b:"Click + New Invoice. Set client, amount, status, due date, and description."},
+      {h:"Update Status",b:"Edit invoice status as payments come in: Draft, Sent, Paid, Overdue."}
+    ]},
+    credits:{title:"Credits",icon:"\u2B50",steps:[
+      {h:"Credit Balance",b:"View your current credit balance at the top of the page."},
+      {h:"Credit Packages",b:"Available packages you can purchase or assign."},
+      {h:"Transaction History",b:"See all credit transactions: purchases, deductions, and adjustments."},
+      {h:"Deduct Credits",b:"Deduct credits from a balance when services are rendered."}
+    ]},
+    deals:{title:"Deals",icon:"\uD83D\uDC8E",steps:[
+      {h:"Sales Pipeline",b:"Track deals through stages: Lead, Qualified, Proposal, Negotiation, Closed Won, Closed Lost."},
+      {h:"Create Deal",b:"Click + New Deal. Set name, value, stage, and contact. Value is tracked in dollars."},
+      {h:"Update Stage",b:"Edit a deal to move it through your pipeline. Stage badges are color-coded."},
+      {h:"Manage Deals",b:"Edit deal details or delete deals that are no longer relevant."}
+    ]},
+    leads:{title:"Leads",icon:"\uD83C\uDFAF",steps:[
+      {h:"Lead Tracking",b:"Manage leads with status: New, Contacted, Qualified, Converted, Lost."},
+      {h:"Add Lead",b:"Click + Add Lead. Enter name, email, and source (Website, Referral, etc.)."},
+      {h:"Update Status",b:"Move leads through the pipeline as you engage them."}
+    ]},
+    campaigns:{title:"Campaigns",icon:"\uD83D\uDCE3",steps:[
+      {h:"Campaign List",b:"View marketing campaigns with type, budget, and status."},
+      {h:"Create Campaign",b:"Click + New Campaign. Set name, type (Email, Social, Ads, Content), budget, and status."},
+      {h:"Track Budget",b:"Budget field tracks campaign spend in dollars."}
+    ]},
+    tickets:{title:"Support Tickets",icon:"\uD83C\uDFAB",steps:[
+      {h:"Ticket List",b:"View support tickets with title, status, priority, and assignee."},
+      {h:"Create Ticket",b:"Click + New Ticket. Add title, priority, status, assignee, and description."},
+      {h:"Priority Levels",b:"Low, Medium, High, Critical. Tickets are color-coded by priority."},
+      {h:"Track Resolution",b:"Move tickets through Open, In Progress, Resolved, Closed."}
+    ]},
+    prospecting:{title:"Prospecting",icon:"\uD83D\uDD0D",steps:[
+      {h:"Search Businesses",b:"Search for businesses by query, location, and industry."},
+      {h:"View Results",b:"See enriched business data including contact info and ratings."}
+    ]},
+    brand:{title:"Brand Monitor",icon:"\uD83D\uDCE1",steps:[
+      {h:"Monitor Brands",b:"Track brand mentions across platforms with keyword alerts."},
+      {h:"Add Monitor",b:"Create a new brand monitor with keywords and platforms to watch."},
+      {h:"View Results",b:"See recent mentions and alerts for each monitor."}
+    ]},
+    competitor:{title:"Competitor Watch",icon:"\uD83C\uDFC6",steps:[
+      {h:"Watch Competitors",b:"Monitor competitor websites for content and structural changes."},
+      {h:"Add Competitor",b:"Enter competitor name and URL to start tracking."},
+      {h:"View Changes",b:"See detected changes over time for each competitor."}
+    ]},
+    portfolio:{title:"Portfolio Companies",icon:"\uD83C\uDFED\uFE0F",steps:[
+      {h:"Portfolio List",b:"Manage your portfolio companies. Each has a name and slug."},
+      {h:"Add Company",b:"Click + New Company. Enter company name and slug."},
+      {h:"Edit & Delete",b:"Update company details or remove portfolio entries."}
+    ]},
+    settings:{title:"Profile & Settings",icon:"\u2699\uFE0F",steps:[
+      {h:"Your Profile",b:"Update your name, email, and password."},
+      {h:"Integrations",b:"Connect external platforms: Nexweave, Hexomatic, Mailgun, DeepSeek, Gemini, and more."},
+      {h:"Admin Section",b:"Admin users: manage tenants, users, plans, API keys, provider keys, webhooks, email templates, categories, tag groups, surfaces, and all system settings."}
     ]}
   };
 
@@ -3368,12 +3447,13 @@ function renderGuide(){
   hIcon.id = 'wt-help';
   hIcon.textContent = '?';
   hIcon.style.cssText = 'position:fixed;bottom:20px;right:20px;width:40px;height:40px;border-radius:50%;background:#4f46e5;color:#fff;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:bold;cursor:pointer;z-index:9998;box-shadow:0 2px 8px rgba(79,70,229,0.4)';
+  var pageKeys = {dashboard:1,workflows:1,builder:1,templates:1,instances:1,automations:1,clients:1,invoices:1,credits:1,deals:1,leads:1,campaigns:1,tickets:1,prospecting:1,'brand-monitor':'brand',competitor:'competitor',portfolio:1,settings:1};
   hIcon.addEventListener('click', function(){
-    var views = ['dashboard','workflows','templates','runs','settings'];
-    var cur = '';
-    for(var i=0;i<views.length;i++){ var s=document.querySelector('[data-route="'+views[i]+'"]'); if(s&&s.style.display!=='none'){cur=views[i];break;} }
-    if(!cur) cur='dashboard';
-    showWalkthroughWFS(cur);
+    var key = currentPage || 'dashboard';
+    var mapped = pageKeys[key];
+    if(mapped === 1) mapped = key;
+    if(!mapped) mapped = 'dashboard';
+    showWalkthroughWFS(mapped);
   });
   var check = setInterval(function(){
     if(document.body){
