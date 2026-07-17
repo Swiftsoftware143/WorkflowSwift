@@ -94,7 +94,7 @@ pub async fn internal_create_portfolio_company(
 
     // Ensure account exists (FK constraint)
     sqlx::query(
-        "INSERT INTO accounts (id, name, slug) VALUES ($1, $2, CONCAT($3, '-', LEFT(CAST($1 AS TEXT), 8))) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, slug = EXCLUDED.slug"
+        "INSERT INTO accounts (id, name, account_slug) VALUES ($1, $2, CONCAT($3, '-', LEFT(CAST($1 AS TEXT), 8))) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, account_slug = EXCLUDED.account_slug"
     )
     .bind(aid)
     .bind(&name)
@@ -103,7 +103,7 @@ pub async fn internal_create_portfolio_company(
     .await.ok();
 
     sqlx::query(
-        "INSERT INTO portfolio_companies (id, aid, name, slug, email, description) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, slug = EXCLUDED.slug"
+        "INSERT INTO portfolio_companies (id, aid, name, slug, email, description) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, account_slug = EXCLUDED.account_slug"
     )
     .bind(id)
     .bind(aid)

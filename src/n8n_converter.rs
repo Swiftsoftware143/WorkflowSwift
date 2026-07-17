@@ -669,6 +669,308 @@ fn convert_user_steps(
                 step_last_node_id = Some(log_id);
             }
 
+
+            // ===== Prospecting Steps: search, enrich, score =====
+            "search" | "scrape" => {
+                // Search/scrape step: calls the WorkflowSwift research endpoint
+                // which proxies to Hexomatic or Playwright scraper
+                let source = config.get("source")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("web");
+                let max_results = config.get("max_results")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(50);
+                let platforms = config.get("platforms")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.iter().map(|x| x.as_str().unwrap_or("")).collect::<Vec<_>>().join(","))
+                    .unwrap_or_default();
+
+                let node = json!({
+                    "id": node_id,
+                    "name": step_name,
+                    "type": "n8n-nodes-base.httpRequest",
+                    "typeVersion": 4.2,
+                    "position": [x_pos, y_base],
+                    "parameters": {
+                        "method": "POST",
+                        "url": format!("{}/api/v1/research/{}", callback_base_url.trim_end_matches('/'), source),
+                        "authentication": "genericCredentialType",
+                        "genericAuthType": "httpHeaderAuth",
+                        "sendHeaders": true,
+                        "headerParameters": {
+                            "parameters": [
+                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Content-Type", "value": "application/json" }
+                            ]
+                        },
+                        "sendBody": true,
+                        "bodyParameters": {
+                            "parameters": [
+                                { "name": "query", "value": "={{ $json.query || $json.search_term || $json.data }}" },
+                                { "name": "max_results", "value": max_results },
+                                { "name": "platforms", "value": platforms }
+                            ]
+                        }
+                    }
+                });
+                nodes.push(node);
+            }
+
+            "enrich" => {
+                // Enrichment step: calls enrichment API to fill in contact details
+                let provider = config.get("provider").and_then(|v| v.as_str()).unwrap_or("auto");
+
+                let node = json!({
+                    "id": node_id,
+                    "name": step_name,
+                    "type": "n8n-nodes-base.httpRequest",
+                    "typeVersion": 4.2,
+                    "position": [x_pos, y_base],
+                    "parameters": {
+                        "method": "POST",
+                        "url": format!("{}/api/v1/enrich/{}", callback_base_url.trim_end_matches('/'), provider),
+                        "authentication": "genericCredentialType",
+                        "genericAuthType": "httpHeaderAuth",
+                        "sendHeaders": true,
+                        "headerParameters": {
+                            "parameters": [
+                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Content-Type", "value": "application/json" }
+                            ]
+                        },
+                        "sendBody": true,
+                        "bodyParameters": {
+                            "parameters": [
+                                { "name": "data", "value": "={{ $json }}" }
+                            ]
+                        }
+                    }
+                });
+                nodes.push(node);
+            }
+
+            "score" | "analyze" => {
+                // Scoring/analysis step: calls LLM to score or analyze data
+                let prompt = config.get("prompt")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Analyze the following data and provide a structured analysis:");
+                let model = config.get("model")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("deepseek/deepseek-chat");
+                let threshold = config.get("threshold")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+
+                let node = json!({
+                    "id": node_id,
+                    "name": step_name,
+                    "type": "n8n-nodes-base.httpRequest",
+                    "typeVersion": 4.2,
+                    "position": [x_pos, y_base],
+                    "parameters": {
+                        "method": "POST",
+                        "url": format!("{}/api/v1/analyze", callback_base_url.trim_end_matches('/')),
+                        "authentication": "genericCredentialType",
+                        "genericAuthType": "httpHeaderAuth",
+                        "sendHeaders": true,
+                        "headerParameters": {
+                            "parameters": [
+                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Content-Type", "value": "application/json" }
+                            ]
+                        },
+                        "sendBody": true,
+                        "bodyParameters": {
+                            "parameters": [
+                                { "name": "prompt", "value": prompt },
+                                { "name": "data", "value": "={{ $json }}" },
+                                { "name": "model", "value": model },
+                                { "name": "threshold", "value": threshold }
+                            ]
+                        }
+                    }
+                });
+                nodes.push(node);
+            }
+
+            "report" | "data-card" => {
+                // Push data to dashboard widget
+                let metric_key = config.get("metric_key")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let period = config.get("period")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                let node = json!({
+                    "id": node_id,
+                    "name": step_name,
+                    "type": "n8n-nodes-base.httpRequest",
+                    "typeVersion": 4.2,
+                    "position": [x_pos, y_base],
+                    "parameters": {
+                        "method": "POST",
+                        "url": format!("{}/api/dashboard/push-widget-data", callback_base_url.trim_end_matches('/')),
+                        "authentication": "genericCredentialType",
+                        "genericAuthType": "httpHeaderAuth",
+                        "sendHeaders": true,
+                        "headerParameters": {
+                            "parameters": [
+                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Content-Type", "value": "application/json" }
+                            ]
+                        },
+                        "sendBody": true,
+                        "bodyParameters": {
+                            "parameters": [
+                                { "name": "metric_key", "value": metric_key },
+                                { "name": "period", "value": period },
+                                { "name": "value", "value": "={{ $json }}" }
+                            ]
+                        }
+                    }
+                });
+                nodes.push(node);
+            }
+
+            "alert" | "notify" => {
+                // Notification/alert step (already handled below, but capture here too)
+                // Fall through to the existing notify handler by re-matching
+                // We'll replicate the notify logic here for completeness
+                let channel = config.get("channel")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("email");
+                let recipient = config.get("recipient")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let subject = config.get("subject")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("WorkflowSwift Alert");
+                let message = config.get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                let node = json!({
+                    "id": node_id,
+                    "name": step_name,
+                    "type": "n8n-nodes-base.httpRequest",
+                    "typeVersion": 4.2,
+                    "position": [x_pos, y_base],
+                    "parameters": {
+                        "method": "POST",
+                        "url": format!("{}/api/notifications/{}", callback_base_url.trim_end_matches('/'), channel),
+                        "authentication": "genericCredentialType",
+                        "genericAuthType": "httpHeaderAuth",
+                        "sendHeaders": true,
+                        "headerParameters": {
+                            "parameters": [
+                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" }
+                            ]
+                        },
+                        "sendBody": true,
+                        "bodyParameters": {
+                            "parameters": [
+                                { "name": "to", "value": recipient },
+                                { "name": "subject", "value": subject },
+                                { "name": "message", "value": message }
+                            ]
+                        }
+                    }
+                });
+                nodes.push(node);
+            }
+
+            "validation" | "config" => {
+                // Validation/config step: calls back to WorkflowSwift for validation
+                let checks = config.get("checks")
+                    .and_then(|v| v.as_array())
+                    .map(|a| serde_json::to_string(a).unwrap_or_default())
+                    .unwrap_or_default();
+
+                let node = json!({
+                    "id": node_id,
+                    "name": step_name,
+                    "type": "n8n-nodes-base.httpRequest",
+                    "typeVersion": 4.2,
+                    "position": [x_pos, y_base],
+                    "parameters": {
+                        "method": "POST",
+                        "url": format!("{}/api/v1/workflows/validate-config", callback_base_url.trim_end_matches('/')),
+                        "authentication": "genericCredentialType",
+                        "genericAuthType": "httpHeaderAuth",
+                        "sendHeaders": true,
+                        "headerParameters": {
+                            "parameters": [
+                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Content-Type", "value": "application/json" }
+                            ]
+                        },
+                        "sendBody": true,
+                        "bodyParameters": {
+                            "parameters": [
+                                { "name": "checks", "value": checks },
+                                { "name": "test_connection", "value": config.get("test_connection").and_then(|v| v.as_bool()).unwrap_or(false) }
+                            ]
+                        }
+                    }
+                });
+                nodes.push(node);
+            }
+
+            "init" | "register" | "test" | "log" => {
+                // System steps: generally call back to WorkflowSwift internal API
+                let endpoint = match step_type {
+                    "init" => "/api/v1/engine/init",
+                    "register" => "/api/v1/engine/register",
+                    "test" => "/api/v1/engine/test",
+                    "log" => "/api/v1/engine/log",
+                    _ => "/api/v1/engine/action",
+                };
+
+                let node = json!({
+                    "id": node_id,
+                    "name": step_name,
+                    "type": "n8n-nodes-base.httpRequest",
+                    "typeVersion": 4.2,
+                    "position": [x_pos, y_base],
+                    "parameters": {
+                        "method": "POST",
+                        "url": format!("{}{}", callback_base_url.trim_end_matches('/'), endpoint),
+                        "authentication": "genericCredentialType",
+                        "genericAuthType": "httpHeaderAuth",
+                        "sendHeaders": true,
+                        "headerParameters": {
+                            "parameters": [
+                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Content-Type", "value": "application/json" }
+                            ]
+                        },
+                        "sendBody": true,
+                        "bodyParameters": {
+                            "parameters": [
+                                { "name": "config", "value": "={{ $json }}" },
+                                { "name": "step_name", "value": step_name }
+                            ]
+                        }
+                    }
+                });
+                nodes.push(node);
+            }
+
+            "trigger" | "poll" => {
+                // Trigger/poll steps: these are handled at the n8n webhook/schedule level
+                // For the execution pipeline, just pass through as a no-op transform node
+                let node = json!({
+                    "id": node_id,
+                    "name": step_name,
+                    "type": "n8n-nodes-base.noOp",
+                    "typeVersion": 1,
+                    "position": [x_pos, y_base],
+                    "parameters": {}
+                });
+                nodes.push(node);
+            }
+
             "fork" | "branch" => {
                 let branches = config.get("branches")
                     .and_then(|v| v.as_array())
@@ -1130,12 +1432,23 @@ return output;
 
 /// Serialize the generated workflow to n8n-compatible JSON.
 pub fn to_n8n_json(wf: &N8nWorkflow) -> Value {
+    let now = chrono::Utc::now().to_rfc3339();
     json!({
+        "id": Uuid::new_v4().to_string(),
         "name": wf.name,
         "nodes": wf.nodes,
         "connections": wf.connections,
         "settings": wf.settings,
         "versionId": Uuid::new_v4().to_string(),
         "active": false,
+        "createdAt": &now,
+        "updatedAt": &now,
+        "description": null,
+        "isArchived": false,
+        "staticData": null,
+        "meta": null,
+        "nodeGroups": [],
+        "pinData": null,
+        "tags": [],
     })
 }
