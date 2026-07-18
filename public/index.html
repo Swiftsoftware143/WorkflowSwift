@@ -2933,12 +2933,13 @@ async function loadPlanList(){
   const plans=data?.plans||[];
   if(!plans.length){el.innerHTML='<div class="empty">No plans created yet</div>';return}
   el.innerHTML='<div class="card" style="padding:0;overflow-x:auto"><table>'
-    +'<tr><th>Name</th><th>Slug</th><th>Monthly</th><th>Yearly</th><th>Workflows</th><th>Users</th><th>Retention</th><th>n8n</th><th>Active</th><th>Actions</th></tr>'
+    +'<tr><th>Name</th><th>Slug</th><th>Monthly</th><th>Yearly</th><th>Provider</th><th>Workflows</th><th>Users</th><th>Retention</th><th>n8n</th><th>Active</th><th>Actions</th></tr>'
     +plans.map(p=>'<tr>'
       +'<td><strong>'+esc(p.name)+'</strong>'+(p.description?'<br><span style="font-size:11px;color:var(--text2)">'+esc(p.description)+'</span>':'')+'</td>'
       +'<td>'+esc(p.slug)+'</td>'
       +'<td>'+(p.price_monthly||'--')+'</td>'
       +'<td>'+(p.price_yearly||'--')+'</td>'
+      +'<td>'+(p.payment_provider?esc(p.payment_provider):'<span style="color:var(--text2)">default</span>')+'</td>'
       +'<td>'+(p.max_workflows||0)+'</td>'
       +'<td>'+(p.max_users||0)+'</td>'
       +'<td>'+(p.retention_days||30)+'d</td>'
@@ -2975,7 +2976,12 @@ async function showPlanForm(id){
     +'<div><label>Yearly Price</label><input id="plan-yearly" value="'+esc(plan.price_yearly||'')+'" placeholder="e.g. 299.99"></div>'
     +'</div>'
     +'<label>Checkout URL</label><input id="plan-checkout" value="'+esc(plan.checkout_url||'')+'" placeholder="Stripe/Lemon link">'
-    +'<div style="margin-top:12px"><label style="display:inline-flex;align-items:center;gap:8px"><input type="checkbox" id="plan-active" '+(plan.is_active!==false?'checked':'')+'> Active</label></div>'
+    +'<label>Payment Provider</label><select id="plan-provider" style="margin-bottom:12px">'
+    +'<option value="">Default (Stripe)</option>'
+    +'<option value="stripe" '+(plan.payment_provider==='stripe'?'selected':'')+'>Stripe</option>'
+    +'<option value="paypal" '+(plan.payment_provider==='paypal'?'selected':'')+'>PayPal</option>'
+    +'</select>'
+    +'<div style="margin-top:12px"><label style="display:inline-flex;align-items:center;gap:8px"><input type="checkbox" id="plan-active" '+(plan.is_active!==false?'checked':'')+'> Active</label></div>'},{
     +'<h3 style="margin-top:16px;margin-bottom:8px;font-size:14px;color:var(--text2)">Feature Limits</h3>'
     +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
   
@@ -3037,6 +3043,7 @@ async function savePlan(id){
     price_monthly:$('plan-monthly')?.value||null,
     price_yearly:$('plan-yearly')?.value||null,
     checkout_url:$('plan-checkout')?.value||null,
+    payment_provider:$('plan-provider')?.value||null,
     is_active:!!$('plan-active')?.checked,
   };
   const feature_limits={};
