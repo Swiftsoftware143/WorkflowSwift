@@ -854,3 +854,85 @@ psql -d workflowswift -c "SELECT template_type, name FROM email_templates;"
 # Verify SMTP config
 systemctl status workflowswift-api.service | grep smtp
 ```
+
+---
+
+## Payment Providers (Admin Configuration)
+
+WorkflowSwift supports **Stripe** and **PayPal** payments. As an admin, you configure the API keys and webhook secrets. Once set, users can create checkout sessions in their workflows.
+
+### Migration
+
+Before use, run the payment providers migration:
+```bash
+psql -d workflowswift -f migrations/041_payment_providers.sql
+```
+
+This creates three tables:
+- `payment_providers` — Stores Stripe/PayPal API keys, webhook secrets, test mode flags
+- `checkout_sessions` — Tracks every payment session from creation through completion
+- `payment_webhook_events` — Logs all incoming webhook events for debugging
+
+### Admin API Endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/v1/admin/payment-providers` | GET | List all configured payment providers (keys masked) |
+| `/api/v1/admin/payment-providers` | POST | Create or update a payment provider |
+| `/api/v1/admin/payment-providers/{provider_type}` | DELETE | Remove a payment provider |
+| `/api/v1/webhooks/stripe` | POST | Stripe webhook receiver (public) |
+| `/api/v1/webhooks/paypal` | POST | PayPal webhook receiver (public) |
+
+### Configure a payment provider (POST)
+
+```json
+POST /api/v1/admin/payment-providers
+{
+  "provider_type": "stripe",
+  "label": "Stripe Production",
+  "is_active": true,
+  "is_test_mode": false,
+  "publishable_key": "pk_live_abc123",
+  "api_key": "sk_live_abc123",
+  "webhook_secret": "whsec_abc123",
+  "config": {
+    "webhook_url": "https://api.workflowswift.com/api/v1/webhooks/stripe"
+  }
+}
+```
+
+**Supported provider types:** `stripe`, `paypal`, `square`, `paddle`
+
+When **updating** an existing provider, `api_key` and `webhook_secret` are optional — omit them to keep the existing values.
+
+### Provider key status
+
+The GET response includes a `key_status` field:
+- `configured` — API key is set
+- `not_configured` — No API key stored yet
+
+### Webhook setup
+
+1. In your Stripe dashboard, add an endpoint pointing to `https://api.workflowswift.com/api/v1/webhooks/stripe`
+2. Copy the signing secret and set it as `webhook_secret` in the provider config
+3. For PayPal, use `https://api.workflowswift.com/api/v1/webhooks/paypal`
+
+> ⚠️ Keys are encrypted at rest using Postgres column encryption. The `api_key` and `webhook_secret` fields are never returned in GET responses — only `key_status: "configured"` is shown.
+
+### Checkout flow overview
+
+1. Admin configures a provider via the admin API
+2. Any authenticated user can call `POST /api/v1/checkout/create` with `provider_type`, `amount`, `currency`, `success_url`, `cancel_url`
+3. The API creates a provider-side checkout session and returns a `redirect_url`
+4. User completes payment on Stripe/PayPal
+5. Webhook confirms payment → session marked `completed`
+6. User can check session status via `GET /api/v1/checkout/sessions`
+
+### Session states
+
+| State | Meaning |
+|---|---|
+| `pending` | Created, awaiting user |
+| `completed` | Payment confirmed via webhook |
+| `expired` | Session expired (no payment) |
+| `failed` | Payment declined or error |

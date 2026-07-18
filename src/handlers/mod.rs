@@ -48,3 +48,4 @@ pub mod internal_handler;
 pub mod rendition_handler;
 pub mod admin_settings_handler;
 pub mod site_handler;
+pub mod checkout_handler;

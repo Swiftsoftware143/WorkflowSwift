@@ -3,6 +3,23 @@ use axum::{
     http::HeaderMap,
     response::IntoResponse,
 };
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+pub struct AssignTagRequest {
+    pub tenant_id: Uuid,
+    pub entity_id: Uuid,
+    pub entity_type: String,
+    pub tag_id: Uuid,
+}
+
+#[derive(Deserialize)]
+pub struct RemoveTagRequest {
+    pub tenant_id: Uuid,
+    pub entity_id: Uuid,
+    pub entity_type: String,
+    pub tag_id: Uuid,
+}
 use serde_json::json;
 use uuid::Uuid;
 use sqlx::Row;
@@ -127,4 +144,60 @@ fn generate_sample_data(metric_key: &str) -> serde_json::Value {
         // Default: simple count
         json!({"value": rng.gen_range(5..200)})
     }
+}
+
+/// POST /api/v1/internal/tags/assign — internal tag assignment, no JWT
+pub async fn internal_assign_tag(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<AssignTagRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let key = headers.get("x-internal-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if key != state.config.internal_sync_key {
+        return Err(AppError::Forbidden("Invalid internal key".into()));
+    }
+
+    sqlx::query(
+        r#"INSERT INTO entity_tags (tenant_id, entity_id, entity_type, tag_id)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (tenant_id, entity_id, entity_type, tag_id) DO NOTHING"#
+    )
+    .bind(req.tenant_id)
+    .bind(req.entity_id)
+    .bind(&req.entity_type)
+    .bind(req.tag_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| AppError::Internal(format!("Tag assign DB error: {e}")))?;
+
+    Ok(Json(json!({"status": "ok"})))
+}
+
+/// POST /api/v1/internal/tags/delete — internal tag removal, no JWT
+pub async fn internal_remove_tag(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<RemoveTagRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let key = headers.get("x-internal-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if key != state.config.internal_sync_key {
+        return Err(AppError::Forbidden("Invalid internal key".into()));
+    }
+
+    sqlx::query(
+        r#"DELETE FROM entity_tags WHERE tenant_id = $1 AND entity_id = $2 AND entity_type = $3 AND tag_id = $4"#
+    )
+    .bind(req.tenant_id)
+    .bind(req.entity_id)
+    .bind(&req.entity_type)
+    .bind(req.tag_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| AppError::Internal(format!("Tag remove DB error: {e}")))?;
+
+    Ok(Json(json!({"status": "ok"})))
 }

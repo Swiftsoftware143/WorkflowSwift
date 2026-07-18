@@ -1,0 +1,277 @@
+{
+  "name": "ZaarHub — Fill Missing Business Images",
+  "nodes": [
+    {
+      "id": "cron-trigger",
+      "name": "Schedule (Weekly)",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {
+              "mode": "everyWeek",
+              "weekday": 1,
+              "hour": 3
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 500],
+      "parameters": {
+        "path": "zaarhub/fill-missing-images",
+        "options": {}
+      },
+      "webhookId": "zaarhub-fill-images-v1"
+    },
+    {
+      "id": "merge-triggers",
+      "name": "Merge Triggers",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2,
+      "position": [450, 400],
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition"
+      }
+    },
+    {
+      "id": "fetch-missing",
+      "name": "Fetch Missing Businesses",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [650, 400],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, name, address, city, state, latitude, longitude, directory_slug FROM (SELECT b.id, b.name, b.address, b.city, b.state, b.latitude, b.longitude, d.slug AS directory_slug FROM businesses b JOIN directories d ON d.id = b.directory_id WHERE b.images IS NULL OR b.images = '[]'::jsonb) sub",
+        "additionalFields": {}
+      },
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "Multidirectory DB"
+        }
+      }
+    },
+    {
+      "id": "split-batch",
+      "name": "Split into Individual Queries",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 2,
+      "position": [850, 400],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      }
+    },
+    {
+      "id": "search-places",
+      "name": "Google Places Text Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1050, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "https://places.googleapis.com/v1/places:searchText",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "textQuery",
+              "value": "={{ $json.name + ' ' + $json.address }}"
+            },
+            {
+              "name": "maxResultCount",
+              "value": 1
+            }
+          ]
+        },
+        "options": {
+          "headers": {
+            "X-Goog-FieldMask": "places.id,places.photos,places.displayName",
+            "Content-Type": "application/json"
+          }
+        },
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "key",
+              "value": "={{ $env.GOOGLE_PLACES_API_KEY || $node[\"Get Provider Key\"].json.api_key }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "get-provider-key",
+      "name": "Get Provider Key",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [1050, 650],
+      "parameters": {
+        "url": "={{ $env.WORKFLOWSWIFT_API_URL || 'http://localhost:8085' }}/api/v1/provider-keys",
+        "options": {
+          "headers": {
+            "Authorization": "Bearer {{ $env.WORKFLOWSWIFT_API_KEY }}"
+          }
+        }
+      }
+    },
+    {
+      "id": "extract-photos",
+      "name": "Extract Photo References",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [1250, 400],
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "business_id",
+              "value": "={{ $json.business_id }}"
+            },
+            {
+              "name": "directory_slug",
+              "value": "={{ $json.directory_slug }}"
+            },
+            {
+              "name": "photos",
+              "value": "={{ $json.json && $json.json.places && $json.json.places.length > 0 ? JSON.stringify($json.json.places[0].photos.map(p => 'places/' + p.name)) : '[]' }}"
+            }
+          ]
+        },
+        "options": {
+          "stripBinary": true
+        }
+      }
+    },
+    {
+      "id": "filter-found",
+      "name": "Filter — Has Photos",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [1450, 400],
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.photos }}",
+              "operation": "notEqual",
+              "value2": "[]"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "update-db",
+      "name": "Update Business Images",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2,
+      "position": [1650, 400],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE businesses SET images = $1::jsonb WHERE id = $2::uuid",
+        "additionalFields": {
+          "queryParams": "={{ $json.photos }}\n={{ $json.business_id }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "1",
+          "name": "Multidirectory DB"
+        }
+      }
+    },
+    {
+      "id": "trigger-regeneration",
+      "name": "Trigger Site Regeneration",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1850, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:3001/api/v1/regenerate",
+        "options": {
+          "headers": {
+            "Content-Type": "application/json"
+          }
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "directory_slug",
+              "value": "={{ $json.directory_slug }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "noop-none",
+      "name": "No Photos Found (skip)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1650, 600],
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Schedule (Weekly)": {
+      "main": [
+        [{ "node": "Merge Triggers", "type": "main", "index": 0 }]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [{ "node": "Merge Triggers", "type": "main", "index": 1 }]
+      ]
+    },
+    "Merge Triggers": {
+      "main": [
+        [{ "node": "Fetch Missing Businesses", "type": "main", "index": 0 }]
+      ]
+    },
+    "Fetch Missing Businesses": {
+      "main": [
+        [{ "node": "Split into Individual Queries", "type": "main", "index": 0 }]
+      ]
+    },
+    "Split into Individual Queries": {
+      "main": [
+        [{ "node": "Google Places Text Search", "type": "main", "index": 0 }]
+      ]
+    },
+    "Google Places Text Search": {
+      "main": [
+        [{ "node": "Extract Photo References", "type": "main", "index": 0 }]
+      ]
+    },
+    "Extract Photo References": {
+      "main": [
+        [{ "node": "Filter — Has Photos", "type": "main", "index": 0 }]
+      ]
+    },
+    "Filter — Has Photos": {
+      "main": [
+        [{ "node": "Update Business Images", "type": "main", "index": 0 }],
+        [{ "node": "No Photos Found (skip)", "type": "main", "index": 1 }]
+      ]
+    },
+    "Update Business Images": {
+      "main": [
+        [{ "node": "Trigger Site Regeneration", "type": "main", "index": 0 }]
+      ]
+    }
+  }
+}
