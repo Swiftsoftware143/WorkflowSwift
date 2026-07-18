@@ -15,6 +15,7 @@ pub struct PlanTier {
     pub checkout_url: Option<String>,
     pub is_active: bool,
     pub sort_order: Option<i32>,
+    pub payment_provider: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 

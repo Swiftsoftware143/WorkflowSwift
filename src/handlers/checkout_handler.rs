@@ -225,13 +225,27 @@ pub async fn create_checkout_session(
     let account_id = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
 
-    let provider_type = req.get("provider_type")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::BadRequest("provider_type is required (stripe, paypal)".into()))?;
-
     let purchasable_type = req.get("purchasable_type")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("purchasable_type is required".into()))?;
+
+    // Resolve payment provider: explicit > plan's payment_provider > error
+    let provider_type = if let Some(pt) = req.get("provider_type").and_then(|v| v.as_str()) {
+        pt.to_string()
+    } else if purchasable_type == "plan" {
+        if let Some(pid) = req.get("purchasable_id").and_then(|v| v.as_str()).and_then(|s| Uuid::parse_str(s).ok()) {
+            sqlx::query_scalar::<_, Option<String>>("SELECT payment_provider FROM plan_tiers WHERE id = $1")
+                .bind(pid)
+                .fetch_optional(&state.db)
+                .await?
+                .flatten()
+                .ok_or_else(|| AppError::BadRequest("No provider_type specified and plan has no payment_provider set".into()))?
+        } else {
+            return Err(AppError::BadRequest("purchasable_id is required for plan checkout".into()));
+        }
+    } else {
+        return Err(AppError::BadRequest("provider_type is required (stripe, paypal)".into()));
+    };
 
     let amount = req.get("amount")
         .and_then(|v| v.as_f64())
@@ -250,7 +264,7 @@ pub async fn create_checkout_session(
     let metadata = req.get("metadata").cloned().unwrap_or(json!({}));
 
     // Get the active provider config
-    let provider = get_active_provider(&state.db, provider_type)
+    let provider = get_active_provider(&state.db, &provider_type)
         .await?
         .ok_or_else(|| AppError::BadRequest(format!("No active {} provider configured", provider_type)))?;
 
@@ -260,7 +274,7 @@ pub async fn create_checkout_session(
     }
 
     // Create checkout session with the provider
-    let provider_session = match provider_type {
+    let provider_session = match provider_type.as_str() {
         "stripe" => create_stripe_session(&api_key, amount, currency, purchasable_type, success_url, cancel_url, &metadata).await?,
         "paypal" => create_paypal_session(&api_key, amount, currency, purchasable_type, success_url, cancel_url, &metadata).await?,
         _ => return Err(AppError::BadRequest(format!("Checkout not supported for provider type: {}", provider_type))),
@@ -280,7 +294,7 @@ pub async fn create_checkout_session(
     .bind(session_id)
     .bind(account_id)
     .bind(user_id)
-    .bind(provider_type)
+    .bind(&provider_type)
     .bind(provider_session_id)
     .bind(purchasable_type)
     .bind(purchasable_id)

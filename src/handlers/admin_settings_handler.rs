@@ -217,7 +217,8 @@ pub async fn admin_list_plans(
         "SELECT id, name, slug, description, price_monthly::text as price_monthly,
                 price_yearly::text as price_yearly, features, checkout_url,
                 is_active, sort_order, created_at,
-                max_workflows, max_users, retention_days, can_export, can_deploy_n8n, has_api_access
+                max_workflows, max_users, retention_days, can_export, can_deploy_n8n, has_api_access,
+                payment_provider
          FROM plan_tiers ORDER BY sort_order ASC NULLS LAST"
     )
     .fetch_all(&state.db)
@@ -242,6 +243,7 @@ pub async fn admin_list_plans(
         let can_export: Option<bool> = row.try_get("can_export").ok();
         let can_deploy_n8n: Option<bool> = row.try_get("can_deploy_n8n").ok();
         let has_api_access: Option<bool> = row.try_get("has_api_access").ok();
+        let payment_provider: Option<String> = row.try_get("payment_provider").ok();
 
         // Get feature_limits for this plan
         let limits = sqlx::query(
@@ -276,6 +278,7 @@ pub async fn admin_list_plans(
             "can_export": can_export,
             "can_deploy_n8n": can_deploy_n8n,
             "has_api_access": has_api_access,
+            "payment_provider": payment_provider,
             "feature_limits": limits_map
         }));
     }
@@ -310,9 +313,11 @@ pub async fn admin_create_plan(
 
     let features_json = features.unwrap_or(json!({}));
 
+    let payment_provider = req.get("payment_provider").and_then(|v| v.as_str()).map(|s| s.to_string());
+
     let plan = sqlx::query(
-        r#"INSERT INTO plan_tiers (id, name, slug, description, price_monthly, price_yearly, features, is_active, sort_order)
-           VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7::jsonb, $8, $9)
+        r#"INSERT INTO plan_tiers (id, name, slug, description, price_monthly, price_yearly, features, is_active, sort_order, payment_provider)
+           VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7::jsonb, $8, $9, $10)
            RETURNING id, name, slug"#,
     )
     .bind(Uuid::new_v4())
@@ -324,6 +329,7 @@ pub async fn admin_create_plan(
     .bind(features_json.to_string())
     .bind(is_active)
     .bind(sort_order)
+    .bind(&payment_provider)
     .fetch_one(&state.db)
     .await?;
 
@@ -372,6 +378,7 @@ pub async fn admin_update_plan_full(
     let can_export = req.get("can_export").and_then(|v| v.as_bool());
     let can_deploy_n8n = req.get("can_deploy_n8n").and_then(|v| v.as_bool());
     let has_api_access = req.get("has_api_access").and_then(|v| v.as_bool());
+    let payment_provider = req.get("payment_provider").and_then(|v| v.as_str()).map(|s| s.to_string());
 
     let name_use = if name.is_empty() {
         let n: String = sqlx::query_scalar("SELECT name FROM plan_tiers WHERE id = $1")
@@ -415,6 +422,7 @@ pub async fn admin_update_plan_full(
     .bind(can_export)
     .bind(can_deploy_n8n)
     .bind(has_api_access)
+    .bind(&payment_provider)
     .bind(id)
     .execute(&state.db)
     .await?;

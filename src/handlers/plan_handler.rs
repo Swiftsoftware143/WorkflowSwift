@@ -19,7 +19,7 @@ pub async fn list_plans(
     State(state): State<AppState>,
 ) -> ApiResult<impl IntoResponse> {
     let plans = sqlx::query_as::<_, PlanTier>(
-        "SELECT id, name, slug, description, price_monthly::text as price_monthly, price_yearly::text as price_yearly, features, checkout_url, is_active, sort_order, created_at FROM plan_tiers WHERE is_active = true ORDER BY sort_order ASC NULLS LAST",
+        "SELECT id, name, slug, description, price_monthly::text as price_monthly, price_yearly::text as price_yearly, features, checkout_url, is_active, sort_order, payment_provider, created_at FROM plan_tiers WHERE is_active = true ORDER BY sort_order ASC NULLS LAST",
     )
     .fetch_all(&state.db)
     .await?;
@@ -55,9 +55,11 @@ pub async fn create_plan(
         return Err(AppError::Validation("Plan name is required".to_string()));
     }
 
+    let payment_provider = req.get("payment_provider").and_then(|v| v.as_str()).map(|s| s.to_string());
+
     let plan = sqlx::query_as::<_, PlanTier>(
-        r#"INSERT INTO plan_tiers (id, name, slug, description, price_monthly, price_yearly, features)
-           VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7::jsonb)
+        r#"INSERT INTO plan_tiers (id, name, slug, description, price_monthly, price_yearly, features, payment_provider)
+           VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7::jsonb, $8)
            RETURNING *"#,
     )
     .bind(Uuid::new_v4())
@@ -67,6 +69,7 @@ pub async fn create_plan(
     .bind(price_monthly)
     .bind(price_yearly)
     .bind(features)
+    .bind(&payment_provider)
     .fetch_one(&state.db)
     .await?;
 
@@ -101,10 +104,12 @@ pub async fn update_plan(
     let is_active = req.get("is_active").and_then(|v| v.as_bool()).unwrap_or(existing.is_active);
     let sort_order = req.get("sort_order").and_then(|v| v.as_i64()).map(|v| v as i32).or(existing.sort_order);
 
+    let payment_provider = req.get("payment_provider").and_then(|v| v.as_str()).map(|s| s.to_string()).or(existing.payment_provider.clone());
+
     sqlx::query(
         r#"UPDATE plan_tiers SET name=$1, slug=$2, description=$3, price_monthly=$4, price_yearly=$5,
-           features=$6::jsonb, checkout_url=$7, is_active=$8, sort_order=$9
-           WHERE id=$10"#,
+           features=$6::jsonb, checkout_url=$7, is_active=$8, sort_order=$9, payment_provider=$10
+           WHERE id=$11"#,
     )
     .bind(&name)
     .bind(&slug)
@@ -115,6 +120,7 @@ pub async fn update_plan(
     .bind(&checkout_url)
     .bind(is_active)
     .bind(sort_order)
+    .bind(&payment_provider)
     .bind(id)
     .execute(&state.db)
     .await?;
@@ -154,7 +160,7 @@ pub async fn admin_list_all_plans(
         return Err(AppError::Forbidden("Only admins can list all plans".to_string()));
     }
     let plans = sqlx::query_as::<_, PlanTier>(
-        "SELECT id, name, slug, description, price_monthly::text as price_monthly, price_yearly::text as price_yearly, features, checkout_url, is_active, sort_order, created_at FROM plan_tiers ORDER BY sort_order ASC NULLS LAST"
+        "SELECT id, name, slug, description, price_monthly::text as price_monthly, price_yearly::text as price_yearly, features, checkout_url, is_active, sort_order, payment_provider, created_at FROM plan_tiers ORDER BY sort_order ASC NULLS LAST"
     )
     .fetch_all(&state.db)
     .await?;
@@ -172,7 +178,7 @@ pub async fn admin_update_plan(
     }
     // Check plan exists
     let existing = sqlx::query_as::<_, PlanTier>(
-        "SELECT id, name, slug, description, price_monthly::text as price_monthly, price_yearly::text as price_yearly, features, checkout_url, is_active, sort_order, created_at FROM plan_tiers WHERE id = $1::uuid"
+        "SELECT id, name, slug, description, price_monthly::text as price_monthly, price_yearly::text as price_yearly, features, checkout_url, is_active, sort_order, payment_provider, created_at FROM plan_tiers WHERE id = $1::uuid"
     )
     .bind(&id)
     .fetch_optional(&state.db)
@@ -186,8 +192,10 @@ pub async fn admin_update_plan(
     let price_yearly = req.get("price_yearly").and_then(|v| v.as_str()).or(existing.price_yearly.as_deref()).unwrap_or("0.00");
     let features = req.get("features").cloned().or_else(|| existing.features.clone());
 
+    let payment_provider = req.get("payment_provider").and_then(|v| v.as_str()).map(|s| s.to_string()).or(existing.payment_provider.clone());
+
     sqlx::query(
-        r#"UPDATE plan_tiers SET name=$1, slug=$2, description=$3, price_monthly=$4::numeric, price_yearly=$5::numeric, features=$6::jsonb WHERE id=$7::uuid"#,
+        r#"UPDATE plan_tiers SET name=$1, slug=$2, description=$3, price_monthly=$4::numeric, price_yearly=$5::numeric, features=$6::jsonb, payment_provider=$7 WHERE id=$8::uuid"#,
     )
     .bind(&name)
     .bind(&slug)
@@ -195,6 +203,7 @@ pub async fn admin_update_plan(
     .bind(price_monthly)
     .bind(price_yearly)
     .bind(&features)
+    .bind(&payment_provider)
     .bind(&id)
     .execute(&state.db)
     .await?;
@@ -211,7 +220,7 @@ pub async fn admin_get_plan(
         return Err(AppError::Forbidden("Only admins can view plans".to_string()));
     }
     let plan = sqlx::query_as::<_, PlanTier>(
-        "SELECT id, name, slug, description, price_monthly::text as price_monthly, price_yearly::text as price_yearly, features, checkout_url, is_active, sort_order, created_at FROM plan_tiers WHERE id = $1::uuid"
+        "SELECT id, name, slug, description, price_monthly::text as price_monthly, price_yearly::text as price_yearly, features, checkout_url, is_active, sort_order, payment_provider, created_at FROM plan_tiers WHERE id = $1::uuid"
     )
     .bind(&id)
     .fetch_optional(&state.db)
