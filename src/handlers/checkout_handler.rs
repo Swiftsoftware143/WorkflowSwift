@@ -255,11 +255,24 @@ pub async fn create_checkout_session(
     let purchasable_id = req.get("purchasable_id").and_then(|v| v.as_str())
         .and_then(|s| Uuid::parse_str(s).ok());
 
-    let success_url = req.get("success_url").and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::BadRequest("success_url is required".into()))?;
+    // Resolve success_url: explicit > plan's thank_you_url > /thank-you.html
+    let success_url = if let Some(url) = req.get("success_url").and_then(|v| v.as_str()) {
+        url.to_string()
+    } else if let Some(pid) = purchasable_id {
+        sqlx::query_scalar::<_, Option<String>>(
+            "SELECT thank_you_url FROM plan_tiers WHERE id = $1"
+        )
+        .bind(pid)
+        .fetch_optional(&state.db)
+        .await?
+        .flatten()
+        .unwrap_or_else(|| "/thank-you.html".to_string())
+    } else {
+        "/thank-you.html".to_string()
+    };
 
     let cancel_url = req.get("cancel_url").and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::BadRequest("cancel_url is required".into()))?;
+        .unwrap_or("/");
 
     let metadata = req.get("metadata").cloned().unwrap_or(json!({}));
 
