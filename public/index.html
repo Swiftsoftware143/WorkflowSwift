@@ -2981,6 +2981,7 @@ async function showPlanForm(id){
     +'<option value="stripe" '+(plan.payment_provider==='stripe'?'selected':'')+'>Stripe</option>'
     +'<option value="paypal" '+(plan.payment_provider==='paypal'?'selected':'')+'>PayPal</option>'
     +'</select>'
+    +'<label>Thank-You URL (optional)</label><input id="plan-thankyou" value="'+esc(plan.thank_you_url||'')+'" placeholder="/thank-you.html">' +'<div style="font-size:11px;color:var(--text2);margin-bottom:12px">Leave blank for default /thank-you.html. Supports full URLs.</div>'
     +'<div style="margin-top:12px"><label style="display:inline-flex;align-items:center;gap:8px"><input type="checkbox" id="plan-active" '+(plan.is_active!==false?'checked':'')+'> Active</label></div>'},{
     +'<h3 style="margin-top:16px;margin-bottom:8px;font-size:14px;color:var(--text2)">Feature Limits</h3>'
     +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
@@ -3044,6 +3045,7 @@ async function savePlan(id){
     price_yearly:$('plan-yearly')?.value||null,
     checkout_url:$('plan-checkout')?.value||null,
     payment_provider:$('plan-provider')?.value||null,
+    thank_you_url:$('plan-thankyou')?.value||null,
     is_active:!!$('plan-active')?.checked,
   };
   const feature_limits={};
