@@ -683,3 +683,53 @@ Click the **?** icon in the sidebar to access this guide at any time. The guide 
 - **Templates**: Team members with only `use` permission can apply templates but cannot create or modify them
 - **Settings**: If `settings` is not included in a team member's permissions, the Settings menu will be hidden
 - **Integration Center**: Visible to all users and team members, but API key management may be restricted based on permissions
+
+---
+
+## Checkout & Payments
+
+WorkflowSwift now supports **Stripe** and **PayPal** checkout sessions, letting you accept payments directly within your workflows.
+
+### How payments work
+
+1. An **admin** configures one or more payment providers (Stripe/PayPal) with API keys
+2. A workflow step calls the checkout API with an amount, currency, and callback URLs
+3. The user is redirected to the provider's hosted checkout page
+4. The payment is confirmed via webhook — the session is marked `completed` automatically
+
+### Available endpoints (user-facing)
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/v1/checkout/create` | POST | Create a Stripe or PayPal checkout session |
+| `/api/v1/checkout/sessions` | GET | List your checkout sessions and their status |
+
+### Creating a checkout session
+
+```json
+POST /api/v1/checkout/create
+{
+  "provider_type": "stripe",
+  "purchasable_type": "subscription",
+  "purchasable_id": "550e8400-e29b-41d4-a716-446655440000",
+  "amount": 29.99,
+  "currency": "USD",
+  "success_url": "https://app.workflowswift.com/payment/success",
+  "cancel_url": "https://app.workflowswift.com/payment/cancel",
+  "metadata": {
+    "workflow_id": "abc-123",
+    "user_email": "user@example.com"
+  }
+}
+```
+
+**Response:** returns a redirect URL to the provider's hosted checkout page and a `session_id` you can use to track the session.
+
+### Session statuses
+
+- `pending` — Created, awaiting user payment
+- `completed` — Payment confirmed via webhook
+- `expired` — Session expired without payment
+- `failed` — Payment was declined or errored
+
+> 💡 Payment providers must be configured by an admin before they appear as available. If you see "No active provider configured", contact your admin.

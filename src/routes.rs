@@ -360,6 +360,12 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/user-keys", user_key_routes)
         .route("/impersonate", post(crate::handlers::admin_settings_handler::admin_impersonate))
         .route("/stop-impersonation", post(crate::handlers::admin_settings_handler::admin_stop_impersonation))
+        // Checkout / Payment routes
+        .route("/checkout/create", post(handlers::checkout_handler::create_checkout_session))
+        .route("/checkout/sessions", get(handlers::checkout_handler::list_checkout_sessions))
+        .route("/payment-providers", get(handlers::checkout_handler::list_payment_providers)
+            .post(handlers::checkout_handler::upsert_payment_provider))
+        .route("/payment-providers/{provider_type}", delete(handlers::checkout_handler::delete_payment_provider))
 
         .nest("/admin", admin_routes)
         .layer(axum::middleware::from_fn_with_state(
@@ -373,9 +379,14 @@ pub fn create_router(state: AppState) -> Router {
         .route("/health", get(health_check))
         .route("/internal/portfolio-companies", post(handlers::portfolio_handler::internal_create_portfolio_company))
         .route("/internal/dashboard-data-seed", post(handlers::internal_handler::seed_dashboard_data))
+        .route("/internal/tags/assign", post(handlers::internal_handler::internal_assign_tag))
+        .route("/internal/tags/delete", post(handlers::internal_handler::internal_remove_tag))
         .route("/provider-presets", get(handlers::integration_dispatch_handler::list_provider_presets))
         .route("/available-providers", get(handlers::provider_keys_handler::list_available_providers))
-        .route("/incoming", post(handlers::incoming_handler::receive_incoming));
+        .route("/incoming", post(handlers::incoming_handler::receive_incoming))
+        // Public webhooks (no auth — signature verification is done in the handler)
+        .route("/webhooks/stripe", post(handlers::checkout_handler::stripe_webhook))
+        .route("/webhooks/paypal", post(handlers::checkout_handler::paypal_webhook));
 
     // Combine: public + protected merged
     let api_v1 = Router::new()
