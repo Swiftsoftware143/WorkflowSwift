@@ -282,6 +282,8 @@ pub fn create_router(state: AppState) -> Router {
 
     // ── Admin routes (protected by admin middleware) ──
     let admin_routes = Router::new()
+        // Usage dashboard
+        .route("/usage", get(handlers::admin_settings_handler::admin_usage_dashboard))
         // Settings
         .route("/settings", get(handlers::admin_settings_handler::list_settings))
         .route("/settings/{key}", get(handlers::admin_settings_handler::get_setting)
@@ -382,6 +384,7 @@ pub fn create_router(state: AppState) -> Router {
     let public_routes = Router::new()
         .nest("/auth", auth_public)
         .route("/health", get(health_check))
+        .route("/extension.zip", get(handlers::extension_download_handler::download_extension))
         .route("/internal/portfolio-companies", post(handlers::portfolio_handler::internal_create_portfolio_company))
         .route("/internal/dashboard-data-seed", post(handlers::internal_handler::seed_dashboard_data))
         .route("/internal/tags/assign", post(handlers::internal_handler::internal_assign_tag))

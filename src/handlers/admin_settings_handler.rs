@@ -602,6 +602,61 @@ pub async fn admin_set_account_retention(
     })))
 }
 
+/// GET /api/v1/admin/usage — aggregated usage stats per account
+/// Shows credit balance, workflow runs, n8n provisioned status
+pub async fn admin_usage_dashboard(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
+    require_admin(&claims)?;
+
+    let rows = sqlx::query(
+        r#"SELECT
+            a.id as aid,
+            a.name as account_name,
+            COALESCE(ct.balance, 0) as credits_balance,
+            COALESCE(wf.run_count, 0) as workflows_run,
+            CASE WHEN n8n.aid IS NOT NULL THEN true ELSE false END as n8n_provisioned,
+            a.created_at
+           FROM accounts a
+           LEFT JOIN (
+               SELECT aid, SUM(amount) as balance
+               FROM credit_transactions
+               GROUP BY aid
+           ) ct ON ct.aid = a.id
+           LEFT JOIN (
+               SELECT aid, COUNT(*) as run_count
+               FROM workflow_instances
+               GROUP BY aid
+           ) wf ON wf.aid = a.id
+           LEFT JOIN n8n_account_config n8n ON n8n.aid = a.id
+           ORDER BY a.created_at DESC"#
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut result = Vec::new();
+    for row in &rows {
+        let aid: Uuid = row.try_get("aid")?;
+        let account_name: Option<String> = row.try_get("account_name").ok();
+        let credits_balance: i64 = row.try_get("credits_balance").unwrap_or(0);
+        let workflows_run: i64 = row.try_get("workflows_run").unwrap_or(0);
+        let n8n_provisioned: bool = row.try_get("n8n_provisioned").unwrap_or(false);
+        let created_at: chrono::DateTime<chrono::Utc> = row.try_get("created_at")?;
+
+        result.push(json!({
+            "aid": aid.to_string(),
+            "account_name": account_name,
+            "credits_balance": credits_balance,
+            "workflows_run": workflows_run,
+            "n8n_provisioned": n8n_provisioned,
+            "created_at": created_at.to_rfc3339()
+        }));
+    }
+
+    Ok(Json(json!({"accounts": result, "total": result.len()})))
+}
+
 // ── Admin Account Creation ──
 
 /// POST /api/v1/admin/accounts/create
