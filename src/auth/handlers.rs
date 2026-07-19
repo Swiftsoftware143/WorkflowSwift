@@ -100,6 +100,9 @@ pub async fn register(
     use crate::handlers::integration_center_handler;
     let _ = integration_center_handler::seed_user_keys(&state.db, user_id, aid).await;
 
+    // Provision n8n tenant config for this account
+    crate::n8n_provision::provision_n8n_for_account(&state.db, aid).await;
+
     // Assign plan if provided, or use default Free plan
     let plan_slug = req.plan_slug.as_deref().unwrap_or("free");
     let plan_id: Option<Uuid> = sqlx::query_scalar(
