@@ -13,10 +13,10 @@ pub async fn provision_n8n_for_account(pool: &PgPool, aid: Uuid) {
     let n8n_url = env::var("N8N_WEBHOOK_URL")
         .unwrap_or_else(|_| "http://user-n8n-webhook:5679".to_string());
 
-    // Upsert into tenant_n8n_config
+    // Upsert into n8n_account_config
     let result = sqlx::query(
         r#"
-        INSERT INTO tenant_n8n_config (id, aid, n8n_url, n8n_api_key, is_active)
+        INSERT INTO n8n_account_config (id, aid, n8n_url, n8n_api_key, is_active)
         VALUES ($1, $2, $3, $4, true)
         ON CONFLICT (aid) DO UPDATE SET
             n8n_url = EXCLUDED.n8n_url,
