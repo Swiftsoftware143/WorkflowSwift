@@ -29,7 +29,7 @@ async function loadSettings() {
   try {
     const result = await chrome.storage.local.get(['wsToken', 'wsBaseUrl', 'autoDetect', 'backgroundPolling']);
     document.getElementById('wsToken').value = result.wsToken || '';
-    document.getElementById('wsBaseUrl').value = result.wsBaseUrl || 'https://workflowswift.netlify.app/api';
+    document.getElementById('wsBaseUrl').value = result.wsBaseUrl || 'https://workflowswift.com/api';
 
     document.getElementById('autoDetect').checked = result.autoDetect !== false; // default true
     document.getElementById('backgroundPolling').checked = result.backgroundPolling !== false; // default true
@@ -71,7 +71,7 @@ function setupListeners() {
 
 async function saveSettings() {
   const token = document.getElementById('wsToken').value.trim();
-  const baseUrl = document.getElementById('wsBaseUrl').value.trim() || 'https://workflowswift.netlify.app/api';
+  const baseUrl = document.getElementById('wsBaseUrl').value.trim() || 'https://workflowswift.com/api';
   const autoDetect = document.getElementById('autoDetect').checked;
   const backgroundPolling = document.getElementById('backgroundPolling').checked;
 
@@ -118,7 +118,7 @@ async function testConnection() {
   const btn = document.getElementById('testConnectionBtn');
   const resultEl = document.getElementById('testResult');
   const token = document.getElementById('wsToken').value.trim();
-  const baseUrl = document.getElementById('wsBaseUrl').value.trim() || 'https://workflowswift.netlify.app/api';
+  const baseUrl = document.getElementById('wsBaseUrl').value.trim() || 'https://workflowswift.com/api';
 
   if (!token) {
     resultEl.className = 'test-result error';
@@ -184,7 +184,7 @@ async function clearData() {
     await chrome.storage.local.remove(['wsToken', 'wsBaseUrl', 'bridgeHistory']);
 
     document.getElementById('wsToken').value = '';
-    document.getElementById('wsBaseUrl').value = 'https://workflowswift.netlify.app/api';
+    document.getElementById('wsBaseUrl').value = 'https://workflowswift.com/api';
     document.getElementById('testResult').className = 'test-result';
     document.getElementById('testResult').style.display = 'none';
 
