@@ -38,7 +38,7 @@ async fn main() {
     tracing::info!("Running database migrations...");
     db::run_migrations(&pool).await;
 
-    let rate_limiters = crate::rate_limit::RateLimiters::new(100, 200);
+    let rate_limiters = crate::rate_limit::RateLimiters::new(30, 10);
     let provider_key_cache = crate::rate_limit::ProviderKeyCache::new(300); // 5 min TTL
 
     let state = AppState {
