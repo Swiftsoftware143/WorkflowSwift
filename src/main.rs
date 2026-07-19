@@ -12,6 +12,7 @@ mod features;
 mod routes;
 mod rate_limit;
 mod n8n_converter;
+mod n8n_provision;
 mod security;
 
 use std::time::Duration;
