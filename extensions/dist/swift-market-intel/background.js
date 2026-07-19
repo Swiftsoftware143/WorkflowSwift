@@ -549,6 +549,79 @@ const PlatformDetectors = {
       }
     },
 
+
+
+    facebook: {
+      name: 'Facebook',
+      slug: 'facebook',
+      icon: '👍',
+      color: '#1877F2',
+      patterns: [
+        /^(https?:\/\/)?(www\.)?facebook\.com/i,
+        /^(https?:\/\/)?(www\.)?fb\.com/i
+      ],
+      scrapeType: 'social_marketplace',
+      features: ['marketplace_listings', 'pages', 'events'],
+      selectors: {
+        marketplaceItem: '[data-testid="marketplace_title"], h1[class*="x1heor9g"]',
+        price: '[data-testid="marketplace_price"], span[dir="auto"]:contains("$")',
+        pageName: '[data-testid="page_title"], h1[class*="x1heor9g"]'
+      }
+    },
+
+    craigslist: {
+      name: 'Craigslist',
+      slug: 'craigslist',
+      icon: '📋',
+      color: '#800000',
+      patterns: [
+        /^(https?:\/\/)?([a-z0-9-]+\.)?craigslist\.(org|com)/i
+      ],
+      scrapeType: 'classifieds',
+      features: ['listings', 'prices', 'categories'],
+      selectors: {
+        title: '#titletextonly, .postingtitletext span[property="name"]',
+        price: '.postingtitletext .price, .postingprice .price',
+        body: '#postingbody, .postingbody'
+      }
+    },
+
+    shopify: {
+      name: 'Shopify',
+      slug: 'shopify',
+      icon: '🛍️',
+      color: '#96BF48',
+      patterns: [
+        /^(https?:\/\/)?([a-z0-9-]+\.)?shopify\.com/i,
+        /^(https?:\/\/)?([a-z0-9-]+\.)?myshopify\.com/i
+      ],
+      scrapeType: 'ecommerce_platform',
+      features: ['products', 'pricing', 'collections', 'analytics'],
+      selectors: {
+        productTitle: 'h1[class*="product"], .product__title, h1[itemprop="name"]',
+        productPrice: '.product__price, .price-item, [data-product-price], span[itemprop="price"]',
+        storeName: '.shop-name, .site-header__logo a'
+      }
+    },
+
+    alibaba: {
+      name: 'Alibaba',
+      slug: 'alibaba',
+      icon: '🏭',
+      color: '#FF6A00',
+      patterns: [
+        /^(https?:\/\/)?([a-z0-9-]+\.)?alibaba\.com/i,
+        /^(https?:\/\/)?([a-z0-9-]+\.)?aliexpress\.com/i
+      ],
+      scrapeType: 'wholesale_marketplace',
+      features: ['products', 'suppliers', 'pricing', 'ratings'],
+      selectors: {
+        productTitle: 'h1[class*="title"], [data-pl="product-title"], .product-title',
+        price: '[class*="price"], .price, [data-pl="price"]',
+        supplier: '[class*="supplier"], [data-pl="supplier"], .company-name'
+      }
+    },
+
     general: {
       name: 'General',
       slug: 'general',
@@ -572,7 +645,7 @@ const PlatformDetectors = {
     // Check known platforms first (ordered by specificity)
     const platformOrder = [
       'etsy', 'pinterest', 'tiktok', 'yelp', 'google_maps',
-      'instagram', 'amazon', 'ebay', 'general'
+      'instagram', 'amazon', 'ebay', 'facebook', 'craigslist', 'shopify', 'alibaba', 'general'
     ];
 
     for (const slug of platformOrder) {
@@ -1955,7 +2028,7 @@ async function getStatus() {
     lastPollTime: STATE.lastPollTime,
     supportedPlatforms: _detectors
       ? _detectors.getSupportedPlatforms()
-      : ['etsy', 'pinterest', 'tiktok', 'yelp', 'google_maps', 'instagram', 'amazon', 'ebay']
+      : ['etsy', 'pinterest', 'tiktok', 'yelp', 'google_maps', 'instagram', 'amazon', 'ebay', 'facebook', 'craigslist', 'shopify', 'alibaba']
   };
 }
 
