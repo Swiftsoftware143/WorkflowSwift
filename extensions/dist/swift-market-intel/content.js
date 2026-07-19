@@ -54,6 +54,10 @@
     if (h.includes('instagram.com')) return 'instagram';
     if (h.includes('amazon.com') || h.includes('amazon.co.uk')) return 'amazon';
     if (h.includes('ebay.com') || h.includes('ebay.co.uk')) return 'ebay';
+    if (h.includes('facebook.com') || h.includes('fb.com')) return 'facebook';
+    if (h.includes('craigslist.org') || h.includes('craigslist.com')) return 'craigslist';
+    if (h.includes('shopify.com') || h.includes('myshopify.com')) return 'shopify';
+    if (h.includes('alibaba.com') || h.includes('aliexpress.com')) return 'alibaba';
     return 'general';
   }
 
@@ -87,6 +91,10 @@
       case 'instagram': return extractInstagram();
       case 'amazon': return extractAmazon();
       case 'ebay': return extractEbay();
+      case 'facebook': return extractFacebook();
+      case 'craigslist': return extractCraigslist();
+      case 'shopify': return extractShopify();
+      case 'alibaba': return extractAlibaba();
       default: return extractGeneral();
     }
   }
@@ -389,6 +397,233 @@
   }
 
   // ─── Platform Enhancements ───
+
+
+  // ─── Facebook Marketplace / Pages ───
+
+  function extractFacebook() {
+    // Detect if on Marketplace
+    const isMarketplace = window.location.pathname.includes('/marketplace');
+    const isPage = window.location.pathname.match(/^\/[^/]+$/) && !isMarketplace;
+    
+    // Marketplace listings
+    const listings = qAll('[data-testid="marketplace_search_result"] a, [class*="x1n2onr6"] a[href*="/marketplace/item"], [role="article"] a[href*="/marketplace"]')
+      .slice(0, 20).map(a => {
+        const card = a.closest('[role="article"], [data-testid="marketplace_search_result"]') || a;
+        const img = card.querySelector('img');
+        const priceEl = card.querySelector('[class*="x193iq5w"][class*="xeuugli"], span[dir="auto"]');
+        const titleEl = card.querySelector('[class*="x1iorvi4"], [class*="x1n2onr6"] span, [data-testid="marketplace_title"]');
+        return {
+          title: titleEl?.textContent?.trim() || null,
+          price: priceEl?.textContent?.trim() || null,
+          image: img?.src || null,
+          url: a?.href || null
+        };
+      }).filter(x => x.title || x.image);
+
+    // Page info
+    const pageName = q('[class*="x1heor9g"] h1, [data-testid="page_title"], h1[class*="x1heor9g"]');
+    const pageCategory = q('[class*="x1i10hfl"][class*="x1qjc9v5"], [data-testid="page_category"]');
+    const followerCount = q('[class*="x1n2onr6"] span:contains("followers"), a[href*="followers"]');
+    
+    // Marketplace item detail
+    const itemTitle = q('[data-testid="marketplace_title"], h1[class*="x1heor9g"]');
+    const itemPrice = q('[class*="x1n2onr6"] span[dir="auto"]:contains("$"), [data-testid="marketplace_price"]');
+
+    return {
+      businessName: pageName || itemTitle || document.title,
+      pageType: isMarketplace ? 'marketplace' : (isPage ? 'page' : 'general'),
+      pageName: pageName || undefined,
+      pageCategory: pageCategory || undefined,
+      followerCount: followerCount || undefined,
+      listings: listings.length > 0 ? listings : undefined,
+      marketplaceItem: itemTitle ? { title: itemTitle, price: itemPrice } : undefined,
+      url: window.location.href,
+      title: document.title
+    };
+  }
+
+  // ─── Craigslist ───
+
+  function extractCraigslist() {
+    const isListing = window.location.pathname.match(/\/d\/|\/search\//) || document.querySelector('.listing-body, .viewpost');
+    const isSearch = window.location.pathname.includes('/search/') || document.querySelector('.result-info');
+    
+    // Search results
+    const listings = qAll('.result-info, .cl-search-result, [data-listingid]')
+      .slice(0, 25).map(item => {
+        const a = item.querySelector('a');
+        const priceEl = item.querySelector('.result-price, .price, .listing-price');
+        const img = item.parentElement?.querySelector('img') || item.querySelector('img');
+        const hood = item.querySelector('.result-hood');
+        return {
+          title: a?.textContent?.trim() || null,
+          price: priceEl?.textContent?.trim() || null,
+          image: img?.src || null,
+          url: a?.href || null,
+          neighborhood: hood?.textContent?.trim().replace(/[()]/g, '') || null
+        };
+      }).filter(x => x.title);
+
+    // Listing detail page
+    const postTitle = q('#titletextonly, .postingtitletext span[property="name"]');
+    const postPrice = q('.postingtitletext .price, .postingprice .price');
+    const postBody = q('#postingbody, .postingbody');
+    const postAttributes = qAll('.attrgroup .attr, .attrgroup span').map(el => ({
+      label: el.querySelector('b, strong')?.textContent?.trim()?.replace(':', '') || null,
+      value: el.textContent?.trim()?.replace(/.*?:\s*/, '') || null
+    })).filter(a => a.label);
+    const postImages = qAll('img[src*="images.craigslist"]').map(img => img.src).filter(Boolean);
+    const postedAt = q('.postinginfo time, .date.timeago');
+
+    return {
+      businessName: postTitle || document.title,
+      pageType: isListing && !isSearch ? 'listing_detail' : (isSearch ? 'search_results' : 'general'),
+      listingTitle: postTitle || undefined,
+      price: postPrice || undefined,
+      description: postBody ? postBody.textContent?.trim()?.substring(0, 2000) : undefined,
+      attributes: postAttributes.length > 0 ? postAttributes : undefined,
+      images: postImages.length > 0 ? postImages : undefined,
+      postedAt: postedAt ? postedAt.getAttribute('datetime') || postedAt.textContent : undefined,
+      listings: listings.length > 0 ? listings : undefined,
+      url: window.location.href,
+      title: document.title
+    };
+  }
+
+  // ─── Shopify ───
+
+  function extractShopify() {
+    // Detect if admin or storefront
+    const isAdmin = window.location.hostname === 'admin.shopify.com' || window.location.pathname.startsWith('/admin');
+
+    if (isAdmin) {
+      // Shopify Admin — product list
+      const products = qAll('[data-product-list-item], .ui-sortable .product, [class*="product"] td, a[href*="/products/"]')
+        .slice(0, 20).map(p => {
+          const a = p.tagName === 'A' ? p : p.querySelector('a[href*="/products/"]');
+          const titleEl = p.querySelector('[class*="title"], [class*="name"], h3, [data-product-title]');
+          return {
+            title: titleEl?.textContent?.trim() || a?.textContent?.trim() || null,
+            url: a?.href || null
+          };
+        }).filter(x => x.title);
+
+      // Product detail
+      const productTitle = q('[data-product-title], input[name="product[title]"], h1[class*="title"]');
+      const productPrice = q('[data-product-price], input[name="product[price]"], [class*="price"] input');
+      const productStatus = q('[data-product-status], select[name="product[status]"] option[selected]');
+      const totalOrders = q('[class*="total-sales"] .value, [data-total-orders]');
+
+      return {
+        businessName: document.title,
+        pageType: productTitle ? 'admin_product_detail' : 'admin_product_list',
+        product: productTitle ? {
+          title: productTitle,
+          price: productPrice?.value || productPrice?.textContent?.trim(),
+          status: productStatus?.value || productStatus?.textContent?.trim()
+        } : undefined,
+        totalOrders: totalOrders?.textContent?.trim() || undefined,
+        products: products.length > 0 ? products : undefined,
+        url: window.location.href,
+        title: document.title
+      };
+    }
+
+    // Storefront
+    const storeName = q('h1[class*="store-name"], .shop-name, .site-header__logo a, [class*="header"] a[class*="logo"]');
+    const productTitle = q('h1[class*="product"], .product__title, h1[itemprop="name"]');
+    const productPrice = q('.product__price, .price-item, [data-product-price], span[itemprop="price"]');
+    const productDescription = q('.product__description, [itemprop="description"]');
+    const productImages = qAll('.product__media img, .product-single__photo img, [data-media-id] img')
+      .map(img => ({
+        src: img.src,
+        alt: img.alt
+      })).filter(x => x.src);
+
+    // Collection listings
+    const products = qAll('.product-item, .grid__item .card, [data-product-card], .product-card')
+      .slice(0, 20).map(item => ({
+        title: item.querySelector('.card__heading, .product-card__title, h3, .product-item__title')?.textContent?.trim(),
+        price: item.querySelector('.price, .card__price, .product-card__price, .product-item__price')?.textContent?.trim(),
+        image: item.querySelector('img')?.src || null,
+        url: item.querySelector('a')?.href || null
+      })).filter(x => x.title);
+
+    return {
+      businessName: storeName || document.title,
+      pageType: productTitle ? 'product_page' : (products.length > 1 ? 'collection' : 'storefront'),
+      storeName: storeName || undefined,
+      product: productTitle ? {
+        title: productTitle,
+        price: productPrice?.textContent?.trim() || productPrice?.textContent?.trim(),
+        description: productDescription?.textContent?.trim()?.substring(0, 2000),
+        images: productImages.length > 0 ? productImages : undefined
+      } : undefined,
+      products: products.length > 0 ? products : undefined,
+      url: window.location.href,
+      title: document.title
+    };
+  }
+
+  // ─── Alibaba ───
+
+  function extractAlibaba() {
+    const isAlibaba = window.location.hostname.includes('alibaba.com');
+    const isAliExpress = window.location.hostname.includes('aliexpress.com');
+    
+    // Product detail
+    const productTitle = q('h1[class*="title"], [data-pl="product-title"], .product-title, h1[class*="product-name"]');
+    const productPrice = q('[class*="price"], .price, [data-pl="price"], span[class*="price"]');
+    const productRating = q('[class*="rating"] .score, [class*="review"] .score, span[class*="rating"]');
+    const orderCount = q('[class*="order"] span, [data-pl="order"], [class*="sold"]');
+    const productImages = qAll('.image-view img, [class*="gallery"] img, .product-image img, .slider img')
+      .map(img => img.src).filter(Boolean);
+
+    // Supplier info
+    const supplierName = q('[class*="supplier"], [data-pl="supplier"], .company-name, a[class*="company"]');
+    const supplierRating = q('[class*="supplier"] [class*="rating"], [data-pl="supplier-rating"]');
+    const responseRate = q('[class*="response"] .rate, [data-pl="response-rate"]');
+    const transactionLevel = q('[class*="transaction"] .level, [data-pl="transaction"]');
+
+    // Search / listing results
+    const listings = qAll('.list-no-v2-item, [class*="organic-list"] .item, .search-item, .product-item')
+      .slice(0, 20).map(item => {
+        const a = item.querySelector('a[href*="product"], a[href*="item"]');
+        const img = item.querySelector('img');
+        const priceEl = item.querySelector('[class*="price"], .min-price');
+        const orders = item.querySelector('[class*="order"], [class*="sold"]');
+        return {
+          title: a?.textContent?.trim() || item.querySelector('[class*="title"]')?.textContent?.trim() || null,
+          price: priceEl?.textContent?.trim() || null,
+          image: img?.src || null,
+          url: a?.href || null,
+          orders: orders?.textContent?.trim() || null
+        };
+      }).filter(x => x.title);
+
+    return {
+      businessName: supplierName || productTitle || document.title,
+      platform: isAliExpress ? 'aliexpress' : 'alibaba',
+      pageType: productTitle ? 'product_page' : (listings.length > 1 ? 'search_results' : 'general'),
+      product: productTitle ? {
+        title: productTitle,
+        price: productPrice?.textContent?.trim(),
+        rating: productRating?.textContent?.trim(),
+        orderCount: orderCount?.textContent?.trim(),
+        images: productImages.length > 0 ? productImages : undefined
+      } : undefined,
+      supplier: supplierName ? {
+        name: supplierName?.textContent?.trim(),
+        rating: supplierRating?.textContent?.trim(),
+        responseRate: responseRate?.textContent?.trim(),
+        transactionLevel: transactionLevel?.textContent?.trim()
+      } : undefined,
+      listings: listings.length > 0 ? listings : undefined,
+      url: window.location.href,
+      title: document.title
+    };
+  }
 
   function enhancePlatformPage(platform) {
     switch (platform) {

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Swift Market Intel",
-  "version": "1.0.0",
-  "description": "Browser bridge for WorkflowSwift. Collect market intelligence from Etsy, Pinterest, TikTok, Yelp, Google Maps, Instagram, and more.",
+  "version": "1.1.0",
+  "description": "Browser bridge for WorkflowSwift. Collect market intelligence from 12+ platforms including Etsy, Amazon, Facebook Marketplace, Shopify, and more.",
   "permissions": [
     "activeTab",
     "storage",
@@ -20,7 +20,14 @@
     "https://*.amazon.com/*",
     "https://*.ebay.com/*",
     "https://workflowswift.com/*",
-    "<all_urls>"
+    "<all_urls>",
+    "https://*.facebook.com/*",
+    "https://*.craigslist.org/*",
+    "https://*.shopify.com/*",
+    "https://*.myshopify.com/*",
+    "https://*.alibaba.com/*",
+    "https://*.aliexpress.com/*",
+    "https://www.facebook.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -50,16 +57,29 @@
         "https://*.google.com/maps/*",
         "https://*.instagram.com/*",
         "https://*.amazon.com/*",
-        "https://*.ebay.com/*"
+        "https://*.ebay.com/*",
+        "https://*.facebook.com/*",
+        "https://*.craigslist.org/*",
+        "https://*.shopify.com/*",
+        "https://*.myshopify.com/*",
+        "https://*.alibaba.com/*",
+        "https://*.aliexpress.com/*",
+        "https://www.facebook.com/*"
       ],
-      "js": ["content.js"],
+      "js": [
+        "content.js"
+      ],
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["icons/*"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "icons/*"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ]
 }
