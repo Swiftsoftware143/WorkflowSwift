@@ -284,7 +284,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 class SwiftMarketIntelPopup {
   constructor() {
-    this.apiUrl = 'https://workflowswift.netlify.app/api';
+    this.apiUrl = 'https://workflowswift.com/api';
     this.token = null;
     this.currentTab = null;
     this.lastScrapedData = null;
