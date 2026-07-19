@@ -495,6 +495,7 @@ pub async fn admin_list_accounts(
            FROM accounts a
            LEFT JOIN account_plans ap ON ap.aid = a.id AND ap.status = 'active'
            LEFT JOIN plan_tiers p ON p.id = ap.plan_id
+           LEFT JOIN n8n_account_config n8n ON n8n.aid = a.id
            ORDER BY a.created_at DESC"#
     )
     .fetch_all(&state.db)
@@ -522,11 +523,47 @@ pub async fn admin_list_accounts(
             "retention_days": retention_days,
             "retention_purge_at": retention_purge_at.map(|t| t.to_rfc3339()),
             "created_at": created_at.to_rfc3339(),
-            "plan": plan_name.map(|n| json!({"name": n, "slug": plan_slug}))
+            "plan": plan_name.map(|n| json!({"name": n, "slug": plan_slug})),
+            "n8n_provisioned": false
         }));
     }
 
     Ok(Json(json!({"accounts": result})))
+}
+
+/// DELETE /api/v1/admin/accounts/:id — permanently delete account + all data
+pub async fn admin_delete_account(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<impl IntoResponse> {
+    require_admin(&claims)?;
+
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM accounts WHERE id = $1)"
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(false);
+
+    if !exists {
+        return Err(AppError::NotFound("Account not found".to_string()));
+    }
+
+    sqlx::query("DELETE FROM n8n_account_config WHERE aid = $1")
+        .bind(id)
+        .execute(&state.db)
+        .await
+        .ok();
+
+    sqlx::query("DELETE FROM accounts WHERE id = $1")
+        .bind(id)
+        .execute(&state.db)
+        .await?;
+
+    tracing::info!(%id, "Account and all associated data deleted");
+    Ok(Json(json!({"status": "deleted", "account_id": id.to_string()})))
 }
 
 /// PUT /api/v1/admin/accounts/:id/retention — override account retention
