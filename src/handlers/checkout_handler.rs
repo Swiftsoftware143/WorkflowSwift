@@ -8,6 +8,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::email;
 use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;
 use sqlx::Row;
@@ -288,8 +289,8 @@ pub async fn create_checkout_session(
 
     // Create checkout session with the provider
     let provider_session = match provider_type.as_str() {
-        "stripe" => create_stripe_session(&api_key, amount, currency, purchasable_type, success_url, cancel_url, &metadata).await?,
-        "paypal" => create_paypal_session(&api_key, amount, currency, purchasable_type, success_url, cancel_url, &metadata).await?,
+        "stripe" => create_stripe_session(&api_key, amount, currency, purchasable_type, &success_url, &cancel_url, &metadata).await?,
+        "paypal" => create_paypal_session(&api_key, amount, currency, purchasable_type, &success_url, &cancel_url, &metadata).await?,
         _ => return Err(AppError::BadRequest(format!("Checkout not supported for provider type: {}", provider_type))),
     };
 
@@ -552,7 +553,7 @@ pub async fn stripe_webhook(
     // Handle the event
     match event_type {
         "checkout.session.completed" => {
-            handle_checkout_completed(&state.db, &event_body, "stripe").await?;
+            handle_checkout_completed(&state, &event_body, "stripe").await?;
         }
         "checkout.session.expired" => {
             if let Some(session) = event_body.get("data").and_then(|d| d.get("object")) {
@@ -610,7 +611,7 @@ pub async fn paypal_webhook(
 
     match event_type {
         "CHECKOUT.ORDER.APPROVED" | "PAYMENT.CAPTURE.COMPLETED" => {
-            handle_checkout_completed(&state.db, &event_body, "paypal").await?;
+            handle_checkout_completed(&state, &event_body, "paypal").await?;
         }
         _ => {
             sqlx::query(
@@ -631,7 +632,7 @@ pub async fn paypal_webhook(
 
 /// Handle a completed checkout — update session status and trigger fulfillment
 async fn handle_checkout_completed(
-    db: &sqlx::PgPool,
+    state: &AppState,
     event_body: &serde_json::Value,
     provider_type: &str,
 ) -> Result<(), AppError> {
@@ -654,6 +655,18 @@ async fn handle_checkout_completed(
 
     let provider_session_id = provider_session_id.unwrap();
 
+    // Look up the checkout session before updating — grab customer_email from metadata
+    let session_row = sqlx::query(
+        r#"SELECT id, account_id, user_id, metadata, purchasable_type, purchasable_id
+           FROM checkout_sessions
+           WHERE provider_session_id = $1
+             AND provider_type = $2"#
+    )
+    .bind(&provider_session_id)
+    .bind(provider_type)
+    .fetch_optional(&state.db)
+    .await?;
+
     // Update the checkout session status
     let result = sqlx::query(
         r#"UPDATE checkout_sessions
@@ -668,7 +681,7 @@ async fn handle_checkout_completed(
     .bind(event_body["id"].as_str().unwrap_or(""))
     .bind(&provider_session_id)
     .bind(provider_type)
-    .execute(db)
+    .execute(&state.db)
     .await?;
 
     if result.rows_affected() == 0 {
@@ -681,11 +694,172 @@ async fn handle_checkout_completed(
         "UPDATE payment_webhook_events SET status = 'processed' WHERE event_id = $1"
     )
     .bind(event_body["id"].as_str().unwrap_or(""))
-    .execute(db)
+    .execute(&state.db)
     .await?;
+
+    // ── Credential delivery ──
+    if let Some(row) = session_row {
+        let metadata: serde_json::Value = row.get("metadata");
+        let customer_email = metadata.get("customer_email").and_then(|v| v.as_str()).unwrap_or("");
+        let customer_name = metadata.get("customer_name").and_then(|v| v.as_str()).unwrap_or("Valued Customer");
+        let _session_account_id: Uuid = row.get("account_id");
+        let _ptype: String = row.get("purchasable_type");
+
+        if !customer_email.is_empty() {
+            if let Err(e) = deliver_credentials(
+                state, customer_email, customer_name, _session_account_id, &_ptype,
+            ).await {
+                tracing::error!("Failed to deliver credentials: {}", e);
+            }
+        }
+    }
 
     tracing::info!("Checkout completed: provider_session={}", provider_session_id);
     Ok(())
+}
+
+/// Deliver login credentials or purchase confirmation to the customer.
+/// Flow:
+/// 1. Look up user by email
+/// 2. If user exists with password → send "purchase_confirmed"
+/// 3. If user exists without password → generate password, hash, update, send "welcome"
+/// 4. If user doesn't exist → create account + user, send "welcome"
+async fn deliver_credentials(
+    state: &AppState,
+    email: &str,
+    name: &str,
+    _session_account_id: Uuid,
+    _purchasable_type: &str,
+) -> Result<(), String> {
+    // Look for existing user
+    let existing_user = sqlx::query_as::<_, UserRow>(
+        "SELECT id, aid, password_hash, email, name FROM users WHERE email = $1"
+    )
+    .bind(email)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| format!("DB lookup error: {}", e))?;
+
+    let app_url = "https://app.workflowswift.com";
+
+    if let Some(user) = existing_user {
+        // User exists
+        let has_password = !user.password_hash.is_empty()
+            && user.password_hash != ""
+            && user.password_hash != " ";
+
+        if has_password {
+            // Existing user — send purchase confirmation
+            let vars = json!({
+                "name": user.name,
+                "email": user.email,
+                "plan_name": _purchasable_type,
+                "app_url": app_url,
+            });
+            email::send_email(state, email, "purchase_confirmed", &vars).await
+        } else {
+            // User exists but no password — set one and send credentials
+            let password = generate_temp_password();
+            let hash = hash_password(&password)
+                .map_err(|e| format!("Password hashing failed: {}", e))?;
+
+            sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+                .bind(&hash)
+                .bind(user.id)
+                .execute(&state.db)
+                .await
+                .map_err(|e| format!("Failed to update password: {}", e))?;
+
+            let vars = json!({
+                "name": user.name,
+                "email": user.email,
+                "password": password,
+                "url": app_url,
+            });
+            email::send_email(state, email, "welcome", &vars).await
+        }
+    } else {
+        // New user — create account + user, send credentials
+        let account_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let password = generate_temp_password();
+        let hash = hash_password(&password)
+            .map_err(|e| format!("Password hashing failed: {}", e))?;
+        let slug = format!("cust-{}", &user_id.to_string()[..8]);
+
+        // Create account
+        sqlx::query(
+            "INSERT INTO accounts (id, name, account_slug, is_active) VALUES ($1, $2, $3, true)"
+        )
+        .bind(account_id)
+        .bind(name)
+        .bind(&slug)
+        .execute(&state.db)
+        .await
+        .map_err(|e| format!("Failed to create account: {}", e))?;
+
+        // Create user linked to account
+        sqlx::query(
+            r#"INSERT INTO users (id, aid, email, password_hash, name, role, is_active)
+               VALUES ($1, $2, $3, $4, $5, 'staff', true)"#
+        )
+        .bind(user_id)
+        .bind(account_id)
+        .bind(email)
+        .bind(&hash)
+        .bind(name)
+        .execute(&state.db)
+        .await
+        .map_err(|e| format!("Failed to create user: {}", e))?;
+
+        // Send welcome email with credentials
+        let vars = json!({
+            "name": name,
+            "email": email,
+            "password": password,
+            "url": app_url,
+        });
+        email::send_email(state, email, "welcome", &vars).await
+    }
+}
+
+/// Generate a cryptographically random temporary password (12 chars)
+fn generate_temp_password() -> String {
+    use rand::Rng;
+    const CHARSET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#";
+    let mut rng = rand::thread_rng();
+    let pass: String = (0..12)
+        .map(|_| {
+            let idx = rng.gen_range(0..CHARSET.len());
+            CHARSET[idx] as char
+        })
+        .collect();
+    pass
+}
+
+/// Hash a password using Argon2
+fn hash_password(password: &str) -> Result<String, String> {
+    use argon2::{
+        password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
+        Argon2,
+    };
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
+    argon2
+        .hash_password(password.as_bytes(), &salt)
+        .map(|h| h.to_string())
+        .map_err(|e| format!("Argon2 error: {}", e))
+}
+
+// ── Data types for credential delivery ──
+
+#[derive(Debug, sqlx::FromRow)]
+struct UserRow {
+    id: Uuid,
+    aid: Uuid,
+    password_hash: String,
+    email: String,
+    name: String,
 }
 
 /// Mark a checkout session as expired

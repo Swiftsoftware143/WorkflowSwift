@@ -217,6 +217,38 @@ async fn send_email_fallback(
 
             send_email_request(&api_url, &api_key, &from, to, &subject, &text_body, &html_body).await
         }
+        "purchase_confirmed" => {
+            let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
+            let plan_name = vars.get("plan_name").and_then(|v| v.as_str()).unwrap_or("a plan");
+            let app_url = vars.get("app_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("https://app.workflowswift.com");
+
+            let subject = "Payment Received — Thank You!".to_string();
+            let html_body = format!(
+                r#"<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin:0;padding:0;background:#f4f4f4;">
+<table style="width:100%;max-width:600px;margin:20px auto;background:#fff;border-radius:8px;overflow:hidden;">
+<tr><td style="padding:30px 40px;background:linear-gradient(135deg,#059669,#047857);text-align:center;">
+<h1 style="color:#fff;font-size:28px;margin:0;">Payment Received!</h1></td></tr>
+<tr><td style="padding:40px;">
+<p style="font-size:16px;color:#374151;">Hello <strong>{name}</strong>,</p>
+<p style="font-size:16px;color:#374151;">Your payment for <strong>{plan_name}</strong> has been confirmed. Thank you!</p>
+<p style="font-size:14px;color:#6b7280;">You can access your account and manage your subscription from the dashboard.</p>
+<table style="margin:30px auto;"><tr><td style="background:#059669;border-radius:6px;text-align:center;">
+<a href="{url}" style="display:inline-block;padding:14px 40px;color:#fff;text-decoration:none;font-size:16px;font-weight:bold;">Go to Dashboard</a>
+</td></tr></table>
+<p style="font-size:14px;color:#9ca3af;text-align:center;">Best regards,<br>The WorkflowSwift Team</p>
+</td></tr></table></body></html>"#,
+                name=name, plan_name=plan_name, url=app_url
+            );
+            let text_body = format!(
+                "Hello {},\n\nYour payment for {} has been confirmed. Thank you!\n\nYou can access your account at {}.\n\nBest regards,\nThe WorkflowSwift Team",
+                name, plan_name, app_url
+            );
+            send_email_request(&api_url, &api_key, &from, to, &subject, &text_body, &html_body).await
+        }
         "password_reset" => {
             let token = vars.get("token").and_then(|v| v.as_str()).unwrap_or("");
 
