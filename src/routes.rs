@@ -298,6 +298,7 @@ pub fn create_router(state: AppState) -> Router {
             .delete(handlers::admin_settings_handler::admin_delete_plan))
         // Account management
         .route("/accounts", get(handlers::admin_settings_handler::admin_list_accounts))
+        .route("/accounts/{id}", delete(handlers::admin_settings_handler::admin_delete_account))
         .route("/accounts/create", post(handlers::admin_settings_handler::admin_create_account))
         .route("/accounts/{id}/retention", put(handlers::admin_settings_handler::admin_set_account_retention))
         // Email templates (admin-only CRUD)
