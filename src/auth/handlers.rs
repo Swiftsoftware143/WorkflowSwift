@@ -476,7 +476,7 @@ pub async fn forgot_password(
         .execute(&state.db)
         .await?;
 
-        match send_reset_email(&user.email, &token).await {
+        match send_reset_email(&state, &user.email, &token).await {
             Ok(_) => tracing::info!("Password reset email sent to {}", user.email),
             Err(e) => tracing::error!("Failed to send password reset email to {}: {}", user.email, e),
         }

@@ -285,43 +285,14 @@ async fn send_email_fallback(
 }
 
 /// Compatibility wrapper — used by password reset flow which has no AppState
-pub async fn send_reset_email(to: &str, token: &str) -> Result<(), String> {
-    let api_url = env::var("EMAIL_API_URL")
-        .map_err(|_| "EMAIL_API_URL not set".to_string())?;
-    let api_key = env::var("EMAIL_API_KEY")
-        .map_err(|_| "EMAIL_API_KEY not set".to_string())?;
-    let from = env::var("EMAIL_FROM")
-        .unwrap_or_else(|_| "swiftsoftware143@yahoo.com".to_string());
-
+/// Attempts DB template first, falls back to inline.
+pub async fn send_reset_email(state: &AppState, to: &str, token: &str) -> Result<(), String> {
     let vars = json!({
         "token": token,
+        "name": "there",
         "app_url": "https://app.workflowswift.com",
     });
-
-    let text_body = format!(
-        "Your password reset code is: {}\n\nThis code expires in 1 hour.\n\nIf you did not request this password reset, please ignore this email.\n\n- WorkflowSwift",
-        token
-    );
-
-    let html_body = format!(
-        r#"<!DOCTYPE html>
-<html><head><meta charset="utf-8"></head>
-<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin:0;padding:0;background:#f4f4f4;">
-<table style="width:100%;max-width:600px;margin:20px auto;background:#fff;border-radius:8px;overflow:hidden;">
-<tr><td style="padding:30px 40px;background:linear-gradient(135deg,#dc2626,#b91c1c);text-align:center;">
-<h1 style="color:#fff;font-size:28px;margin:0;">Password Reset</h1></td></tr>
-<tr><td style="padding:40px;">
-<p style="font-size:16px;color:#374151;">You have requested a password reset.</p>
-<div style="background:#fef2f2;padding:20px;border-radius:8px;margin:25px 0;text-align:center;border:2px dashed #dc2626;">
-<p style="font-size:32px;font-weight:bold;letter-spacing:6px;color:#dc2626;margin:0;font-family:monospace;">{token}</p></div>
-<p style="font-size:14px;color:#6b7280;">Code expires in <strong>1 hour</strong>.</p>
-<p style="font-size:14px;color:#9ca3af;margin-top:25px;">If you did not request this, ignore this email.</p>
-<p style="font-size:14px;color:#9ca3af;text-align:center;margin-top:30px;">- The WorkflowSwift Team</p>
-</td></tr></table></body></html>"#,
-        token=token
-    );
-
-    send_email_request(&api_url, &api_key, &from, to, "Password Reset Request", &text_body, &html_body).await
+    send_email(state, to, "password_reset", &vars).await
 }
 
 // ---- Data types ----
