@@ -1962,7 +1962,7 @@ let userIntegrations=[];
 async function renderIntegrations(){
   const mc=$('main-content');
   mc.innerHTML='<h1>🔗 Integration Center</h1>\n'
-    +'<p style="font-size:13px;color:var(--text2);margin-bottom:16px">Connect your own API keys and engines. WorkflowSwift automatically uses your keys when available -- otherwise it falls back to the system default at standard credit rates.</p>';
+    +'<p style="font-size:13px;color:var(--text2);margin-bottom:16px">Connect your own API keys and engines. WorkflowSwift automatically uses your keys when available -- otherwise it falls back to the system default at standard credit rates.</p>\n    +'<div style="font-size:12px;color:var(--accent);background:rgba(79,134,247,.08);padding:10px 14px;border-radius:8px;margin-bottom:16px">🔒 All API keys are encrypted at rest using PGP symmetric encryption. Keys are scoped per workspace and never shared across accounts.</div>'';
 
   try{
     const res=await api('/integrations');

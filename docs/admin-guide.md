@@ -14,6 +14,8 @@ All admin endpoints require a super admin JWT token (David's account).
 | `/api/v1/admin/plans` | GET/POST | List/create plan tiers |
 | `/api/v1/admin/settings` | GET | List all admin settings |
 | `/api/v1/admin/settings/{key}` | GET/PUT | Get/update specific setting |
+| `/api/v1/bridge/tasks` | GET | List AI bridge inbound files |
+| `/api/v1/bridge/results` | GET | List AI bridge outbound results |
 
 ## Workspaces & Multi-Industry
 
@@ -64,7 +66,7 @@ Paperclip agents can be created per workspace. Each agent has a role, budget, an
 
 ## BYOK Integrations (Provider Keys)
 
-Per-workspace API key management for external providers. Keys are scoped to the workspace — not shared globally.
+Per-workspace API key management for external providers. Keys are scoped to the workspace — not shared globally. **All keys are encrypted at rest** using pgcrypto (PGP symmetric encryption) with a per-account encryption key.
 
 | Endpoint | Method | Description |
 |---|---|---|
