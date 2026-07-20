@@ -16,6 +16,7 @@ fn is_public_path(path: &str) -> bool {
         vec![
             "/api/v1/auth/login".to_string(),
             "/api/v1/auth/register".to_string(),
+            "/api/v1/industries".to_string(),
             "/api/v1/auth/forgot-password".to_string(),
             "/api/v1/auth/reset-password".to_string(),
             "/api/v1/health".to_string(),
@@ -42,6 +43,7 @@ pub async fn auth_middleware(
     next: Next,
 ) -> Result<Response, AppError> {
     let path = req.uri().path().to_string();
+
     tracing::info!("AUTH_MIDDLEWARE: path={}", path);
 
     if is_public_path(&path) {

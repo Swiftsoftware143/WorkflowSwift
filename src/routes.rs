@@ -82,7 +82,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/", get(handlers::account_handler::get_account).put(handlers::account_handler::update_account))
         .route("/hexomatic-key", get(handlers::account_handler::get_hexomatic_key).put(handlers::account_handler::set_hexomatic_key))
         .route("/industry", get(handlers::industry_handler::get_account_industry).put(handlers::industry_handler::set_account_industry))
-        .route("/industry/{slug}", delete(handlers::industry_handler::remove_account_industry));
+        .route("/industry/{slug}", delete(handlers::industry_handler::remove_account_industry))
+        .route("/add-industry", post(crate::auth::handlers::add_account_industry));
 
     let user_routes = Router::new()
         .route("/", get(handlers::user_handler::list_users))
@@ -100,6 +101,8 @@ pub fn create_router(state: AppState) -> Router {
 
 
     let dashboard_routes = Router::new()
+        .route("/workspace", get(handlers::paperclip_handler::workspace_dashboard))
+        .route("/timeline", get(handlers::paperclip_handler::activity_timeline))
         .route("/stats", get(handlers::dashboard_handler::dashboard_stats))
         .route("/activity", get(handlers::dashboard_handler::dashboard_activity))
         .route("/data", post(handlers::dashboard_handler::push_dashboard_data))
@@ -119,7 +122,9 @@ pub fn create_router(state: AppState) -> Router {
         .route("/prospecting", get(handlers::dashboard_tabs_handler::list_prospectings).post(handlers::dashboard_tabs_handler::create_prospecting))
         .route("/prospecting/{id}", delete(handlers::dashboard_tabs_handler::delete_prospecting))
         .route("/prospecting/{id}/results", get(handlers::dashboard_tabs_handler::get_prospecting_results))
-        .route("/connect-workflow", post(handlers::dashboard_tabs_handler::connect_to_workflow));
+        .route("/connect-workflow", post(handlers::dashboard_tabs_handler::connect_to_workflow))
+        ;
+
 
     let industry_routes = Router::new()
         .route("/", get(handlers::industry_handler::list_industries));
@@ -333,7 +338,6 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/workspaces", workspace_routes)
         .nest("/automations", automation_routes)
         .nest("/dashboard", dashboard_routes)
-        .nest("/industries", industry_routes)
         .nest("/api-keys", api_key_routes)
         .nest("/portfolio-companies", portfolio_routes)
         .nest("/integration-targets", integration_routes)
@@ -383,6 +387,10 @@ pub fn create_router(state: AppState) -> Router {
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::rate_limit::rate_limit_middleware,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::middleware::auth_middleware,
         ));
 
     // Public routes (no auth)
@@ -397,6 +405,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/provider-presets", get(handlers::integration_dispatch_handler::list_provider_presets))
         .route("/available-providers", get(handlers::provider_keys_handler::list_available_providers))
         .route("/incoming", post(handlers::incoming_handler::receive_incoming))
+        .route("/industries", get(handlers::industry_handler::list_industries))
         // Public webhooks (no auth — signature verification is done in the handler)
         .route("/webhooks/stripe", post(handlers::checkout_handler::stripe_webhook))
         .route("/webhooks/paypal", post(handlers::checkout_handler::paypal_webhook));
@@ -409,10 +418,6 @@ pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/", get(health_check))
         .nest("/api/v1", api_v1)
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            crate::auth::middleware::auth_middleware,
-        ))
         .with_state(state)
 }
 
