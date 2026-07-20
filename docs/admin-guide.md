@@ -45,7 +45,40 @@ Users create **workspaces** (portfolio companies) from their dashboard. Each wor
 | `/api/v1/dashboard/push-widget-data` | POST | Push metric data to widget |
 | `/api/v1/dashboard/activity` | GET | Recent activity feed |
 
-### Industry Endpoints
+#
+## Industry Data Sources (Satellites)
+
+Admin-configurable data sources that power industry-specific dashboard widgets. Each source costs credits per API call.
+
+### Admin Endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/v1/admin/industry-sources` | GET | List all sources (opt. `?industry=`) |
+| `/api/v1/admin/industry-sources` | POST | Create/update a data source |
+| `/api/v1/admin/industry-sources/seed` | POST | Seed defaults (5 sources per industry) |
+| `/api/v1/admin/industry-sources/{id}` | DELETE | Remove a data source |
+
+### Tabbed Dashboard
+
+The dashboard now supports industry-specific tabs. Each workspace shows a **General** tab plus one tab per industry the account has selected.
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/v1/dashboard/industry-tabs` | GET | Tab-navigated dashboard (opt. `?workspace_id=`) |
+
+### Source Types
+
+- **api** — External API integration (credit cost per call)
+- **webhook** — Push-based data ingestion
+- **rss** — Feed-based updates (hourly refresh)
+- **scraper** — Scheduled data scraping
+
+### Default Sources (Seeded per Industry)
+
+All 19 industries get 5 default sources: market_research (2 credits), news_feed (1), competitor_intel (3), lead_finder (5), trend_analytics (2).
+
+## Industry Endpoints
 
 | Endpoint | Method | Description |
 |---|---|---|
