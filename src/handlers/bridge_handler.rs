@@ -101,7 +101,7 @@ struct ExtensionCommand {
 
 /// GET /api/v1/bridge/inbound — list inbound task files
 pub async fn list_inbound_tasks(
-    State(s): State<AppState>,
+    State(_s): State<AppState>,
 ) -> Result<impl IntoResponse, AppError> {
     let inbound_dir = std::path::PathBuf::from("/opt/ai-bridge/inbound");
     let mut tasks = Vec::new();
@@ -122,7 +122,7 @@ pub async fn list_inbound_tasks(
 
 /// GET /api/v1/bridge/outbound — list outbound result files
 pub async fn list_outbound_results(
-    State(s): State<AppState>,
+    State(_s): State<AppState>,
 ) -> Result<impl IntoResponse, AppError> {
     let outbound_dir = std::path::PathBuf::from("/opt/ai-bridge/outbound");
     let mut results = Vec::new();
@@ -144,7 +144,7 @@ pub async fn list_outbound_results(
 
 /// Minimal test — returns 200 with empty results
 pub async fn ping_bridge(
-    State(s): State<AppState>,
+    State(_s): State<AppState>,
 ) -> Result<impl IntoResponse, AppError> {
     Ok(Json(json!({"status": "bridge-ok"})))
 }

@@ -372,7 +372,7 @@ pub async fn receive_incoming(
                 let tone = step_config.get("tone").and_then(|v| v.as_str()).unwrap_or("professional");
                 
                 // Format via n8n or mark as config-based transformation
-                let n8n_payload = json!({
+                let _n8n_payload = json!({
                     "action": "format",
                     "format": format_type,
                     "tone": tone,
