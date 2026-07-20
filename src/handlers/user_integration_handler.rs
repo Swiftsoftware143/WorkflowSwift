@@ -81,7 +81,7 @@ pub async fn list_native_integrations(
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
-    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let _aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Native providers are the SwiftSoftware products
     let native_providers = vec!["coreswift", "funnelswift", "incentiveswift"];
@@ -332,7 +332,7 @@ pub async fn check_integration_health(
 async fn run_health_check(
     db: &sqlx::PgPool,
     user_id: Uuid,
-    aid: Uuid,
+    _aid: Uuid,
     provider: &str,
 ) -> (String, String) {
     // Fetch the integration
@@ -482,7 +482,7 @@ pub async fn resolve_step_provider(
     Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> ApiResult<impl IntoResponse> {
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
-    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let _aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let step_type = params.get("step_type").map(|s| s.as_str()).unwrap_or("");
     let requested_provider = params.get("provider");

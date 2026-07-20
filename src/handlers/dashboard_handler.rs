@@ -1,8 +1,9 @@
 use axum::{
-    extract::{State, Json},
+    extract::{State, Json, Query},
     response::IntoResponse,
     Extension,
 };
+use std::collections::HashMap;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -368,4 +369,63 @@ pub async fn get_widget_metric_keys(
         .collect();
 
     Ok(Json(json!({"metric_keys": metric_keys})))
+}
+
+/// GET /api/v1/dashboard/tabs — tab-navigated dashboard with per-industry widgets
+/// Returns General tab + one tab per industry the account has selected.
+pub async fn tabbed_dashboard(
+    State(s): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> Result<impl IntoResponse, AppError> {
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let workspace_uuid = q.get("workspace_id").map(|s| s.as_str()).and_then(|v| Uuid::parse_str(v).ok());
+
+    // Get account's industries
+    let industries: Vec<String> = sqlx::query_scalar(
+        "SELECT industry_slug FROM account_industries WHERE aid = $1 AND is_active = true ORDER BY created_at"
+    )
+    .bind(aid)
+    .fetch_all(&s.db)
+    .await?;
+
+    // Get general widgets (shared across all industries)
+    let general_widgets: Vec<serde_json::Value> = sqlx::query_as::<_, (String, String, Option<String>, i32)>(
+        "SELECT iw.widget_key, iw.title, iw.description, iw.sort_order FROM industry_widgets iw
+         JOIN template_categories tc ON tc.slug = iw.industry_slug
+         WHERE iw.industry_slug = 'general' AND iw.is_active = true ORDER BY iw.sort_order"
+    )
+    .fetch_all(&s.db)
+    .await.unwrap_or_default()
+    .into_iter().map(|w| json!({"key": w.0, "title": w.1, "description": w.2, "order": w.3})).collect();
+
+    // Build industry tabs with their widgets
+    let mut tabs = vec![json!({
+        "id": "general",
+        "name": "General",
+        "widgets": general_widgets
+    })];
+
+    for ind in &industries {
+        let widgets = if workspace_uuid.is_some() {
+            sqlx::query_as::<_, (String, String, Option<String>, i32)>(
+                "SELECT iw.widget_key, iw.title, iw.description, iw.sort_order FROM industry_widgets iw
+                 WHERE iw.industry_slug = $1 AND iw.is_active = true ORDER BY iw.sort_order"
+            ).bind(ind).fetch_all(&s.db).await.unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        let widget_data: Vec<serde_json::Value> = widgets.into_iter().map(|w| json!({
+            "key": w.0, "title": w.1, "description": w.2, "order": w.3
+        })).collect();
+
+        tabs.push(json!({
+            "id": ind,
+            "name": ind,
+            "widgets": widget_data
+        }));
+    }
+
+    Ok(Json(json!({"tabs": tabs, "active_industry": industries.first()})))
 }

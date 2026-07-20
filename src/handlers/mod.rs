@@ -53,3 +53,4 @@ pub mod extension_download_handler;
 pub mod workspace_handler;
 pub mod paperclip_handler;
 pub mod agent_handler;
+pub mod industry_sources_handler;

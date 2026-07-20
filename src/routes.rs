@@ -121,6 +121,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/widgets", get(handlers::industry_handler::get_dashboard_widgets))
         .route("/data/{metric_key}", get(handlers::industry_handler::get_dashboard_metric))
         .route("/push-widget-data", post(handlers::industry_handler::push_widget_data))
+        .route("/industry-tabs", get(handlers::dashboard_handler::tabbed_dashboard))
         .route("/industry-data", get(handlers::dashboard_handler::industry_dashboard_data))
         .route("/metric-keys", get(handlers::dashboard_handler::get_widget_metric_keys))
         // Dashboard Tabs (Brand Monitor, Competitor Watch, Prospecting)
@@ -333,6 +334,10 @@ pub fn create_router(state: AppState) -> Router {
             .post(handlers::admin_settings_handler::admin_create_email_template))
         .route("/email-templates/{id}", put(handlers::admin_settings_handler::admin_update_email_template)
             .delete(handlers::admin_settings_handler::admin_delete_email_template))
+        // Industry Source Management
+        .route("/industry-sources", get(handlers::industry_sources_handler::list_industry_sources).post(handlers::industry_sources_handler::upsert_industry_source))
+        .route("/industry-sources/seed", post(handlers::industry_sources_handler::seed_industry_sources))
+        .route("/industry-sources/{id}", delete(handlers::industry_sources_handler::delete_industry_source))
         .route("/site", get(handlers::site_handler::get_site)
             .put(handlers::site_handler::update_site));
 

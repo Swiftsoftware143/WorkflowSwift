@@ -220,27 +220,27 @@ pub async fn list_renditions(
     // WHERE filters
     let mut params: Vec<String> = Vec::new();
 
-    if let Some(ref provider) = query.provider {
+    if let Some(ref _provider) = query.provider {
         params.push(format!("provider = ${}", param_idx));
         param_idx += 1;
     }
-    if let Some(ref asset_type) = query.asset_type {
+    if let Some(ref _asset_type) = query.asset_type {
         params.push(format!("asset_type = ${}", param_idx));
         param_idx += 1;
     }
-    if let Some(ref status) = query.status {
+    if let Some(ref _status) = query.status {
         params.push(format!("status = ${}", param_idx));
         param_idx += 1;
     }
-    if let Some(wf_id) = query.workflow_id {
+    if let Some(_wf_id) = query.workflow_id {
         params.push(format!("workflow_id = ${}", param_idx));
         param_idx += 1;
     }
-    if let Some(inst_id) = query.instance_id {
+    if let Some(_inst_id) = query.instance_id {
         params.push(format!("instance_id = ${}", param_idx));
         param_idx += 1;
     }
-    if let Some(ref search) = query.search {
+    if let Some(ref _search) = query.search {
         params.push(format!(
             "(provider ILIKE ${} OR provider_asset_id ILIKE ${} OR step_name ILIKE ${})",
             param_idx, param_idx, param_idx
@@ -262,23 +262,23 @@ pub async fn list_renditions(
     let mut query_builder = sqlx::query_as::<_, AccountRendition>(&sql)
         .bind(aid);
 
-    if let Some(ref provider) = query.provider {
-        query_builder = query_builder.bind(provider);
+    if let Some(ref _provider) = query.provider {
+        query_builder = query_builder.bind(_provider);
     }
-    if let Some(ref asset_type) = query.asset_type {
-        query_builder = query_builder.bind(asset_type);
+    if let Some(ref _asset_type) = query.asset_type {
+        query_builder = query_builder.bind(_asset_type);
     }
-    if let Some(ref status) = query.status {
-        query_builder = query_builder.bind(status);
+    if let Some(ref _status) = query.status {
+        query_builder = query_builder.bind(_status);
     }
-    if let Some(wf_id) = query.workflow_id {
-        query_builder = query_builder.bind(wf_id);
+    if let Some(_wf_id) = query.workflow_id {
+        query_builder = query_builder.bind(_wf_id);
     }
-    if let Some(inst_id) = query.instance_id {
-        query_builder = query_builder.bind(inst_id);
+    if let Some(_inst_id) = query.instance_id {
+        query_builder = query_builder.bind(_inst_id);
     }
-    if let Some(ref search) = query.search {
-        query_builder = query_builder.bind(search);
+    if let Some(ref _search) = query.search {
+        query_builder = query_builder.bind(_search);
     }
 
     query_builder = query_builder.bind(limit as i64).bind(offset as i64);
