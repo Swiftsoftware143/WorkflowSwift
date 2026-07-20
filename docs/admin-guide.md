@@ -51,6 +51,28 @@ Users create **workspaces** (portfolio companies) from their dashboard. Each wor
 | `/api/v1/accounts/industry` | GET | Get account's industries |
 | `/api/v1/accounts/add-industry` | POST | Add industry (creates dashboard) |
 
+## Agents & Kanban
+
+Paperclip agents can be created per workspace. Each agent has a role, budget, and credit tracking. Tickets act as a kanban board for tracking work items.
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/v1/agents` | POST | Create agent (accepts `name`, `role`, `workspace_id`) |
+| `/api/v1/agents` | GET | List agents (opt. `?workspace_id=`) |
+| `/api/v1/workspaces/{id}/tickets` | GET | List workspace tickets |
+| `/api/v1/workspaces/{id}/tickets/{tid}/status` | PATCH | Update ticket status |
+
+## BYOK Integrations (Provider Keys)
+
+Per-workspace API key management for external providers. Keys are scoped to the workspace — not shared globally.
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/v1/workspaces/{id}/provider-keys` | GET | List configured providers |
+| `/api/v1/workspaces/{id}/provider-keys` | POST | Save/update provider key |
+| `/api/v1/workspaces/{id}/provider-keys/{provider}` | DELETE | Remove provider key |
+
+
 ## Rate Limiting
 
 All protected endpoints are rate-limited per account: **30 requests/second**, burst of 10. Returns HTTP 429 with `Retry-After` header when exceeded.
