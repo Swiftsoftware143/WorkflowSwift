@@ -91,6 +91,14 @@ pub fn create_router(state: AppState) -> Router {
         .route("/{id}", delete(handlers::user_handler::remove_user))
         .route("/{id}/permissions", put(handlers::user_handler::update_user_permissions));
 
+    // ── Workspace routes ──
+    let workspace_routes = Router::new()
+        .route("/", get(handlers::workspace_handler::list_user_workspaces))
+        .route("/", post(handlers::workspace_handler::create_user_workspace))
+        .route("/{id}", delete(handlers::workspace_handler::delete_user_workspace))
+        .route("/{id}/stats", get(handlers::workspace_handler::get_workspace_stats));
+
+
     let dashboard_routes = Router::new()
         .route("/stats", get(handlers::dashboard_handler::dashboard_stats))
         .route("/activity", get(handlers::dashboard_handler::dashboard_activity))
@@ -322,6 +330,7 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/tags", tag_routes)
         .nest("/plans", plan_routes)
         .nest("/credits", credit_routes)
+        .nest("/workspaces", workspace_routes)
         .nest("/automations", automation_routes)
         .nest("/dashboard", dashboard_routes)
         .nest("/industries", industry_routes)
@@ -373,10 +382,6 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/admin", admin_routes)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
-            crate::auth::middleware::auth_middleware,
-        ))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
             crate::rate_limit::rate_limit_middleware,
         ));
 
@@ -404,6 +409,10 @@ pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/", get(health_check))
         .nest("/api/v1", api_v1)
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::middleware::auth_middleware,
+        ))
         .with_state(state)
 }
 

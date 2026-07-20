@@ -50,3 +50,4 @@ pub mod admin_settings_handler;
 pub mod site_handler;
 pub mod checkout_handler;
 pub mod extension_download_handler;
+pub mod workspace_handler;

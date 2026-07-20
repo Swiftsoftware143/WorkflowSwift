@@ -42,10 +42,13 @@ pub async fn auth_middleware(
     next: Next,
 ) -> Result<Response, AppError> {
     let path = req.uri().path().to_string();
+    tracing::info!("AUTH_MIDDLEWARE: path={}", path);
 
     if is_public_path(&path) {
         return Ok(next.run(req).await);
     }
+
+    tracing::debug!("auth_middleware: checking Authorization header for {}", path);
 
     let auth_header = req
         .headers()

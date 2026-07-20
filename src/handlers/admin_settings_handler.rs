@@ -1010,7 +1010,7 @@ pub async fn admin_delete_email_template(
 
 /// POST /api/v1/admin/impersonate — generate JWT for impersonating a tenant
 pub async fn admin_impersonate(
-    Extension(claims): Extension<Claims>,
+    Extension(_claims): Extension<Claims>,
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
