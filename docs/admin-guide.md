@@ -8,40 +8,48 @@ All admin endpoints require a super admin JWT token (David's account).
 |---|---|---|
 | `/api/v1/admin/usage` | GET | Usage dashboard — credits, workflow runs, n8n status per account |
 | `/api/v1/admin/accounts` | GET | List all accounts with retention + n8n_provisioned flag |
-| `/api/v1/admin/accounts/{id}` | DELETE | Permanently delete account + all data (n8n config, workflows, instances) |
+| `/api/v1/admin/accounts/{id}` | DELETE | Permanently delete account + all data |
 | `/api/v1/admin/accounts/{id}/retention` | PUT | Override account retention policy |
-| `/api/v1/admin/accounts/create` | POST | Create new account (admin only) |
+| `/api/v1/admin/accounts/create` | POST | Create new account |
 | `/api/v1/admin/plans` | GET/POST | List/create plan tiers |
-| `/api/v1/admin/plans/{id}` | PUT/DELETE | Update/delete plan |
 | `/api/v1/admin/settings` | GET | List all admin settings |
 | `/api/v1/admin/settings/{key}` | GET/PUT | Get/update specific setting |
-| `/api/v1/admin/email-templates` | GET/POST | Manage email templates |
-| `/api/v1/admin/email-templates/{id}` | PUT/DELETE | Update/delete email templates |
 
-## Usage Dashboard Response
+## Workspaces & Multi-Industry
 
-```json
-{
-  "accounts": [
-    {
-      "aid": "uuid",
-      "account_name": "Acme Corp",
-      "credits_balance": 150,
-      "workflows_run": 23,
-      "n8n_provisioned": true,
-      "created_at": "2026-07-19T00:00:00Z"
-    }
-  ],
-  "total": 1
-}
-```
+Users create **workspaces** (portfolio companies) from their dashboard. Each workspace can have its own **industry** which determines dashboard layout and workflow templates.
 
-## Deleting Accounts
+**Registration:** New users choose an industry at signup. Their dashboard auto-seeds with industry-specific widgets.
 
-Deleting an account via `DELETE /api/v1/admin/accounts/{id}`:
-1. Removes the n8n provisioned config from `n8n_account_config`
-2. Deletes the account (cascades to users, workflows, instances, dashboard data, etc.)
-3. This is permanent — there is no undo
+**Multi-industry:** Higher-tier accounts can add multiple industries via `POST /api/v1/accounts/add-industry`. Each gets its own dashboard with widgets.
+
+### Workspace Endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/v1/workspaces` | GET | List user's workspaces |
+| `/api/v1/workspaces` | POST | Create workspace (accepts `industry_slug`) |
+| `/api/v1/workspaces/{id}` | DELETE | Delete workspace |
+| `/api/v1/workspaces/{id}/stats` | GET | Workspace-scoped counts |
+
+### Paperclip Dashboard Endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/v1/dashboard/workspace` | GET | Active instances + automation stats (opt. `?workspace_id=`) |
+| `/api/v1/dashboard/timeline` | GET | Activity timeline (opt. `?workspace_id=&days=`) |
+| `/api/v1/dashboard/stats` | GET | Aggregate counts |
+| `/api/v1/dashboard/widgets` | GET | Industry-specific widgets (`?industry=`) |
+| `/api/v1/dashboard/push-widget-data` | POST | Push metric data to widget |
+| `/api/v1/dashboard/activity` | GET | Recent activity feed |
+
+### Industry Endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/v1/industries` | GET | List all industries (public) |
+| `/api/v1/accounts/industry` | GET | Get account's industries |
+| `/api/v1/accounts/add-industry` | POST | Add industry (creates dashboard) |
 
 ## Rate Limiting
 

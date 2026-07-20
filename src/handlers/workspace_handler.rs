@@ -11,19 +11,17 @@ use sqlx::Row;
 use crate::AppState;
 use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;
+use crate::handlers::industry_handler::seed_default_widgets_internal;
 
 /// GET /api/v1/user/workspaces
-/// List all portfolio companies for the authenticated user's account.
-/// These act as workspaces the user can switch between.
 pub async fn list_user_workspaces(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let mut workspaces: Vec<serde_json::Value> = Vec::<serde_json::Value>::new();
+    let mut workspaces: Vec<serde_json::Value> = Vec::new();
 
-    // Check if user has workspaces
     let count: i64 = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM portfolio_companies WHERE aid = $1"
     )
@@ -32,7 +30,6 @@ pub async fn list_user_workspaces(
     .await?;
 
     if count == 0 {
-        // Auto-seed a default workspace
         let ws_id = Uuid::new_v4();
         let _ = sqlx::query(
             "INSERT INTO portfolio_companies (id, aid, name, slug) VALUES ($1, $2, 'Default Workspace', 'default')"
@@ -75,14 +72,13 @@ pub async fn list_user_workspaces(
 }
 
 /// POST /api/v1/user/workspaces
-/// Create a new workspace (portfolio company) for the user.
+/// Create a new workspace with optional industry_slug to auto-seed dashboard.
 pub async fn create_user_workspace(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
 
     let name = req
         .get("name")
@@ -93,6 +89,22 @@ pub async fn create_user_workspace(
         return Err(AppError::BadRequest("name must not be empty".into()));
     }
 
+    let industry_slug = req.get("industry_slug").and_then(|v| v.as_str()).unwrap_or("");
+
+    // Verify industry exists if provided
+    if !industry_slug.is_empty() {
+        let industry_exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM template_categories WHERE slug = $1 AND is_active = true)"
+        )
+        .bind(industry_slug)
+        .fetch_one(&state.db)
+        .await?;
+
+        if !industry_exists {
+            return Err(AppError::NotFound(format!("Industry '{}' not found", industry_slug)));
+        }
+    }
+
     // Generate slug from name
     let base_slug = name.to_lowercase()
         .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
@@ -100,7 +112,6 @@ pub async fn create_user_workspace(
         .to_string();
     let slug = if base_slug.is_empty() { "workspace" } else { &base_slug };
 
-    // Ensure slug is unique for this account
     let mut final_slug = slug.to_string();
     let mut counter = 1;
     loop {
@@ -119,26 +130,68 @@ pub async fn create_user_workspace(
         counter += 1;
     }
 
-    let id = Uuid::new_v4();
+    let ws_id = Uuid::new_v4();
     sqlx::query(
         r#"INSERT INTO portfolio_companies (id, aid, name, slug)
            VALUES ($1, $2, $3, $4)"#,
     )
-    .bind(id)
+    .bind(ws_id)
     .bind(aid)
     .bind(name)
     .bind(&final_slug)
     .execute(&state.db)
     .await?;
 
+    // If industry was provided, create dashboard + seed widgets
+    let mut dashboard_id: Option<Uuid> = None;
+    if !industry_slug.is_empty() {
+        let industry_name: String = sqlx::query_scalar(
+            "SELECT name FROM template_categories WHERE slug = $1"
+        )
+        .bind(industry_slug)
+        .fetch_optional(&state.db)
+        .await?
+        .unwrap_or_else(|| industry_slug.to_string());
+
+        let db_id = Uuid::new_v4();
+        let _ = sqlx::query(
+            r#"INSERT INTO dashboards (id, aid, name, description, slug)
+               VALUES ($1, $2, $3, $4, $5)"#
+        )
+        .bind(db_id)
+        .bind(aid)
+        .bind(format!("{} Dashboard", industry_name))
+        .bind(format!("Auto-generated dashboard for {} workspace", name))
+        .bind(&final_slug)
+        .execute(&state.db)
+        .await;
+
+        // Link industry to account if not already
+        let _ = sqlx::query(
+            r#"INSERT INTO account_industries (aid, industry_slug, dashboard_id)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (aid, industry_slug) DO UPDATE SET is_active = true"#
+        )
+        .bind(aid)
+        .bind(industry_slug)
+        .bind(db_id)
+        .execute(&state.db)
+        .await;
+
+        // Seed default widgets
+        seed_default_widgets_internal(&state, aid, db_id, industry_slug).await;
+        dashboard_id = Some(db_id);
+    }
+
     Ok((
         StatusCode::CREATED,
         Json(json!({
             "workspace": {
-                "id": id.to_string(),
+                "id": ws_id.to_string(),
                 "name": name,
                 "slug": final_slug,
-            }
+            },
+            "dashboard_id": dashboard_id.map(|d| d.to_string()),
         })),
     ))
 }
@@ -167,7 +220,6 @@ pub async fn delete_user_workspace(
 }
 
 /// GET /api/v1/user/workspaces/:id/stats
-/// Get workspace-scoped stats (counts of workflows, clients, instances, automations)
 pub async fn get_workspace_stats(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -175,7 +227,6 @@ pub async fn get_workspace_stats(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    // Verify workspace belongs to user's account
     let owned: bool = sqlx::query_scalar(
         "SELECT EXISTS(SELECT 1 FROM portfolio_companies WHERE id = $1 AND aid = $2)"
     )

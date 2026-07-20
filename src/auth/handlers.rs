@@ -529,3 +529,75 @@ pub async fn reset_password(
 
     Ok((StatusCode::OK, Json(json!({"message": "Password has been reset successfully"}))))
 }
+
+/// POST /api/v1/accounts/industries — add an industry to the account (multi-industry)
+#[derive(Debug, serde::Deserialize)]
+pub struct AddIndustryRequest {
+    pub industry_slug: String,
+}
+
+pub async fn add_account_industry(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<AddIndustryRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+
+    // Verify industry exists
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM template_categories WHERE slug = $1 AND is_active = true)"
+    )
+    .bind(&req.industry_slug)
+    .fetch_one(&state.db)
+    .await?;
+
+    if !exists {
+        return Err(AppError::NotFound(format!("Industry '{}' not found", req.industry_slug)));
+    }
+
+    // Create dashboard and seed
+    let industry_name: String = sqlx::query_scalar(
+        "SELECT name FROM template_categories WHERE slug = $1"
+    )
+    .bind(&req.industry_slug)
+    .fetch_optional(&state.db)
+    .await?
+    .unwrap_or_else(|| req.industry_slug.clone());
+
+    let dashboard_id = Uuid::new_v4();
+    let dashboard_name = format!("{} Dashboard", industry_name);
+
+    sqlx::query(
+        r#"INSERT INTO dashboards (id, aid, name, description, slug, is_default)
+           VALUES ($1, $2, $3, $4, $5, false)"#
+    )
+    .bind(dashboard_id)
+    .bind(aid)
+    .bind(&dashboard_name)
+    .bind(format!("Your {} dashboard", industry_name))
+    .bind(&req.industry_slug)
+    .execute(&state.db)
+    .await?;
+
+    crate::handlers::industry_handler::seed_default_widgets_internal(
+        &state, aid, dashboard_id, &req.industry_slug
+    ).await;
+
+    // Link to account
+    sqlx::query(
+        r#"INSERT INTO account_industries (aid, industry_slug, dashboard_id)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (aid, industry_slug) DO UPDATE SET is_active = true, dashboard_id = $3"#
+    )
+    .bind(aid)
+    .bind(&req.industry_slug)
+    .bind(dashboard_id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(Json(json!({
+        "status": "added",
+        "industry": req.industry_slug,
+        "dashboard_id": dashboard_id
+    })))
+}
