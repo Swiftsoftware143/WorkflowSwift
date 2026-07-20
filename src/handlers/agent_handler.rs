@@ -255,7 +255,7 @@ pub async fn upsert_provider_key(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let ws_id = req.workspace_id.and_then(|w| Uuid::parse_str(&w).ok());
 
-    // Delete and re-insert for clean upsert
+    // Delete and re-insert for clean upsert — encrypt api_key at rest
     let ws_uuid = ws_id;
     sqlx::query(
         "DELETE FROM provider_keys WHERE aid = $1 AND provider = $2 AND (portfolio_company_id = $3 OR ($3 IS NULL AND portfolio_company_id IS NULL))"
@@ -263,8 +263,8 @@ pub async fn upsert_provider_key(
     .bind(aid).bind(&req.provider).bind(ws_uuid)
     .execute(&s.db).await?;
     sqlx::query(
-        "INSERT INTO provider_keys (id, aid, portfolio_company_id, provider, api_key, is_active)
-         VALUES ($1,$2,$3,$4,$5,true)"
+        r#"INSERT INTO provider_keys (id, aid, portfolio_company_id, provider, api_key, is_active)
+         VALUES ($1,$2,$3,$4,pgp_sym_encrypt($5, (SELECT COALESCE(encryption_key, 'change-me') FROM accounts WHERE id = $2)), true)"#
     )
     .bind(Uuid::new_v4()).bind(aid).bind(ws_uuid)
     .bind(&req.provider).bind(&req.api_key)
