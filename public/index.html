@@ -209,7 +209,13 @@ tr:hover{background:rgba(79,134,247,.04)}
 <a href="#" onclick="showPage('leads')" data-page="leads"><span>🎯</span><span>Leads</span></a>
 <a href="#" onclick="showPage('campaigns')" data-page="campaigns"><span>📣</span><span>Campaigns</span></a>
 <a href="#" onclick="showPage('tickets')" data-page="tickets"><span>🎫</span><span>Tickets</span></a>
-<a href="#" onclick="showPage('portfolio')" data-page="portfolio"><span>🏢</span><span>Portfolio Companies</span></a>
+<a href="#" onclick="showPage('portfolio')"
+      if(window._userRole==='super_admin'){
+        links+='<div style="font-size:11px;color:var(--text2);padding:8px 20px 4px;text-transform:uppercase;letter-spacing:1px">Paperclip</div>'
+          +'<a href="#" onclick="showPage(\'paperclip-agents\')" data-page="paperclip-agents"><span>🤖</span><span>Agents</span></a>'
+          +'<a href="#" onclick="showPage(\'paperclip-kanban\')" data-page="paperclip-kanban"><span>📋</span><span>Kanban</span></a>'
+          +'<a href="#" onclick="showPage(\'paperclip-bridge\')" data-page="paperclip-bridge"><span>🔗</span><span>AI Bridge</span></a>';
+      } data-page="portfolio"><span>🏢</span><span>Portfolio Companies</span></a>
 
 <!-- ADMIN accordion -->
 <hr class="admin-divider">
@@ -469,6 +475,9 @@ async function showPage(page){
     'admin-n8n':renderAdminN8n,
     'admin-bridge':renderAdminBridge,
     'admin-settings':renderAdminSettings,
+    'paperclip-agents':renderPaperclipAgents,
+    'paperclip-kanban':renderPaperclipKanban,
+    'paperclip-bridge':renderPaperclipBridge,
   };
   try{
     await renderers[page]();
@@ -3571,6 +3580,107 @@ function renderGuide(){
     }
   },100);
 })();
+
+// ── Paperclip Agent Views ─────────────────────────────────────────
+function renderPaperclipAgents(){
+  const c=$('main-content');
+  let html='<div class="page-header"><h2>🤖 Paperclip Agents</h2></div>'
+    +'<div id="agent-list"></div>'
+    +'<div class="card" style="margin-top:20px"><h3>Register New Agent</h3>'
+    +'<form id="agent-form" onsubmit="return createAgent(event)">'
+    +'<div class="form-row"><label>Agent Name</label><input id="agent-name" required></div>'
+    +'<div class="form-row"><label>Role</label><select id="agent-role"><option value="worker">Worker</option><option value="supervisor">Supervisor</option><option value="analyst">Analyst</option></select></div>'
+    +'<div class="form-row"><label>Model</label><input id="agent-model" placeholder="deepseek, claude, gpt-4"></div>'
+    +'<div class="form-row"><label>Budget (credits)</label><input id="agent-budget" type="number" value="100"></div>'
+    +'<div class="form-row"><label>Workspace ID</label><input id="agent-ws" placeholder="optional, uses active workspace"></div>'
+    +'<button type="submit" class="btn btn-primary">Create Agent</button></form></div>';
+  c.innerHTML=html;
+  loadAgents();
+}
+
+async function loadAgents(){
+  try{
+    const d=await api('/agents');
+    const agents=d.agents||[];
+    let html='<table class="table"><tr><th>Name</th><th>Role</th><th>Budget</th><th>Spent</th><th>Status</th></tr>';
+    agents.forEach(a=>{
+      html+='<tr><td>'+esc(a.name)+'</td><td>'+esc(a.role)+'</td><td>'+a.budget+'</td><td>'+a.spent+'</td><td>'+esc(a.status)+'</td></tr>';
+    });
+    html+='</table>';
+    $('agent-list').innerHTML=agents.length?html:'<div class="empty">No agents registered</div>';
+  }catch(e){$('agent-list').innerHTML='<div class="empty">Error loading agents</div>';}
+}
+
+async function createAgent(e){
+  e.preventDefault();
+  const body={name:$('agent-name').value,role:$('agent-role').value};
+  const m=$('agent-model').value;if(m)body.model=m;
+  const b=parseInt($('agent-budget').value)||0;body.budget_credits=b;
+  const ws=$('agent-ws').value;if(ws)body.workspace_id=ws;
+  try{
+    const d=await api('/agents',{method:'POST',body:JSON.stringify(body)});
+    if(d.status==='created'){showToast('Agent created!');loadAgents();$('agent-form').reset();}
+    else showToast('Error: '+JSON.stringify(d));
+  }catch(e){showToast('Error creating agent');}
+}
+
+function renderPaperclipKanban(){
+  const c=$('main-content');
+  c.innerHTML='<div class="page-header"><h2>📋 Agent Kanban Board</h2></div>'
+    +'<div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px" id="kanban-columns">'
+    +'  <div class="card"><h4 style="color:#666">Backlog</h4><div class="kanban-cards" data-status="backlog"></div></div>'
+    +'  <div class="card"><h4 style="color:#4f86f7">To Do</h4><div class="kanban-cards" data-status="todo"></div></div>'
+    +'  <div class="card"><h4 style="color:#f7b731">In Progress</h4><div class="kanban-cards" data-status="in_progress"></div></div>'
+    +'  <div class="card"><h4 style="color:#27ae60">Review</h4><div class="kanban-cards" data-status="review"></div></div>'
+    +'  <div class="card"><h4 style="color:#999">Done</h4><div class="kanban-cards" data-status="done"></div></div>'
+    +'</div>';
+  loadKanbanTickets();
+}
+
+async function loadKanbanTickets(){
+  try{
+    const d=await api('/workspaces/'+encodeURIComponent(currentWsId||'')+'/tickets');
+    const tickets=d.tickets||[];
+    const columns={backlog:[],todo:[],in_progress:[],review:[],done:[]};
+    tickets.forEach(t=>{if(columns[t.status])columns[t.status].push(t);});
+    Object.keys(columns).forEach(s=>{
+      const el=document.querySelector('.kanban-cards[data-status="'+s+'"]');
+      if(!el)return;
+      el.innerHTML=columns[s].map(t=>
+        '<div class="card" style="padding:10px;margin-bottom:8px;cursor:pointer;font-size:13px" onclick="updateTicketStatus(\''+t.id+'\')">'
+        +'<strong>'+esc(t.title)+'</strong>'
+        +'<div style="font-size:11px;color:var(--text2);margin-top:4px">'+esc(t.priority||'')+'</div>'
+        +'</div>'
+      ).join('')||'<div class="empty" style="font-size:12px">No tickets</div>';
+    });
+  }catch(e){}
+}
+
+function renderPaperclipBridge(){
+  const c=$('main-content');
+  c.innerHTML='<div class="page-header"><h2>🔗 AI Bridge Task Flow</h2></div>'
+    +'<div class="card"><h3>Inbound Tasks</h3><div id="bridge-inbound"></div></div>'
+    +'<div class="card" style="margin-top:16px"><h3>Outbound Results</h3><div id="bridge-outbound"></div></div>';
+  loadBridgeTasks();
+}
+
+async function loadBridgeTasks(){
+  try{
+    const r1=await fetch('/api/v1/admin/bridge/inbound',{headers:{'Authorization':'Bearer '+token}});
+    const inbound=await r1.json();
+    $('bridge-inbound').innerHTML=Array.isArray(inbound.tasks)
+      ? inbound.tasks.map(t=>'<div style="padding:8px;border-bottom:1px solid var(--border);font-size:13px">'+esc(t.task_id||t.name||'Task')+'</div>').join('')
+      :'<div class="empty">No inbound tasks</div>';
+  }catch(e){$('bridge-inbound').innerHTML='<div class="empty">Bridge offline</div>';}
+  try{
+    const r2=await fetch('/api/v1/admin/bridge/outbound',{headers:{'Authorization':'Bearer '+token}});
+    const outbound=await r2.json();
+    $('bridge-outbound').innerHTML=Array.isArray(outbound.results)
+      ? outbound.results.map(t=>'<div style="padding:8px;border-bottom:1px solid var(--border);font-size:13px">'+esc(t.task_id||t.taskId||'Result')+' — '+esc(t.status||'?')+'</div>').join('')
+      :'<div class="empty">No outbound results</div>';
+  }catch(e){$('bridge-outbound').innerHTML='<div class="empty">Bridge offline</div>';}
+}
+
 </script>
 
 </body>
