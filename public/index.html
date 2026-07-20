@@ -3019,6 +3019,10 @@ async function renderAdminDashboard(){
     +'<div class="card stat-card"><div class="num">'+plans+'</div><div class="label">Plans</div></div>'
     +'<div class="card stat-card"><div class="num">'+tenants+'</div><div class="label">Accounts</div></div>'
     +'</div>'
+    +'<div class="card" style="background:rgba(79,134,247,.05);border:1px solid rgba(79,134,247,.2)"><h3>🤖 Paperclip Module</h3>'
+    +'<div style="font-size:13px;color:var(--text2);margin-bottom:8px">Agents, Kanban, and BYOK integrations active.</div>'
+    +'<a href="#" onclick="showPage(\'paperclip-agents\')" style="color:var(--accent);font-size:13px">Manage Agents →</a>'
+    +'</div>'
     +'<div class="card"><h3>Quick Actions</h3>'
     +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">'
     +'<button class="btn-primary" onclick="showPage(\'admin-plans\')">📋 Manage Plans</button>'
@@ -3618,7 +3622,7 @@ async function createAgent(e){
   const b=parseInt($('agent-budget').value)||0;body.budget_credits=b;
   const ws=$('agent-ws').value;if(ws)body.workspace_id=ws;
   try{
-    const d=await api('/workspaces/'+encodeURIComponent(currentWsId||'')+'/agents',{method:'POST',body:JSON.stringify(body)});
+    if(!body.workspace_id)body.workspace_id=currentWsId||'';const d=await api('/agents',{method:'POST',body:JSON.stringify(body)});
     if(d.status==='created'){showToast('Agent created!');loadAgents();$('agent-form').reset();}
     else showToast('Error: '+JSON.stringify(d));
   }catch(e){showToast('Error creating agent');}
@@ -3666,14 +3670,14 @@ function renderPaperclipBridge(){
 
 async function loadBridgeTasks(){
   try{
-    const r1=await fetch('/api/v1/admin/bridge/inbound',{headers:{'Authorization':'Bearer '+token}});
+    const r1=await fetch('/api/v1/bridge/tasks',{headers:{'Authorization':'Bearer '+token}});
     const inbound=await r1.json();
     $('bridge-inbound').innerHTML=Array.isArray(inbound.tasks)
       ? inbound.tasks.map(t=>'<div style="padding:8px;border-bottom:1px solid var(--border);font-size:13px">'+esc(t.task_id||t.name||'Task')+'</div>').join('')
       :'<div class="empty">No inbound tasks</div>';
   }catch(e){$('bridge-inbound').innerHTML='<div class="empty">Bridge offline</div>';}
   try{
-    const r2=await fetch('/api/v1/admin/bridge/outbound',{headers:{'Authorization':'Bearer '+token}});
+    const r2=await fetch('/api/v1/bridge/results',{headers:{'Authorization':'Bearer '+token}});
     const outbound=await r2.json();
     $('bridge-outbound').innerHTML=Array.isArray(outbound.results)
       ? outbound.results.map(t=>'<div style="padding:8px;border-bottom:1px solid var(--border);font-size:13px">'+esc(t.task_id||t.taskId||'Result')+' — '+esc(t.status||'?')+'</div>').join('')

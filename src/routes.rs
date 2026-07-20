@@ -103,7 +103,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/{id}/tickets", get(handlers::agent_handler::list_tickets))
         .route("/{id}/tickets/{ticket_id}/status", patch(handlers::agent_handler::update_ticket_status))
         .route("/{id}/provider-keys", get(handlers::agent_handler::list_provider_keys).post(handlers::agent_handler::upsert_provider_key))
-        .route("/{id}/provider-keys/{provider}", delete(handlers::agent_handler::delete_provider_key));
+        .route("/{id}/provider-keys/{provider}", delete(handlers::agent_handler::delete_provider_key))
+        .route("/{id}/agents/{agent_id}", delete(handlers::agent_handler::delete_agent));
 
 
     let agent_routes = Router::new()
