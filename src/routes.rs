@@ -1,4 +1,5 @@
 use axum::{
+    routing::patch,
     routing::{get, post, put, delete},
     Router,
 };
@@ -97,12 +98,22 @@ pub fn create_router(state: AppState) -> Router {
         .route("/", get(handlers::workspace_handler::list_user_workspaces))
         .route("/", post(handlers::workspace_handler::create_user_workspace))
         .route("/{id}", delete(handlers::workspace_handler::delete_user_workspace))
-        .route("/{id}/stats", get(handlers::workspace_handler::get_workspace_stats));
+        .route("/{id}/stats", get(handlers::workspace_handler::get_workspace_stats))
+        .route("/{id}/agents", get(handlers::agent_handler::list_agents))
+        .route("/{id}/tickets", get(handlers::agent_handler::list_tickets))
+        .route("/{id}/tickets/{ticket_id}/status", patch(handlers::agent_handler::update_ticket_status))
+        .route("/{id}/provider-keys", get(handlers::agent_handler::list_provider_keys).post(handlers::agent_handler::upsert_provider_key))
+        .route("/{id}/provider-keys/{provider}", delete(handlers::agent_handler::delete_provider_key));
 
+
+    let agent_routes = Router::new()
+        .route("/", get(handlers::agent_handler::list_agents).post(handlers::agent_handler::create_agent))
+        .route("/{id}", delete(handlers::agent_handler::delete_agent));
 
     let dashboard_routes = Router::new()
         .route("/workspace", get(handlers::paperclip_handler::workspace_dashboard))
         .route("/timeline", get(handlers::paperclip_handler::activity_timeline))
+
         .route("/stats", get(handlers::dashboard_handler::dashboard_stats))
         .route("/activity", get(handlers::dashboard_handler::dashboard_activity))
         .route("/data", post(handlers::dashboard_handler::push_dashboard_data))
@@ -336,6 +347,7 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/plans", plan_routes)
         .nest("/credits", credit_routes)
         .nest("/workspaces", workspace_routes)
+        .nest("/agents", agent_routes)
         .nest("/automations", automation_routes)
         .nest("/dashboard", dashboard_routes)
         .nest("/api-keys", api_key_routes)
