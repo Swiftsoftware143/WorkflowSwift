@@ -3600,7 +3600,7 @@ function renderPaperclipAgents(){
 
 async function loadAgents(){
   try{
-    const d=await api('/agents');
+    const d=await api('/workspaces/'+encodeURIComponent(currentWsId||'')+'/agents');
     const agents=d.agents||[];
     let html='<table class="table"><tr><th>Name</th><th>Role</th><th>Budget</th><th>Spent</th><th>Status</th></tr>';
     agents.forEach(a=>{
@@ -3618,7 +3618,7 @@ async function createAgent(e){
   const b=parseInt($('agent-budget').value)||0;body.budget_credits=b;
   const ws=$('agent-ws').value;if(ws)body.workspace_id=ws;
   try{
-    const d=await api('/agents',{method:'POST',body:JSON.stringify(body)});
+    const d=await api('/workspaces/'+encodeURIComponent(currentWsId||'')+'/agents',{method:'POST',body:JSON.stringify(body)});
     if(d.status==='created'){showToast('Agent created!');loadAgents();$('agent-form').reset();}
     else showToast('Error: '+JSON.stringify(d));
   }catch(e){showToast('Error creating agent');}
