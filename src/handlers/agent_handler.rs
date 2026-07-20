@@ -292,3 +292,29 @@ pub async fn delete_provider_key(
 
     Ok(Json(json!({"status": "deleted"})))
 }
+
+
+/// Decrypt a provider API key — uses account-level encryption key
+pub async fn get_decrypted_key(
+    pool: &sqlx::PgPool,
+    aid: Uuid,
+    provider: &str,
+    ws_id: Option<Uuid>,
+) -> Result<Option<String>, AppError> {
+    let key: Option<String> = if let Some(ws) = ws_id {
+        sqlx::query_scalar(
+            "SELECT pgp_sym_decrypt(api_key, (SELECT COALESCE(encryption_key, 'default-key-please-rotate') FROM accounts WHERE id = $1))
+             FROM provider_keys WHERE aid = $1 AND provider = $2 AND portfolio_company_id = $3 AND is_active = true"
+        )
+        .bind(aid).bind(provider).bind(ws)
+        .fetch_optional(pool).await?
+    } else {
+        sqlx::query_scalar(
+            "SELECT pgp_sym_decrypt(api_key, (SELECT COALESCE(encryption_key, 'default-key-please-rotate') FROM accounts WHERE id = $1))
+             FROM provider_keys WHERE aid = $1 AND provider = $2 AND portfolio_company_id IS NULL AND is_active = true"
+        )
+        .bind(aid).bind(provider)
+        .fetch_optional(pool).await?
+    };
+    Ok(key)
+}
