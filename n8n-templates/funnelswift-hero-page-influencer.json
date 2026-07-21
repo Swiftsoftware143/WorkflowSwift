@@ -1,0 +1,321 @@
+{
+  "name": "FunnelSwift Hero Page (Influencer)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Hero Page Request",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "funnelswift-hero-page",
+      "authentication": "none",
+      "responseMode": "lastNode",
+      "responseData": "allEntries",
+      "path": "funnelswift-hero-page",
+      "options": {
+        "responseHeaders": {
+          "entries": {
+            "values": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          }
+        },
+        "responseData": "",
+        "responseMode": ""
+      }
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "title",
+              "value": "={{ $json.body.title || $json.title || '' }}"
+            },
+            {
+              "name": "slug",
+              "value": "={{ $json.body.slug || $json.slug || '' }}"
+            },
+            {
+              "name": "owner_email",
+              "value": "={{ $json.body.owner_email || $json.owner_email || '' }}"
+            },
+            {
+              "name": "owner_name",
+              "value": "={{ $json.body.owner_name || $json.owner_name || '' }}"
+            },
+            {
+              "name": "callback_url",
+              "value": "={{ $json.body.callback_url || $json.callback_url || '' }}"
+            }
+          ],
+          "number": [],
+          "boolean": [],
+          "array": [
+            {
+              "name": "layout_blocks",
+              "value": "={{ $json.body.layout_blocks || $json.layout_blocks || '' }}"
+            }
+          ],
+          "object": [
+            {
+              "name": "settings",
+              "value": "={{ $json.body.settings || $json.settings || '{}' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "extract-fields",
+      "name": "Extract Fields",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [420, 300],
+      "attributes": {
+        "mode": "raw",
+        "include": "noExisting",
+        "values": {
+          "string": [
+            {
+              "name": "title",
+              "value": "={{ $json.body.title || $json.title || '' }}"
+            },
+            {
+              "name": "slug",
+              "value": "={{ $json.body.slug || $json.slug || '' }}"
+            },
+            {
+              "name": "owner_email",
+              "value": "={{ $json.body.owner_email || $json.owner_email || '' }}"
+            },
+            {
+              "name": "owner_name",
+              "value": "={{ $json.body.owner_name || $json.owner_name || '' }}"
+            },
+            {
+              "name": "callback_url",
+              "value": "={{ $json.body.callback_url || $json.callback_url || '' }}"
+            }
+          ],
+          "number": [],
+          "boolean": [],
+          "array": [
+            {
+              "name": "layout_blocks",
+              "value": "={{ $json.body.layout_blocks || $json.layout_blocks || '' }}"
+            }
+          ],
+          "object": [
+            {
+              "name": "settings",
+              "value": "={{ $json.body.settings || $json.settings || '{}' }}"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ {\n  \"template_type\": \"hero_page\",\n  \"title\": $json.title,\n  \"slug\": $json.slug,\n  \"owner_email\": $json.owner_email,\n  \"owner_name\": $json.owner_name,\n  \"settings\": $json.settings || {},\n  \"layout_blocks\": $json.layout_blocks || JSON.parse('[' +\n    '{\"id\":\"hero\",\"type\":\"hero\",\"enabled\":true,\"settings\":{' +\n      '\"fullscreen\":true,' +\n      '\"background_type\":\"image\",' +\n      '\"background_value\":\"\",' +\n      '\"overlay_opacity\":0.5,' +\n      '\"headline\":\"\",' +\n      '\"headline_color\":\"#ffffff\",' +\n      '\"subheadline\":\"\",' +\n      '\"subheadline_color\":\"#cccccc\",' +\n      '\"cta_text\":\"Get Started\",' +\n      '\"cta_url\":\"\",' +\n      '\"cta_color\":\"#6366f1\"' +\n    '}},' +\n    '{\"id\":\"carousel\",\"type\":\"carousel\",\"enabled\":true,\"settings\":{' +\n      '\"title\":\"Featured\",' +\n      '\"slides\":[],' +\n      '\"autoplay\":true,' +\n      '\"interval_ms\":4000' +\n    '}},' +\n    '{\"id\":\"video\",\"type\":\"video\",\"enabled\":true,\"settings\":{' +\n      '\"title\":\"Watch My Story\",' +\n      '\"embed_url\":\"\",' +\n      '\"autoplay\":false,' +\n      '\"show_controls\":true' +\n    '}},' +\n    '{\"id\":\"gallery\",\"type\":\"gallery\",\"enabled\":true,\"settings\":{' +\n      '\"title\":\"Portfolio\",' +\n      '\"images\":[],' +\n      '\"columns\":3' +\n    '}},' +\n    '{\"id\":\"features\",\"type\":\"features\",\"enabled\":true,\"settings\":{' +\n      '\"title\":\"What I Offer\",' +\n      '\"features\":[{\"icon\":\"star\",\"heading\":\"\",\"description\":\"\"},{\"icon\":\"heart\",\"heading\":\"\",\"description\":\"\"},{\"icon\":\"zap\",\"heading\":\"\",\"description\":\"\"}],' +\n      '\"columns\":3' +\n    '}},' +\n    '{\"id\":\"lead_form\",\"type\":\"lead_form\",\"enabled\":true,\"settings\":{' +\n      '\"title\":\"Work With Me\",' +\n      '\"subtitle\":\"Fill out the form below and I\\'ll get back to you\",' +\n      '\"fields\":[' +\n        '{\"key\":\"name\",\"label\":\"Full Name\",\"type\":\"text\",\"required\":true},' +\n        '{\"key\":\"email\",\"label\":\"Email Address\",\"type\":\"email\",\"required\":true},' +\n        '{\"key\":\"phone\",\"label\":\"Phone Number\",\"type\":\"tel\",\"required\":false},' +\n        '{\"key\":\"message\",\"label\":\"Your Message\",\"type\":\"textarea\",\"required\":true}' +\n      '],' +\n      '\"button_text\":\"Send Message\",' +\n      '\"button_color\":\"#6366f1\",' +\n      '\"success_message\":\"Thanks! I\\'ll be in touch soon.\"' +\n    '}}' +\n  ']')\n} }}"
+      },
+      "id": "set-card-data",
+      "name": "Prepare Card Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [600, 300],
+      "attributes": {}
+    },
+    {
+      "parameters": {
+        "options": {},
+        "httpMethod": "POST",
+        "url": "={{ $env.FUNNELSWIFT_API_URL }}/api/v1/kinetic/cards",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.FUNNELSWIFT_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "title",
+              "value": "={{ $json.title }}"
+            },
+            {
+              "name": "slug",
+              "value": "={{ $json.slug }}"
+            },
+            {
+              "name": "template_type",
+              "value": "hero_page"
+            },
+            {
+              "name": "owner_email",
+              "value": "={{ $json.owner_email }}"
+            },
+            {
+              "name": "owner_name",
+              "value": "={{ $json.owner_name }}"
+            },
+            {
+              "name": "layout_blocks",
+              "value": "={{ $json.layout_blocks }}"
+            },
+            {
+              "name": "settings",
+              "value": "={{ $json.settings }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "create-kinetic-card",
+      "name": "Create Kinetic Card",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [800, 300],
+      "credentials": {}
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ {\n  \"success\": true,\n  \"message\": \"Hero Page created successfully\",\n  \"card_id\": $json.id || $json.card_id,\n  \"slug\": $json.slug,\n  \"url\": ($env.FUNNELSWIFT_API_URL || 'https://app.funnelswift.net') + '/hero/' + $json.slug\n} }}"
+      },
+      "id": "webhook-response",
+      "name": "Return Success",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1000, 300],
+      "attributes": {}
+    },
+    {
+      "parameters": {
+        "options": {},
+        "httpMethod": "POST",
+        "url": "={{ $node['Extract Fields'].json.callback_url || $env.FUNNELSWIFT_WEBHOOK_URL || '' }}",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "event",
+              "value": "hero_page.created"
+            },
+            {
+              "name": "card_id",
+              "value": "={{ $node['Create Kinetic Card'].json.id || $node['Create Kinetic Card'].json.card_id || '' }}"
+            },
+            {
+              "name": "slug",
+              "value": "={{ $node['Extract Fields'].json.slug }}"
+            },
+            {
+              "name": "owner_email",
+              "value": "={{ $node['Extract Fields'].json.owner_email }}"
+            },
+            {
+              "name": "owner_name",
+              "value": "={{ $node['Extract Fields'].json.owner_name }}"
+            },
+            {
+              "name": "status",
+              "value": "success"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "send-notification",
+      "name": "Send Webhook Notification",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1200, 300],
+      "credentials": {}
+    }
+  ],
+  "connections": {
+    "Hero Page Request": {
+      "main": [
+        [
+          {
+            "node": "Extract Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Fields": {
+      "main": [
+        [
+          {
+            "node": "Prepare Card Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Card Data": {
+      "main": [
+        [
+          {
+            "node": "Create Kinetic Card",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Kinetic Card": {
+      "main": [
+        [
+          {
+            "node": "Return Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Return Success": {
+      "main": [
+        [
+          {
+            "node": "Send Webhook Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}
