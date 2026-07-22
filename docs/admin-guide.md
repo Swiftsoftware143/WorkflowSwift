@@ -46,6 +46,14 @@ Users create **workspaces** (portfolio companies) from their dashboard. Each wor
 | `/api/v1/dashboard/activity` | GET | Recent activity feed |
 
 #
+## MultiDirectory Integration — Referral Workflows
+
+MultiDirectory's referral verification flow can send webhook notifications to WorkflowSwift for downstream automation (e.g., email the referrer when Zaarcash is awarded, notify admin of new pending referrals).
+
+Webhook payload: `{ "event": "referral_verified", "referrer_email": "...", "referee_email": "...", "zaarcash_earned": 100, "direction": "visitor_to_visitor" }`
+
+WorkflowSwift workflows can consume these events and trigger notifications, CRM updates, or analytics logging.
+
 ## Industry Data Sources (Satellites)
 
 Admin-configurable data sources that power industry-specific dashboard widgets. Each source costs credits per API call.
