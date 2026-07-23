@@ -15,6 +15,7 @@ pub struct AppConfig {
     pub n8n_webhook_url: String,
     pub n8n_api_key: String,
     pub callback_base_url: String,
+    pub funnelswift_url: String,
 }
 
 impl AppConfig {
@@ -56,6 +57,7 @@ impl AppConfig {
         let n8n_webhook_url = env::var("N8N_WEBHOOK_URL").unwrap_or_else(|_| "http://localhost:5679".to_string());
         let n8n_api_key = env::var("N8N_API_KEY").unwrap_or_default();
         let callback_base_url = env::var("CALLBACK_BASE_URL").unwrap_or_else(|_| "http://workflowswift:8085".to_string());
+        let funnelswift_url = env::var("FUNNELSWIFT_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
 
         Self {
             host, port, database_url, jwt_secret,
@@ -66,6 +68,7 @@ impl AppConfig {
             n8n_webhook_url,
             n8n_api_key,
             callback_base_url,
+            funnelswift_url,
         }
     }
 }

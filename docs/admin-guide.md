@@ -116,6 +116,22 @@ Per-workspace API key management for external providers. Keys are scoped to the 
 | `/api/v1/workspaces/{id}/provider-keys/{provider}` | DELETE | Remove provider key |
 
 
+## Affiliate Product Auto-Sync
+
+WorkflowSwift plan tiers are automatically synced to FunnelSwift's `affiliate_products` table.
+
+**How it works:**
+
+| Action | What happens |
+|--------|-------------|
+| **Plan created** | `POST /api/v1/internal/sync-affiliate-plan` fires with `action: create`, `source_app: workflowswift` |
+| **Plan updated** | Same endpoint with `action: update` |
+| **Plan deleted** | Same endpoint with `action: deactivate` — marks the affiliate product inactive |
+
+The sync fires asynchronously. FunnelSwift must be reachable at `FUNNELSWIFT_URL` (default `http://localhost:8080`).
+
+**Requires:** `FUNNELSWIFT_URL` environment variable.
+
 ## Rate Limiting
 
 All protected endpoints are rate-limited per account: **30 requests/second**, burst of 10. Returns HTTP 429 with `Retry-After` header when exceeded.

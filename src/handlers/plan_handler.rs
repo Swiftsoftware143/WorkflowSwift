@@ -15,6 +15,52 @@ use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;
 use crate::models::plan::*;
 
+/// Fire-and-forget sync of a plan to FunnelSwift's affiliate_products.
+async fn sync_plan_to_affiliate(
+    config: &crate::config::AppConfig,
+    action: &str,
+    plan_name: &str,
+    plan_price: f64,
+    is_active: bool,
+) {
+    let url = format!("{}/api/v1/internal/sync-affiliate-plan", config.funnelswift_url.trim_end_matches('/'));
+    let api_key = config.internal_sync_key.clone();
+
+    let action_owned = action.to_string();
+    let plan_name_owned = plan_name.to_string();
+
+    let payload = serde_json::json!({
+        "action": &action_owned,
+        "plan_name": &plan_name_owned,
+        "plan_price": plan_price,
+        "source_app": "workflowswift",
+        "is_active": is_active,
+        "owner_name": "SwiftSoftware",
+        "product_type": "software",
+        "api_key": &api_key,
+    });
+
+    tokio::spawn(async move {
+        match reqwest::Client::new()
+            .post(&url)
+            .json(&payload)
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                let status = resp.status();
+                if status.is_success() {
+                    tracing::info!("sync-affiliate-plan {} {}: {}", action_owned, plan_name_owned, status);
+                } else {
+                    let body = resp.text().await.unwrap_or_default();
+                    tracing::warn!("sync-affiliate-plan {} {} failed: {} - {}", action_owned, plan_name_owned, status, body);
+                }
+            }
+            Err(e) => tracing::warn!("sync-affiliate-plan {} {} error: {}", action_owned, plan_name_owned, e),
+        }
+    });
+}
+
 pub async fn list_plans(
     State(state): State<AppState>,
 ) -> ApiResult<impl IntoResponse> {
@@ -57,6 +103,12 @@ pub async fn create_plan(
 
     let payment_provider = req.get("payment_provider").and_then(|v| v.as_str()).map(|s| s.to_string());
 
+    // Capture price before it's moved into bind
+    let plan_price_for_sync = price_monthly
+        .as_deref()
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.0);
+
     let plan = sqlx::query_as::<_, PlanTier>(
         r#"INSERT INTO plan_tiers (id, name, slug, description, price_monthly, price_yearly, features, payment_provider)
            VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7::jsonb, $8)
@@ -72,6 +124,13 @@ pub async fn create_plan(
     .bind(&payment_provider)
     .fetch_one(&state.db)
     .await?;
+
+    // Sync to FunnelSwift affiliate products
+    let plan_name2 = name.clone();
+    let config2 = state.config.clone();
+    tokio::spawn(async move {
+        sync_plan_to_affiliate(&config2, "create", &plan_name2, plan_price_for_sync, true).await;
+    });
 
     Ok((StatusCode::CREATED, Json(json!({"plan": plan}))))
 }
@@ -106,6 +165,12 @@ pub async fn update_plan(
 
     let payment_provider = req.get("payment_provider").and_then(|v| v.as_str()).map(|s| s.to_string()).or(existing.payment_provider.clone());
 
+    // Capture price before it's moved into bind
+    let plan_price_for_sync = price_monthly
+        .as_deref()
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.0);
+
     sqlx::query(
         r#"UPDATE plan_tiers SET name=$1, slug=$2, description=$3, price_monthly=$4, price_yearly=$5,
            features=$6::jsonb, checkout_url=$7, is_active=$8, sort_order=$9, payment_provider=$10
@@ -125,6 +190,13 @@ pub async fn update_plan(
     .execute(&state.db)
     .await?;
 
+    // Sync to FunnelSwift affiliate products
+    let plan_name2 = name.clone();
+    let config2 = state.config.clone();
+    tokio::spawn(async move {
+        sync_plan_to_affiliate(&config2, "update", &plan_name2, plan_price_for_sync, is_active).await;
+    });
+
     Ok(Json(json!({"message": "Plan updated"})))
 }
 
@@ -137,6 +209,13 @@ pub async fn delete_plan(
         return Err(AppError::Forbidden("Only admins can delete plans".to_string()));
     }
 
+    // Get plan name before deleting for affiliate sync
+    let plan_name = sqlx::query_scalar::<_, String>("SELECT name FROM plan_tiers WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?
+        .unwrap_or_default();
+
     let result = sqlx::query("DELETE FROM plan_tiers WHERE id = $1")
         .bind(id)
         .execute(&state.db)
@@ -144,6 +223,15 @@ pub async fn delete_plan(
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Plan not found".to_string()));
+    }
+
+    // Sync deactivation to FunnelSwift affiliate products
+    if !plan_name.is_empty() {
+        let plan_name2 = plan_name.clone();
+        let config2 = state.config.clone();
+        tokio::spawn(async move {
+            sync_plan_to_affiliate(&config2, "deactivate", &plan_name2, 0.0, false).await;
+        });
     }
 
     Ok(Json(json!({"message": "Plan deleted"})))
