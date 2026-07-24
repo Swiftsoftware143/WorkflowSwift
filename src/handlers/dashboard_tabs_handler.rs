@@ -53,8 +53,8 @@ pub async fn create_brand_monitor(
     .bind(id)
     .bind(aid)
     .bind(&req.brand_name)
-    .bind(&req.keywords.unwrap_or_default())
-    .bind(&req.sources.unwrap_or_else(|| vec!["web".into(), "news".into(), "social".into()]))
+    .bind(req.keywords.unwrap_or_default())
+    .bind(req.sources.unwrap_or_else(|| vec!["web".into(), "news".into(), "social".into()]))
     .execute(&state.db)
     .await?;
 
@@ -184,8 +184,8 @@ pub async fn create_competitor_watch(
     .bind(aid)
     .bind(&req.competitor_name)
     .bind(&req.competitor_website)
-    .bind(&req.competitor_social.unwrap_or(json!({})))
-    .bind(&req.watch_focus.unwrap_or_else(|| vec!["pricing".into(), "content".into(), "reviews".into(), "activity".into()]))
+    .bind(req.competitor_social.unwrap_or(json!({})))
+    .bind(req.watch_focus.unwrap_or_else(|| vec!["pricing".into(), "content".into(), "reviews".into(), "activity".into()]))
     .execute(&state.db)
     .await?;
 
@@ -445,11 +445,9 @@ pub async fn get_dashboard_tabs(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Ensure default tabs exist
-    let default_tabs = vec![
-        ("brand_monitor", "Brand Monitor"),
+    let default_tabs = [("brand_monitor", "Brand Monitor"),
         ("competitor_watch", "Competitor Watch"),
-        ("prospecting", "Prospecting"),
-    ];
+        ("prospecting", "Prospecting")];
 
     for (i, (tab_type, label)) in default_tabs.iter().enumerate() {
         sqlx::query(
@@ -522,7 +520,7 @@ pub async fn connect_to_workflow(
     .bind(source_id)
     .bind(&req.source_table)
     .bind(workflow_id)
-    .bind(&req.trigger_on.unwrap_or_else(|| "new_result".to_string()))
+    .bind(req.trigger_on.unwrap_or_else(|| "new_result".to_string()))
     .execute(&state.db)
     .await?;
 

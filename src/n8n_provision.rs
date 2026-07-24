@@ -7,7 +7,7 @@ use std::env;
 /// workflows deploy to the correct n8n webhook instance with credentials.
 pub async fn provision_n8n_for_account(pool: &PgPool, aid: Uuid) {
     // Generate a unique API key for this tenant's n8n instance
-    let n8n_api_key = format!("ws-{}-{}", &aid.to_string()[..8], Uuid::new_v4().to_string());
+    let n8n_api_key = format!("ws-{}-{}", &aid.to_string()[..8], Uuid::new_v4());
 
     // Determine which n8n webhook URL to use (configurable via env, default to user-n8n-webhook)
     let n8n_url = env::var("N8N_WEBHOOK_URL")

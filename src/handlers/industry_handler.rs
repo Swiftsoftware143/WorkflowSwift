@@ -597,7 +597,7 @@ pub async fn get_dashboard_widgets(
                ORDER BY recorded_at DESC LIMIT 1"#,
         )
         .bind(aid)
-        .bind(&format!("n8n_{}", metric_key))
+        .bind(format!("n8n_{}", metric_key))
         .fetch_optional(&state.db)
         .await
         .ok()
@@ -665,12 +665,10 @@ pub async fn get_dashboard_metric(
 /// 
 /// Accepts: { metric_key: string, value: number|object|array }
 /// The metric_key must match a widget's config.metric_key for the data to display.
-///
 /// Data sources:
 /// - n8n workflow results (POST from webhook node)
 /// - External APIs (Stripe, Flippa, Google, etc. via n8n HTTP node)
 /// - Browser automation (Playwright/Puppeteer scraping results)
-///
 /// Now accepts optional `industry_slug` to route data to the right dashboard
 pub async fn push_widget_data(
     State(state): State<AppState>,

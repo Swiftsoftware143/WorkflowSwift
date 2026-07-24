@@ -8,7 +8,6 @@
 
 use std::env;
 use serde_json::json;
-use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::state::AppState;
@@ -31,7 +30,6 @@ fn render_template(template: &str, vars: &serde_json::Value) -> String {
 
 /// Send a templated email using database-stored templates.
 /// Falls back to hardcoded inline templates if DB lookup fails.
-///
 /// This is the preferred method — pass `AppState` to get access to DB and config.
 pub async fn send_email(
     state: &AppState,
@@ -278,7 +276,7 @@ async fn send_email_fallback(
             send_email_request(&api_url, &api_key, &from, to, "Password Reset Request", &text_body, &html_body).await
         }
         _ => {
-            let text_body = format!("WorkflowSwift Notification:\n\n{}", vars.to_string());
+            let text_body = format!("WorkflowSwift Notification:\n\n{}", vars);
             send_email_request(&api_url, &api_key, &from, to, "WorkflowSwift Notification", &text_body, "").await
         }
     }

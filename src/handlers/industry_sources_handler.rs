@@ -3,11 +3,10 @@
 
 use axum::{
     extract::{Path, State, Query},
-    http::StatusCode,
     response::IntoResponse,
     Extension, Json,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 

@@ -4,10 +4,9 @@ use axum::{
     response::IntoResponse,
     Extension,
 };
-use serde_json::{json, Value};
+use serde_json::json;
 use uuid::Uuid;
 
-use std::path::PathBuf;
 use crate::AppState;
 use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;

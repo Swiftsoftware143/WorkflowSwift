@@ -32,10 +32,8 @@ pub struct N8nWorkflow {
 }
 
 /// Build an n8n workflow JSON from WorkflowSwift steps.
-///
 /// `steps` — a list of JSON objects, each with at minimum:
 ///   { "step_type": "...", "name": "...", "config": { ... } }
-///
 /// `aid` is used for webhook path namespacing.
 /// `workflow_id` is the UUID of the WorkflowSwift workflow.
 /// `workflow_name` is used as the n8n workflow title.
@@ -124,7 +122,7 @@ pub fn convert_steps_to_n8n(
     nodes.push(balance_check_node);
 
     // Build connection chains
-    let mut prev_node_id = "balance_check";
+    let prev_node_id = "balance_check";
     let prev_output_index = 0; // 0 = success branch, 1 = failure branch
 
     // ===== Node 3: Deduct Credit =====
@@ -235,7 +233,7 @@ pub fn convert_steps_to_n8n(
     });
 
     N8nWorkflow {
-        name: format!("WFS {}", workflow_id.to_string()),
+        name: format!("WFS {}", workflow_id),
         nodes,
         connections: Value::Object(connections_map),
         settings,
@@ -298,7 +296,7 @@ fn convert_user_steps(
                         "method": method,
                         "url": url,
                         "authentication": "none",
-                        "sendHeaders": !config.get("headers").is_none(),
+                        "sendHeaders": config.get("headers").is_some(),
                         "sendBody": method != "GET",
                     }
                 });

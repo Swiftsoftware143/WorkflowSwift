@@ -69,7 +69,7 @@ pub async fn create_workflow(
     .bind(&req.category)
     .bind(&req.lifecycle_summary)
     .bind(&req.tags)
-    .bind(&req.surface_id)
+    .bind(req.surface_id)
     .bind(&trigger_type)
     .bind(&req.trigger_config)
     .fetch_one(&state.db)
@@ -368,7 +368,7 @@ pub async fn start_workflow(
         match client.post(&n8n_url).json(&trigger_payload).send().await {
             Ok(resp) => {
                 let status_code = resp.status().as_u16();
-                if status_code >= 200 && status_code < 300 {
+                if (200..300).contains(&status_code) {
                     tracing::info!(instance_id = %inst_id, "n8n accepted workflow");
                 } else {
                     let _ = sqlx::query(
@@ -592,7 +592,6 @@ pub async fn reorder_workflow_steps(
 // ─── New: Deploy Workflow to n8n via REST API ───
 
 /// POST /api/v1/workflows/:id/deploy — convert WorkflowSwift steps to n8n and import
-///
 /// Generates an n8n-compatible workflow JSON from the stored steps,
 /// and imports it via the n8n REST API using `POST /rest/workflows`.
 pub async fn deploy_workflow_to_n8n(
@@ -692,7 +691,6 @@ pub async fn deploy_workflow_to_n8n(
 }
 
 /// POST /api/v1/workflows/:id/run — deploy (if needed) and execute the workflow
-///
 /// Deploys the workflow to n8n if not yet deployed, then triggers the webhook.
 pub async fn run_workflow(
     State(state): State<AppState>,
@@ -883,13 +881,11 @@ pub async fn run_workflow(
 }
 
 /// POST /api/v1/workflows/validate-steps — validate a sequence of steps before deploy
-///
 /// Checks each step for:
 ///   - Required config fields per step type
 ///   - Proper ordering constraints
 ///   - Valid provider assignments
 ///   - Cyclic dependencies (for fork/loop steps)
-///
 /// Returns validation warnings and errors without requiring a DB write.
 pub async fn validate_workflow_steps(
     State(_state): State<AppState>,
@@ -984,23 +980,21 @@ pub async fn validate_workflow_steps(
         }
 
         // Ordering rules
-        if step_type == "fork" || step_type == "branch" {
-            if i as i32 >= steps.len() as i32 - 1 {
+        if (step_type == "fork" || step_type == "branch")
+            && i as i32 >= steps.len() as i32 - 1 {
                 warnings.push(format!(
                     "Step {} '{}': Fork/branch at the end of the workflow has no effect — no downstream steps to branch.",
                     i + 1, step_name
                 ));
             }
-        }
 
-        if step_type == "loop" {
-            if steps.len() < 2 {
+        if step_type == "loop"
+            && steps.len() < 2 {
                 warnings.push(format!(
                     "Step {} '{}': Loop with only one step will iterate on itself indefinitely. Add inner steps.",
                     i + 1, step_name
                 ));
             }
-        }
 
         if step_type == "manual" {
             warnings.push(format!(
