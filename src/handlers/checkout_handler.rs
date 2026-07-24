@@ -289,8 +289,8 @@ pub async fn create_checkout_session(
 
     // Create checkout session with the provider
     let provider_session = match provider_type.as_str() {
-        "stripe" => create_stripe_session(&api_key, amount, currency, purchasable_type, &success_url, &cancel_url, &metadata).await?,
-        "paypal" => create_paypal_session(&api_key, amount, currency, purchasable_type, &success_url, &cancel_url, &metadata).await?,
+        "stripe" => create_stripe_session(&api_key, amount, currency, purchasable_type, &success_url, cancel_url, &metadata).await?,
+        "paypal" => create_paypal_session(&api_key, amount, currency, purchasable_type, &success_url, cancel_url, &metadata).await?,
         _ => return Err(AppError::BadRequest(format!("Checkout not supported for provider type: {}", provider_type))),
     };
 
@@ -541,7 +541,7 @@ pub async fn stripe_webhook(
     .bind(event_type)
     .bind(event_id)
     .bind(&event_body)
-    .bind(&json!({"stripe-signature": signature}))
+    .bind(json!({"stripe-signature": signature}))
     .bind(db_status)
     .execute(&state.db)
     .await?;
@@ -745,7 +745,7 @@ async fn deliver_credentials(
     if let Some(user) = existing_user {
         // User exists
         let has_password = !user.password_hash.is_empty()
-            && user.password_hash != ""
+            && !user.password_hash.is_empty()
             && user.password_hash != " ";
 
         if has_password {

@@ -1,6 +1,5 @@
 use axum::{
     extract::{State, Json, Path, Query},
-    http::StatusCode,
     response::IntoResponse,
     Extension,
 };
@@ -59,7 +58,7 @@ pub async fn list_integrations(
             "provider_icon": row.try_get::<Option<&str>, _>("provider_icon").unwrap_or(None),
             "integration_type": row.try_get::<&str, _>("integration_type").unwrap_or("byok"),
             "api_key_masked": masked,
-            "has_key": key_raw.is_some() && key_raw.unwrap_or("").len() > 0,
+            "has_key": key_raw.is_some() && !key_raw.unwrap_or("").is_empty(),
             "base_url": row.try_get::<Option<String>, _>("base_url").unwrap_or(None),
             "config": row.try_get::<serde_json::Value, _>("config").unwrap_or(json!({})),
             "is_active": row.try_get::<bool, _>("is_active").unwrap_or(false),
@@ -474,7 +473,6 @@ async fn run_health_check(
 
 /// Check what provider/engine a user's step should route to.
 /// Returns the resolution result: user's key, system default, or error.
-///
 /// GET /api/v1/integrations/resolve?step_type=ai-action&provider=openai
 pub async fn resolve_step_provider(
     State(state): State<AppState>,

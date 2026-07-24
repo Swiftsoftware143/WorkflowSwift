@@ -2,8 +2,7 @@
 //! Visual automation tracking: active instances, tickets, automation stats, activity timeline
 
 use axum::{
-    extract::{Path, State, Query},
-    http::StatusCode,
+    extract::{State, Query},
     response::IntoResponse,
     Extension, Json,
 };

@@ -3,7 +3,6 @@ use axum::{
     response::IntoResponse,
     Extension,
 };
-use std::collections::HashMap;
 use serde_json::json;
 use uuid::Uuid;
 

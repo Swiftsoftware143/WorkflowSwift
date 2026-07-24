@@ -281,7 +281,7 @@ pub async fn list_renditions(
         query_builder = query_builder.bind(_search);
     }
 
-    query_builder = query_builder.bind(limit as i64).bind(offset as i64);
+    query_builder = query_builder.bind(limit).bind(offset);
 
     let renditions = query_builder.fetch_all(&state.db).await?;
 

@@ -1,13 +1,10 @@
 use axum::{
-    extract::{FromRequestParts, Query},
+    extract::FromRequestParts,
     http::request::Parts,
-    Extension,
 };
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::auth::models::Claims;
-use crate::error::ApiResult;
 
 /// Optional workspace ID extracted from query string or X-Workspace-Id header.
 /// When set, scopes data queries to that portfolio_company_id.

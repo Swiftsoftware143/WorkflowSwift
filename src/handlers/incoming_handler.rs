@@ -48,7 +48,6 @@ pub struct IncomingContact {
 }
 
 /// POST /api/v1/incoming
-///
 /// Receives lead data from any Swift tool, matches to an active workflow,
 /// creates an instance, and steps through the workflow steps.
 pub async fn receive_incoming(
@@ -522,7 +521,7 @@ pub async fn receive_incoming(
                 json!({"step": i, "type": "data-card", "status": "completed", "widget_name": widget_name, "metric_key": metric_key, "metric_value": metric_value})
             }
             "fork" => {
-                let branches: Vec<serde_json::Value> = step_config.get("branches").and_then(|v| v.as_array()).map(|a| a.clone()).unwrap_or_default();
+                let branches: Vec<serde_json::Value> = step_config.get("branches").and_then(|v| v.as_array()).cloned().unwrap_or_default();
                 json!({"step": i, "type": "fork", "status": "completed", "branches": branches.len(), "note": "Workflow will fork into parallel branches"})
             }
             "loop" => {

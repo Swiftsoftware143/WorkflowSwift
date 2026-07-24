@@ -6,15 +6,11 @@ use axum::{
     Extension,
 };
 use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
-use governor::clock::DefaultClock;
-use governor::middleware::NoOpMiddleware;
-use governor::state::direct::NotKeyed;
-use governor::state::InMemoryState;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use tracing::{warn, info};
+use tracing::warn;
 
 use crate::AppState;
 use crate::auth::models::Claims;
