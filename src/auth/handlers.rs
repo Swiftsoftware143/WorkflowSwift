@@ -19,6 +19,10 @@ pub async fn register(
     State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
 ) -> ApiResult<impl IntoResponse> {
+    // Clone for CoreSwift push before req is consumed
+    let cs_email = req.email.clone();
+    let cs_name = req.name.clone();
+
     // Validate input
     if req.email.is_empty() || req.password.is_empty() || req.name.is_empty() {
         return Err(AppError::Validation("Name, email, and password are required".to_string()));
@@ -240,6 +244,16 @@ pub async fn register(
         last_login_at: None,
         created_at: now,
     };
+
+    // Push to CoreSwift as a SwiftSoftware contact (fire-and-forget)
+    let cs_state = state.clone();
+    let cs_aid = aid;
+    let cs_plan = plan_slug.to_string();
+    tokio::spawn(async move {
+        crate::handlers::coreswift_push::push_signup_to_coreswift(
+            &cs_state, cs_aid, &cs_email, &cs_name, &cs_plan,
+        ).await;
+    });
 
     Ok((
         StatusCode::CREATED,
