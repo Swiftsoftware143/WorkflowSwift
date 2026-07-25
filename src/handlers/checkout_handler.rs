@@ -714,25 +714,6 @@ async fn handle_checkout_completed(
         }
     }
 
-    // FunnelSwift affiliate conversion webhook (fire-and-forget, never blocks)
-    let ptype = _ptype.clone();
-    let psid = provider_session_id.clone();
-    tokio::spawn(async move {
-        let funnelswift_url = std::env::var("FUNNELSWIFT_URL").unwrap_or_default();
-        if !funnelswift_url.is_empty() {
-            let _ = reqwest::Client::new()
-                .post(format!("{}/api/v1/webhooks/conversion", funnelswift_url))
-                .json(&serde_json::json!({
-                    "source_app": "workflowswift",
-                    "purchasable_type": ptype,
-                    "provider_session_id": psid,
-                }))
-                .timeout(std::time::Duration::from_secs(5))
-                .send()
-                .await;
-        }
-    });
-
     tracing::info!("Checkout completed: provider_session={}", provider_session_id);
     Ok(())
 }
