@@ -16,7 +16,6 @@ pub mod account_handler;
 pub mod user_handler;
 pub mod dashboard_handler;
 
-pub mod affiliates_handler;
 pub mod leads_handler;
 pub mod tag_groups_handler;
 pub mod deals_handler;

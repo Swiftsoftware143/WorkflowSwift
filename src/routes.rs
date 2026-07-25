@@ -177,10 +177,6 @@ pub fn create_router(state: AppState) -> Router {
 
     // Protected routes with auth middleware
 
-    let affiliates_routes = Router::new()
-        .route("/", get(handlers::affiliates_handler::list).post(handlers::affiliates_handler::create))
-        .route("/{id}", get(handlers::affiliates_handler::get).put(handlers::affiliates_handler::update).delete(handlers::affiliates_handler::delete));
-
     let leads_routes = Router::new()
         .route("/", get(handlers::leads_handler::list).post(handlers::leads_handler::create))
         .route("/{id}", get(handlers::leads_handler::get).put(handlers::leads_handler::update).delete(handlers::leads_handler::delete));
@@ -363,7 +359,6 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/step-integrations", step_integration_routes)
         .nest("/available-integrations", available_integration_routes)
         .nest("/invoices", invoice_routes)
-        .nest("/affiliates", affiliates_routes)
         .nest("/leads", leads_routes)
         .nest("/tag-groups", tag_groups_routes)
         .nest("/deals", deals_routes)
