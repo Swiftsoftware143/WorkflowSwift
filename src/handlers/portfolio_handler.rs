@@ -89,6 +89,7 @@ pub async fn internal_create_portfolio_company(
     let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("Company").to_string();
     let slug = body.get("slug").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| name.to_lowercase().replace(' ', "-"));
     let email = body.get("email").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let domain = body.get("domain").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let description = body.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
     let id = Uuid::new_v4();
 
@@ -103,7 +104,7 @@ pub async fn internal_create_portfolio_company(
     .await.ok();
 
     sqlx::query(
-        "INSERT INTO portfolio_companies (id, aid, name, slug, email, description) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, account_slug = EXCLUDED.account_slug"
+        "INSERT INTO portfolio_companies (id, aid, name, slug, email, description, domain) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, account_slug = EXCLUDED.account_slug, domain = EXCLUDED.domain"
     )
     .bind(id)
     .bind(aid)
