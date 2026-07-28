@@ -85,8 +85,6 @@ pub async fn update_site(
     Ok(Json(json!({"message": "Site settings updated", "slug": "workflowswift"})))
 }
 
-/// ── HTML Injection (no regex) ──
-
 fn regenerate_html(settings: &serde_json::Value) -> Result<(), AppError> {
     let html_path = "/opt/swift/www/workflowswift/index.html";
     let html = fs::read_to_string(html_path)
@@ -174,8 +172,6 @@ fn inject_site_settings(html: &str, s: &serde_json::Value) -> String {
 
     result
 }
-
-/// ── String helpers (no regex) ──
 
 fn replace_title(result: &mut String, new_title: &str) {
     let open = "<title>";

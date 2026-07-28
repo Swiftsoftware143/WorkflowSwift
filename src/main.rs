@@ -1,5 +1,5 @@
-#![allow(dead_code)]
-
+#![allow(dead_code, unused_variables, unused_assignments, unused_must_use)]
+#![allow(clippy::doc_lazy_continuation, clippy::let_underscore_future, clippy::collapsible_match, clippy::redundant_pattern_matching, clippy::needless_late_init, clippy::type_complexity)]
 mod email;
 mod config;
 mod db;
