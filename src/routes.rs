@@ -139,10 +139,6 @@ pub fn create_router(state: AppState) -> Router {
         ;
 
 
-    let industry_routes = Router::new()
-        .route("/", get(handlers::industry_handler::list_industries));
-
-
 
     let api_key_routes = Router::new()
         .route("/", get(handlers::api_key_handler::list_api_keys).post(handlers::api_key_handler::create_api_key))
@@ -167,9 +163,6 @@ pub fn create_router(state: AppState) -> Router {
 
     let available_integration_routes = Router::new()
         .route("/", get(handlers::step_integration_handler::list_available_integrations));
-
-    let _provider_preset_routes = Router::new()
-        .route("/", get(handlers::integration_dispatch_handler::list_provider_presets));
 
     let invoice_routes = Router::new()
         .route("/", get(handlers::invoice_handler::list_invoices))
