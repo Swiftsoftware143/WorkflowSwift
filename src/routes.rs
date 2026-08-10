@@ -20,6 +20,7 @@ pub fn create_router(state: AppState) -> Router {
     // Protected auth route
     let auth_protected = Router::new()
         .route("/me", get(auth::me))
+        .route("/me/usage", get(auth::get_usage))
         .route("/change-password", post(auth::change_password))
         .route("/profile", put(auth::update_profile));
 
@@ -413,6 +414,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/bridge-ping", get(handlers::bridge_handler::ping_bridge))
         .route("/extension.zip", get(handlers::extension_download_handler::download_extension))
         .route("/internal/portfolio-companies", post(handlers::portfolio_handler::internal_create_portfolio_company))
+        .route("/internal/portfolio-sync", post(handlers::portfolio_sync_handler::portfolio_sync_internal))
         .route("/internal/dashboard-data-seed", post(handlers::internal_handler::seed_dashboard_data))
         .route("/internal/tags/assign", post(handlers::internal_handler::internal_assign_tag))
         .route("/internal/tags/delete", post(handlers::internal_handler::internal_remove_tag))

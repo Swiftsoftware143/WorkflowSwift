@@ -27,6 +27,8 @@ pub enum AppError {
 
     #[error("{0}")]
     BadRequest(String),
+    #[error("Upgrade required: {0}")]
+    UpgradeRequired(String),
 
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),
@@ -54,6 +56,7 @@ impl IntoResponse for AppError {
             AppError::Duplicate(msg) => (StatusCode::CONFLICT, msg.clone()),
             AppError::Validation(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg.clone()),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
+            AppError::UpgradeRequired(msg) => (StatusCode::PAYMENT_REQUIRED, msg.clone()),
             AppError::Hash(msg) => {
                 tracing::error!("Password hashing error: {}", msg);
                 (StatusCode::INTERNAL_SERVER_ERROR, "Password hashing error".to_string())

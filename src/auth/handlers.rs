@@ -6,7 +6,7 @@ use axum::{
     Json,
 };
 use chrono::Utc;
-use serde_json::json;
+use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::AppState;
@@ -614,4 +614,13 @@ pub async fn add_account_industry(
         "industry": req.industry_slug,
         "dashboard_id": dashboard_id
     })))
+}
+
+pub async fn get_usage(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> Result<Json<Value>, AppError> {
+    let aid: uuid::Uuid = claims.aid.parse().map_err(|_| AppError::BadRequest("Invalid account".into()))?;
+    let usage = crate::features::get_usage_json(&state.db, aid).await;
+    Ok(Json(usage))
 }
