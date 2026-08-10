@@ -1,17 +1,17 @@
 use axum::{
-    extract::{State, Json},
+    extract::{Json, State},
     response::IntoResponse,
     Extension,
 };
 use serde_json::json;
-use uuid::Uuid;
 use std::fs;
+use uuid::Uuid;
 
 use sqlx::Row;
 
-use crate::AppState;
-use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;
+use crate::error::{ApiResult, AppError};
+use crate::AppState;
 
 const SITE_KEY: &str = "workflowswift_site";
 
@@ -24,12 +24,10 @@ pub async fn get_site(
 
     let defaults = default_site_settings();
 
-    let row = sqlx::query(
-        "SELECT value FROM admin_settings WHERE key = $1"
-    )
-    .bind(SITE_KEY)
-    .fetch_optional(&state.db)
-    .await?;
+    let row = sqlx::query("SELECT value FROM admin_settings WHERE key = $1")
+        .bind(SITE_KEY)
+        .fetch_optional(&state.db)
+        .await?;
 
     let settings = match row {
         Some(r) => {
@@ -53,12 +51,10 @@ pub async fn update_site(
     let admin_id = Uuid::parse_str(&claims.sub).unwrap_or(Uuid::nil());
 
     // Merge with existing to preserve fields not sent
-    let existing_row = sqlx::query(
-        "SELECT value FROM admin_settings WHERE key = $1"
-    )
-    .bind(SITE_KEY)
-    .fetch_optional(&state.db)
-    .await?;
+    let existing_row = sqlx::query("SELECT value FROM admin_settings WHERE key = $1")
+        .bind(SITE_KEY)
+        .fetch_optional(&state.db)
+        .await?;
 
     let merged = match existing_row {
         Some(r) => {
@@ -82,7 +78,9 @@ pub async fn update_site(
     // Regenerate HTML
     regenerate_html(&merged)?;
 
-    Ok(Json(json!({"message": "Site settings updated", "slug": "workflowswift"})))
+    Ok(Json(
+        json!({"message": "Site settings updated", "slug": "workflowswift"}),
+    ))
 }
 
 fn regenerate_html(settings: &serde_json::Value) -> Result<(), AppError> {
@@ -115,9 +113,21 @@ fn inject_site_settings(html: &str, s: &serde_json::Value) -> String {
     }
 
     // ── OG tags ──
-    upsert_meta_prop(&mut result, "og:title", s.get("og_title").and_then(|v| v.as_str()));
-    upsert_meta_prop(&mut result, "og:description", s.get("og_description").and_then(|v| v.as_str()));
-    upsert_meta_prop(&mut result, "og:image", s.get("og_image_url").and_then(|v| v.as_str()));
+    upsert_meta_prop(
+        &mut result,
+        "og:title",
+        s.get("og_title").and_then(|v| v.as_str()),
+    );
+    upsert_meta_prop(
+        &mut result,
+        "og:description",
+        s.get("og_description").and_then(|v| v.as_str()),
+    );
+    upsert_meta_prop(
+        &mut result,
+        "og:image",
+        s.get("og_image_url").and_then(|v| v.as_str()),
+    );
     upsert_meta_prop(&mut result, "og:type", None);
 
     // ── Schema.org ──
@@ -137,7 +147,8 @@ fn inject_site_settings(html: &str, s: &serde_json::Value) -> String {
         let ga_script = format!(
             r#"<script async src="https://www.googletagmanager.com/gtag/js?id={}"></script>
 <script>window.dataLayer=window.dataLayer||[];function gtag(){{dataLayer.push(arguments);}}gtag('js',new Date());gtag('config','{}');</script>"#,
-            html_escape(ga_id), html_escape(ga_id)
+            html_escape(ga_id),
+            html_escape(ga_id)
         );
         inject_before_head_end(&mut result, &ga_script);
     }
@@ -199,7 +210,10 @@ fn upsert_meta(result: &mut String, name: &str, content: &str) {
             result.replace_range(pos..full_tag_end, &new_tag);
         }
     } else {
-        inject_before_head_end(result, &format!(r#"  <meta name="{}" content="{}">"#, name, escaped));
+        inject_before_head_end(
+            result,
+            &format!(r#"  <meta name="{}" content="{}">"#, name, escaped),
+        );
     }
 }
 
@@ -215,7 +229,10 @@ fn upsert_meta_prop(result: &mut String, property: &str, content: Option<&str>) 
                 result.replace_range(pos..full_tag_end, &new_tag);
             }
         } else {
-            inject_before_head_end(result, &format!(r#"  <meta property="{}" content="{}">"#, property, escaped));
+            inject_before_head_end(
+                result,
+                &format!(r#"  <meta property="{}" content="{}">"#, property, escaped),
+            );
         }
     } else {
         // If content is None, just ensure the tag doesn't exist (remove it)
@@ -240,7 +257,13 @@ fn upsert_schema(result: &mut String, schema_json: &str) {
             result.replace_range(after_open..after_open + end, schema_json);
         }
     } else {
-        inject_before_head_end(result, &format!("  <script type=\"application/ld+json\">{}</script>", schema_json));
+        inject_before_head_end(
+            result,
+            &format!(
+                "  <script type=\"application/ld+json\">{}</script>",
+                schema_json
+            ),
+        );
     }
 }
 

@@ -1,5 +1,5 @@
 use axum::{
-    extract::{State, Json},
+    extract::{Json, State},
     http::StatusCode,
     response::IntoResponse,
     Extension,
@@ -7,9 +7,9 @@ use axum::{
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::AppState;
-use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;
+use crate::error::{ApiResult, AppError};
+use crate::AppState;
 
 pub async fn ingest_data(
     State(state): State<AppState>,
@@ -18,12 +18,14 @@ pub async fn ingest_data(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let source = req.get("source")
+    let source = req
+        .get("source")
         .and_then(|v| v.as_str())
         .unwrap_or("extension")
         .to_string();
 
-    let payload = req.get("payload")
+    let payload = req
+        .get("payload")
         .cloned()
         .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
@@ -39,10 +41,7 @@ pub async fn ingest_data(
     .fetch_one(&state.db)
     .await?;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({"ingest_log": log_entry})),
-    ))
+    Ok((StatusCode::CREATED, Json(json!({"ingest_log": log_entry}))))
 }
 
 pub async fn get_commands(
@@ -97,11 +96,8 @@ struct ExtensionCommand {
     created_at: DateTime<Utc>,
 }
 
-
 /// GET /api/v1/bridge/inbound — list inbound task files
-pub async fn list_inbound_tasks(
-    State(_s): State<AppState>,
-) -> Result<impl IntoResponse, AppError> {
+pub async fn list_inbound_tasks(State(_s): State<AppState>) -> Result<impl IntoResponse, AppError> {
     let inbound_dir = std::path::PathBuf::from("/opt/ai-bridge/inbound");
     let mut tasks = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&inbound_dir) {
@@ -140,10 +136,7 @@ pub async fn list_outbound_results(
     Ok(Json(json!({"results": results})))
 }
 
-
 /// Minimal test — returns 200 with empty results
-pub async fn ping_bridge(
-    State(_s): State<AppState>,
-) -> Result<impl IntoResponse, AppError> {
+pub async fn ping_bridge(State(_s): State<AppState>) -> Result<impl IntoResponse, AppError> {
     Ok(Json(json!({"status": "bridge-ok"})))
 }

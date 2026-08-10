@@ -1,16 +1,16 @@
 use axum::{
-    extract::{State, Json, Path},
+    extract::{Json, Path, State},
     response::IntoResponse,
     Extension,
 };
 use serde_json::json;
-use uuid::Uuid;
 use sqlx::Row;
+use uuid::Uuid;
 
-use crate::AppState;
-use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;
+use crate::error::{ApiResult, AppError};
 use crate::models::instance::*;
+use crate::AppState;
 
 pub async fn list_instances(
     State(state): State<AppState>,
@@ -42,7 +42,9 @@ pub async fn get_instance(
     .bind(aid)
     .fetch_optional(&state.db)
     .await?
-    .ok_or(AppError::NotFound("Workflow instance not found".to_string()))?;
+    .ok_or(AppError::NotFound(
+        "Workflow instance not found".to_string(),
+    ))?;
 
     let steps = sqlx::query_as::<_, WorkflowInstanceStep>(
         "SELECT * FROM workflow_instance_steps WHERE instance_id = $1 ORDER BY sort_order ASC",
@@ -72,13 +74,11 @@ pub async fn update_instance(
     .ok_or(AppError::NotFound("Instance not found".to_string()))?;
 
     if let Some(status) = req.get("status").and_then(|v| v.as_str()) {
-        sqlx::query(
-            "UPDATE workflow_instances SET status = $1, updated_at = NOW() WHERE id = $2",
-        )
-        .bind(status)
-        .bind(id)
-        .execute(&state.db)
-        .await?;
+        sqlx::query("UPDATE workflow_instances SET status = $1, updated_at = NOW() WHERE id = $2")
+            .bind(status)
+            .bind(id)
+            .execute(&state.db)
+            .await?;
     }
 
     Ok(Json(json!({"message": "Instance updated"})))
@@ -98,7 +98,8 @@ pub async fn instance_callback(
     // No auth required — this is called by n8n internally
     // The instance_id acts as bearer token
 
-    let status = req.get("status")
+    let status = req
+        .get("status")
         .and_then(|v| v.as_str())
         .unwrap_or("completed");
 
@@ -106,13 +107,12 @@ pub async fn instance_callback(
     let error_msg = req.get("error").and_then(|v| v.as_str());
 
     // Verify instance exists
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM workflow_instances WHERE id = $1)"
-    )
-    .bind(id)
-    .fetch_one(&state.db)
-    .await
-    .unwrap_or(false);
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM workflow_instances WHERE id = $1)")
+            .bind(id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(false);
 
     if !exists {
         return Err(AppError::NotFound("Instance not found".to_string()));
@@ -139,13 +139,11 @@ pub async fn instance_callback(
     }
 
     if let Some(err) = error_msg {
-        let _ = sqlx::query(
-            "UPDATE workflow_instances SET error_text = $1 WHERE id = $2"
-        )
-        .bind(err)
-        .bind(id)
-        .execute(&state.db)
-        .await;
+        let _ = sqlx::query("UPDATE workflow_instances SET error_text = $1 WHERE id = $2")
+            .bind(err)
+            .bind(id)
+            .execute(&state.db)
+            .await;
     }
 
     if let Some(err) = error_msg {
@@ -176,7 +174,11 @@ pub async fn advance_instance(
     .await?
     .ok_or(AppError::NotFound("Instance not found".to_string()))?;
 
-    let current_order: i32 = req.get("current_step_order").and_then(|v| v.as_i64()).map(|n| n as i32).unwrap_or(0);
+    let current_order: i32 = req
+        .get("current_step_order")
+        .and_then(|v| v.as_i64())
+        .map(|n| n as i32)
+        .unwrap_or(0);
 
     // Check if there's an integration target bound to this step
     // Also fetch security fields: allowed_domains and daily_limit
@@ -192,7 +194,7 @@ pub async fn advance_instance(
              WHERE ws.workflow_id = $1 AND ws.sort_order = $2
          )
          AND it.aid = $3
-         ORDER BY wsi.sort_order"
+         ORDER BY wsi.sort_order",
     )
     .bind(instance.workflow_id)
     .bind(current_order)
@@ -221,7 +223,9 @@ pub async fn advance_instance(
                     url,
                     &allowed_domains,
                     daily_limit,
-                ).await {
+                )
+                .await
+                {
                     dispatch_results.push(json!({
                         "target_id": target_id,
                         "status": "blocked",
@@ -229,8 +233,12 @@ pub async fn advance_instance(
                     }));
                     continue;
                 }
-            } else { continue; }
-        } else { continue; }
+            } else {
+                continue;
+            }
+        } else {
+            continue;
+        }
 
         // Build the target URL from webhook_url or provider preset base_url
         let target_url = if let Some(ref url) = webhook_url {
@@ -238,12 +246,21 @@ pub async fn advance_instance(
         } else {
             // Try to look up the preset base URL
             let base: Option<String> = if let Some(ref preset) = provider_preset {
-                sqlx::query_scalar("SELECT base_url FROM integration_provider_presets WHERE key = $1")
-                    .bind(preset)
-                    .fetch_optional(&state.db).await?
-                    .unwrap_or_default()
-            } else { None };
-            if let Some(b) = base { b } else { continue; }
+                sqlx::query_scalar(
+                    "SELECT base_url FROM integration_provider_presets WHERE key = $1",
+                )
+                .bind(preset)
+                .fetch_optional(&state.db)
+                .await?
+                .unwrap_or_default()
+            } else {
+                None
+            };
+            if let Some(b) = base {
+                b
+            } else {
+                continue;
+            }
         };
 
         // Dispatch
@@ -252,12 +269,11 @@ pub async fn advance_instance(
             .build()
             .map_err(|e| AppError::Internal(format!("HTTP client error: {}", e)))?;
 
-        let mut dispatch_req = client.post(&target_url)
-            .json(&json!({
-                "workflow_instance_id": id.to_string(),
-                "step_order": current_order,
-                "payload": req.get("payload")
-            }));
+        let mut dispatch_req = client.post(&target_url).json(&json!({
+            "workflow_instance_id": id.to_string(),
+            "step_order": current_order,
+            "payload": req.get("payload")
+        }));
 
         if let Some(ref key) = api_key {
             dispatch_req = dispatch_req.header("Authorization", format!("Bearer {}", key));
@@ -296,7 +312,10 @@ pub async fn advance_instance(
     }
 
     // Optionally mark completed
-    let completed = req.get("completed").and_then(|v| v.as_bool()).unwrap_or(false);
+    let completed = req
+        .get("completed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     if completed {
         sqlx::query(
             "UPDATE workflow_instances SET status = 'completed', completed_at = NOW(), updated_at = NOW() WHERE id = $1",

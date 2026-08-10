@@ -13,13 +13,12 @@ use url::Url;
 /// Validate a webhook URL against the target's allowed domains list.
 /// Returns Ok(()) if the domain passes, Err with a descriptive message otherwise.
 pub fn validate_webhook_url(webhook_url: &str, allowed_domains: &[String]) -> Result<(), String> {
-    let parsed = Url::parse(webhook_url).map_err(|e| {
-        format!("Invalid webhook URL '{}': {}", webhook_url, e)
-    })?;
+    let parsed = Url::parse(webhook_url)
+        .map_err(|e| format!("Invalid webhook URL '{}': {}", webhook_url, e))?;
 
-    let host = parsed.host_str().ok_or_else(|| {
-        format!("Webhook URL '{}' has no host component", webhook_url)
-    })?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| format!("Webhook URL '{}' has no host component", webhook_url))?;
 
     // If the allowed_domains list is empty, all domains are permitted
     if allowed_domains.is_empty() {
@@ -80,11 +79,13 @@ pub async fn check_webhook_security(
     daily_limit: i32,
 ) -> Result<(), AppError> {
     // 1. Domain allowlist check
-    validate_webhook_url(webhook_url, allowed_domains)
-        .map_err(|msg| AppError::Forbidden(format!("Webhook blocked by security policy: {}", msg)))?;
+    validate_webhook_url(webhook_url, allowed_domains).map_err(|msg| {
+        AppError::Forbidden(format!("Webhook blocked by security policy: {}", msg))
+    })?;
 
     // 2. Daily limit check
-    let within_limit = check_daily_limit(pool, target_id, daily_limit).await
+    let within_limit = check_daily_limit(pool, target_id, daily_limit)
+        .await
         .map_err(|msg| AppError::Internal(format!("Security check error: {}", msg)))?;
 
     if !within_limit {

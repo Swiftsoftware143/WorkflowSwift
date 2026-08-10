@@ -1,15 +1,15 @@
 use axum::{
-    extract::{State, Json, Path, Query},
+    extract::{Json, Path, Query, State},
     response::IntoResponse,
     Extension,
 };
 use serde_json::json;
-use uuid::Uuid;
 use sqlx::Row;
+use uuid::Uuid;
 
-use crate::AppState;
-use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;
+use crate::error::{ApiResult, AppError};
+use crate::AppState;
 
 // ──────────────────────────────────────────────
 // Integration Center — user-facing provider connections
@@ -124,7 +124,8 @@ pub async fn upsert_integration(
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let provider = req.get("provider")
+    let provider = req
+        .get("provider")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("provider is required".into()))?;
 
@@ -132,25 +133,40 @@ pub async fn upsert_integration(
         return Err(AppError::BadRequest("provider must not be empty".into()));
     }
 
-    let integration_type = req.get("integration_type")
+    let integration_type = req
+        .get("integration_type")
         .and_then(|v| v.as_str())
         .unwrap_or("byok");
 
-    let api_key = req.get("api_key").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
-    let base_url = req.get("base_url").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
-    let provider_label = req.get("provider_label").and_then(|v| v.as_str()).unwrap_or(provider);
+    let api_key = req
+        .get("api_key")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    let base_url = req
+        .get("base_url")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
+    let provider_label = req
+        .get("provider_label")
+        .and_then(|v| v.as_str())
+        .unwrap_or(provider);
     let config = req.get("config").cloned().unwrap_or(json!({}));
-    let is_active = req.get("is_active").and_then(|v| v.as_bool()).unwrap_or(true);
+    let is_active = req
+        .get("is_active")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
 
     // Validate: if it's BYOK, an API key is required
     if integration_type == "byok" && api_key.is_none() {
-        return Err(AppError::BadRequest("api_key is required for BYOK integrations".into()));
+        return Err(AppError::BadRequest(
+            "api_key is required for BYOK integrations".into(),
+        ));
     }
 
     // If a base_url is provided and the provider requires one, validate it's present
     // We fetch from available_providers to check
     if let Ok(Some(requires_url)) = sqlx::query_scalar::<_, bool>(
-        "SELECT requires_base_url FROM available_providers WHERE key = $1"
+        "SELECT requires_base_url FROM available_providers WHERE key = $1",
     )
     .bind(provider)
     .fetch_optional(&state.db)
@@ -158,7 +174,8 @@ pub async fn upsert_integration(
     {
         if requires_url && base_url.is_none() {
             return Err(AppError::BadRequest(format!(
-                "base_url is required for provider '{}'", provider
+                "base_url is required for provider '{}'",
+                provider
             )));
         }
     }
@@ -225,7 +242,7 @@ pub async fn toggle_native_integration(
 
     // Check if it already exists
     let existing = sqlx::query_scalar::<_, bool>(
-        "SELECT is_active FROM user_integrations WHERE user_id = $1 AND provider = $2"
+        "SELECT is_active FROM user_integrations WHERE user_id = $1 AND provider = $2",
     )
     .bind(user_id)
     .bind(&provider)
@@ -281,18 +298,17 @@ pub async fn delete_integration(
 ) -> ApiResult<impl IntoResponse> {
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
 
-    let result = sqlx::query(
-        "DELETE FROM user_integrations WHERE user_id = $1 AND provider = $2"
-    )
-    .bind(user_id)
-    .bind(&provider)
-    .execute(&state.db)
-    .await?;
+    let result = sqlx::query("DELETE FROM user_integrations WHERE user_id = $1 AND provider = $2")
+        .bind(user_id)
+        .bind(&provider)
+        .execute(&state.db)
+        .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(
-            format!("Integration '{}' not found", provider)
-        ));
+        return Err(AppError::NotFound(format!(
+            "Integration '{}' not found",
+            provider
+        )));
     }
 
     // Invalidate cache
@@ -314,7 +330,8 @@ pub async fn check_integration_health(
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let provider = req.get("provider")
+    let provider = req
+        .get("provider")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("provider is required".into()))?;
 
@@ -335,7 +352,17 @@ async fn run_health_check(
     provider: &str,
 ) -> (String, String) {
     // Fetch the integration
-    let integration = sqlx::query_as::<_, (Uuid, String, String, Option<String>, Option<String>, serde_json::Value)>(
+    let integration = sqlx::query_as::<
+        _,
+        (
+            Uuid,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            serde_json::Value,
+        ),
+    >(
         r#"SELECT id, provider, integration_type, api_key_encrypted, base_url, config
            FROM user_integrations
            WHERE user_id = $1 AND provider = $2 AND is_active = true"#,
@@ -354,7 +381,10 @@ async fn run_health_check(
             .bind(user_id)
             .bind(provider)
             .execute(db).await;
-            return ("error".to_string(), "Integration not found or inactive".to_string());
+            return (
+                "error".to_string(),
+                "Integration not found or inactive".to_string(),
+            );
         }
     };
 
@@ -365,7 +395,10 @@ async fn run_health_check(
         )
         .bind(integration_id)
         .execute(db).await.ok();
-        return ("connected".to_string(), "Native integration is active".to_string());
+        return (
+            "connected".to_string(),
+            "Native integration is active".to_string(),
+        );
     }
 
     // For BYOK and engine integrations, try to validate the connection
@@ -417,7 +450,9 @@ async fn run_health_check(
         // OpenClaw — check the gateway health endpoint
         "openclaw" => {
             let url = base_url.as_deref().unwrap_or("");
-            if url.is_empty() { return ("error".to_string(), "No gateway URL configured".to_string()); }
+            if url.is_empty() {
+                return ("error".to_string(), "No gateway URL configured".to_string());
+            }
             let base = url.trim_end_matches('/');
             // Try the health endpoint
             match reqwest::Client::new()
@@ -444,7 +479,9 @@ async fn run_health_check(
         // Generic: try the base_url with a GET
         "deepseek" | "gemini" | "mailgun" | "twilio" | "hexomatic" => {
             let key = api_key.as_deref().unwrap_or("");
-            if key.is_empty() { return ("error".to_string(), "No API key configured".to_string()); }
+            if key.is_empty() {
+                return ("error".to_string(), "No API key configured".to_string());
+            }
             // For most providers, just check the key isn't empty
             !key.is_empty()
         }
@@ -455,7 +492,11 @@ async fn run_health_check(
     };
 
     let status = if healthy { "connected" } else { "error" };
-    let message = if healthy { "Connection verified" } else { "Connection failed — check your credentials" };
+    let message = if healthy {
+        "Connection verified"
+    } else {
+        "Connection failed — check your credentials"
+    };
 
     sqlx::query(
         "UPDATE user_integrations SET last_health_status = $1, last_health_check_at = NOW() WHERE id = $2"
@@ -493,10 +534,21 @@ pub async fn resolve_step_provider(
     let provider_options: Vec<&str> = match step_type {
         "ai-action" | "ai_prompt" => vec!["openai", "anthropic", "deepseek", "gemini"],
         "email" | "export" => vec!["sendgrid", "smtp", "mailgun"],
-        "integration" => vec!["coreswift", "funnelswift", "incentiveswift", "hubspot", "salesforce",
-                              "mailchimp", "activecampaign", "convertkit", "slack", "discord",
-                              "google_sheets", "stripe"],
-        "playwright" | "browser" => vec!["browserbase"],  // always system-owned
+        "integration" => vec![
+            "coreswift",
+            "funnelswift",
+            "incentiveswift",
+            "hubspot",
+            "salesforce",
+            "mailchimp",
+            "activecampaign",
+            "convertkit",
+            "slack",
+            "discord",
+            "google_sheets",
+            "stripe",
+        ],
+        "playwright" | "browser" => vec!["browserbase"], // always system-owned
         "notify" => vec!["slack", "discord", "sendgrid", "smtp"],
         _ => vec![],
     };
@@ -518,16 +570,17 @@ pub async fn resolve_step_provider(
         // System auto-resolves — find any matching provider the user has
         let mut result = None;
         for prov in &provider_options {
-            if let Ok(Some(row)) = sqlx::query_as::<_, (String, String, Option<String>, Option<String>)>(
-                r#"SELECT provider, integration_type, api_key_encrypted, base_url
+            if let Ok(Some(row)) =
+                sqlx::query_as::<_, (String, String, Option<String>, Option<String>)>(
+                    r#"SELECT provider, integration_type, api_key_encrypted, base_url
                    FROM user_integrations
                    WHERE user_id = $1 AND provider = $2 AND is_active = true
                    LIMIT 1"#,
-            )
-            .bind(user_id)
-            .bind(prov)
-            .fetch_optional(&state.db)
-            .await
+                )
+                .bind(user_id)
+                .bind(prov)
+                .fetch_optional(&state.db)
+                .await
             {
                 result = Some(row);
                 break;

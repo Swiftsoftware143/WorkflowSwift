@@ -6,8 +6,8 @@
 //! SMTP/API config comes from `admin_settings` (key: "email").
 //! Fallback: EMAIL_API_URL / EMAIL_API_KEY env vars.
 
-use std::env;
 use serde_json::json;
+use std::env;
 use uuid::Uuid;
 
 use crate::state::AppState;
@@ -57,14 +57,19 @@ pub async fn send_email(
     match template {
         Some(t) => {
             // Use DB template
-            let subject = render_template(&t.subject.unwrap_or_else(|| match template_type {
-                "welcome" => "Welcome to WorkflowSwift!".into(),
-                "team_invite" => "Team Invitation".into(),
-                "password_reset" => "Password Reset".into(),
-                _ => "WorkflowSwift Notification".into(),
-            }), vars);
+            let subject = render_template(
+                &t.subject.unwrap_or_else(|| match template_type {
+                    "welcome" => "Welcome to WorkflowSwift!".into(),
+                    "team_invite" => "Team Invitation".into(),
+                    "password_reset" => "Password Reset".into(),
+                    _ => "WorkflowSwift Notification".into(),
+                }),
+                vars,
+            );
 
-            let html_body = t.html_body.as_ref()
+            let html_body = t
+                .html_body
+                .as_ref()
                 .map(|h| render_template(h, vars))
                 .unwrap_or_default();
 
@@ -73,9 +78,27 @@ pub async fn send_email(
             let use_html = t.is_html.unwrap_or(true);
 
             if use_html && !html_body.is_empty() {
-                send_email_request(&api_url, &api_key, &from_address, to, &subject, &text_body, &html_body).await
+                send_email_request(
+                    &api_url,
+                    &api_key,
+                    &from_address,
+                    to,
+                    &subject,
+                    &text_body,
+                    &html_body,
+                )
+                .await
             } else {
-                send_email_request(&api_url, &api_key, &from_address, to, &subject, &text_body, "").await
+                send_email_request(
+                    &api_url,
+                    &api_key,
+                    &from_address,
+                    to,
+                    &subject,
+                    &text_body,
+                    "",
+                )
+                .await
             }
         }
         None => {
@@ -89,7 +112,7 @@ pub async fn send_email(
 async fn get_email_config(state: &AppState) -> (String, String, String) {
     // Try DB config
     let db_config = sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT value FROM admin_settings WHERE key = 'email'"
+        "SELECT value FROM admin_settings WHERE key = 'email'",
     )
     .fetch_optional(&state.db)
     .await
@@ -97,29 +120,35 @@ async fn get_email_config(state: &AppState) -> (String, String, String) {
     .flatten();
 
     if let Some(cfg) = db_config {
-        let api_url = cfg.get("api_url")
+        let api_url = cfg
+            .get("api_url")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
             .unwrap_or_else(|| env::var("EMAIL_API_URL").unwrap_or_default());
 
-        let api_key = cfg.get("api_key")
+        let api_key = cfg
+            .get("api_key")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
             .unwrap_or_else(|| env::var("EMAIL_API_KEY").unwrap_or_default());
 
-        let from = cfg.get("from_address")
+        let from = cfg
+            .get("from_address")
             .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
-            .unwrap_or_else(|| env::var("EMAIL_FROM").unwrap_or_else(|_| "swiftsoftware143@yahoo.com".to_string()));
+            .unwrap_or_else(|| {
+                env::var("EMAIL_FROM").unwrap_or_else(|_| "swiftsoftware143@yahoo.com".to_string())
+            });
 
         (api_url, api_key, from)
     } else {
         let api_url = env::var("EMAIL_API_URL").unwrap_or_default();
         let api_key = env::var("EMAIL_API_KEY").unwrap_or_default();
-        let from = env::var("EMAIL_FROM").unwrap_or_else(|_| "swiftsoftware143@yahoo.com".to_string());
+        let from =
+            env::var("EMAIL_FROM").unwrap_or_else(|_| "swiftsoftware143@yahoo.com".to_string());
         (api_url, api_key, from)
     }
 }
@@ -133,7 +162,8 @@ async fn send_email_fallback(
     template_type: &str,
     vars: &serde_json::Value,
 ) -> Result<(), String> {
-    let app_url = vars.get("app_url")
+    let app_url = vars
+        .get("app_url")
         .and_then(|v| v.as_str())
         .unwrap_or("https://app.workflowswift.com");
 
@@ -144,7 +174,9 @@ async fn send_email_fallback(
             let password = vars.get("password").and_then(|v| v.as_str()).unwrap_or("");
 
             let account_name = if template_type == "team_invite" {
-                vars.get("account_name").and_then(|v| v.as_str()).unwrap_or("Your Team")
+                vars.get("account_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Your Team")
             } else {
                 ""
             };
@@ -175,7 +207,10 @@ async fn send_email_fallback(
 </td></tr></table>
 <p style="font-size:14px;color:#9ca3af;text-align:center;">Best regards,<br>The WorkflowSwift Team</p>
 </td></tr></table></body></html>"#,
-                    name=name, email=email, password=password, url=app_url
+                    name = name,
+                    email = email,
+                    password = password,
+                    url = app_url
                 )
             } else {
                 format!(
@@ -197,7 +232,11 @@ async fn send_email_fallback(
 </td></tr></table>
 <p style="font-size:14px;color:#9ca3af;text-align:center;">Best regards,<br>The WorkflowSwift Team</p>
 </td></tr></table></body></html>"#,
-                    name=name, account=account_name, email=email, password=password, url=app_url
+                    name = name,
+                    account = account_name,
+                    email = email,
+                    password = password,
+                    url = app_url
                 )
             };
 
@@ -213,12 +252,19 @@ async fn send_email_fallback(
                 )
             };
 
-            send_email_request(&api_url, &api_key, &from, to, &subject, &text_body, &html_body).await
+            send_email_request(
+                &api_url, &api_key, &from, to, &subject, &text_body, &html_body,
+            )
+            .await
         }
         "purchase_confirmed" => {
             let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
-            let plan_name = vars.get("plan_name").and_then(|v| v.as_str()).unwrap_or("a plan");
-            let app_url = vars.get("app_url")
+            let plan_name = vars
+                .get("plan_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("a plan");
+            let app_url = vars
+                .get("app_url")
                 .and_then(|v| v.as_str())
                 .unwrap_or("https://app.workflowswift.com");
 
@@ -239,13 +285,18 @@ async fn send_email_fallback(
 </td></tr></table>
 <p style="font-size:14px;color:#9ca3af;text-align:center;">Best regards,<br>The WorkflowSwift Team</p>
 </td></tr></table></body></html>"#,
-                name=name, plan_name=plan_name, url=app_url
+                name = name,
+                plan_name = plan_name,
+                url = app_url
             );
             let text_body = format!(
                 "Hello {},\n\nYour payment for {} has been confirmed. Thank you!\n\nYou can access your account at {}.\n\nBest regards,\nThe WorkflowSwift Team",
                 name, plan_name, app_url
             );
-            send_email_request(&api_url, &api_key, &from, to, &subject, &text_body, &html_body).await
+            send_email_request(
+                &api_url, &api_key, &from, to, &subject, &text_body, &html_body,
+            )
+            .await
         }
         "password_reset" => {
             let token = vars.get("token").and_then(|v| v.as_str()).unwrap_or("");
@@ -265,7 +316,7 @@ async fn send_email_fallback(
 <p style="font-size:14px;color:#9ca3af;margin-top:25px;">If you did not request this, ignore this email.</p>
 <p style="font-size:14px;color:#9ca3af;text-align:center;margin-top:30px;">- The WorkflowSwift Team</p>
 </td></tr></table></body></html>"#,
-                token=token
+                token = token
             );
 
             let text_body = format!(
@@ -273,11 +324,29 @@ async fn send_email_fallback(
                 token
             );
 
-            send_email_request(&api_url, &api_key, &from, to, "Password Reset Request", &text_body, &html_body).await
+            send_email_request(
+                &api_url,
+                &api_key,
+                &from,
+                to,
+                "Password Reset Request",
+                &text_body,
+                &html_body,
+            )
+            .await
         }
         _ => {
             let text_body = format!("WorkflowSwift Notification:\n\n{}", vars);
-            send_email_request(&api_url, &api_key, &from, to, "WorkflowSwift Notification", &text_body, "").await
+            send_email_request(
+                &api_url,
+                &api_key,
+                &from,
+                to,
+                "WorkflowSwift Notification",
+                &text_body,
+                "",
+            )
+            .await
         }
     }
 }

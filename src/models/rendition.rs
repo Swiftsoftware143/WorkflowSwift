@@ -1,8 +1,8 @@
-use serde::{Deserialize, Serialize};
-use sqlx::FromRow;
 use chrono::{DateTime, Utc};
-use uuid::Uuid;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sqlx::FromRow;
+use uuid::Uuid;
 
 /// Reference record for a rendered asset.
 /// No files stored — just pointers to the third-party provider.

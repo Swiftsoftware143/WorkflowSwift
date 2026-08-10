@@ -1,19 +1,19 @@
 use axum::{
-    extract::{State, Request},
+    extract::{Request, State},
     http::StatusCode,
     middleware::Next,
     response::Response,
     Extension,
 };
 use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
+use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::sync::Arc;
-use std::collections::HashMap;
 use std::sync::Mutex;
 use tracing::warn;
 
-use crate::AppState;
 use crate::auth::models::Claims;
+use crate::AppState;
 
 /// Per-account rate limiter keyed by aid
 #[derive(Clone)]
@@ -42,12 +42,8 @@ impl RateLimiters {
             return limiter.clone();
         }
         // Create a new rate limiter: max_per_second requests per second, with burst
-        let quota = Quota::per_second(
-            NonZeroU32::new(self.max_per_second).unwrap()
-        )
-        .allow_burst(
-            NonZeroU32::new(self.burst).unwrap()
-        );
+        let quota = Quota::per_second(NonZeroU32::new(self.max_per_second).unwrap())
+            .allow_burst(NonZeroU32::new(self.burst).unwrap());
         let limiter = Arc::new(RateLimiter::direct(quota));
         limiters.insert(aid.to_string(), limiter.clone());
         limiter
@@ -75,12 +71,15 @@ pub async fn rate_limit_middleware(
         return Response::builder()
             .status(StatusCode::TOO_MANY_REQUESTS)
             .header("Retry-After", "1")
-            .body(axum::body::Body::from("{\"error\":\"Rate limit exceeded. Wait before retrying.\",\"status\":429}"))
-            .unwrap_or_else(|_| Response::builder()
-                .status(StatusCode::TOO_MANY_REQUESTS)
-                .body(axum::body::Body::empty())
-                .unwrap()
-            );
+            .body(axum::body::Body::from(
+                "{\"error\":\"Rate limit exceeded. Wait before retrying.\",\"status\":429}",
+            ))
+            .unwrap_or_else(|_| {
+                Response::builder()
+                    .status(StatusCode::TOO_MANY_REQUESTS)
+                    .body(axum::body::Body::empty())
+                    .unwrap()
+            });
     }
 
     next.run(request).await
@@ -109,7 +108,11 @@ impl ProviderKeyCache {
     }
 
     /// Get cached value, returns None if expired or missing
-    pub fn get(&self, aid: &str, provider: &str) -> Option<(String, Option<String>, serde_json::Value)> {
+    pub fn get(
+        &self,
+        aid: &str,
+        provider: &str,
+    ) -> Option<(String, Option<String>, serde_json::Value)> {
         let cache = self.cache.lock().unwrap();
         let key = Self::key(aid, provider);
         if let Some((api_key, base_url, metadata, expires_at)) = cache.get(&key) {
@@ -121,7 +124,14 @@ impl ProviderKeyCache {
     }
 
     /// Set a value in the cache
-    pub fn set(&self, aid: &str, provider: &str, api_key: String, base_url: Option<String>, metadata: serde_json::Value) {
+    pub fn set(
+        &self,
+        aid: &str,
+        provider: &str,
+        api_key: String,
+        base_url: Option<String>,
+        metadata: serde_json::Value,
+    ) {
         let mut cache = self.cache.lock().unwrap();
         let key = Self::key(aid, provider);
         let expires_at = chrono::Utc::now().timestamp() + self.ttl_seconds;

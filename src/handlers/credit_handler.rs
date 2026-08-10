@@ -1,5 +1,5 @@
 use axum::{
-    extract::{State, Json},
+    extract::{Json, State},
     response::IntoResponse,
     Extension,
 };
@@ -8,10 +8,10 @@ use sqlx::Row;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::AppState;
-use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;
+use crate::error::{ApiResult, AppError};
 use crate::features;
+use crate::AppState;
 
 /// Tiered pricing — profit margin optimized
 fn tiered_pricing() -> HashMap<&'static str, (i64, &'static str)> {
@@ -116,25 +116,26 @@ pub async fn list_transactions(
     .fetch_all(&state.db)
     .await?;
 
-    let transactions: Vec<serde_json::Value> = rows.iter().map(|row| {
-        json!({
-            "id": row.try_get::<Uuid, _>("id").map(|u| u.to_string()).unwrap_or_default(),
-            "amount": row.try_get::<i64, _>("amount").unwrap_or(0),
-            "transaction_type": row.try_get::<&str, _>("transaction_type").unwrap_or(""),
-            "description": row.try_get::<Option<&str>, _>("description").unwrap_or(None),
-            "reference_id": row.try_get::<Option<&str>, _>("reference_id").unwrap_or(None),
-            "created_at": row.try_get::<&str, _>("created_at").unwrap_or(""),
+    let transactions: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| {
+            json!({
+                "id": row.try_get::<Uuid, _>("id").map(|u| u.to_string()).unwrap_or_default(),
+                "amount": row.try_get::<i64, _>("amount").unwrap_or(0),
+                "transaction_type": row.try_get::<&str, _>("transaction_type").unwrap_or(""),
+                "description": row.try_get::<Option<&str>, _>("description").unwrap_or(None),
+                "reference_id": row.try_get::<Option<&str>, _>("reference_id").unwrap_or(None),
+                "created_at": row.try_get::<&str, _>("created_at").unwrap_or(""),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({"transactions": transactions})))
 }
 
 /// GET /api/v1/credits/packages
 /// List available credit packages for purchase.
-pub async fn list_credit_packages(
-    State(state): State<AppState>,
-) -> ApiResult<impl IntoResponse> {
+pub async fn list_credit_packages(State(state): State<AppState>) -> ApiResult<impl IntoResponse> {
     let rows = sqlx::query(
         r#"SELECT id::text, name, credits, price::text, is_active, created_at::text
            FROM credit_packages
@@ -144,15 +145,18 @@ pub async fn list_credit_packages(
     .fetch_all(&state.db)
     .await?;
 
-    let packages: Vec<serde_json::Value> = rows.iter().map(|row| {
-        json!({
-            "id": row.try_get::<&str, _>("id").unwrap_or(""),
-            "name": row.try_get::<&str, _>("name").unwrap_or(""),
-            "credits": row.try_get::<i32, _>("credits").unwrap_or(0),
-            "price": row.try_get::<&str, _>("price").unwrap_or("0.00"),
-            "is_active": row.try_get::<bool, _>("is_active").unwrap_or(true),
+    let packages: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| {
+            json!({
+                "id": row.try_get::<&str, _>("id").unwrap_or(""),
+                "name": row.try_get::<&str, _>("name").unwrap_or(""),
+                "credits": row.try_get::<i32, _>("credits").unwrap_or(0),
+                "price": row.try_get::<&str, _>("price").unwrap_or("0.00"),
+                "is_active": row.try_get::<bool, _>("is_active").unwrap_or(true),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({"packages": packages})))
 }
@@ -222,13 +226,17 @@ pub async fn create_credit_package(
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    features::enforce_feature_limit(&state.db, aid, "max_credit_packages", "Credit Packages").await?;
+    features::enforce_feature_limit(&state.db, aid, "max_credit_packages", "Credit Packages")
+        .await?;
 
     if !claims.perm_is_super_admin.unwrap_or(false) {
-        return Err(AppError::Forbidden("Only the super admin can purchase credits".to_string()));
+        return Err(AppError::Forbidden(
+            "Only the super admin can purchase credits".to_string(),
+        ));
     }
 
-    let package_id_str = req.get("package_id")
+    let package_id_str = req
+        .get("package_id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::Validation("package_id is required".to_string()))?;
     let package_id = Uuid::parse_str(package_id_str)
@@ -253,7 +261,10 @@ pub async fn create_credit_package(
     .bind(tx_id)
     .bind(aid)
     .bind(credits)
-    .bind(format!("Purchased {} credit package for ${}", credits, price))
+    .bind(format!(
+        "Purchased {} credit package for ${}",
+        credits, price
+    ))
     .execute(&state.db)
     .await?;
 
@@ -312,7 +323,10 @@ pub async fn deduct_credit(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let pricing = tiered_pricing();
 
-    let workflow_type = req.get("workflow_type").and_then(|v| v.as_str()).unwrap_or("simple");
+    let workflow_type = req
+        .get("workflow_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("simple");
     let explicit_amount = req.get("amount").and_then(|v| v.as_i64());
 
     let (amount, description) = if let Some(a) = explicit_amount {
@@ -337,7 +351,8 @@ pub async fn deduct_credit(
 
     if balance < amount {
         return Err(AppError::BadRequest(format!(
-            "Insufficient credits. Need {}, have {}. Purchase more credits.", amount, balance
+            "Insufficient credits. Need {}, have {}. Purchase more credits.",
+            amount, balance
         )));
     }
 

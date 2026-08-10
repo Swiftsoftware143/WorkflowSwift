@@ -1,14 +1,14 @@
 use axum::{
-    extract::{State, Json, Query},
+    extract::{Json, Query, State},
     response::IntoResponse,
     Extension,
 };
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::AppState;
-use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;
+use crate::error::{ApiResult, AppError};
+use crate::AppState;
 
 /// Cost for dashboard data push — this is data users paid a workflow credit
 /// to generate, so the dashboard read is free. The ingestion costs 0.5 credits
@@ -33,16 +33,18 @@ pub async fn dashboard_stats(
         .fetch_one(&state.db)
         .await
         .unwrap_or(0);
-    let total_clients: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM clients WHERE aid = $1 AND is_active = true")
-        .bind(aid)
-        .fetch_one(&state.db)
-        .await
-        .unwrap_or(0);
-    let total_templates: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workflow_templates WHERE aid = $1")
-        .bind(aid)
-        .fetch_one(&state.db)
-        .await
-        .unwrap_or(0);
+    let total_clients: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM clients WHERE aid = $1 AND is_active = true")
+            .bind(aid)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(0);
+    let total_templates: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM workflow_templates WHERE aid = $1")
+            .bind(aid)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(0);
 
     Ok(Json(json!({
         "stats": {
@@ -70,16 +72,19 @@ pub async fn dashboard_activity(
     .await?;
 
     use sqlx::Row;
-    let activities: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({
-            "id": r.try_get::<&str, _>("id").unwrap_or(""),
-            "user_id": r.try_get::<&str, _>("user_id").unwrap_or(""),
-            "action": r.try_get::<&str, _>("action").unwrap_or(""),
-            "entity_type": r.try_get::<&str, _>("entity_type").unwrap_or(""),
-            "entity_id": r.try_get::<&str, _>("entity_id").unwrap_or(""),
-            "created_at": r.try_get::<&str, _>("created_at").unwrap_or(""),
+    let activities: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.try_get::<&str, _>("id").unwrap_or(""),
+                "user_id": r.try_get::<&str, _>("user_id").unwrap_or(""),
+                "action": r.try_get::<&str, _>("action").unwrap_or(""),
+                "entity_type": r.try_get::<&str, _>("entity_type").unwrap_or(""),
+                "entity_id": r.try_get::<&str, _>("entity_id").unwrap_or(""),
+                "created_at": r.try_get::<&str, _>("created_at").unwrap_or(""),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({"activities": activities})))
 }
@@ -87,7 +92,7 @@ pub async fn dashboard_activity(
 /// Ingest dashboard data from n8n workflow results.
 /// This costs DASHBOARD_DATA_COST credits — it's a premium storage/display
 /// feature on top of the workflow execution itself.
-/// 
+///
 /// n8n calls this after running a workflow. The data is stored keyed by
 /// (aid, dashboard_type) and displayed in the user's dashboard.
 pub async fn push_dashboard_data(
@@ -98,10 +103,12 @@ pub async fn push_dashboard_data(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Extract dashboard type and data
-    let dashboard_type = req.get("dashboard_type")
+    let dashboard_type = req
+        .get("dashboard_type")
         .and_then(|v| v.as_str())
         .unwrap_or("default");
-    let data = req.get("data")
+    let data = req
+        .get("data")
         .and_then(|v| v.as_object())
         .cloned()
         .unwrap_or_default();
@@ -140,28 +147,27 @@ pub async fn push_dashboard_data(
     .await?;
 
     // Get or create default dashboard for this account (async, not closure)
-    let dashboard_id: Uuid = match sqlx::query_scalar(
-        "SELECT id FROM dashboards WHERE aid = $1 AND name = $2 LIMIT 1",
-    )
-    .bind(aid)
-    .bind("Default Dashboard")
-    .fetch_optional(&state.db)
-    .await?
-    {
-        Some(id) => id,
-        None => {
-            let id = Uuid::new_v4();
-            sqlx::query(
-                r#"INSERT INTO dashboards (id, aid, name, description, layout)
-                   VALUES ($1, $2, 'Default Dashboard', 'Auto-created dashboard', '{}'::jsonb)"#,
-            )
-            .bind(id)
+    let dashboard_id: Uuid =
+        match sqlx::query_scalar("SELECT id FROM dashboards WHERE aid = $1 AND name = $2 LIMIT 1")
             .bind(aid)
-            .execute(&state.db)
-            .await?;
-            id
-        }
-    };
+            .bind("Default Dashboard")
+            .fetch_optional(&state.db)
+            .await?
+        {
+            Some(id) => id,
+            None => {
+                let id = Uuid::new_v4();
+                sqlx::query(
+                    r#"INSERT INTO dashboards (id, aid, name, description, layout)
+                   VALUES ($1, $2, 'Default Dashboard', 'Auto-created dashboard', '{}'::jsonb)"#,
+                )
+                .bind(id)
+                .bind(aid)
+                .execute(&state.db)
+                .await?;
+                id
+            }
+        };
 
     // Store the data
     let data_id = Uuid::new_v4();
@@ -199,13 +205,17 @@ pub async fn push_dashboard_data(
     // trigger_config->>'metric_key' matches this dashboard_type,
     // automatically start a new workflow instance.
     let metric_key = format!("n8n_{}", dashboard_type);
-    tracing::info!("Checking dashboard triggers for aid={} metric_key={}", aid.to_string(), metric_key);
+    tracing::info!(
+        "Checking dashboard triggers for aid={} metric_key={}",
+        aid.to_string(),
+        metric_key
+    );
     let matching_workflows: Vec<Uuid> = match sqlx::query_as::<_, (Uuid,)>(
         r#"SELECT id FROM workflows
            WHERE aid = $1
              AND is_active = true
              AND trigger_type = 'dashboard_data'
-             AND trigger_config->>'metric_key' = $2"#
+             AND trigger_config->>'metric_key' = $2"#,
     )
     .bind(aid)
     .bind(&metric_key)
@@ -214,11 +224,20 @@ pub async fn push_dashboard_data(
     {
         Ok(rows) => {
             let ids: Vec<Uuid> = rows.into_iter().map(|r| r.0).collect();
-            tracing::info!("Found {} matching workflows for trigger metric_key={}", ids.len(), metric_key);
+            tracing::info!(
+                "Found {} matching workflows for trigger metric_key={}",
+                ids.len(),
+                metric_key
+            );
             ids
-        },
+        }
         Err(e) => {
-            tracing::error!("Dashboard trigger query for aid={} metric_key={} failed: {}", aid.to_string(), metric_key, e);
+            tracing::error!(
+                "Dashboard trigger query for aid={} metric_key={} failed: {}",
+                aid.to_string(),
+                metric_key,
+                e
+            );
             Vec::new()
         }
     };
@@ -279,16 +298,15 @@ pub async fn industry_dashboard_data(
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    
+
     // Get account's industry
-    let industry_slug: Option<String> = sqlx::query_scalar(
-        "SELECT industry_slug FROM accounts WHERE id = $1"
-    )
-    .bind(aid)
-    .fetch_optional(&state.db)
-    .await?
-    .flatten();
-    
+    let industry_slug: Option<String> =
+        sqlx::query_scalar("SELECT industry_slug FROM accounts WHERE id = $1")
+            .bind(aid)
+            .fetch_optional(&state.db)
+            .await?
+            .flatten();
+
     // Get widgets for this industry
     type WidgetRow = (Uuid, String, String, String, i32);
     let widgets = if let Some(ref slug) = industry_slug {
@@ -301,7 +319,7 @@ pub async fn industry_dashboard_data(
     } else {
         vec![]
     };
-    
+
     // Get dashboard data for each widget
     let mut widget_data = Vec::new();
     for (widget_id, name, data_type, default_config, sort_order) in &widgets {
@@ -315,7 +333,7 @@ pub async fn industry_dashboard_data(
         .into_iter()
         .map(|r| r.0)
         .collect();
-        
+
         widget_data.push(json!({
             "id": widget_id,
             "name": name,
@@ -325,7 +343,7 @@ pub async fn industry_dashboard_data(
             "data": data.first().unwrap_or(&json!(null))
         }));
     }
-    
+
     Ok(Json(json!({
         "industry": industry_slug,
         "widgets": widget_data
@@ -349,7 +367,7 @@ pub async fn get_widget_metric_keys(
            JOIN account_industries ti ON ti.dashboard_id = d.id
            WHERE ti.aid = $1 AND ti.is_active = true
              AND dw.config->>'metric_key' IS NOT NULL
-           ORDER BY dw.title"#
+           ORDER BY dw.title"#,
     )
     .bind(aid)
     .fetch_all(&state.db)
@@ -378,7 +396,10 @@ pub async fn tabbed_dashboard(
     Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> Result<impl IntoResponse, AppError> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let workspace_uuid = q.get("workspace_id").map(|s| s.as_str()).and_then(|v| Uuid::parse_str(v).ok());
+    let workspace_uuid = q
+        .get("workspace_id")
+        .map(|s| s.as_str())
+        .and_then(|v| Uuid::parse_str(v).ok());
 
     // Get account's industries
     let industries: Vec<String> = sqlx::query_scalar(
@@ -389,14 +410,18 @@ pub async fn tabbed_dashboard(
     .await?;
 
     // Get general widgets (shared across all industries)
-    let general_widgets: Vec<serde_json::Value> = sqlx::query_as::<_, (String, String, Option<String>, i32)>(
-        "SELECT iw.widget_key, iw.title, iw.description, iw.sort_order FROM industry_widgets iw
+    let general_widgets: Vec<serde_json::Value> =
+        sqlx::query_as::<_, (String, String, Option<String>, i32)>(
+            "SELECT iw.widget_key, iw.title, iw.description, iw.sort_order FROM industry_widgets iw
          JOIN template_categories tc ON tc.slug = iw.industry_slug
-         WHERE iw.industry_slug = 'general' AND iw.is_active = true ORDER BY iw.sort_order"
-    )
-    .fetch_all(&s.db)
-    .await.unwrap_or_default()
-    .into_iter().map(|w| json!({"key": w.0, "title": w.1, "description": w.2, "order": w.3})).collect();
+         WHERE iw.industry_slug = 'general' AND iw.is_active = true ORDER BY iw.sort_order",
+        )
+        .fetch_all(&s.db)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .map(|w| json!({"key": w.0, "title": w.1, "description": w.2, "order": w.3}))
+        .collect();
 
     // Build industry tabs with their widgets
     let mut tabs = vec![json!({
@@ -415,9 +440,14 @@ pub async fn tabbed_dashboard(
             Vec::new()
         };
 
-        let widget_data: Vec<serde_json::Value> = widgets.into_iter().map(|w| json!({
-            "key": w.0, "title": w.1, "description": w.2, "order": w.3
-        })).collect();
+        let widget_data: Vec<serde_json::Value> = widgets
+            .into_iter()
+            .map(|w| {
+                json!({
+                    "key": w.0, "title": w.1, "description": w.2, "order": w.3
+                })
+            })
+            .collect();
 
         tabs.push(json!({
             "id": ind,
@@ -426,5 +456,7 @@ pub async fn tabbed_dashboard(
         }));
     }
 
-    Ok(Json(json!({"tabs": tabs, "active_industry": industries.first()})))
+    Ok(Json(
+        json!({"tabs": tabs, "active_industry": industries.first()}),
+    ))
 }

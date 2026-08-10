@@ -1,5 +1,5 @@
 use axum::{
-    extract::{State, Path, Json},
+    extract::{Json, Path, State},
     http::StatusCode,
     response::IntoResponse,
     Extension,
@@ -8,10 +8,10 @@ use chrono::Utc;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::AppState;
-use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;
+use crate::error::{ApiResult, AppError};
 use crate::models::competitor_watch::*;
+use crate::AppState;
 
 pub async fn list_competitors(
     State(state): State<AppState>,
@@ -36,7 +36,8 @@ pub async fn create_competitor(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let name = req.get("name")
+    let name = req
+        .get("name")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
@@ -45,16 +46,28 @@ pub async fn create_competitor(
         return Err(AppError::Validation("name is required".to_string()));
     }
 
-    let website = req.get("website").and_then(|v| v.as_str()).map(String::from);
-    let description = req.get("description").and_then(|v| v.as_str()).map(String::from);
+    let website = req
+        .get("website")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let description = req
+        .get("description")
+        .and_then(|v| v.as_str())
+        .map(String::from);
 
-    let strengths: Option<Vec<String>> = req.get("strengths")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+    let strengths: Option<Vec<String>> =
+        req.get("strengths").and_then(|v| v.as_array()).map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        });
 
-    let weaknesses: Option<Vec<String>> = req.get("weaknesses")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+    let weaknesses: Option<Vec<String>> =
+        req.get("weaknesses").and_then(|v| v.as_array()).map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        });
 
     let market_share = req.get("market_share").and_then(|v| v.as_f64());
 
@@ -85,14 +98,13 @@ pub async fn update_competitor(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let _existing = sqlx::query_as::<_, Competitor>(
-        "SELECT * FROM competitors WHERE id = $1 AND aid = $2",
-    )
-    .bind(id)
-    .bind(aid)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::NotFound("Competitor not found".to_string()))?;
+    let _existing =
+        sqlx::query_as::<_, Competitor>("SELECT * FROM competitors WHERE id = $1 AND aid = $2")
+            .bind(id)
+            .bind(aid)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or(AppError::NotFound("Competitor not found".to_string()))?;
 
     if let Some(name) = req.get("name").and_then(|v| v.as_str()) {
         sqlx::query("UPDATE competitors SET name = $1 WHERE id = $2")
@@ -121,7 +133,10 @@ pub async fn update_competitor(
     }
 
     if let Some(strengths) = req.get("strengths").and_then(|v| v.as_array()) {
-        let val: Vec<String> = strengths.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        let val: Vec<String> = strengths
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
         sqlx::query("UPDATE competitors SET strengths = $1::text[] WHERE id = $2")
             .bind(&val)
             .bind(id)
@@ -130,7 +145,10 @@ pub async fn update_competitor(
     }
 
     if let Some(weaknesses) = req.get("weaknesses").and_then(|v| v.as_array()) {
-        let val: Vec<String> = weaknesses.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+        let val: Vec<String> = weaknesses
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect();
         sqlx::query("UPDATE competitors SET weaknesses = $1::text[] WHERE id = $2")
             .bind(&val)
             .bind(id)
@@ -159,12 +177,10 @@ pub async fn update_competitor(
         .execute(&state.db)
         .await?;
 
-    let competitor = sqlx::query_as::<_, Competitor>(
-        "SELECT * FROM competitors WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_one(&state.db)
-    .await?;
+    let competitor = sqlx::query_as::<_, Competitor>("SELECT * FROM competitors WHERE id = $1")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
 
     Ok(Json(json!({"competitor": competitor})))
 }
@@ -176,13 +192,11 @@ pub async fn delete_competitor(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let result = sqlx::query(
-        "DELETE FROM competitors WHERE id = $1 AND aid = $2",
-    )
-    .bind(id)
-    .bind(aid)
-    .execute(&state.db)
-    .await?;
+    let result = sqlx::query("DELETE FROM competitors WHERE id = $1 AND aid = $2")
+        .bind(id)
+        .bind(aid)
+        .execute(&state.db)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Competitor not found".to_string()));
@@ -205,7 +219,9 @@ pub async fn check_competitor(
     .bind(aid)
     .fetch_optional(&state.db)
     .await?
-    .ok_or(AppError::NotFound("Active competitor not found".to_string()))?;
+    .ok_or(AppError::NotFound(
+        "Active competitor not found".to_string(),
+    ))?;
 
     // Update last_checked_at
     sqlx::query("UPDATE competitors SET last_checked_at = NOW(), updated_at = NOW() WHERE id = $1")
@@ -219,7 +235,10 @@ pub async fn check_competitor(
         name: competitor.name.clone(),
         status: "completed".to_string(),
         changes_detected: false,
-        summary: format!("Checked competitor '{}'. No significant changes detected.", competitor.name),
+        summary: format!(
+            "Checked competitor '{}'. No significant changes detected.",
+            competitor.name
+        ),
         checked_at: Utc::now(),
     };
 

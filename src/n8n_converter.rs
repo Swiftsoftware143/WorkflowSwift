@@ -162,30 +162,48 @@ pub fn convert_steps_to_n8n(
     // ===== Convert user steps =====
     // Returns (all_step_nodes, step_output_ids), where step_output_ids[i] is the
     // ID of the last node produced by step i (the one to wire forward).
-    let (step_nodes, step_output_ids) = convert_user_steps(steps, aid, workflow_id, callback_base_url, &mut connections_map);
+    let (step_nodes, step_output_ids) = convert_user_steps(
+        steps,
+        aid,
+        workflow_id,
+        callback_base_url,
+        &mut connections_map,
+    );
 
     // Wire Webhook → Credit Check
     let mut webhook_conn = serde_json::Map::new();
-    webhook_conn.insert("main".to_string(), json!([[{"node": "credit_check", "type": "main", "index": 0}]]));
+    webhook_conn.insert(
+        "main".to_string(),
+        json!([[{"node": "credit_check", "type": "main", "index": 0}]]),
+    );
     connections_map.insert("webhook".to_string(), Value::Object(webhook_conn));
 
     // Wire Credit Check → Balance Check
     let mut credit_conn = serde_json::Map::new();
-    credit_conn.insert("main".to_string(), json!([[{"node": "balance_check", "type": "main", "index": 0}]]));
+    credit_conn.insert(
+        "main".to_string(),
+        json!([[{"node": "balance_check", "type": "main", "index": 0}]]),
+    );
     connections_map.insert("credit_check".to_string(), Value::Object(credit_conn));
 
     // Wire Balance Check success → Deduct Credit; failure → respond with error
     let mut balance_conn = serde_json::Map::new();
-    balance_conn.insert("main".to_string(), json!([
-        [{"node": "deduct_credit", "type": "main", "index": 0}],
-        [{"node": "respond"}]
-    ]));
+    balance_conn.insert(
+        "main".to_string(),
+        json!([
+            [{"node": "deduct_credit", "type": "main", "index": 0}],
+            [{"node": "respond"}]
+        ]),
+    );
     connections_map.insert("balance_check".to_string(), Value::Object(balance_conn));
 
     // Wire Deduct → first user step's output node
     if let Some(first_output) = step_output_ids.first() {
         let mut deduct_conn = serde_json::Map::new();
-        deduct_conn.insert("main".to_string(), json!([[{"node": first_output, "type": "main", "index": 0}]]));
+        deduct_conn.insert(
+            "main".to_string(),
+            json!([[{"node": first_output, "type": "main", "index": 0}]]),
+        );
         connections_map.insert("deduct_credit".to_string(), Value::Object(deduct_conn));
     }
 
@@ -196,12 +214,18 @@ pub fn convert_steps_to_n8n(
         if i + 1 < step_output_ids.len() {
             let next_id = &step_output_ids[i + 1];
             let mut conn = serde_json::Map::new();
-            conn.insert("main".to_string(), json!([[{"node": next_id, "type": "main", "index": 0}]]));
+            conn.insert(
+                "main".to_string(),
+                json!([[{"node": next_id, "type": "main", "index": 0}]]),
+            );
             connections_map.insert(current_id.clone(), Value::Object(conn));
         } else {
             // Last user step → Respond node
             let mut conn = serde_json::Map::new();
-            conn.insert("main".to_string(), json!([[{"node": "respond", "type": "main", "index": 0}]]));
+            conn.insert(
+                "main".to_string(),
+                json!([[{"node": "respond", "type": "main", "index": 0}]]),
+            );
             connections_map.insert(current_id.clone(), Value::Object(conn));
         }
     }
@@ -262,13 +286,16 @@ fn convert_user_steps(
     let _wf_short = &workflow_id.to_string()[..8];
 
     for (i, step) in steps.iter().enumerate() {
-        let step_type = step.get("step_type")
+        let step_type = step
+            .get("step_type")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
-        let step_name = step.get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Step");
-        let config = step.get("config").and_then(|v| v.as_object()).cloned().unwrap_or_default();
+        let step_name = step.get("name").and_then(|v| v.as_str()).unwrap_or("Step");
+        let config = step
+            .get("config")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
 
         let x_pos = 250 + (i as i32 + 1) * 200;
         let y_base = 300;
@@ -279,12 +306,11 @@ fn convert_user_steps(
 
         match step_type {
             "http-request" | "action" => {
-                let method = config.get("method")
+                let method = config
+                    .get("method")
                     .and_then(|v| v.as_str())
                     .unwrap_or("GET");
-                let url = config.get("url")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let url = config.get("url").and_then(|v| v.as_str()).unwrap_or("");
 
                 let node = json!({
                     "id": node_id,
@@ -304,16 +330,16 @@ fn convert_user_steps(
             }
 
             "ai-action" | "openclaw" => {
-                let prompt = config.get("prompt")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let model = config.get("model")
+                let prompt = config.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+                let model = config
+                    .get("model")
                     .and_then(|v| v.as_str())
                     .unwrap_or("deepseek/deepseek-chat");
 
                 // OpenClaw HTTP node — POST to the gateway
                 // The user provides their OpenClaw gateway URL in Integration Center
-                let openclaw_url = config.get("gateway_url")
+                let openclaw_url = config
+                    .get("gateway_url")
                     .and_then(|v| v.as_str())
                     .unwrap_or("http://localhost:18792");
 
@@ -350,10 +376,12 @@ fn convert_user_steps(
 
             "data-card" => {
                 // Push data to the dashboard
-                let metric_key = config.get("metric_key")
+                let metric_key = config
+                    .get("metric_key")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let value_expr = config.get("value_expression")
+                let value_expr = config
+                    .get("value_expression")
                     .and_then(|v| v.as_str())
                     .unwrap_or("={{ $json[\"data\"] }}");
 
@@ -388,18 +416,19 @@ fn convert_user_steps(
             }
 
             "notify" => {
-                let channel = config.get("channel")
+                let channel = config
+                    .get("channel")
                     .and_then(|v| v.as_str())
                     .unwrap_or("email");
-                let recipient = config.get("recipient")
+                let recipient = config
+                    .get("recipient")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let subject = config.get("subject")
+                let subject = config
+                    .get("subject")
                     .and_then(|v| v.as_str())
                     .unwrap_or("WorkflowSwift Notification");
-                let message = config.get("message")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let message = config.get("message").and_then(|v| v.as_str()).unwrap_or("");
 
                 match channel {
                     "email" => {
@@ -473,7 +502,8 @@ fn convert_user_steps(
             }
 
             "export" => {
-                let destination = config.get("destination")
+                let destination = config
+                    .get("destination")
                     .and_then(|v| v.as_str())
                     .unwrap_or("http");
                 match destination {
@@ -498,7 +528,8 @@ fn convert_user_steps(
                         nodes.push(node);
                     }
                     "csv" => {
-                        let filename = config.get("filename")
+                        let filename = config
+                            .get("filename")
                             .and_then(|v| v.as_str())
                             .unwrap_or("export.csv");
                         let node = json!({
@@ -517,9 +548,7 @@ fn convert_user_steps(
                     }
                     _ => {
                         // Generic HTTP POST export
-                        let url = config.get("url")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("");
+                        let url = config.get("url").and_then(|v| v.as_str()).unwrap_or("");
                         let node = json!({
                             "id": node_id,
                             "name": step_name,
@@ -543,7 +572,8 @@ fn convert_user_steps(
             }
 
             "delay" | "wait" => {
-                let duration_ms = config.get("duration_ms")
+                let duration_ms = config
+                    .get("duration_ms")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(3600000); // default 1 hour
                 let node = json!({
@@ -563,7 +593,8 @@ fn convert_user_steps(
             }
 
             "transform" | "code" => {
-                let code = config.get("code")
+                let code = config
+                    .get("code")
                     .and_then(|v| v.as_str())
                     .unwrap_or("return $json;");
                 let node = json!({
@@ -584,13 +615,16 @@ fn convert_user_steps(
             "render_video" | "render_media" | "render_image" | "render_audio" => {
                 // Rendering step: calls the third-party provider's render API
                 // to create content, then logs the result in account_renditions.
-                let provider = config.get("provider")
+                let provider = config
+                    .get("provider")
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
-                let api_endpoint = config.get("endpoint")
+                let api_endpoint = config
+                    .get("endpoint")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let method = config.get("method")
+                let method = config
+                    .get("method")
                     .and_then(|v| v.as_str())
                     .unwrap_or("POST");
                 let asset_type = match step_type {
@@ -660,27 +694,37 @@ fn convert_user_steps(
 
                 // Wire render → log node
                 let mut conn = serde_json::Map::new();
-                conn.insert("main".to_string(), json!([[{"node": log_id, "type": "main", "index": 0}]]));
+                conn.insert(
+                    "main".to_string(),
+                    json!([[{"node": log_id, "type": "main", "index": 0}]]),
+                );
                 connections_map.insert(node_id.to_string(), Value::Object(conn));
 
                 // The log_id is the effective "output" node of this step
                 step_last_node_id = Some(log_id);
             }
 
-
             // ===== Prospecting Steps: search, enrich, score =====
             "search" | "scrape" => {
                 // Search/scrape step: calls the WorkflowSwift research endpoint
                 // which proxies to Hexomatic or Playwright scraper
-                let source = config.get("source")
+                let source = config
+                    .get("source")
                     .and_then(|v| v.as_str())
                     .unwrap_or("web");
-                let max_results = config.get("max_results")
+                let max_results = config
+                    .get("max_results")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(50);
-                let platforms = config.get("platforms")
+                let platforms = config
+                    .get("platforms")
                     .and_then(|v| v.as_array())
-                    .map(|a| a.iter().map(|x| x.as_str().unwrap_or("")).collect::<Vec<_>>().join(","))
+                    .map(|a| {
+                        a.iter()
+                            .map(|x| x.as_str().unwrap_or(""))
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    })
                     .unwrap_or_default();
 
                 let node = json!({
@@ -716,7 +760,10 @@ fn convert_user_steps(
 
             "enrich" => {
                 // Enrichment step: calls enrichment API to fill in contact details
-                let provider = config.get("provider").and_then(|v| v.as_str()).unwrap_or("auto");
+                let provider = config
+                    .get("provider")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("auto");
 
                 let node = json!({
                     "id": node_id,
@@ -749,13 +796,16 @@ fn convert_user_steps(
 
             "score" | "analyze" => {
                 // Scoring/analysis step: calls LLM to score or analyze data
-                let prompt = config.get("prompt")
+                let prompt = config
+                    .get("prompt")
                     .and_then(|v| v.as_str())
                     .unwrap_or("Analyze the following data and provide a structured analysis:");
-                let model = config.get("model")
+                let model = config
+                    .get("model")
                     .and_then(|v| v.as_str())
                     .unwrap_or("deepseek/deepseek-chat");
-                let threshold = config.get("threshold")
+                let threshold = config
+                    .get("threshold")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0);
 
@@ -793,12 +843,11 @@ fn convert_user_steps(
 
             "report" => {
                 // Push data to dashboard widget
-                let metric_key = config.get("metric_key")
+                let metric_key = config
+                    .get("metric_key")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let period = config.get("period")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let period = config.get("period").and_then(|v| v.as_str()).unwrap_or("");
 
                 let node = json!({
                     "id": node_id,
@@ -835,18 +884,19 @@ fn convert_user_steps(
                 // Notification/alert step (already handled below, but capture here too)
                 // Fall through to the existing notify handler by re-matching
                 // We'll replicate the notify logic here for completeness
-                let channel = config.get("channel")
+                let channel = config
+                    .get("channel")
                     .and_then(|v| v.as_str())
                     .unwrap_or("email");
-                let recipient = config.get("recipient")
+                let recipient = config
+                    .get("recipient")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let subject = config.get("subject")
+                let subject = config
+                    .get("subject")
                     .and_then(|v| v.as_str())
                     .unwrap_or("WorkflowSwift Alert");
-                let message = config.get("message")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let message = config.get("message").and_then(|v| v.as_str()).unwrap_or("");
 
                 let node = json!({
                     "id": node_id,
@@ -880,7 +930,8 @@ fn convert_user_steps(
 
             "validation" | "config" => {
                 // Validation/config step: calls back to WorkflowSwift for validation
-                let checks = config.get("checks")
+                let checks = config
+                    .get("checks")
                     .and_then(|v| v.as_array())
                     .map(|a| serde_json::to_string(a).unwrap_or_default())
                     .unwrap_or_default();
@@ -970,7 +1021,8 @@ fn convert_user_steps(
             }
 
             "fork" | "branch" => {
-                let branches = config.get("branches")
+                let branches = config
+                    .get("branches")
                     .and_then(|v| v.as_array())
                     .map(|arr| arr.len())
                     .unwrap_or(2);
@@ -1012,13 +1064,13 @@ fn convert_user_steps(
 
             // ===== Generate: LLM text/image generation (calls OpenAI/Anthropic) =====
             "generate" => {
-                let provider = config.get("provider")
+                let provider = config
+                    .get("provider")
                     .and_then(|v| v.as_str())
                     .unwrap_or("openai");
-                let prompt = config.get("prompt")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let model = config.get("model")
+                let prompt = config.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+                let model = config
+                    .get("model")
                     .and_then(|v| v.as_str())
                     .unwrap_or("gpt-4");
 
@@ -1060,13 +1112,16 @@ fn convert_user_steps(
 
             // ===== Format: Transform content for a specific platform =====
             "format" => {
-                let platform = config.get("platform")
+                let platform = config
+                    .get("platform")
                     .and_then(|v| v.as_str())
                     .unwrap_or("web");
-                let content = config.get("input_content")
+                let content = config
+                    .get("input_content")
                     .and_then(|v| v.as_str())
                     .unwrap_or("={{ $json }}");
-                let format_type = config.get("format_type")
+                let format_type = config
+                    .get("format_type")
                     .and_then(|v| v.as_str())
                     .unwrap_or("auto");
 
@@ -1107,13 +1162,13 @@ return output;
 
             // ===== Design: Create visuals/assets (calls provider API) =====
             "design" => {
-                let provider = config.get("provider")
+                let provider = config
+                    .get("provider")
                     .and_then(|v| v.as_str())
                     .unwrap_or("artistly");
-                let prompt = config.get("prompt")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let design_type = config.get("design_type")
+                let prompt = config.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
+                let design_type = config
+                    .get("design_type")
                     .and_then(|v| v.as_str())
                     .unwrap_or("graphic");
 
@@ -1155,13 +1210,16 @@ return output;
 
             // ===== Publish: Post via Buffer (white-hat only) =====
             "publish" => {
-                let platform = config.get("platform")
+                let platform = config
+                    .get("platform")
                     .and_then(|v| v.as_str())
                     .unwrap_or("twitter");
-                let content = config.get("content")
+                let content = config
+                    .get("content")
                     .and_then(|v| v.as_str())
                     .unwrap_or("={{ $json }}");
-                let schedule_time = config.get("schedule_time")
+                let schedule_time = config
+                    .get("schedule_time")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
 
@@ -1200,13 +1258,16 @@ return output;
 
             // ===== Loop: Repeat steps until condition =====
             "loop" => {
-                let max_iterations = config.get("max_iterations")
+                let max_iterations = config
+                    .get("max_iterations")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(5);
-                let condition_field = config.get("condition_field")
+                let condition_field = config
+                    .get("condition_field")
                     .and_then(|v| v.as_str())
                     .unwrap_or("$json");
-                let stop_value = config.get("stop_value")
+                let stop_value = config
+                    .get("stop_value")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
 
@@ -1248,18 +1309,19 @@ return output;
 
             // ===== Condition: If/else routing =====
             "condition" => {
-                let field = config.get("field")
+                let field = config
+                    .get("field")
                     .and_then(|v| v.as_str())
                     .unwrap_or("$json");
-                let operator = config.get("operator")
+                let operator = config
+                    .get("operator")
                     .and_then(|v| v.as_str())
                     .unwrap_or("equals");
-                let value = config.get("value")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let value = config.get("value").and_then(|v| v.as_str()).unwrap_or("");
 
                 // Determine the operator type in Rust (not in JSON template)
-                let is_string_op = matches!(operator, "equals" | "contains" | "startsWith" | "endsWith");
+                let is_string_op =
+                    matches!(operator, "equals" | "contains" | "startsWith" | "endsWith");
                 let is_number_op = matches!(operator, "larger" | "smaller" | "equals");
                 let is_boolean_op = operator == "isTrue" || operator == "isFalse";
 
@@ -1295,10 +1357,12 @@ return output;
 
             // ===== Manual Review: Pause for human approval =====
             "manual" => {
-                let instructions = config.get("instructions")
+                let instructions = config
+                    .get("instructions")
                     .and_then(|v| v.as_str())
                     .unwrap_or("Review the workflow output and approve or reject.");
-                let timeout_hours = config.get("timeout_hours")
+                let timeout_hours = config
+                    .get("timeout_hours")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(24);
 
@@ -1354,7 +1418,10 @@ return output;
 
                 // Wire wait → notify
                 let mut conn = serde_json::Map::new();
-                conn.insert("main".to_string(), json!([[{"node": notify_id, "type": "main", "index": 0}]]));
+                conn.insert(
+                    "main".to_string(),
+                    json!([[{"node": notify_id, "type": "main", "index": 0}]]),
+                );
                 connections_map.insert(node_id.to_string(), Value::Object(conn));
 
                 step_last_node_id = Some(notify_id);
@@ -1362,13 +1429,13 @@ return output;
 
             // ===== Research: Data scraping/enrichment (Hexomatic, Google Places, Apollo) =====
             "research" => {
-                let provider = config.get("provider")
+                let provider = config
+                    .get("provider")
                     .and_then(|v| v.as_str())
                     .unwrap_or("hexomatic");
-                let query = config.get("query")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let research_type = config.get("research_type")
+                let query = config.get("query").and_then(|v| v.as_str()).unwrap_or("");
+                let research_type = config
+                    .get("research_type")
                     .and_then(|v| v.as_str())
                     .unwrap_or("search");
 

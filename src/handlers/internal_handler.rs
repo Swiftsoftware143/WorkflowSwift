@@ -1,5 +1,5 @@
 use axum::{
-    extract::{State, Json},
+    extract::{Json, State},
     http::HeaderMap,
     response::IntoResponse,
 };
@@ -21,11 +21,11 @@ pub struct RemoveTagRequest {
     pub tag_id: Uuid,
 }
 use serde_json::json;
-use uuid::Uuid;
 use sqlx::Row;
+use uuid::Uuid;
 
+use crate::error::{ApiResult, AppError};
 use crate::AppState;
-use crate::error::{AppError, ApiResult};
 /// POST /api/v1/internal/dashboard-data-seed
 /// Called by n8n on a schedule to generate dashboard data for all accounts.
 /// Requires X-Internal-Key header matching the configured internal_sync_key.
@@ -33,7 +33,8 @@ pub async fn seed_dashboard_data(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> ApiResult<impl IntoResponse> {
-    let key = headers.get("x-internal-key")
+    let key = headers
+        .get("x-internal-key")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
@@ -45,7 +46,7 @@ pub async fn seed_dashboard_data(
     let accounts = sqlx::query(
         r#"SELECT t.id, t.industry_slug
            FROM accounts t
-           WHERE t.is_active = true"#
+           WHERE t.is_active = true"#,
     )
     .fetch_all(&state.db)
     .await?;
@@ -54,7 +55,9 @@ pub async fn seed_dashboard_data(
 
     for row in &accounts {
         let aid: Uuid = row.try_get("id").unwrap_or_default();
-        let industry_slug: String = row.try_get("industry_slug").unwrap_or_else(|_| "site-flipping".to_string());
+        let industry_slug: String = row
+            .try_get("industry_slug")
+            .unwrap_or_else(|_| "site-flipping".to_string());
 
         // Get the metric keys for this account's dashboard widgets
         let metric_keys: Vec<String> = sqlx::query_scalar(
@@ -63,7 +66,7 @@ pub async fn seed_dashboard_data(
                JOIN dashboards d ON d.id = dw.dashboard_id
                JOIN account_industries ti ON ti.dashboard_id = d.id
                WHERE ti.aid = $1 AND ti.industry_slug = $2
-               AND config->>'metric_key' IS NOT NULL"#
+               AND config->>'metric_key' IS NOT NULL"#,
         )
         .bind(aid)
         .bind(&industry_slug)
@@ -82,7 +85,7 @@ pub async fn seed_dashboard_data(
                    JOIN account_industries ti ON ti.dashboard_id = d.id
                    WHERE ti.aid = $2 AND ti.industry_slug = $5
                    ORDER BY d.created_at DESC
-                   LIMIT 1"#
+                   LIMIT 1"#,
             )
             .bind(Uuid::new_v4())
             .bind(aid)
@@ -114,9 +117,13 @@ fn generate_sample_data(metric_key: &str) -> serde_json::Value {
     let mut rng = rand::thread_rng();
 
     // Generate realistic data based on metric key patterns
-    if metric_key.contains("revenue") || metric_key.contains("sales")
-        || metric_key.contains("funding") || metric_key.contains("billings")
-        || metric_key.contains("awarded") || metric_key.contains("portfolio") {
+    if metric_key.contains("revenue")
+        || metric_key.contains("sales")
+        || metric_key.contains("funding")
+        || metric_key.contains("billings")
+        || metric_key.contains("awarded")
+        || metric_key.contains("portfolio")
+    {
         json!({"value": rng.gen_range(50000..500000), "currency": "USD"})
     } else if metric_key.contains("rate") || metric_key.contains("success") {
         json!({"value": rng.gen_range(15..85), "suffix": "%"})
@@ -128,8 +135,16 @@ fn generate_sample_data(metric_key: &str) -> serde_json::Value {
             })).collect::<Vec<_>>()
         })
     } else if metric_key.contains("activity") || metric_key.contains("recent") {
-        let actions = ["New deal closed", "Lead converted", "Email sent", "Task completed",
-            "Milestone reached", "Contract signed", "Proposal submitted", "Follow-up scheduled"];
+        let actions = [
+            "New deal closed",
+            "Lead converted",
+            "Email sent",
+            "Task completed",
+            "Milestone reached",
+            "Contract signed",
+            "Proposal submitted",
+            "Follow-up scheduled",
+        ];
         json!({
             "activities": (0..5).map(|_| json!({
                 "action": actions[rng.gen_range(0..actions.len())],
@@ -152,7 +167,8 @@ pub async fn internal_assign_tag(
     headers: HeaderMap,
     Json(req): Json<AssignTagRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let key = headers.get("x-internal-key")
+    let key = headers
+        .get("x-internal-key")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     if key != state.config.internal_sync_key {
@@ -162,7 +178,7 @@ pub async fn internal_assign_tag(
     sqlx::query(
         r#"INSERT INTO entity_tags (tenant_id, entity_id, entity_type, tag_id)
            VALUES ($1, $2, $3, $4)
-           ON CONFLICT (tenant_id, entity_id, entity_type, tag_id) DO NOTHING"#
+           ON CONFLICT (tenant_id, entity_id, entity_type, tag_id) DO NOTHING"#,
     )
     .bind(req.tenant_id)
     .bind(req.entity_id)
@@ -181,7 +197,8 @@ pub async fn internal_remove_tag(
     headers: HeaderMap,
     Json(req): Json<RemoveTagRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let key = headers.get("x-internal-key")
+    let key = headers
+        .get("x-internal-key")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     if key != state.config.internal_sync_key {

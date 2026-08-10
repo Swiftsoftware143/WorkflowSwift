@@ -1,7 +1,7 @@
 //! Agent Handler — Paperclip agent profiles, tickets, kanban, budgets, and BYOK integrations
 
 use axum::{
-    extract::{Path, State, Query},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Extension, Json,
@@ -10,8 +10,8 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::{AppState, error::AppError};
 use crate::auth::models::Claims;
+use crate::{error::AppError, AppState};
 
 #[derive(Deserialize)]
 pub struct AgentQuery {
@@ -37,7 +37,8 @@ pub async fn list_agents(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let agents = if let Some(ref ws) = q.workspace_id {
-        let ws_id = Uuid::parse_str(ws).map_err(|_| AppError::BadRequest("Invalid workspace_id".into()))?;
+        let ws_id =
+            Uuid::parse_str(ws).map_err(|_| AppError::BadRequest("Invalid workspace_id".into()))?;
         sqlx::query_as::<_, (Uuid, String, String, Option<String>, i32, i32, String)>(
             "SELECT id, name, role, model, budget_credits, credits_spent, status FROM agent_profiles WHERE aid = $1 AND portfolio_company_id = $2 ORDER BY created_at"
         ).bind(aid).bind(ws_id).fetch_all(&s.db).await?
@@ -47,10 +48,15 @@ pub async fn list_agents(
         ).bind(aid).fetch_all(&s.db).await?
     };
 
-    let result: Vec<serde_json::Value> = agents.into_iter().map(|a| json!({
-        "id": a.0, "name": a.1, "role": a.2, "model": a.3,
-        "budget": a.4, "spent": a.5, "status": a.6
-    })).collect();
+    let result: Vec<serde_json::Value> = agents
+        .into_iter()
+        .map(|a| {
+            json!({
+                "id": a.0, "name": a.1, "role": a.2, "model": a.3,
+                "budget": a.4, "spent": a.5, "status": a.6
+            })
+        })
+        .collect();
 
     Ok(Json(json!({"agents": result})))
 }
@@ -66,9 +72,16 @@ pub async fn create_agent(
     let ws_id = req.workspace_id.and_then(|w| Uuid::parse_str(&w).ok());
 
     if let Some(ref ws) = ws_id {
-        let owned: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM portfolio_companies WHERE id = $1 AND aid = $2)")
-            .bind(ws).bind(aid).fetch_one(&s.db).await?;
-        if !owned { return Err(AppError::NotFound("Workspace not found".into())); }
+        let owned: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM portfolio_companies WHERE id = $1 AND aid = $2)",
+        )
+        .bind(ws)
+        .bind(aid)
+        .fetch_one(&s.db)
+        .await?;
+        if !owned {
+            return Err(AppError::NotFound("Workspace not found".into()));
+        }
     }
 
     sqlx::query(
@@ -78,7 +91,10 @@ pub async fn create_agent(
     .bind(req.model).bind(req.budget_credits.unwrap_or(0))
     .execute(&s.db).await?;
 
-    Ok((StatusCode::CREATED, Json(json!({"id": id, "status": "created"}))))
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({"id": id, "status": "created"})),
+    ))
 }
 
 // ── Agent Tickets (Kanban) ─────────────────────────────────────────
@@ -100,7 +116,8 @@ pub async fn list_tickets(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let tickets = if let Some(ref ws) = q.workspace_id {
-        let ws_id = Uuid::parse_str(ws).map_err(|_| AppError::BadRequest("Invalid workspace_id".into()))?;
+        let ws_id =
+            Uuid::parse_str(ws).map_err(|_| AppError::BadRequest("Invalid workspace_id".into()))?;
         sqlx::query_as::<_, (Uuid, Option<Uuid>, String, Option<String>, String, String, Option<String>, i32, chrono::DateTime<chrono::Utc>)>(
             "SELECT id, agent_id, title, description, status, priority, assigned_to, budget_credits, created_at FROM agent_tickets WHERE aid = $1 AND portfolio_company_id = $2 ORDER BY created_at DESC"
         ).bind(aid).bind(ws_id).fetch_all(&s.db).await?
@@ -110,11 +127,16 @@ pub async fn list_tickets(
         ).bind(aid).fetch_all(&s.db).await?
     };
 
-    let result: Vec<serde_json::Value> = tickets.into_iter().map(|t| json!({
-        "id": t.0, "agent_id": t.1, "title": t.2, "description": t.3,
-        "status": t.4, "priority": t.5, "assigned_to": t.6,
-        "budget": t.7, "created_at": t.8
-    })).collect();
+    let result: Vec<serde_json::Value> = tickets
+        .into_iter()
+        .map(|t| {
+            json!({
+                "id": t.0, "agent_id": t.1, "title": t.2, "description": t.3,
+                "status": t.4, "priority": t.5, "assigned_to": t.6,
+                "budget": t.7, "created_at": t.8
+            })
+        })
+        .collect();
 
     Ok(Json(json!({"tickets": result})))
 }
@@ -126,10 +148,19 @@ pub async fn update_ticket_status(
     Json(body): Json<serde_json::Value>,
 ) -> Result<impl IntoResponse, AppError> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let new_status = body.get("status").and_then(|v| v.as_str()).ok_or_else(|| AppError::BadRequest("status required".into()))?;
+    let new_status = body
+        .get("status")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| AppError::BadRequest("status required".into()))?;
 
-    sqlx::query("UPDATE agent_tickets SET status = $1, updated_at = NOW() WHERE id = $2 AND aid = $3")
-        .bind(new_status).bind(id).bind(aid).execute(&s.db).await?;
+    sqlx::query(
+        "UPDATE agent_tickets SET status = $1, updated_at = NOW() WHERE id = $2 AND aid = $3",
+    )
+    .bind(new_status)
+    .bind(id)
+    .bind(aid)
+    .execute(&s.db)
+    .await?;
 
     Ok(Json(json!({"status": "updated"})))
 }
@@ -145,7 +176,8 @@ pub async fn workspace_dashboard(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let (ws_clause, ws_bind): (String, Option<Uuid>) = if let Some(ref ws) = q.workspace_id {
-        let ws_id = Uuid::parse_str(ws).map_err(|_| AppError::BadRequest("Invalid workspace_id".into()))?;
+        let ws_id =
+            Uuid::parse_str(ws).map_err(|_| AppError::BadRequest("Invalid workspace_id".into()))?;
         ("AND portfolio_company_id = $2".into(), Some(ws_id))
     } else {
         (String::new(), None)
@@ -184,7 +216,8 @@ pub async fn activity_timeline(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let (ws_clause, ws_bind): (String, Option<Uuid>) = if let Some(ref ws) = q.workspace_id {
-        let ws_id = Uuid::parse_str(ws).map_err(|_| AppError::BadRequest("Invalid workspace_id".into()))?;
+        let ws_id =
+            Uuid::parse_str(ws).map_err(|_| AppError::BadRequest("Invalid workspace_id".into()))?;
         ("AND wi.portfolio_company_id = $2".into(), Some(ws_id))
     } else {
         (String::new(), None)
@@ -220,7 +253,8 @@ pub async fn list_provider_keys(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let keys = if let Some(ref ws) = q.workspace_id {
-        let ws_id = Uuid::parse_str(ws).map_err(|_| AppError::BadRequest("Invalid workspace_id".into()))?;
+        let ws_id =
+            Uuid::parse_str(ws).map_err(|_| AppError::BadRequest("Invalid workspace_id".into()))?;
         sqlx::query_as::<_, (String, String, bool)>(
             "SELECT provider, COALESCE(label, provider), is_active FROM provider_keys WHERE aid = $1 AND portfolio_company_id = $2 ORDER BY provider"
         ).bind(aid).bind(ws_id).fetch_all(&s.db).await?
@@ -230,9 +264,14 @@ pub async fn list_provider_keys(
         ).bind(aid).fetch_all(&s.db).await?
     };
 
-    let result: Vec<serde_json::Value> = keys.into_iter().map(|k| json!({
-        "provider": k.0, "label": k.1, "configured": true, "active": k.2
-    })).collect();
+    let result: Vec<serde_json::Value> = keys
+        .into_iter()
+        .map(|k| {
+            json!({
+                "provider": k.0, "label": k.1, "configured": true, "active": k.2
+            })
+        })
+        .collect();
 
     Ok(Json(json!({"provider_keys": result})))
 }
@@ -243,7 +282,11 @@ pub async fn delete_agent(
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    sqlx::query("DELETE FROM agent_profiles WHERE id = $1 AND aid = $2").bind(id).bind(aid).execute(&s.db).await?;
+    sqlx::query("DELETE FROM agent_profiles WHERE id = $1 AND aid = $2")
+        .bind(id)
+        .bind(aid)
+        .execute(&s.db)
+        .await?;
     Ok(Json(json!({"status": "deleted"})))
 }
 
@@ -270,7 +313,9 @@ pub async fn upsert_provider_key(
     .bind(&req.provider).bind(&req.api_key)
     .execute(&s.db).await?;
 
-    Ok(Json(json!({"status": "saved", "provider": req.provider, "configured": true})))
+    Ok(Json(
+        json!({"status": "saved", "provider": req.provider, "configured": true}),
+    ))
 }
 
 pub async fn delete_provider_key(
@@ -282,7 +327,8 @@ pub async fn delete_provider_key(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     if let Some(ref ws) = q.workspace_id {
-        let ws_id = Uuid::parse_str(ws).map_err(|_| AppError::BadRequest("Invalid workspace_id".into()))?;
+        let ws_id =
+            Uuid::parse_str(ws).map_err(|_| AppError::BadRequest("Invalid workspace_id".into()))?;
         sqlx::query("DELETE FROM provider_keys WHERE aid = $1 AND provider = $2 AND portfolio_company_id = $3")
             .bind(aid).bind(&provider).bind(ws_id).execute(&s.db).await?;
     } else {
@@ -292,7 +338,6 @@ pub async fn delete_provider_key(
 
     Ok(Json(json!({"status": "deleted"})))
 }
-
 
 /// Decrypt a provider API key — uses account-level encryption key
 pub async fn get_decrypted_key(

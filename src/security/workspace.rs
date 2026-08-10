@@ -1,10 +1,6 @@
-use axum::{
-    extract::FromRequestParts,
-    http::request::Parts,
-};
+use axum::{extract::FromRequestParts, http::request::Parts};
 use serde::Deserialize;
 use uuid::Uuid;
-
 
 /// Optional workspace ID extracted from query string or X-Workspace-Id header.
 /// When set, scopes data queries to that portfolio_company_id.
@@ -113,7 +109,7 @@ pub async fn verify_workspace_access(
 ) -> Result<(), crate::error::AppError> {
     if let Some(ws_id) = workspace_id {
         let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM portfolio_companies WHERE id = $1 AND aid = $2)"
+            "SELECT EXISTS(SELECT 1 FROM portfolio_companies WHERE id = $1 AND aid = $2)",
         )
         .bind(ws_id)
         .bind(aid)

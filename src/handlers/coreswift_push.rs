@@ -33,7 +33,16 @@ pub async fn push_signup_to_coreswift(
     last_name = parts.get(1).unwrap_or(&"");
 
     // 1. Create contact in CoreSwift under SwiftSoftware
-    let contact_id = match create_contact(&http, cs_url, internal_key, first_name, last_name, user_email).await {
+    let contact_id = match create_contact(
+        &http,
+        cs_url,
+        internal_key,
+        first_name,
+        last_name,
+        user_email,
+    )
+    .await
+    {
         Ok(id) => id,
         Err(e) => {
             tracing::warn!("coreswift_push: create_contact failed: {e}");
@@ -46,11 +55,27 @@ pub async fn push_signup_to_coreswift(
 
     // 3. Tag with plan: e.g., "workflowswift:Pro"
     let tag_name = format!("{}:{}", SOURCE_APP, plan_slug);
-    let _ = ensure_tag(&http, cs_url, internal_key, contact_id, &tag_name, "#8b5cf6").await;
+    let _ = ensure_tag(
+        &http,
+        cs_url,
+        internal_key,
+        contact_id,
+        &tag_name,
+        "#8b5cf6",
+    )
+    .await;
 
     // 4. Also tag with source
     let source_tag = format!("Source: {}", SOURCE_APP);
-    let _ = ensure_tag(&http, cs_url, internal_key, contact_id, &source_tag, "#10b981").await;
+    let _ = ensure_tag(
+        &http,
+        cs_url,
+        internal_key,
+        contact_id,
+        &source_tag,
+        "#10b981",
+    )
+    .await;
 
     tracing::info!(
         account_id = %account_id,
@@ -89,10 +114,7 @@ async fn create_contact(
         return Err(format!("HTTP {status}"));
     }
 
-    let data: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| format!("parse: {e}"))?;
+    let data: serde_json::Value = resp.json().await.map_err(|e| format!("parse: {e}"))?;
 
     Uuid::parse_str(data["id"].as_str().ok_or("no id field")?)
         .map_err(|e| format!("invalid uuid: {e}"))

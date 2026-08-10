@@ -1,15 +1,15 @@
 use axum::{
-    extract::{State, Json},
+    extract::{Json, State},
     response::IntoResponse,
     Extension,
 };
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::AppState;
-use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;
+use crate::error::{ApiResult, AppError};
 use crate::models::plan::Invoice;
+use crate::AppState;
 
 pub async fn list_invoices(
     State(state): State<AppState>,
@@ -34,14 +34,12 @@ pub async fn get_invoice(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let invoice = sqlx::query_as::<_, Invoice>(
-        "SELECT * FROM invoices WHERE id = $1 AND aid = $2",
-    )
-    .bind(id)
-    .bind(aid)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::NotFound("Invoice not found".to_string()))?;
+    let invoice = sqlx::query_as::<_, Invoice>("SELECT * FROM invoices WHERE id = $1 AND aid = $2")
+        .bind(id)
+        .bind(aid)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(AppError::NotFound("Invoice not found".to_string()))?;
 
     Ok(Json(json!({"invoice": invoice})))
 }

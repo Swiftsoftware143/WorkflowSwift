@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 use sqlx::Row;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
@@ -180,4 +180,3 @@ pub struct ResetPasswordRequest {
 pub struct MessageResponse {
     pub message: String,
 }
-

@@ -1,21 +1,21 @@
 use axum::{
-    extract::{State, Json, Path},
+    extract::{Json, Path, State},
     response::IntoResponse,
     Extension,
 };
 use serde_json::json;
-use uuid::Uuid;
 use sqlx::Row;
+use uuid::Uuid;
 
-use chrono::{DateTime, Utc};
-use crate::AppState;
-use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;
+use crate::error::{ApiResult, AppError};
+use crate::AppState;
+use chrono::{DateTime, Utc};
 
 /// Mask an API key ??? show first 3 and last 3 chars, mask the rest.
 fn mask_key(key: &str) -> String {
     if key.len() > 6 {
-        format!("{}...{}", &key[..3], &key[key.len()-3..])
+        format!("{}...{}", &key[..3], &key[key.len() - 3..])
     } else if key.len() > 3 {
         format!("{}...", &key[..3])
     } else {
@@ -45,25 +45,30 @@ pub async fn list_provider_keys(
     .fetch_all(&state.db)
     .await?;
 
-    let keys: Vec<serde_json::Value> = rows.iter().map(|row| {
-        let raw_key: &str = row.try_get("api_key").unwrap_or("");
-        let base_url: Option<String> = row.try_get("base_url").unwrap_or(None);
-        let metadata: serde_json::Value = row.try_get("metadata").unwrap_or(json!({}));
-        let created_at: DateTime<Utc> = row.try_get("created_at").unwrap_or_else(|_| Utc::now());
-        let updated_at: DateTime<Utc> = row.try_get("updated_at").unwrap_or_else(|_| Utc::now());
+    let keys: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| {
+            let raw_key: &str = row.try_get("api_key").unwrap_or("");
+            let base_url: Option<String> = row.try_get("base_url").unwrap_or(None);
+            let metadata: serde_json::Value = row.try_get("metadata").unwrap_or(json!({}));
+            let created_at: DateTime<Utc> =
+                row.try_get("created_at").unwrap_or_else(|_| Utc::now());
+            let updated_at: DateTime<Utc> =
+                row.try_get("updated_at").unwrap_or_else(|_| Utc::now());
 
-        json!({
-            "id": row.try_get::<Uuid, _>("id").map(|u| u.to_string()).unwrap_or_default(),
-            "provider": row.try_get::<&str, _>("provider").unwrap_or(""),
-            "api_key": mask_key(raw_key),
-            "has_key": !raw_key.is_empty(),
-            "base_url": base_url,
-            "metadata": metadata,
-            "is_active": row.try_get::<bool, _>("is_active").unwrap_or(false),
-            "created_at": created_at.to_rfc3339(),
-            "updated_at": updated_at.to_rfc3339(),
+            json!({
+                "id": row.try_get::<Uuid, _>("id").map(|u| u.to_string()).unwrap_or_default(),
+                "provider": row.try_get::<&str, _>("provider").unwrap_or(""),
+                "api_key": mask_key(raw_key),
+                "has_key": !raw_key.is_empty(),
+                "base_url": base_url,
+                "metadata": metadata,
+                "is_active": row.try_get::<bool, _>("is_active").unwrap_or(false),
+                "created_at": created_at.to_rfc3339(),
+                "updated_at": updated_at.to_rfc3339(),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({"provider_keys": keys})))
 }
@@ -94,9 +99,15 @@ pub async fn upsert_provider_key(
         ));
     }
 
-    let base_url = req.get("base_url").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
+    let base_url = req
+        .get("base_url")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty());
     let metadata = req.get("metadata").cloned().unwrap_or(json!({}));
-    let is_active = req.get("is_active").and_then(|v| v.as_bool()).unwrap_or(true);
+    let is_active = req
+        .get("is_active")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
 
     // Upsert
     let result = sqlx::query(
@@ -148,18 +159,17 @@ pub async fn delete_provider_key(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let result = sqlx::query(
-        "DELETE FROM provider_keys WHERE aid = $1 AND provider = $2",
-    )
-    .bind(aid)
-    .bind(&provider)
-    .execute(&state.db)
-    .await?;
+    let result = sqlx::query("DELETE FROM provider_keys WHERE aid = $1 AND provider = $2")
+        .bind(aid)
+        .bind(&provider)
+        .execute(&state.db)
+        .await?;
 
     if result.rows_affected() == 0 {
-        return Err(AppError::NotFound(
-            format!("Provider key for '{}' not found", provider),
-        ));
+        return Err(AppError::NotFound(format!(
+            "Provider key for '{}' not found",
+            provider
+        )));
     }
 
     // Invalidate cache
@@ -184,21 +194,26 @@ pub async fn list_available_providers(
     .fetch_all(&state.db)
     .await?;
 
-    let providers: Vec<serde_json::Value> = rows.iter().map(|row| {
-        let metadata_raw: String = row.try_get("requires_metadata").unwrap_or_else(|_| "[]".to_string());
-        let metadata: serde_json::Value =
-            serde_json::from_str(&metadata_raw).unwrap_or(json!([]));
-        let requires_base_url: bool = row.try_get("requires_base_url").unwrap_or(false);
+    let providers: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| {
+            let metadata_raw: String = row
+                .try_get("requires_metadata")
+                .unwrap_or_else(|_| "[]".to_string());
+            let metadata: serde_json::Value =
+                serde_json::from_str(&metadata_raw).unwrap_or(json!([]));
+            let requires_base_url: bool = row.try_get("requires_base_url").unwrap_or(false);
 
-        json!({
-            "key": row.try_get::<&str, _>("key").unwrap_or(""),
-            "name": row.try_get::<&str, _>("name").unwrap_or(""),
-            "description": row.try_get::<Option<&str>, _>("description").unwrap_or(None),
-            "requires_base_url": requires_base_url,
-            "requires_metadata": metadata,
-            "icon": row.try_get::<Option<&str>, _>("icon").unwrap_or(None),
+            json!({
+                "key": row.try_get::<&str, _>("key").unwrap_or(""),
+                "name": row.try_get::<&str, _>("name").unwrap_or(""),
+                "description": row.try_get::<Option<&str>, _>("description").unwrap_or(None),
+                "requires_base_url": requires_base_url,
+                "requires_metadata": metadata,
+                "icon": row.try_get::<Option<&str>, _>("icon").unwrap_or(None),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({"available_providers": providers})))
 }
@@ -266,8 +281,13 @@ pub async fn get_provider_key_cached(
         let metadata: serde_json::Value = r.try_get("metadata").unwrap_or(json!({}));
 
         // Populate cache
-        state.provider_key_cache.set(&aid_str, provider,
-            api_key.clone(), base_url.clone(), metadata.clone());
+        state.provider_key_cache.set(
+            &aid_str,
+            provider,
+            api_key.clone(),
+            base_url.clone(),
+            metadata.clone(),
+        );
 
         Ok(Some((api_key, base_url, metadata)))
     } else {

@@ -1,5 +1,5 @@
 use axum::{
-    extract::{State, Path, Json},
+    extract::{Json, Path, State},
     http::StatusCode,
     response::IntoResponse,
     Extension,
@@ -7,10 +7,10 @@ use axum::{
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::AppState;
-use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;
+use crate::error::{ApiResult, AppError};
 use crate::models::brand_monitor::*;
+use crate::AppState;
 
 pub async fn list_brand_monitors(
     State(state): State<AppState>,
@@ -35,7 +35,8 @@ pub async fn create_brand_monitor(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let brand_name = req.get("brand_name")
+    let brand_name = req
+        .get("brand_name")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
@@ -44,17 +45,26 @@ pub async fn create_brand_monitor(
         return Err(AppError::Validation("brand_name is required".to_string()));
     }
 
-    let keywords: Option<Vec<String>> = req.get("keywords")
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect());
+    let keywords: Option<Vec<String>> = req.get("keywords").and_then(|v| v.as_array()).map(|arr| {
+        arr.iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect()
+    });
 
-    let platforms: Vec<String> = req.get("platforms")
+    let platforms: Vec<String> = req
+        .get("platforms")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
 
     if platforms.is_empty() {
-        return Err(AppError::Validation("At least one platform is required".to_string()));
+        return Err(AppError::Validation(
+            "At least one platform is required".to_string(),
+        ));
     }
 
     let monitor = sqlx::query_as::<_, BrandMonitor>(
@@ -80,19 +90,19 @@ pub async fn delete_brand_monitor(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let result = sqlx::query(
-        "DELETE FROM brand_monitors WHERE id = $1 AND aid = $2",
-    )
-    .bind(id)
-    .bind(aid)
-    .execute(&state.db)
-    .await?;
+    let result = sqlx::query("DELETE FROM brand_monitors WHERE id = $1 AND aid = $2")
+        .bind(id)
+        .bind(aid)
+        .execute(&state.db)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Brand monitor not found".to_string()));
     }
 
-    Ok(Json(json!({"message": "Brand monitor deleted successfully"})))
+    Ok(Json(
+        json!({"message": "Brand monitor deleted successfully"}),
+    ))
 }
 
 pub async fn search_brand_mentions(
@@ -102,10 +112,13 @@ pub async fn search_brand_mentions(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let brand_monitor_id = req.get("brand_monitor_id")
+    let brand_monitor_id = req
+        .get("brand_monitor_id")
         .and_then(|v| v.as_str())
         .and_then(|s| Uuid::parse_str(s).ok())
-        .ok_or(AppError::Validation("Valid brand_monitor_id is required".to_string()))?;
+        .ok_or(AppError::Validation(
+            "Valid brand_monitor_id is required".to_string(),
+        ))?;
 
     let _monitor = sqlx::query_as::<_, BrandMonitor>(
         "SELECT * FROM brand_monitors WHERE id = $1 AND aid = $2 AND is_active = true",
@@ -114,23 +127,40 @@ pub async fn search_brand_mentions(
     .bind(aid)
     .fetch_optional(&state.db)
     .await?
-    .ok_or(AppError::NotFound("Active brand monitor not found".to_string()))?;
+    .ok_or(AppError::NotFound(
+        "Active brand monitor not found".to_string(),
+    ))?;
 
-    let max_results = req.get("max_results")
+    let max_results = req
+        .get("max_results")
         .and_then(|v| v.as_i64())
         .unwrap_or(10);
 
     // Mock search results — in production this would call external APIs
-    let mentions: Vec<BrandMention> = (0..max_results.min(20) as usize).map(|i| {
-        BrandMention {
-            platform: vec![String::from("twitter"), String::from("reddit"), String::from("news"), String::from("blogs")][i % 4].clone(),
+    let mentions: Vec<BrandMention> = (0..max_results.min(20) as usize)
+        .map(|i| BrandMention {
+            platform: vec![
+                String::from("twitter"),
+                String::from("reddit"),
+                String::from("news"),
+                String::from("blogs"),
+            ][i % 4]
+                .clone(),
             title: format!("Brand mention {} for monitor", i + 1),
             url: format!("https://example.com/mention/{}", i + 1),
-            snippet: format!("This is a sample mention snippet #{} related to the monitored brand.", i + 1),
-            sentiment: vec![String::from("positive"), String::from("neutral"), String::from("negative")][i % 3].clone(),
+            snippet: format!(
+                "This is a sample mention snippet #{} related to the monitored brand.",
+                i + 1
+            ),
+            sentiment: vec![
+                String::from("positive"),
+                String::from("neutral"),
+                String::from("negative"),
+            ][i % 3]
+                .clone(),
             relevance_score: 0.85 + (i as f64 * 0.01).min(0.15),
-        }
-    }).collect();
+        })
+        .collect();
 
     // Update last_scanned_at
     sqlx::query("UPDATE brand_monitors SET last_scanned_at = NOW() WHERE id = $1")
