@@ -1,11 +1,16 @@
-use axum::{extract::{State, Json, Path}, http::{HeaderMap, StatusCode}, response::IntoResponse, Extension};
-use serde_json::json;
-use uuid::Uuid;
-use sqlx::Row;
+use crate::auth::models::Claims;
+use crate::error::{ApiResult, AppError};
 use crate::features;
 use crate::AppState;
-use crate::error::{AppError, ApiResult};
-use crate::auth::models::Claims;
+use axum::{
+    extract::{Json, Path, State},
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+    Extension,
+};
+use serde_json::json;
+use sqlx::Row;
+use uuid::Uuid;
 
 pub async fn list_portfolio_companies(
     State(state): State<AppState>,
@@ -27,14 +32,35 @@ pub async fn create_portfolio_company(
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    features::enforce_feature_limit(&state.db, aid, "max_portfolio_companys", "Portfolio Companys").await?;
-    let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("Company").to_string();
-    let slug = req.get("slug").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| name.to_lowercase().replace(' ', "-"));
+    features::enforce_feature_limit(
+        &state.db,
+        aid,
+        "max_portfolio_companys",
+        "Portfolio Companys",
+    )
+    .await?;
+    let name = req
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Company")
+        .to_string();
+    let slug = req
+        .get("slug")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| name.to_lowercase().replace(' ', "-"));
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO portfolio_companies (id, aid, name, slug) VALUES ($1, $2, $3, $4)")
-        .bind(id).bind(aid).bind(&name).bind(&slug)
-        .execute(&state.db).await?;
-    Ok((StatusCode::CREATED, Json(json!({"id": id.to_string(), "name": name, "slug": slug}))))
+        .bind(id)
+        .bind(aid)
+        .bind(&name)
+        .bind(&slug)
+        .execute(&state.db)
+        .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({"id": id.to_string(), "name": name, "slug": slug})),
+    ))
 }
 
 pub async fn get_portfolio_company(
@@ -48,7 +74,9 @@ pub async fn get_portfolio_company(
         .bind(company_id).bind(aid)
         .fetch_optional(&state.db).await?
         .ok_or(AppError::NotFound("Company not found".into()))?;
-    Ok(Json(json!({"id": row.try_get::<&str,_>("id").unwrap_or(""), "name": row.try_get::<&str,_>("name").unwrap_or(""), "slug": row.try_get::<&str,_>("slug").unwrap_or("")})))
+    Ok(Json(
+        json!({"id": row.try_get::<&str,_>("id").unwrap_or(""), "name": row.try_get::<&str,_>("name").unwrap_or(""), "slug": row.try_get::<&str,_>("slug").unwrap_or("")}),
+    ))
 }
 
 pub async fn update_portfolio_company(
@@ -76,21 +104,45 @@ pub async fn internal_create_portfolio_company(
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let key = headers.get("x-internal-key").and_then(|v| v.to_str().ok()).unwrap_or("");
+    let key = headers
+        .get("x-internal-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
     if key != state.config.internal_sync_key {
         return Err(AppError::Forbidden("Invalid internal key".into()));
     }
 
-    let aid = body.get("aid")
+    let aid = body
+        .get("aid")
         .and_then(|v| v.as_str())
         .and_then(|s| Uuid::parse_str(s).ok())
         .ok_or_else(|| AppError::BadRequest("aid required".into()))?;
 
-    let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("Company").to_string();
-    let slug = body.get("slug").and_then(|v| v.as_str()).map(|s| s.to_string()).unwrap_or_else(|| name.to_lowercase().replace(' ', "-"));
-    let email = body.get("email").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let domain = body.get("domain").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let description = body.get("description").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let name = body
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Company")
+        .to_string();
+    let slug = body
+        .get("slug")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| name.to_lowercase().replace(' ', "-"));
+    let email = body
+        .get("email")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let domain = body
+        .get("domain")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let description = body
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let id = Uuid::new_v4();
 
     // Ensure account exists (FK constraint)
@@ -126,6 +178,9 @@ pub async fn delete_portfolio_company(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let company_id = Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid ID".into()))?;
     sqlx::query("DELETE FROM portfolio_companies WHERE id = $1 AND aid = $2")
-        .bind(company_id).bind(aid).execute(&state.db).await?;
+        .bind(company_id)
+        .bind(aid)
+        .execute(&state.db)
+        .await?;
     Ok(Json(json!({"status": "deleted"})))
 }

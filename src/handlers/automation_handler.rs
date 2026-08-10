@@ -1,5 +1,5 @@
 use axum::{
-    extract::{State, Json, Path},
+    extract::{Json, Path, State},
     http::StatusCode,
     response::IntoResponse,
     Extension,
@@ -7,11 +7,11 @@ use axum::{
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::features;
-use crate::AppState;
-use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;
+use crate::error::{ApiResult, AppError};
+use crate::features;
 use crate::models::automation::*;
+use crate::AppState;
 
 pub async fn list_automations(
     State(state): State<AppState>,
@@ -37,15 +37,32 @@ pub async fn create_automation(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     features::enforce_feature_limit(&state.db, aid, "max_automations", "Automations").await?;
 
-    let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let description = req.get("description").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let trigger_type = req.get("trigger_type").and_then(|v| v.as_str()).unwrap_or("manual").to_string();
+    let name = req
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let description = req
+        .get("description")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let trigger_type = req
+        .get("trigger_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("manual")
+        .to_string();
     let trigger_config = req.get("trigger_config").cloned();
-    let action_type = req.get("action_type").and_then(|v| v.as_str()).unwrap_or("webhook").to_string();
+    let action_type = req
+        .get("action_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("webhook")
+        .to_string();
     let action_config = req.get("action_config").cloned();
 
     if name.is_empty() {
-        return Err(AppError::Validation("Automation name is required".to_string()));
+        return Err(AppError::Validation(
+            "Automation name is required".to_string(),
+        ));
     }
 
     let automation = sqlx::query_as::<_, Automation>(
@@ -75,13 +92,11 @@ pub async fn run_automation(
 ) -> ApiResult<impl IntoResponse> {
     let _aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let _automation = sqlx::query_as::<_, Automation>(
-        "SELECT * FROM automations WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::NotFound("Automation not found".to_string()))?;
+    let _automation = sqlx::query_as::<_, Automation>("SELECT * FROM automations WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(AppError::NotFound("Automation not found".to_string()))?;
 
     let run_id = Uuid::new_v4();
     sqlx::query(

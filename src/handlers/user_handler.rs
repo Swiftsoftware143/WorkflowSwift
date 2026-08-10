@@ -1,5 +1,5 @@
 use axum::{
-    extract::{State, Json, Path},
+    extract::{Json, Path, State},
     http::StatusCode,
     response::IntoResponse,
     Extension,
@@ -8,11 +8,11 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::AppState;
-use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;
-use crate::models::user::User;
 use crate::email;
+use crate::error::{ApiResult, AppError};
+use crate::models::user::User;
+use crate::AppState;
 
 /// GET /api/v1/users — list users in the current account
 pub async fn list_users(
@@ -28,16 +28,19 @@ pub async fn list_users(
     .fetch_all(&state.db)
     .await?;
 
-    let user_list: Vec<serde_json::Value> = users.into_iter().map(|u| {
-        json!({
-            "id": u.id,
-            "email": u.email,
-            "name": u.name,
-            "role": u.role,
-            "is_active": u.is_active,
-            "permissions": u.permissions,
+    let user_list: Vec<serde_json::Value> = users
+        .into_iter()
+        .map(|u| {
+            json!({
+                "id": u.id,
+                "email": u.email,
+                "name": u.name,
+                "role": u.role,
+                "is_active": u.is_active,
+                "permissions": u.permissions,
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({"users": user_list})))
 }
@@ -56,16 +59,19 @@ pub async fn list_team_members(
     .fetch_all(&state.db)
     .await?;
 
-    let user_list: Vec<serde_json::Value> = users.into_iter().map(|u| {
-        json!({
-            "id": u.id,
-            "email": u.email,
-            "name": u.name,
-            "role": u.role,
-            "is_active": u.is_active,
-            "permissions": u.permissions,
+    let user_list: Vec<serde_json::Value> = users
+        .into_iter()
+        .map(|u| {
+            json!({
+                "id": u.id,
+                "email": u.email,
+                "name": u.name,
+                "role": u.role,
+                "is_active": u.is_active,
+                "permissions": u.permissions,
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({"users": user_list})))
 }
@@ -78,18 +84,35 @@ pub async fn invite_user(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let email = req.get("email").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let role = req.get("role").and_then(|v| v.as_str()).unwrap_or("team_member").to_string();
+    let email = req
+        .get("email")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let name = req
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let role = req
+        .get("role")
+        .and_then(|v| v.as_str())
+        .unwrap_or("team_member")
+        .to_string();
     let permissions = req.get("permissions").cloned().unwrap_or(json!({}));
 
     // Only allow valid roles — can't create another 'user' (account owner) or 'super_admin' via invite
     if role == "user" || role == "admin" || role == "super_admin" {
-        return Err(AppError::Validation("Cannot create account owners via invite. Use admin account creation for that.".to_string()));
+        return Err(AppError::Validation(
+            "Cannot create account owners via invite. Use admin account creation for that."
+                .to_string(),
+        ));
     }
 
     if email.is_empty() || name.is_empty() {
-        return Err(AppError::Validation("Email and name are required".to_string()));
+        return Err(AppError::Validation(
+            "Email and name are required".to_string(),
+        ));
     }
 
     // Check duplicate
@@ -100,12 +123,14 @@ pub async fn invite_user(
         .unwrap_or(0);
 
     if existing > 0 {
-        return Err(AppError::Duplicate("A user with this email already exists".to_string()));
+        return Err(AppError::Duplicate(
+            "A user with this email already exists".to_string(),
+        ));
     }
 
     // Generate temp password
-    use argon2::{Argon2, PasswordHasher};
     use argon2::password_hash::SaltString;
+    use argon2::{Argon2, PasswordHasher};
     use rand::rngs::OsRng;
 
     let temp_password = Uuid::new_v4().to_string();
@@ -149,7 +174,8 @@ pub async fn invite_user(
             "account_name": account_name,
             "app_url": "https://app.workflowswift.com",
         }),
-    ).await;
+    )
+    .await;
 
     match result {
         Ok(_) => tracing::info!("Team invite email sent to {}", email),
@@ -202,17 +228,23 @@ pub async fn remove_user(
 
     // Cannot remove super_admin
     if user.perm_is_super_admin {
-        return Err(AppError::Forbidden("Cannot remove the super admin".to_string()));
+        return Err(AppError::Forbidden(
+            "Cannot remove the super admin".to_string(),
+        ));
     }
 
     // Must be in same account, or caller must be super_admin
     if user.aid != aid && !caller_is_super {
-        return Err(AppError::Forbidden("User is not in your account".to_string()));
+        return Err(AppError::Forbidden(
+            "User is not in your account".to_string(),
+        ));
     }
 
     // If not super_admin, can only remove team_members
     if !caller_is_super && user.role != "team_member" {
-        return Err(AppError::Forbidden("You can only remove team members".to_string()));
+        return Err(AppError::Forbidden(
+            "You can only remove team members".to_string(),
+        ));
     }
 
     sqlx::query("DELETE FROM users WHERE id = $1")
@@ -233,7 +265,8 @@ pub async fn update_user_permissions(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let caller_is_super = claims.perm_is_super_admin.unwrap_or(false);
 
-    let permissions = req.get("permissions")
+    let permissions = req
+        .get("permissions")
         .ok_or_else(|| AppError::Validation("permissions field is required".to_string()))?;
 
     // Find the user
@@ -247,12 +280,16 @@ pub async fn update_user_permissions(
 
     // Must be in same account, or caller must be super_admin
     if user.aid != aid && !caller_is_super {
-        return Err(AppError::Forbidden("User is not in your account".to_string()));
+        return Err(AppError::Forbidden(
+            "User is not in your account".to_string(),
+        ));
     }
 
     // Super admin permissions cannot be changed
     if user.perm_is_super_admin {
-        return Err(AppError::Forbidden("Cannot change super admin permissions".to_string()));
+        return Err(AppError::Forbidden(
+            "Cannot change super admin permissions".to_string(),
+        ));
     }
 
     sqlx::query("UPDATE users SET permissions = $1::jsonb WHERE id = $2")

@@ -1,6 +1,9 @@
 //! Export Templates handler — auto-generated.
 
-use axum::{extract::{Path, State}, Json};
+use axum::{
+    extract::{Path, State},
+    Json,
+};
 use serde_json::{json, Value};
 use uuid::Uuid;
 

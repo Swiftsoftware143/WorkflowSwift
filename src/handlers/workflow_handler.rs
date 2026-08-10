@@ -1,5 +1,5 @@
 use axum::{
-    extract::{State, Json, Path, Query},
+    extract::{Json, Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Extension,
@@ -7,14 +7,12 @@ use axum::{
 use serde_json::json;
 use uuid::Uuid;
 
-
-
+use crate::auth::models::Claims;
+use crate::error::{ApiResult, AppError};
 use crate::features;
+use crate::models::workflow::*;
 use crate::n8n_converter;
 use crate::AppState;
-use crate::error::{AppError, ApiResult};
-use crate::auth::models::Claims;
-use crate::models::workflow::*;
 
 #[derive(Debug, serde::Deserialize)]
 pub struct ListWorkflowsQuery {
@@ -37,12 +35,10 @@ pub async fn list_workflows(
         .fetch_all(&state.db)
         .await?
     } else {
-        sqlx::query_as::<_, Workflow>(
-            "SELECT * FROM workflows WHERE aid = $1 ORDER BY name ASC",
-        )
-        .bind(aid)
-        .fetch_all(&state.db)
-        .await?
+        sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE aid = $1 ORDER BY name ASC")
+            .bind(aid)
+            .fetch_all(&state.db)
+            .await?
     };
 
     Ok(Json(json!({"workflows": workflows})))
@@ -56,7 +52,10 @@ pub async fn create_workflow(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     features::enforce_feature_limit(&state.db, aid, "max_workflows", "Workflows").await?;
 
-    let trigger_type = req.trigger_type.clone().unwrap_or_else(|| "manual".to_string());
+    let trigger_type = req
+        .trigger_type
+        .clone()
+        .unwrap_or_else(|| "manual".to_string());
     let workflow = sqlx::query_as::<_, Workflow>(
         r#"INSERT INTO workflows (id, aid, name, description, category, lifecycle_summary, tags, surface_id, trigger_type, trigger_config)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
@@ -85,14 +84,13 @@ pub async fn get_workflow(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let workflow = sqlx::query_as::<_, Workflow>(
-        "SELECT * FROM workflows WHERE id = $1 AND aid = $2",
-    )
-    .bind(id)
-    .bind(aid)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
+    let workflow =
+        sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE id = $1 AND aid = $2")
+            .bind(id)
+            .bind(aid)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
     let steps = sqlx::query_as::<_, WorkflowStep>(
         "SELECT * FROM workflow_steps WHERE workflow_id = $1 ORDER BY sort_order ASC",
@@ -112,14 +110,13 @@ pub async fn update_workflow(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let existing = sqlx::query_as::<_, Workflow>(
-        "SELECT * FROM workflows WHERE id = $1 AND aid = $2",
-    )
-    .bind(id)
-    .bind(aid)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
+    let existing =
+        sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE id = $1 AND aid = $2")
+            .bind(id)
+            .bind(aid)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
     let name = req.name.unwrap_or(existing.name);
     let description = req.description.or(existing.description);
@@ -127,7 +124,11 @@ pub async fn update_workflow(
     let lifecycle_summary = req.lifecycle_summary.or(existing.lifecycle_summary);
     let tags = req.tags.or(existing.tags);
 
-    let trigger_type = req.trigger_type.unwrap_or(existing.trigger_type.unwrap_or_else(|| "manual".to_string()));
+    let trigger_type = req.trigger_type.unwrap_or(
+        existing
+            .trigger_type
+            .unwrap_or_else(|| "manual".to_string()),
+    );
     let trigger_config = req.trigger_config.or(existing.trigger_config);
 
     let workflow = sqlx::query_as::<_, Workflow>(
@@ -177,19 +178,19 @@ pub async fn start_workflow(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     features::enforce_feature_limit(&state.db, aid, "max_instances", "Instances").await?;
 
-    let client_id = req.get("client_id")
+    let client_id = req
+        .get("client_id")
         .and_then(|v| v.as_str())
         .and_then(|s| Uuid::parse_str(s).ok())
         .ok_or(AppError::Validation("client_id is required".to_string()))?;
 
-    let workflow = sqlx::query_as::<_, Workflow>(
-        "SELECT * FROM workflows WHERE id = $1 AND aid = $2",
-    )
-    .bind(id)
-    .bind(aid)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
+    let workflow =
+        sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE id = $1 AND aid = $2")
+            .bind(id)
+            .bind(aid)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
     // Check credits
     let balance: i64 = sqlx::query_scalar(
@@ -207,7 +208,11 @@ pub async fn start_workflow(
     }
 
     let instance_id = Uuid::new_v4();
-    let name = req.get("name").and_then(|v| v.as_str()).unwrap_or(&workflow.name).to_string();
+    let name = req
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&workflow.name)
+        .to_string();
 
     // Define callback base URL for n8n node callbacks
     let callback_base_url = std::env::var("CALLBACK_BASE_URL")
@@ -265,9 +270,14 @@ pub async fn start_workflow(
 
         let import_filename = format!("wfs_run_{}.json", id);
         let import_output = StdCommand::new("docker")
-            .args(["exec", "user-n8n-main", "n8n", "import:workflow",
-                   &format!("--input=/tmp/{}", import_filename),
-                   "--activeState=fromJson"])
+            .args([
+                "exec",
+                "user-n8n-main",
+                "n8n",
+                "import:workflow",
+                &format!("--input=/tmp/{}", import_filename),
+                "--activeState=fromJson",
+            ])
             .output()
             .map_err(|e| AppError::Internal(format!("n8n import exec failed: {}", e)))?;
 
@@ -279,29 +289,37 @@ pub async fn start_workflow(
 
         let _ = tokio::fs::remove_file(&temp_path).await;
         let _ = StdCommand::new("docker")
-            .args(["exec", "user-n8n-main", "rm", &format!("/tmp/{}", import_filename)])
+            .args([
+                "exec",
+                "user-n8n-main",
+                "rm",
+                &format!("/tmp/{}", import_filename),
+            ])
             .output();
 
-        let _ = sqlx::query(
-            "UPDATE workflows SET lifecycle_summary = $1 WHERE id = $2",
-        )
-        .bind(json!({
-            "n8n_deployed": true,
-            "n8n_webhook_path": n8n_wf.webhook_path,
-            "deployed_at": chrono::Utc::now().to_rfc3339(),
-        }).to_string())
-        .bind(id)
-        .execute(&state.db)
-        .await;
+        let _ = sqlx::query("UPDATE workflows SET lifecycle_summary = $1 WHERE id = $2")
+            .bind(
+                json!({
+                    "n8n_deployed": true,
+                    "n8n_webhook_path": n8n_wf.webhook_path,
+                    "deployed_at": chrono::Utc::now().to_rfc3339(),
+                })
+                .to_string(),
+            )
+            .bind(id)
+            .execute(&state.db)
+            .await;
 
         n8n_wf.webhook_path
     } else {
         // Extract from lifecycle summary
-        let summary: serde_json::Value = workflow.lifecycle_summary
+        let summary: serde_json::Value = workflow
+            .lifecycle_summary
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or(json!({}));
-        summary.get("n8n_webhook_path")
+        summary
+            .get("n8n_webhook_path")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string()
@@ -338,7 +356,11 @@ pub async fn start_workflow(
     .await?;
 
     // Trigger n8n webhook with instance context
-    let n8n_url = format!("{}/webhook/{}", state.config.n8n_webhook_url.trim_end_matches('/'), webhook_path);
+    let n8n_url = format!(
+        "{}/webhook/{}",
+        state.config.n8n_webhook_url.trim_end_matches('/'),
+        webhook_path
+    );
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
         .build()
@@ -410,12 +432,15 @@ pub async fn start_workflow(
         }
     });
 
-    Ok((StatusCode::CREATED, Json(json!({
-        "instance_id": instance_id.to_string(),
-        "status": "running",
-        "webhook_path": webhook_path,
-        "message": format!("Workflow '{}' started. Check instance for results.", workflow.name)
-    }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "instance_id": instance_id.to_string(),
+            "status": "running",
+            "webhook_path": webhook_path,
+            "message": format!("Workflow '{}' started. Check instance for results.", workflow.name)
+        })),
+    ))
 }
 
 pub async fn get_workflow_steps(
@@ -444,27 +469,22 @@ pub async fn create_workflow_step(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Verify workflow exists and belongs to account
-    let _workflow = sqlx::query_as::<_, Workflow>(
-        "SELECT * FROM workflows WHERE id = $1 AND aid = $2",
-    )
-    .bind(id)
-    .bind(aid)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
+    let _workflow =
+        sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE id = $1 AND aid = $2")
+            .bind(id)
+            .bind(aid)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
     // Auto-assign sort_order: max + 1
-    let max_sort: Option<(Option<i32>,)> = sqlx::query_as(
-        "SELECT MAX(sort_order) FROM workflow_steps WHERE workflow_id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await?;
+    let max_sort: Option<(Option<i32>,)> =
+        sqlx::query_as("SELECT MAX(sort_order) FROM workflow_steps WHERE workflow_id = $1")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?;
 
-    let sort_order = max_sort
-        .and_then(|r| r.0)
-        .map(|m| m + 1)
-        .unwrap_or(0);
+    let sort_order = max_sort.and_then(|r| r.0).map(|m| m + 1).unwrap_or(0);
 
     let step = sqlx::query_as::<_, WorkflowStep>(
         r#"INSERT INTO workflow_steps (id, workflow_id, step_type, name, description, sort_order, config)
@@ -493,14 +513,13 @@ pub async fn update_workflow_step(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Verify workflow exists and belongs to account
-    let _workflow = sqlx::query_as::<_, Workflow>(
-        "SELECT * FROM workflows WHERE id = $1 AND aid = $2",
-    )
-    .bind(workflow_id)
-    .bind(aid)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
+    let _workflow =
+        sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE id = $1 AND aid = $2")
+            .bind(workflow_id)
+            .bind(aid)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
     let sort_order = req.sort_order.unwrap_or(0);
     let step = sqlx::query_as::<_, WorkflowStep>(
@@ -530,14 +549,13 @@ pub async fn delete_workflow_step(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Verify workflow exists and belongs to account
-    let _workflow = sqlx::query_as::<_, Workflow>(
-        "SELECT * FROM workflows WHERE id = $1 AND aid = $2",
-    )
-    .bind(workflow_id)
-    .bind(aid)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
+    let _workflow =
+        sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE id = $1 AND aid = $2")
+            .bind(workflow_id)
+            .bind(aid)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
     let result = sqlx::query("DELETE FROM workflow_steps WHERE id = $1 AND workflow_id = $2")
         .bind(step_id)
@@ -561,14 +579,13 @@ pub async fn reorder_workflow_steps(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Verify workflow exists and belongs to account
-    let _workflow = sqlx::query_as::<_, Workflow>(
-        "SELECT * FROM workflows WHERE id = $1 AND aid = $2",
-    )
-    .bind(id)
-    .bind(aid)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
+    let _workflow =
+        sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE id = $1 AND aid = $2")
+            .bind(id)
+            .bind(aid)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
     for (i, step_id) in req.step_ids.iter().enumerate() {
         sqlx::query("UPDATE workflow_steps SET sort_order = $1 WHERE id = $2 AND workflow_id = $3")
@@ -601,14 +618,13 @@ pub async fn deploy_workflow_to_n8n(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let workflow = sqlx::query_as::<_, Workflow>(
-        "SELECT * FROM workflows WHERE id = $1 AND aid = $2",
-    )
-    .bind(id)
-    .bind(aid)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
+    let workflow =
+        sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE id = $1 AND aid = $2")
+            .bind(id)
+            .bind(aid)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
     let steps = sqlx::query_as::<_, WorkflowStep>(
         "SELECT * FROM workflow_steps WHERE workflow_id = $1 ORDER BY sort_order ASC",
@@ -643,7 +659,10 @@ pub async fn deploy_workflow_to_n8n(
     let n8n_json = n8n_converter::to_n8n_json(&n8n_wf);
 
     // Deploy via n8n REST API
-    let n8n_api_url = format!("{}/rest/workflows", state.config.n8n_url.trim_end_matches('/'));
+    let n8n_api_url = format!(
+        "{}/rest/workflows",
+        state.config.n8n_url.trim_end_matches('/')
+    );
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
@@ -661,7 +680,10 @@ pub async fn deploy_workflow_to_n8n(
 
     let api_status = api_resp.status();
     if !api_status.is_success() {
-        let error_text = api_resp.text().await.unwrap_or_else(|_| "unknown error".to_string());
+        let error_text = api_resp
+            .text()
+            .await
+            .unwrap_or_else(|_| "unknown error".to_string());
         return Err(AppError::Internal(format!(
             "n8n workflow import failed ({}): {}",
             api_status, error_text
@@ -669,17 +691,18 @@ pub async fn deploy_workflow_to_n8n(
     }
 
     // Store the webhook path so the frontend can trigger it
-    sqlx::query(
-        "UPDATE workflows SET lifecycle_summary = $1 WHERE id = $2",
-    )
-    .bind(json!({
-        "n8n_deployed": true,
-        "n8n_webhook_path": n8n_wf.webhook_path,
-        "deployed_at": chrono::Utc::now().to_rfc3339(),
-    }).to_string())
-    .bind(id)
-    .execute(&state.db)
-    .await?;
+    sqlx::query("UPDATE workflows SET lifecycle_summary = $1 WHERE id = $2")
+        .bind(
+            json!({
+                "n8n_deployed": true,
+                "n8n_webhook_path": n8n_wf.webhook_path,
+                "deployed_at": chrono::Utc::now().to_rfc3339(),
+            })
+            .to_string(),
+        )
+        .bind(id)
+        .execute(&state.db)
+        .await?;
 
     Ok(Json(json!({
         "deployed": true,
@@ -700,14 +723,13 @@ pub async fn run_workflow(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let workflow = sqlx::query_as::<_, Workflow>(
-        "SELECT * FROM workflows WHERE id = $1 AND aid = $2",
-    )
-    .bind(id)
-    .bind(aid)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
+    let workflow =
+        sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE id = $1 AND aid = $2")
+            .bind(id)
+            .bind(aid)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
     // Check if already deployed; if not, deploy first
     let needs_deploy = match &workflow.lifecycle_summary {
@@ -719,9 +741,9 @@ pub async fn run_workflow(
         let steps = sqlx::query_as::<_, WorkflowStep>(
             "SELECT * FROM workflow_steps WHERE workflow_id = $1 ORDER BY sort_order ASC",
         )
-    .bind(id)
-    .fetch_all(&state.db)
-    .await?;
+        .bind(id)
+        .fetch_all(&state.db)
+        .await?;
 
         if steps.is_empty() {
             return Err(AppError::BadRequest(
@@ -748,7 +770,10 @@ pub async fn run_workflow(
         let n8n_json = n8n_converter::to_n8n_json(&n8n_wf);
 
         // Deploy via n8n REST API
-        let n8n_api_url = format!("{}/rest/workflows", state.config.n8n_url.trim_end_matches('/'));
+        let n8n_api_url = format!(
+            "{}/rest/workflows",
+            state.config.n8n_url.trim_end_matches('/')
+        );
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
@@ -766,32 +791,38 @@ pub async fn run_workflow(
 
         let api_status = api_resp.status();
         if !api_status.is_success() {
-            let error_text = api_resp.text().await.unwrap_or_else(|_| "unknown error".to_string());
+            let error_text = api_resp
+                .text()
+                .await
+                .unwrap_or_else(|_| "unknown error".to_string());
             return Err(AppError::Internal(format!(
                 "n8n workflow import failed ({}): {}",
                 api_status, error_text
             )));
         }
 
-        sqlx::query(
-            "UPDATE workflows SET lifecycle_summary = $1 WHERE id = $2",
-        )
-        .bind(json!({
-            "n8n_deployed": true,
-            "n8n_webhook_path": n8n_wf.webhook_path,
-            "deployed_at": chrono::Utc::now().to_rfc3339(),
-        }).to_string())
-        .bind(id)
-        .execute(&state.db)
-        .await?;
+        sqlx::query("UPDATE workflows SET lifecycle_summary = $1 WHERE id = $2")
+            .bind(
+                json!({
+                    "n8n_deployed": true,
+                    "n8n_webhook_path": n8n_wf.webhook_path,
+                    "deployed_at": chrono::Utc::now().to_rfc3339(),
+                })
+                .to_string(),
+            )
+            .bind(id)
+            .execute(&state.db)
+            .await?;
     }
 
     // Get the webhook path from lifecycle_summary
-    let summary: serde_json::Value = workflow.lifecycle_summary
+    let summary: serde_json::Value = workflow
+        .lifecycle_summary
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or(json!({}));
 
-    let webhook_path = summary.get("n8n_webhook_path")
+    let webhook_path = summary
+        .get("n8n_webhook_path")
         .and_then(|v| v.as_str())
         .ok_or(AppError::Internal(
             "Workflow deployed but missing webhook path. Try deploying again.".to_string(),
@@ -824,7 +855,11 @@ pub async fn run_workflow(
     .await?;
 
     // Trigger n8n webhook
-    let n8n_url = format!("{}/webhook/{}", state.config.n8n_webhook_url.trim_end_matches('/'), webhook_path);
+    let n8n_url = format!(
+        "{}/webhook/{}",
+        state.config.n8n_webhook_url.trim_end_matches('/'),
+        webhook_path
+    );
     let client = reqwest::Client::new();
     let trigger_payload = json!({
         "aid": claims.aid,
@@ -835,12 +870,7 @@ pub async fn run_workflow(
         }
     });
 
-    match client
-        .post(&n8n_url)
-        .json(&trigger_payload)
-        .send()
-        .await
-    {
+    match client.post(&n8n_url).json(&trigger_payload).send().await {
         Ok(resp) => {
             let status = resp.status().as_u16();
             let body: serde_json::Value = resp
@@ -875,7 +905,10 @@ pub async fn run_workflow(
             .execute(&state.db)
             .await;
 
-            Err(AppError::Internal(format!("n8n webhook call failed: {}", e)))
+            Err(AppError::Internal(format!(
+                "n8n webhook call failed: {}",
+                e
+            )))
         }
     }
 }
@@ -892,9 +925,12 @@ pub async fn validate_workflow_steps(
     Extension(_claims): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let steps = req.get("steps")
+    let steps = req
+        .get("steps")
         .and_then(|v| v.as_array())
-        .ok_or(AppError::Validation("Missing 'steps' array in request body".to_string()))?;
+        .ok_or(AppError::Validation(
+            "Missing 'steps' array in request body".to_string(),
+        ))?;
 
     if steps.is_empty() {
         return Ok(Json(json!({
@@ -926,18 +962,23 @@ pub async fn validate_workflow_steps(
         ("render_video", vec!["provider", "endpoint"]),
         ("render_image", vec!["provider", "endpoint"]),
         ("render_audio", vec!["provider", "endpoint"]),
-    ].iter().cloned().collect();
+    ]
+    .iter()
+    .cloned()
+    .collect();
 
     // Track step types for ordering/duplicate checks
     let mut step_types: Vec<String> = Vec::new();
     let mut prev_type: Option<&str> = None;
 
     for (i, step) in steps.iter().enumerate() {
-        let step_type = step.get("step_type")
+        let step_type = step
+            .get("step_type")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
 
-        let step_name = step.get("name")
+        let step_name = step
+            .get("name")
             .and_then(|v| v.as_str())
             .unwrap_or("Unnamed step");
 
@@ -945,17 +986,41 @@ pub async fn validate_workflow_steps(
 
         // Check step_type is valid
         let valid_types = [
-            "http-request", "action", "ai-action", "openclaw", "data-card",
-            "notify", "export", "delay", "wait", "transform", "code",
-            "fork", "branch", "render_video", "render_media", "render_image", "render_audio",
-            "generate", "format", "design", "publish", "loop", "condition", "manual", "research",
+            "http-request",
+            "action",
+            "ai-action",
+            "openclaw",
+            "data-card",
+            "notify",
+            "export",
+            "delay",
+            "wait",
+            "transform",
+            "code",
+            "fork",
+            "branch",
+            "render_video",
+            "render_media",
+            "render_image",
+            "render_audio",
+            "generate",
+            "format",
+            "design",
+            "publish",
+            "loop",
+            "condition",
+            "manual",
+            "research",
             "webhook",
         ];
 
         if !valid_types.contains(&step_type) {
             errors.push(format!(
                 "Step {} '{}': Unknown step type '{}'. Valid types are: {}",
-                i + 1, step_name, step_type, valid_types.join(", ")
+                i + 1,
+                step_name,
+                step_type,
+                valid_types.join(", ")
             ));
             continue;
         }
@@ -973,28 +1038,29 @@ pub async fn validate_workflow_steps(
                 if !has_field {
                     errors.push(format!(
                         "Step {} '{}' ({}): Missing required config field '{}'",
-                        i + 1, step_name, step_type, field
+                        i + 1,
+                        step_name,
+                        step_type,
+                        field
                     ));
                 }
             }
         }
 
         // Ordering rules
-        if (step_type == "fork" || step_type == "branch")
-            && i as i32 >= steps.len() as i32 - 1 {
-                warnings.push(format!(
+        if (step_type == "fork" || step_type == "branch") && i as i32 >= steps.len() as i32 - 1 {
+            warnings.push(format!(
                     "Step {} '{}': Fork/branch at the end of the workflow has no effect — no downstream steps to branch.",
                     i + 1, step_name
                 ));
-            }
+        }
 
-        if step_type == "loop"
-            && steps.len() < 2 {
-                warnings.push(format!(
+        if step_type == "loop" && steps.len() < 2 {
+            warnings.push(format!(
                     "Step {} '{}': Loop with only one step will iterate on itself indefinitely. Add inner steps.",
                     i + 1, step_name
                 ));
-            }
+        }
 
         if step_type == "manual" {
             warnings.push(format!(
@@ -1004,32 +1070,39 @@ pub async fn validate_workflow_steps(
         }
 
         if step_type == "delay" || step_type == "wait" {
-            let dur = step.get("config")
+            let dur = step
+                .get("config")
                 .and_then(|c| c.get("duration_ms"))
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
             if dur == 0 {
                 warnings.push(format!(
                     "Step {} '{}': Delay duration is 0ms — step will proceed immediately.",
-                    i + 1, step_name
+                    i + 1,
+                    step_name
                 ));
             } else if dur > 7 * 24 * 3600000 {
                 warnings.push(format!(
                     "Step {} '{}': Delay of {}ms exceeds 7 days — n8n may timeout.",
-                    i + 1, step_name, dur
+                    i + 1,
+                    step_name,
+                    dur
                 ));
             }
         }
 
-        if step_type == "render_video" || step_type == "render_image" || step_type == "render_audio" {
-            let provider = step.get("config")
+        if step_type == "render_video" || step_type == "render_image" || step_type == "render_audio"
+        {
+            let provider = step
+                .get("config")
                 .and_then(|c| c.get("provider"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             if provider == "unknown" || provider.is_empty() {
                 warnings.push(format!(
                     "Step {} '{}': No provider selected for rendering. Defaulting to 'unknown'.",
-                    i + 1, step_name
+                    i + 1,
+                    step_name
                 ));
             }
         }

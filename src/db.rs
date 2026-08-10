@@ -2,9 +2,7 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 
 pub async fn connect(database_url: &str, min_connections: u32, max_connections: u32) -> PgPool {
-    let options: PgConnectOptions = database_url
-        .parse()
-        .expect("Invalid DATABASE_URL format");
+    let options: PgConnectOptions = database_url.parse().expect("Invalid DATABASE_URL format");
 
     match PgPoolOptions::new()
         .min_connections(min_connections)
@@ -35,7 +33,12 @@ pub async fn run_migrations(pool: &PgPool) {
         }
     }
     .filter_map(|e| e.ok())
-    .filter(|e| e.path().extension().map(|ext| ext == "sql").unwrap_or(false))
+    .filter(|e| {
+        e.path()
+            .extension()
+            .map(|ext| ext == "sql")
+            .unwrap_or(false)
+    })
     .collect();
 
     entries.sort_by_key(|e| e.file_name());
@@ -58,13 +61,12 @@ pub async fn run_migrations(pool: &PgPool) {
     for entry in &entries {
         let filename = entry.file_name().to_string_lossy().to_string();
 
-        let already_applied = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM _migrations WHERE filename = $1",
-        )
-        .bind(&filename)
-        .fetch_one(pool)
-        .await
-        .unwrap_or(0);
+        let already_applied =
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM _migrations WHERE filename = $1")
+                .bind(&filename)
+                .fetch_one(pool)
+                .await
+                .unwrap_or(0);
 
         if already_applied > 0 {
             tracing::info!("Migration {} already applied, skipping", filename);
@@ -87,7 +89,8 @@ pub async fn run_migrations(pool: &PgPool) {
                 if let Err(e) = sqlx::query(trimmed).execute(pool).await {
                     tracing::warn!(
                         "Migration {} statement warning (may be non-fatal): {}",
-                        filename, e
+                        filename,
+                        e
                     );
                 }
             }

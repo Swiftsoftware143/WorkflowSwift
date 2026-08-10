@@ -2,7 +2,7 @@
 //! Each source powers specific widgets. Sources cost credits per API call.
 
 use axum::{
-    extract::{Path, State, Query},
+    extract::{Path, Query, State},
     response::IntoResponse,
     Extension, Json,
 };
@@ -10,8 +10,8 @@ use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::{AppState, error::AppError};
 use crate::auth::models::Claims;
+use crate::{error::AppError, AppState};
 
 #[derive(Deserialize)]
 pub struct CreateSourceRequest {
@@ -52,10 +52,15 @@ pub async fn list_industry_sources(
         ).fetch_all(&s.db).await?
     };
 
-    let result: Vec<serde_json::Value> = sources.into_iter().map(|s| json!({
-        "id": s.0, "industry": s.1, "name": s.2, "type": s.3,
-        "endpoint": s.4, "cadence": s.5, "credit_cost": s.6, "active": s.7
-    })).collect();
+    let result: Vec<serde_json::Value> = sources
+        .into_iter()
+        .map(|s| {
+            json!({
+                "id": s.0, "industry": s.1, "name": s.2, "type": s.3,
+                "endpoint": s.4, "cadence": s.5, "credit_cost": s.6, "active": s.7
+            })
+        })
+        .collect();
 
     Ok(Json(json!({"sources": result})))
 }
@@ -66,7 +71,7 @@ pub async fn upsert_industry_source(
     Extension(_claims): Extension<Claims>,
     Json(req): Json<CreateSourceRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-let _ =     sqlx::query(
+    let _ =     sqlx::query(
         "INSERT INTO industry_data_sources (id, industry_slug, source_name, source_type, endpoint, refresh_cadence, credit_cost, config)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
          ON CONFLICT (industry_slug, source_name) DO UPDATE SET
@@ -90,18 +95,37 @@ pub async fn seed_industry_sources(
     State(s): State<AppState>,
     Extension(_claims): Extension<Claims>,
 ) -> Result<impl IntoResponse, AppError> {
-    let industries: Vec<(String,)> = sqlx::query_as(
-        "SELECT slug FROM template_categories WHERE is_active = true"
-    ).fetch_all(&s.db).await?;
+    let industries: Vec<(String,)> =
+        sqlx::query_as("SELECT slug FROM template_categories WHERE is_active = true")
+            .fetch_all(&s.db)
+            .await?;
 
     let mut count = 0;
     for (slug,) in &industries {
         let common_sources = vec![
-            ("market_research", "api", "/api/v1/satellite/market-research", "daily", 2),
+            (
+                "market_research",
+                "api",
+                "/api/v1/satellite/market-research",
+                "daily",
+                2,
+            ),
             ("news_feed", "rss", "/api/v1/satellite/news", "hourly", 1),
-            ("competitor_intel", "api", "/api/v1/satellite/competitors", "daily", 3),
+            (
+                "competitor_intel",
+                "api",
+                "/api/v1/satellite/competitors",
+                "daily",
+                3,
+            ),
             ("lead_finder", "api", "/api/v1/satellite/leads", "daily", 5),
-            ("trend_analytics", "api", "/api/v1/satellite/trends", "weekly", 2),
+            (
+                "trend_analytics",
+                "api",
+                "/api/v1/satellite/trends",
+                "weekly",
+                2,
+            ),
         ];
 
         for (name, stype, endpoint, cadence, cost) in &common_sources {
@@ -116,7 +140,9 @@ pub async fn seed_industry_sources(
         count += 1;
     }
 
-    Ok(Json(json!({"status": "seeded", "industries_updated": count})))
+    Ok(Json(
+        json!({"status": "seeded", "industries_updated": count}),
+    ))
 }
 
 /// DELETE /api/v1/admin/industry-sources/:id — remove a data source
@@ -126,6 +152,8 @@ pub async fn delete_industry_source(
     Path(id): Path<Uuid>,
 ) -> Result<impl IntoResponse, AppError> {
     sqlx::query("DELETE FROM industry_data_sources WHERE id = $1")
-        .bind(id).execute(&s.db).await?;
+        .bind(id)
+        .execute(&s.db)
+        .await?;
     Ok(Json(json!({"status": "deleted"})))
 }

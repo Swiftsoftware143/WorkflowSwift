@@ -3,19 +3,18 @@
 // July 3, 2026
 
 use axum::{
-    extract::{State, Path, Json as AxumJson},
+    extract::{Json as AxumJson, Path, State},
     response::IntoResponse,
-    Json,
-    Extension,
+    Extension, Json,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use uuid::Uuid;
 use sqlx::Row;
+use uuid::Uuid;
 
-use crate::AppState;
-use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;
+use crate::error::{ApiResult, AppError};
+use crate::AppState;
 
 // ─── Brand Monitor ───
 
@@ -54,7 +53,10 @@ pub async fn create_brand_monitor(
     .bind(aid)
     .bind(&req.brand_name)
     .bind(req.keywords.unwrap_or_default())
-    .bind(req.sources.unwrap_or_else(|| vec!["web".into(), "news".into(), "social".into()]))
+    .bind(
+        req.sources
+            .unwrap_or_else(|| vec!["web".into(), "news".into(), "social".into()]),
+    )
     .execute(&state.db)
     .await?;
 
@@ -83,17 +85,20 @@ pub async fn list_brand_monitors(
     .fetch_all(&state.db)
     .await?;
 
-    let items: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({
-            "id": r.try_get::<&str, _>("id").unwrap_or(""),
-            "brand_name": r.try_get::<String, _>("brand_name").unwrap_or_default(),
-            "keywords": r.try_get::<Vec<String>, _>("keywords").unwrap_or_default(),
-            "sources": r.try_get::<Vec<String>, _>("sources").unwrap_or_default(),
-            "is_active": r.try_get::<bool, _>("is_active").unwrap_or(false),
-            "created_at": r.try_get::<&str, _>("created_at").unwrap_or(""),
-            "result_count": r.try_get::<i64, _>("result_count").unwrap_or(0),
+    let items: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.try_get::<&str, _>("id").unwrap_or(""),
+                "brand_name": r.try_get::<String, _>("brand_name").unwrap_or_default(),
+                "keywords": r.try_get::<Vec<String>, _>("keywords").unwrap_or_default(),
+                "sources": r.try_get::<Vec<String>, _>("sources").unwrap_or_default(),
+                "is_active": r.try_get::<bool, _>("is_active").unwrap_or(false),
+                "created_at": r.try_get::<&str, _>("created_at").unwrap_or(""),
+                "result_count": r.try_get::<i64, _>("result_count").unwrap_or(0),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({"brands": items})))
 }
@@ -118,18 +123,21 @@ pub async fn get_brand_monitor_results(
     .fetch_all(&state.db)
     .await?;
 
-    let results: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({
-            "id": r.try_get::<&str, _>("id").unwrap_or(""),
-            "source": r.try_get::<&str, _>("source").unwrap_or(""),
-            "source_url": r.try_get::<&str, _>("source_url").unwrap_or(""),
-            "title": r.try_get::<&str, _>("title").unwrap_or(""),
-            "snippet": r.try_get::<&str, _>("snippet").unwrap_or(""),
-            "sentiment": r.try_get::<&str, _>("sentiment").unwrap_or(""),
-            "published_at": r.try_get::<&str, _>("published_at").unwrap_or(""),
-            "fetched_at": r.try_get::<&str, _>("fetched_at").unwrap_or(""),
+    let results: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.try_get::<&str, _>("id").unwrap_or(""),
+                "source": r.try_get::<&str, _>("source").unwrap_or(""),
+                "source_url": r.try_get::<&str, _>("source_url").unwrap_or(""),
+                "title": r.try_get::<&str, _>("title").unwrap_or(""),
+                "snippet": r.try_get::<&str, _>("snippet").unwrap_or(""),
+                "sentiment": r.try_get::<&str, _>("sentiment").unwrap_or(""),
+                "published_at": r.try_get::<&str, _>("published_at").unwrap_or(""),
+                "fetched_at": r.try_get::<&str, _>("fetched_at").unwrap_or(""),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({"results": results})))
 }
@@ -142,13 +150,11 @@ pub async fn delete_brand_monitor(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let result = sqlx::query(
-        "DELETE FROM brand_monitor_items WHERE id = $1 AND aid = $2"
-    )
-    .bind(id)
-    .bind(aid)
-    .execute(&state.db)
-    .await?;
+    let result = sqlx::query("DELETE FROM brand_monitor_items WHERE id = $1 AND aid = $2")
+        .bind(id)
+        .bind(aid)
+        .execute(&state.db)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Brand monitor not found".into()));
@@ -251,16 +257,19 @@ pub async fn get_competitor_changes(
     .fetch_all(&state.db)
     .await?;
 
-    let changes: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({
-            "id": r.try_get::<&str, _>("id").unwrap_or(""),
-            "change_type": r.try_get::<&str, _>("change_type").unwrap_or(""),
-            "description": r.try_get::<&str, _>("description").unwrap_or(""),
-            "source_url": r.try_get::<&str, _>("source_url").unwrap_or(""),
-            "detected_at": r.try_get::<&str, _>("detected_at").unwrap_or(""),
-            "alert_sent": r.try_get::<bool, _>("alert_sent").unwrap_or(false),
+    let changes: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.try_get::<&str, _>("id").unwrap_or(""),
+                "change_type": r.try_get::<&str, _>("change_type").unwrap_or(""),
+                "description": r.try_get::<&str, _>("description").unwrap_or(""),
+                "source_url": r.try_get::<&str, _>("source_url").unwrap_or(""),
+                "detected_at": r.try_get::<&str, _>("detected_at").unwrap_or(""),
+                "alert_sent": r.try_get::<bool, _>("alert_sent").unwrap_or(false),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({"changes": changes})))
 }
@@ -273,13 +282,11 @@ pub async fn delete_competitor_watch(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let result = sqlx::query(
-        "DELETE FROM competitor_watch_items WHERE id = $1 AND aid = $2"
-    )
-    .bind(id)
-    .bind(aid)
-    .execute(&state.db)
-    .await?;
+    let result = sqlx::query("DELETE FROM competitor_watch_items WHERE id = $1 AND aid = $2")
+        .bind(id)
+        .bind(aid)
+        .execute(&state.db)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Competitor watch not found".into()));
@@ -355,18 +362,21 @@ pub async fn list_prospectings(
     .fetch_all(&state.db)
     .await?;
 
-    let items: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({
-            "id": r.try_get::<&str, _>("id").unwrap_or(""),
-            "industry": r.try_get::<String, _>("industry").unwrap_or_default(),
-            "city": r.try_get::<String, _>("city").unwrap_or_default(),
-            "state": r.try_get::<String, _>("state").unwrap_or_default(),
-            "search_query": r.try_get::<String, _>("search_query").unwrap_or_default(),
-            "is_active": r.try_get::<bool, _>("is_active").unwrap_or(false),
-            "created_at": r.try_get::<&str, _>("created_at").unwrap_or(""),
-            "result_count": r.try_get::<i64, _>("result_count").unwrap_or(0),
+    let items: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.try_get::<&str, _>("id").unwrap_or(""),
+                "industry": r.try_get::<String, _>("industry").unwrap_or_default(),
+                "city": r.try_get::<String, _>("city").unwrap_or_default(),
+                "state": r.try_get::<String, _>("state").unwrap_or_default(),
+                "search_query": r.try_get::<String, _>("search_query").unwrap_or_default(),
+                "is_active": r.try_get::<bool, _>("is_active").unwrap_or(false),
+                "created_at": r.try_get::<&str, _>("created_at").unwrap_or(""),
+                "result_count": r.try_get::<i64, _>("result_count").unwrap_or(0),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({"searches": items})))
 }
@@ -420,13 +430,11 @@ pub async fn delete_prospecting(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let result = sqlx::query(
-        "DELETE FROM prospecting_items WHERE id = $1 AND aid = $2"
-    )
-    .bind(id)
-    .bind(aid)
-    .execute(&state.db)
-    .await?;
+    let result = sqlx::query("DELETE FROM prospecting_items WHERE id = $1 AND aid = $2")
+        .bind(id)
+        .bind(aid)
+        .execute(&state.db)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("Prospecting search not found".into()));
@@ -445,9 +453,11 @@ pub async fn get_dashboard_tabs(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Ensure default tabs exist
-    let default_tabs = [("brand_monitor", "Brand Monitor"),
+    let default_tabs = [
+        ("brand_monitor", "Brand Monitor"),
         ("competitor_watch", "Competitor Watch"),
-        ("prospecting", "Prospecting")];
+        ("prospecting", "Prospecting"),
+    ];
 
     for (i, (tab_type, label)) in default_tabs.iter().enumerate() {
         sqlx::query(
@@ -475,15 +485,18 @@ pub async fn get_dashboard_tabs(
     .fetch_all(&state.db)
     .await?;
 
-    let tabs: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({
-            "id": r.try_get::<&str, _>("id").unwrap_or(""),
-            "tab_type": r.try_get::<&str, _>("tab_type").unwrap_or(""),
-            "tab_label": r.try_get::<&str, _>("tab_label").unwrap_or(""),
-            "sort_order": r.try_get::<i32, _>("sort_order").unwrap_or(0),
-            "is_visible": r.try_get::<bool, _>("is_visible").unwrap_or(false),
+    let tabs: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.try_get::<&str, _>("id").unwrap_or(""),
+                "tab_type": r.try_get::<&str, _>("tab_type").unwrap_or(""),
+                "tab_label": r.try_get::<&str, _>("tab_label").unwrap_or(""),
+                "sort_order": r.try_get::<i32, _>("sort_order").unwrap_or(0),
+                "is_visible": r.try_get::<bool, _>("is_visible").unwrap_or(false),
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({"tabs": tabs})))
 }
@@ -507,8 +520,10 @@ pub async fn connect_to_workflow(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let id = Uuid::new_v4();
-    let source_id = Uuid::parse_str(&req.source_item_id).map_err(|_| AppError::BadRequest("Invalid source_item_id".into()))?;
-    let workflow_id = Uuid::parse_str(&req.workflow_id).map_err(|_| AppError::BadRequest("Invalid workflow_id".into()))?;
+    let source_id = Uuid::parse_str(&req.source_item_id)
+        .map_err(|_| AppError::BadRequest("Invalid source_item_id".into()))?;
+    let workflow_id = Uuid::parse_str(&req.workflow_id)
+        .map_err(|_| AppError::BadRequest("Invalid workflow_id".into()))?;
 
     sqlx::query(
         r#"INSERT INTO dashboard_workflow_links (id, aid, dashboard_tab_type, source_item_id, source_table, workflow_id, trigger_on)

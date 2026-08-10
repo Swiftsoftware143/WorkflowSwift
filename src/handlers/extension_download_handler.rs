@@ -1,7 +1,7 @@
 use axum::{
-    response::Response,
     body::Body,
-    http::{StatusCode, header},
+    http::{header, StatusCode},
+    response::Response,
 };
 
 static EXTENSION_ZIP_BYTES: &[u8] = include_bytes!("../../swift-market-intel-extension.zip");
@@ -10,8 +10,14 @@ pub async fn download_extension() -> Response {
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/zip")
-        .header(header::CONTENT_DISPOSITION, "attachment; filename=\"swift-market-intel-extension.zip\"")
-        .header(header::CONTENT_LENGTH, EXTENSION_ZIP_BYTES.len().to_string())
+        .header(
+            header::CONTENT_DISPOSITION,
+            "attachment; filename=\"swift-market-intel-extension.zip\"",
+        )
+        .header(
+            header::CONTENT_LENGTH,
+            EXTENSION_ZIP_BYTES.len().to_string(),
+        )
         .body(Body::from(EXTENSION_ZIP_BYTES))
         .unwrap_or_else(|_| {
             Response::builder()

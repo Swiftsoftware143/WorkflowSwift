@@ -1,15 +1,20 @@
 //! Integration target handlers — CRUD with webhook security (domain allowlisting + daily limits).
 
-use axum::{extract::{State, Json, Path, Query}, http::StatusCode, response::IntoResponse, Extension};
+use crate::auth::models::Claims;
+use crate::error::{ApiResult, AppError};
+use crate::features;
+use crate::security::webhook_security;
+use crate::AppState;
+use axum::{
+    extract::{Json, Path, Query, State},
+    http::StatusCode,
+    response::IntoResponse,
+    Extension,
+};
 use serde_json::json;
+use sqlx::Row;
 use std::collections::HashMap;
 use uuid::Uuid;
-use sqlx::Row;
-use crate::features;
-use crate::AppState;
-use crate::error::{AppError, ApiResult};
-use crate::auth::models::Claims;
-use crate::security::webhook_security;
 
 pub async fn list_integration_targets(
     State(state): State<AppState>,
@@ -17,7 +22,9 @@ pub async fn list_integration_targets(
     Query(params): Query<HashMap<String, String>>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let portfolio_filter = params.get("portfolio_company_id").and_then(|v| Uuid::parse_str(v).ok());
+    let portfolio_filter = params
+        .get("portfolio_company_id")
+        .and_then(|v| Uuid::parse_str(v).ok());
 
     if let Some(pc_id) = portfolio_filter {
         let rows = sqlx::query(
@@ -26,10 +33,12 @@ pub async fn list_integration_targets(
              COALESCE(allowed_domains, ARRAY[]::TEXT[])::text[]::text as allowed_domains, \
              COALESCE(daily_limit, 1000)::int as daily_limit, \
              created_at::text \
-             FROM integration_targets WHERE aid = $1 AND portfolio_company_id = $2 ORDER BY name"
+             FROM integration_targets WHERE aid = $1 AND portfolio_company_id = $2 ORDER BY name",
         )
-        .bind(aid).bind(pc_id)
-        .fetch_all(&state.db).await?;
+        .bind(aid)
+        .bind(pc_id)
+        .fetch_all(&state.db)
+        .await?;
         let targets: Vec<serde_json::Value> = rows.iter().map(|r| {
             json!({
                 "id": r.try_get::<&str,_>("id").unwrap_or(""),
@@ -50,10 +59,11 @@ pub async fn list_integration_targets(
          COALESCE(allowed_domains, ARRAY[]::TEXT[])::text[]::text as allowed_domains, \
          COALESCE(daily_limit, 1000)::int as daily_limit, \
          created_at::text \
-         FROM integration_targets WHERE aid = $1 ORDER BY name"
+         FROM integration_targets WHERE aid = $1 ORDER BY name",
     )
     .bind(aid)
-    .fetch_all(&state.db).await?;
+    .fetch_all(&state.db)
+    .await?;
     let targets: Vec<serde_json::Value> = rows.iter().map(|r| {
         json!({
             "id": r.try_get::<&str,_>("id").unwrap_or(""),
@@ -74,19 +84,52 @@ pub async fn create_integration_target(
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    features::enforce_feature_limit(&state.db, aid, "max_integration_targets", "Integration Targets").await?;
+    features::enforce_feature_limit(
+        &state.db,
+        aid,
+        "max_integration_targets",
+        "Integration Targets",
+    )
+    .await?;
 
-    let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("Target").to_string();
-    let provider = req.get("provider").and_then(|v| v.as_str()).unwrap_or("webhook").to_string();
-    let webhook_url = req.get("webhook_url").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let pc_id = req.get("portfolio_company_id").and_then(|v| v.as_str()).and_then(|s| Uuid::parse_str(s).ok());
-    let user_id = req.get("user_id").and_then(|v| v.as_str()).and_then(|s| Uuid::parse_str(s).ok());
+    let name = req
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Target")
+        .to_string();
+    let provider = req
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .unwrap_or("webhook")
+        .to_string();
+    let webhook_url = req
+        .get("webhook_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let pc_id = req
+        .get("portfolio_company_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok());
+    let user_id = req
+        .get("user_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok());
     let api_key = req.get("api_key").and_then(|v| v.as_str());
-    let allowed_domains: Vec<String> = req.get("allowed_domains")
+    let allowed_domains: Vec<String> = req
+        .get("allowed_domains")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
         .unwrap_or_default();
-    let daily_limit: i32 = req.get("daily_limit").and_then(|v| v.as_i64()).map(|n| n as i32).unwrap_or(1000);
+    let daily_limit: i32 = req
+        .get("daily_limit")
+        .and_then(|v| v.as_i64())
+        .map(|n| n as i32)
+        .unwrap_or(1000);
 
     // Validate webhook URL against allowed domains
     webhook_security::validate_webhook_url(&webhook_url, &allowed_domains)
@@ -103,14 +146,17 @@ pub async fn create_integration_target(
     .bind(&allowed_domains).bind(daily_limit)
     .execute(&state.db).await?;
 
-    Ok((StatusCode::CREATED, Json(json!({
-        "id": id.to_string(),
-        "name": name,
-        "provider": provider,
-        "webhook_url": webhook_url,
-        "allowed_domains": allowed_domains,
-        "daily_limit": daily_limit,
-    }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "id": id.to_string(),
+            "name": name,
+            "provider": provider,
+            "webhook_url": webhook_url,
+            "allowed_domains": allowed_domains,
+            "daily_limit": daily_limit,
+        })),
+    ))
 }
 
 pub async fn update_integration_target(
@@ -134,10 +180,19 @@ pub async fn update_integration_target(
     let existing_webhook: String = existing.try_get("webhook_url").unwrap_or_default();
     let existing_domains: Vec<String> = existing.try_get("allowed_domains").unwrap_or_default();
 
-    let webhook_url = req.get("webhook_url").and_then(|v| v.as_str()).unwrap_or(&existing_webhook).to_string();
-    let allowed_domains: Vec<String> = req.get("allowed_domains")
+    let webhook_url = req
+        .get("webhook_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&existing_webhook)
+        .to_string();
+    let allowed_domains: Vec<String> = req
+        .get("allowed_domains")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
         .unwrap_or(existing_domains);
 
     // Validate webhook URL against allowed domains if either changed
@@ -177,6 +232,9 @@ pub async fn delete_integration_target(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let target_id = Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid ID".into()))?;
     sqlx::query("DELETE FROM integration_targets WHERE id = $1 AND aid = $2")
-        .bind(target_id).bind(aid).execute(&state.db).await?;
+        .bind(target_id)
+        .bind(aid)
+        .execute(&state.db)
+        .await?;
     Ok(Json(json!({"status": "deleted"})))
 }

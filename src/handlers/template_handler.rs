@@ -1,19 +1,19 @@
 use axum::{
-    extract::{State, Json, Path, Query},
+    extract::{Json, Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Extension,
 };
-use std::collections::HashMap;
 use serde_json::json;
 use sqlx::Row;
+use std::collections::HashMap;
 use uuid::Uuid;
 
-use crate::features;
-use crate::AppState;
-use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;
+use crate::error::{ApiResult, AppError};
+use crate::features;
 use crate::models::template::*;
+use crate::AppState;
 
 #[derive(Debug, serde::Deserialize)]
 pub struct ListTemplatesQuery {
@@ -30,7 +30,7 @@ pub async fn list_templates(
 
     // Determine which templates this account's plan allows
     let plan_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT plan_id FROM account_plans WHERE aid = $1 AND status = 'active'"
+        "SELECT plan_id FROM account_plans WHERE aid = $1 AND status = 'active'",
     )
     .bind(aid)
     .fetch_optional(&state.db)
@@ -57,7 +57,7 @@ pub async fn list_templates(
                        INNER JOIN industry_templates it ON it.template_id = wt.id
                        WHERE it.industry_slug = $1 AND wt.is_public = true
                        AND (wt.surface_id = $2 OR wt.surface_id IS NULL)
-                       ORDER BY wt.name ASC"#
+                       ORDER BY wt.name ASC"#,
                 )
                 .bind(industry_slug)
                 .bind(surface_id)
@@ -68,7 +68,7 @@ pub async fn list_templates(
                     r#"SELECT wt.* FROM workflow_templates wt
                        INNER JOIN industry_templates it ON it.template_id = wt.id
                        WHERE it.industry_slug = $1 AND wt.is_public = true
-                       ORDER BY wt.name ASC"#
+                       ORDER BY wt.name ASC"#,
                 )
                 .bind(industry_slug)
                 .fetch_all(&state.db)
@@ -88,7 +88,7 @@ pub async fn list_templates(
                    WHERE (wt.aid = $1 OR (wt.is_public = true))
                    AND it.industry_slug = $2
                    AND (wt.surface_id = $3 OR wt.surface_id IS NULL)
-                   ORDER BY wt.name ASC"#
+                   ORDER BY wt.name ASC"#,
             )
             .bind(aid)
             .bind(industry_slug)
@@ -101,7 +101,7 @@ pub async fn list_templates(
                    INNER JOIN industry_templates it ON it.template_id = wt.id
                    WHERE (wt.aid = $1 OR (wt.is_public = true))
                    AND it.industry_slug = $2
-                   ORDER BY wt.name ASC"#
+                   ORDER BY wt.name ASC"#,
             )
             .bind(aid)
             .bind(industry_slug)
@@ -135,7 +135,7 @@ pub async fn list_templates(
                JOIN template_categories tc ON tc.slug = vpit.industry_slug
                WHERE vpit.plan_id = $1
                   AND (wt.aid = $2 OR wt.is_public = true)
-               ORDER BY wt.name"#
+               ORDER BY wt.name"#,
         )
         .bind(pid)
         .bind(aid)
@@ -249,9 +249,21 @@ pub async fn update_template(
     .await?
     .ok_or(AppError::NotFound("Template not found".to_string()))?;
 
-    let name = req.get("name").and_then(|v| v.as_str()).unwrap_or(&existing.name).to_string();
-    let description = req.get("description").and_then(|v| v.as_str()).map(|s| s.to_string()).or(existing.description);
-    let category = req.get("category").and_then(|v| v.as_str()).unwrap_or(&existing.category).to_string();
+    let name = req
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&existing.name)
+        .to_string();
+    let description = req
+        .get("description")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or(existing.description);
+    let category = req
+        .get("category")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&existing.category)
+        .to_string();
     let tags = req.get("tags").cloned().or(existing.tags);
 
     sqlx::query(
@@ -308,7 +320,9 @@ pub async fn install_template_as_workflow(
     .bind(aid)
     .fetch_optional(&state.db)
     .await?
-    .ok_or(AppError::NotFound("Template not found or not accessible".to_string()))?;
+    .ok_or(AppError::NotFound(
+        "Template not found or not accessible".to_string(),
+    ))?;
 
     // Fetch template steps
     let template_steps = sqlx::query_as::<_, WorkflowTemplateStep>(
@@ -325,19 +339,22 @@ pub async fn install_template_as_workflow(
     }
 
     // Allow caller to override name/description/surface_id
-    let workflow_name = req.get("name")
+    let workflow_name = req
+        .get("name")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .unwrap_or(&template.name)
         .to_string();
 
-    let workflow_description = req.get("description")
+    let workflow_description = req
+        .get("description")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
         .or_else(|| template.description.clone());
 
-    let surface_id = req.get("surface_id")
+    let surface_id = req
+        .get("surface_id")
         .and_then(|v| v.as_str())
         .and_then(|s| Uuid::parse_str(s).ok())
         .or(template.surface_id);
@@ -385,11 +402,14 @@ pub async fn install_template_as_workflow(
     .fetch_all(&state.db)
     .await?;
 
-    Ok((StatusCode::CREATED, Json(json!({
-        "workflow": workflow,
-        "steps": steps,
-        "message": format!("Template '{}' installed as workflow", template.name)
-    }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "workflow": workflow,
+            "steps": steps,
+            "message": format!("Template '{}' installed as workflow", template.name)
+        })),
+    ))
 }
 
 pub async fn get_template_steps(

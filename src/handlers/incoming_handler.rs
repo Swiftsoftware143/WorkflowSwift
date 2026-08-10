@@ -10,18 +10,14 @@
 //!
 //! Users configure everything in WorkflowSwift — this is the hands-off layer.
 
-use axum::{
-    extract::State,
-    http::HeaderMap,
-    Json,
-};
+use axum::{extract::State, http::HeaderMap, Json};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
-use chrono::Utc;
 
+use crate::error::{ApiResult, AppError};
 use crate::state::AppState;
-use crate::error::{AppError, ApiResult};
 
 /// Payload that any Swift tool sends to WorkflowSwift.
 #[derive(Debug, Deserialize)]
@@ -59,7 +55,8 @@ pub async fn receive_incoming(
     // the request MUST provide the matching X-Internal-Key header.
     // If no key is configured on the server, the endpoint is open.
     if !state.config.internal_sync_key.is_empty() {
-        let internal_key = headers.get("x-internal-key")
+        let internal_key = headers
+            .get("x-internal-key")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
         if internal_key != state.config.internal_sync_key {
@@ -107,7 +104,11 @@ pub async fn receive_incoming(
     let workflow = match workflow {
         Some(w) => w,
         None => {
-            tracing::info!("No active workflow matched for source={}, slug={}", source, slug);
+            tracing::info!(
+                "No active workflow matched for source={}, slug={}",
+                source,
+                slug
+            );
             return Ok(Json(json!({
                 "status": "accepted",
                 "matched": false,
@@ -216,7 +217,9 @@ pub async fn receive_incoming(
                         target_id,
                         aid,
                         &dispatch_payload,
-                    ).await {
+                    )
+                    .await
+                    {
                         Ok(resp) => {
                             json!({
                                 "step": i,
@@ -246,7 +249,10 @@ pub async fn receive_incoming(
                 }
             }
             "webhook" => {
-                let url = step_config.get("url").and_then(|v| v.as_str()).unwrap_or("");
+                let url = step_config
+                    .get("url")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
                 if url.is_empty() {
                     json!({"step": i, "type": "webhook", "status": "skipped", "reason": "No URL configured"})
                 } else {
@@ -258,13 +264,21 @@ pub async fn receive_incoming(
                         "source_entry_id": payload.source_entry_id,
                     });
                     let client = reqwest::Client::new();
-                    match client.post(url).json(&wh_payload).timeout(std::time::Duration::from_secs(15)).send().await {
+                    match client
+                        .post(url)
+                        .json(&wh_payload)
+                        .timeout(std::time::Duration::from_secs(15))
+                        .send()
+                        .await
+                    {
                         Ok(resp) => {
                             let status_code = resp.status().as_u16();
                             let body = resp.text().await.unwrap_or_default();
                             json!({"step": i, "type": "webhook", "status": status_code, "url": url, "response": body})
                         }
-                        Err(e) => json!({"step": i, "type": "webhook", "status": "error", "error": e.to_string()})
+                        Err(e) => {
+                            json!({"step": i, "type": "webhook", "status": "error", "error": e.to_string()})
+                        }
                     }
                 }
             }
@@ -284,7 +298,11 @@ pub async fn receive_incoming(
                         }
                     });
 
-                    let webhook_url = format!("{}/webhook/incoming/{}", n8n_url.trim_end_matches('/'), wf_id);
+                    let webhook_url = format!(
+                        "{}/webhook/incoming/{}",
+                        n8n_url.trim_end_matches('/'),
+                        wf_id
+                    );
                     let client = reqwest::Client::new();
                     let mut req = client.post(&webhook_url).json(&n8n_payload);
                     if !n8n_api_key.is_empty() {
@@ -297,7 +315,9 @@ pub async fn receive_incoming(
                             let body = resp.text().await.unwrap_or_default();
                             json!({"step": i, "type": "n8n", "status": status_code, "n8n_workflow_id": wf_id, "response": body})
                         }
-                        Err(e) => json!({"step": i, "type": "n8n", "status": "error", "error": e.to_string()})
+                        Err(e) => {
+                            json!({"step": i, "type": "n8n", "status": "error", "error": e.to_string()})
+                        }
                     }
                 } else {
                     json!({"step": i, "type": "n8n", "status": "skipped", "reason": "No n8n_workflow_id in step config"})
@@ -308,15 +328,30 @@ pub async fn receive_incoming(
                 json!({"step": i, "type": "manual", "status": "pending"})
             }
             "delay" | "wait" => {
-                let duration = step_config.get("duration").and_then(|v| v.as_str()).unwrap_or("1h");
+                let duration = step_config
+                    .get("duration")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("1h");
                 json!({"step": i, "type": "delay", "duration": duration, "status": "pending", "note": "Will be processed by background worker"})
             }
             "generate" | "ai-action" | "ai_action" => {
                 // Call the configured LLM provider
-                let provider = step_config.get("provider").and_then(|v| v.as_str()).unwrap_or("openai");
-                let prompt = step_config.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
-                let model = step_config.get("model").and_then(|v| v.as_str()).unwrap_or("gpt-4");
-                let system_prompt = step_config.get("system_prompt").and_then(|v| v.as_str()).unwrap_or("");
+                let provider = step_config
+                    .get("provider")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("openai");
+                let prompt = step_config
+                    .get("prompt")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let model = step_config
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("gpt-4");
+                let system_prompt = step_config
+                    .get("system_prompt")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
 
                 // Try to call the AI provider via n8n or direct API
                 // For now, route through n8n which handles provider routing
@@ -332,9 +367,15 @@ pub async fn receive_incoming(
                     "campaign_slug": slug,
                 });
 
-                let n8n_url = format!("{}/webhook/workflowswift-generate", state.config.n8n_webhook_url.trim_end_matches('/'));
+                let n8n_url = format!(
+                    "{}/webhook/workflowswift-generate",
+                    state.config.n8n_webhook_url.trim_end_matches('/')
+                );
                 let client = reqwest::Client::new();
-                let mut req = client.post(&n8n_url).json(&n8n_payload).timeout(std::time::Duration::from_secs(60));
+                let mut req = client
+                    .post(&n8n_url)
+                    .json(&n8n_payload)
+                    .timeout(std::time::Duration::from_secs(60));
                 if !state.config.n8n_api_key.is_empty() {
                     req = req.header("X-API-Key", &state.config.n8n_api_key);
                 }
@@ -344,9 +385,15 @@ pub async fn receive_incoming(
                 // If the n8n webhook doesn't exist, try direct API call as fallback
                 if payload_req.is_err() {
                     // Fallback: send to the default n8n workflow handler
-                    let fallback_url = format!("{}/webhook/incoming/content-gen", state.config.n8n_webhook_url.trim_end_matches('/'));
+                    let fallback_url = format!(
+                        "{}/webhook/incoming/content-gen",
+                        state.config.n8n_webhook_url.trim_end_matches('/')
+                    );
                     let client = reqwest::Client::new();
-                    let mut fallback_req = client.post(&fallback_url).json(&n8n_payload).timeout(std::time::Duration::from_secs(60));
+                    let mut fallback_req = client
+                        .post(&fallback_url)
+                        .json(&n8n_payload)
+                        .timeout(std::time::Duration::from_secs(60));
                     if !state.config.n8n_api_key.is_empty() {
                         fallback_req = fallback_req.header("X-API-Key", &state.config.n8n_api_key);
                     }
@@ -367,9 +414,15 @@ pub async fn receive_incoming(
                 }
             }
             "format" => {
-                let format_type = step_config.get("format").and_then(|v| v.as_str()).unwrap_or("twitter-thread");
-                let tone = step_config.get("tone").and_then(|v| v.as_str()).unwrap_or("professional");
-                
+                let format_type = step_config
+                    .get("format")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("twitter-thread");
+                let tone = step_config
+                    .get("tone")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("professional");
+
                 // Format via n8n or mark as config-based transformation
                 let _n8n_payload = json!({
                     "action": "format",
@@ -383,16 +436,39 @@ pub async fn receive_incoming(
                 json!({"step": i, "type": "format", "status": "completed", "format": format_type, "tone": tone, "note": "Formatting queued — will transform content for selected platform"})
             }
             "design" => {
-                let style = step_config.get("style").and_then(|v| v.as_str()).unwrap_or("modern");
-                let dimensions = step_config.get("dimensions").and_then(|v| v.as_str()).unwrap_or("1024x1024");
+                let style = step_config
+                    .get("style")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("modern");
+                let dimensions = step_config
+                    .get("dimensions")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("1024x1024");
 
                 json!({"step": i, "type": "design", "status": "completed", "style": style, "dimensions": dimensions, "note": "Design queued — will generate visual assets via configured provider"})
             }
             "publish" => {
-                let provider = step_config.get("provider").and_then(|v| v.as_str()).unwrap_or("webhook");
-                let message = step_config.get("message").and_then(|v| v.as_str()).unwrap_or("");
-                let platforms: Vec<String> = step_config.get("platforms").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
-                let media_url = step_config.get("media_url").and_then(|v| v.as_str()).unwrap_or("");
+                let provider = step_config
+                    .get("provider")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("webhook");
+                let message = step_config
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let platforms: Vec<String> = step_config
+                    .get("platforms")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let media_url = step_config
+                    .get("media_url")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
 
                 // Route to n8n which handles multi-platform publishing
                 let n8n_payload = json!({
@@ -406,9 +482,15 @@ pub async fn receive_incoming(
                     "data": payload.data,
                 });
 
-                let n8n_url = format!("{}/webhook/workflowswift-publish", state.config.n8n_webhook_url.trim_end_matches('/'));
+                let n8n_url = format!(
+                    "{}/webhook/workflowswift-publish",
+                    state.config.n8n_webhook_url.trim_end_matches('/')
+                );
                 let client = reqwest::Client::new();
-                let mut req = client.post(&n8n_url).json(&n8n_payload).timeout(std::time::Duration::from_secs(30));
+                let mut req = client
+                    .post(&n8n_url)
+                    .json(&n8n_payload)
+                    .timeout(std::time::Duration::from_secs(30));
                 if !state.config.n8n_api_key.is_empty() {
                     req = req.header("X-API-Key", &state.config.n8n_api_key);
                 }
@@ -428,9 +510,23 @@ pub async fn receive_incoming(
                 }
             }
             "export" => {
-                let format = step_config.get("format").and_then(|v| v.as_str()).unwrap_or("csv");
-                let targets: Vec<String> = step_config.get("targets").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()).unwrap_or_default();
-                let filename = step_config.get("filename").and_then(|v| v.as_str()).unwrap_or("workflow-export");
+                let format = step_config
+                    .get("format")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("csv");
+                let targets: Vec<String> = step_config
+                    .get("targets")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let filename = step_config
+                    .get("filename")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("workflow-export");
 
                 // Send export job to n8n
                 let n8n_payload = json!({
@@ -443,9 +539,15 @@ pub async fn receive_incoming(
                     "data": payload.data,
                 });
 
-                let n8n_url = format!("{}/webhook/workflowswift-export", state.config.n8n_webhook_url.trim_end_matches('/'));
+                let n8n_url = format!(
+                    "{}/webhook/workflowswift-export",
+                    state.config.n8n_webhook_url.trim_end_matches('/')
+                );
                 let client = reqwest::Client::new();
-                let mut req = client.post(&n8n_url).json(&n8n_payload).timeout(std::time::Duration::from_secs(30));
+                let mut req = client
+                    .post(&n8n_url)
+                    .json(&n8n_payload)
+                    .timeout(std::time::Duration::from_secs(30));
                 if !state.config.n8n_api_key.is_empty() {
                     req = req.header("X-API-Key", &state.config.n8n_api_key);
                 }
@@ -463,10 +565,22 @@ pub async fn receive_incoming(
                 }
             }
             "notify" => {
-                let channel = step_config.get("channel").and_then(|v| v.as_str()).unwrap_or("email");
-                let recipient = step_config.get("recipient").and_then(|v| v.as_str()).unwrap_or("");
-                let subject = step_config.get("subject").and_then(|v| v.as_str()).unwrap_or("");
-                let message = step_config.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                let channel = step_config
+                    .get("channel")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("email");
+                let recipient = step_config
+                    .get("recipient")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let subject = step_config
+                    .get("subject")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let message = step_config
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
 
                 // Route to n8n notification handler
                 let n8n_payload = json!({
@@ -480,9 +594,15 @@ pub async fn receive_incoming(
                     "data": payload.data,
                 });
 
-                let n8n_url = format!("{}/webhook/workflowswift-notify", state.config.n8n_webhook_url.trim_end_matches('/'));
+                let n8n_url = format!(
+                    "{}/webhook/workflowswift-notify",
+                    state.config.n8n_webhook_url.trim_end_matches('/')
+                );
                 let client = reqwest::Client::new();
-                let mut req = client.post(&n8n_url).json(&n8n_payload).timeout(std::time::Duration::from_secs(15));
+                let mut req = client
+                    .post(&n8n_url)
+                    .json(&n8n_payload)
+                    .timeout(std::time::Duration::from_secs(15));
                 if !state.config.n8n_api_key.is_empty() {
                     req = req.header("X-API-Key", &state.config.n8n_api_key);
                 }
@@ -501,8 +621,14 @@ pub async fn receive_incoming(
             }
             "data-card" | "data_card" => {
                 // Pull data from dashboard and attach to context
-                let widget_name = step_config.get("widget_name").and_then(|v| v.as_str()).unwrap_or("");
-                let metric_key = step_config.get("metric_key").and_then(|v| v.as_str()).unwrap_or("");
+                let widget_name = step_config
+                    .get("widget_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let metric_key = step_config
+                    .get("metric_key")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
 
                 // Query dashboard_data for latest value
                 let metric_value: Option<serde_json::Value> = if !metric_key.is_empty() {
@@ -521,15 +647,25 @@ pub async fn receive_incoming(
                 json!({"step": i, "type": "data-card", "status": "completed", "widget_name": widget_name, "metric_key": metric_key, "metric_value": metric_value})
             }
             "fork" => {
-                let branches: Vec<serde_json::Value> = step_config.get("branches").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+                let branches: Vec<serde_json::Value> = step_config
+                    .get("branches")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
                 json!({"step": i, "type": "fork", "status": "completed", "branches": branches.len(), "note": "Workflow will fork into parallel branches"})
             }
             "loop" => {
-                let iterations = step_config.get("iterations").and_then(|v| v.as_u64()).unwrap_or(1);
+                let iterations = step_config
+                    .get("iterations")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(1);
                 json!({"step": i, "type": "loop", "status": "completed", "iterations": iterations, "note": format!("Will loop {} times or until condition met", iterations)})
             }
             "condition" | "ifelse" => {
-                let condition = step_config.get("condition").and_then(|v| v.as_str()).unwrap_or("true");
+                let condition = step_config
+                    .get("condition")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("true");
                 json!({"step": i, "type": "condition", "status": "completed", "condition": condition, "note": "Condition evaluation queued"})
             }
             _ => {
@@ -540,7 +676,10 @@ pub async fn receive_incoming(
         };
 
         // Mark step instance as completed (or error)
-        let step_status = result.get("status").and_then(|v| v.as_str()).unwrap_or("completed");
+        let step_status = result
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("completed");
         let completed_at = if step_status == "completed" {
             Some(Utc::now())
         } else {
@@ -622,14 +761,13 @@ async fn find_or_create_system_client(
     let sys_email = format!("incoming+{}@workflowswift.local", source);
 
     // Check if a system client by email already exists
-    let existing: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM clients WHERE email = $1 AND aid = $2"
-    )
-    .bind(&sys_email)
-    .bind(aid)
-    .fetch_optional(db)
-    .await
-    .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
+    let existing: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM clients WHERE email = $1 AND aid = $2")
+            .bind(&sys_email)
+            .bind(aid)
+            .fetch_optional(db)
+            .await
+            .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
 
     if let Some(existing_id) = existing {
         return Ok(existing_id);

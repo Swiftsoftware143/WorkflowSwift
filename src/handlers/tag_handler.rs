@@ -1,5 +1,5 @@
 use axum::{
-    extract::{State, Json},
+    extract::{Json, State},
     http::StatusCode,
     response::IntoResponse,
     Extension,
@@ -7,11 +7,11 @@ use axum::{
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::features;
-use crate::AppState;
-use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;
+use crate::error::{ApiResult, AppError};
+use crate::features;
 use crate::models::tag::*;
+use crate::AppState;
 
 pub async fn list_tags(
     State(state): State<AppState>,
@@ -19,12 +19,10 @@ pub async fn list_tags(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let tags = sqlx::query_as::<_, Tag>(
-        "SELECT * FROM tags WHERE aid = $1 ORDER BY name ASC",
-    )
-    .bind(aid)
-    .fetch_all(&state.db)
-    .await?;
+    let tags = sqlx::query_as::<_, Tag>("SELECT * FROM tags WHERE aid = $1 ORDER BY name ASC")
+        .bind(aid)
+        .fetch_all(&state.db)
+        .await?;
 
     Ok(Json(json!({"tags": tags})))
 }
@@ -37,22 +35,28 @@ pub async fn create_tag(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     features::enforce_feature_limit(&state.db, aid, "max_tags", "Tags").await?;
 
-    let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let color = req.get("color").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let name = req
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let color = req
+        .get("color")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
 
     if name.is_empty() {
         return Err(AppError::Validation("Tag name is required".to_string()));
     }
 
     // Check duplicate
-    let existing = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM tags WHERE aid = $1 AND name = $2",
-    )
-    .bind(aid)
-    .bind(&name)
-    .fetch_one(&state.db)
-    .await
-    .unwrap_or(0);
+    let existing =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM tags WHERE aid = $1 AND name = $2")
+            .bind(aid)
+            .bind(&name)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(0);
 
     if existing > 0 {
         return Err(AppError::Duplicate("Tag already exists".to_string()));
@@ -79,13 +83,11 @@ pub async fn assign_tag(
     let _aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Check tag exists and belongs to account
-    let _tag = sqlx::query_as::<_, Tag>(
-        "SELECT * FROM tags WHERE id = $1",
-    )
-    .bind(req.tag_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::NotFound("Tag not found".to_string()))?;
+    let _tag = sqlx::query_as::<_, Tag>("SELECT * FROM tags WHERE id = $1")
+        .bind(req.tag_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(AppError::NotFound("Tag not found".to_string()))?;
 
     // Check if already assigned
     let existing = sqlx::query_scalar::<_, i64>(
@@ -112,7 +114,10 @@ pub async fn assign_tag(
     .execute(&state.db)
     .await?;
 
-    Ok((StatusCode::CREATED, Json(json!({"message": "Tag assigned"}))))
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({"message": "Tag assigned"})),
+    ))
 }
 
 pub async fn unassign_tag(

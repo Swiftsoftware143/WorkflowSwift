@@ -1,5 +1,5 @@
 use axum::{
-    extract::{State, Json, Path},
+    extract::{Json, Path, State},
     http::StatusCode,
     response::IntoResponse,
     Extension,
@@ -8,9 +8,9 @@ use serde_json::json;
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::AppState;
-use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;
+use crate::error::{ApiResult, AppError};
+use crate::AppState;
 
 /// GET /api/v1/admin/settings — list all admin settings
 pub async fn list_settings(
@@ -19,11 +19,10 @@ pub async fn list_settings(
 ) -> ApiResult<impl IntoResponse> {
     require_admin(&claims)?;
 
-    let rows = sqlx::query(
-        "SELECT key, value, description, updated_at FROM admin_settings ORDER BY key"
-    )
-    .fetch_all(&state.db)
-    .await?;
+    let rows =
+        sqlx::query("SELECT key, value, description, updated_at FROM admin_settings ORDER BY key")
+            .fetch_all(&state.db)
+            .await?;
 
     let mut settings = serde_json::Map::new();
     for row in &rows {
@@ -31,11 +30,14 @@ pub async fn list_settings(
         let value: serde_json::Value = row.try_get("value")?;
         let description: Option<String> = row.try_get("description").ok();
         let updated_at: chrono::DateTime<chrono::Utc> = row.try_get("updated_at")?;
-        settings.insert(key, json!({
-            "value": value,
-            "description": description,
-            "updated_at": updated_at.to_rfc3339()
-        }));
+        settings.insert(
+            key,
+            json!({
+                "value": value,
+                "description": description,
+                "updated_at": updated_at.to_rfc3339()
+            }),
+        );
     }
 
     Ok(Json(json!({"settings": settings})))
@@ -50,7 +52,7 @@ pub async fn get_setting(
     require_admin(&claims)?;
 
     let row = sqlx::query(
-        "SELECT key, value, description, updated_at FROM admin_settings WHERE key = $1"
+        "SELECT key, value, description, updated_at FROM admin_settings WHERE key = $1",
     )
     .bind(&key)
     .fetch_optional(&state.db)
@@ -79,7 +81,9 @@ pub async fn update_setting(
 ) -> ApiResult<impl IntoResponse> {
     require_admin(&claims)?;
 
-    let value = req.get("value").ok_or_else(|| AppError::Validation("value is required".to_string()))?;
+    let value = req
+        .get("value")
+        .ok_or_else(|| AppError::Validation("value is required".to_string()))?;
     let description = req.get("description").and_then(|v| v.as_str());
 
     let admin_id = Uuid::parse_str(&claims.sub).unwrap_or(Uuid::nil());
@@ -108,11 +112,9 @@ pub async fn get_retention_policy(
 ) -> ApiResult<impl IntoResponse> {
     require_admin(&claims)?;
 
-    let row = sqlx::query(
-        "SELECT value, updated_at FROM admin_settings WHERE key = 'retention'"
-    )
-    .fetch_optional(&state.db)
-    .await?;
+    let row = sqlx::query("SELECT value, updated_at FROM admin_settings WHERE key = 'retention'")
+        .fetch_optional(&state.db)
+        .await?;
 
     let policy = match row {
         Some(r) => {
@@ -126,7 +128,7 @@ pub async fn get_retention_policy(
         None => json!({
             "policy": {"default_days": 90, "max_days": 365, "min_days": 1},
             "updated_at": null
-        })
+        }),
     };
 
     Ok(Json(policy))
@@ -140,7 +142,10 @@ pub async fn update_retention_policy(
 ) -> ApiResult<impl IntoResponse> {
     require_admin(&claims)?;
 
-    let default_days = req.get("default_days").and_then(|v| v.as_i64()).unwrap_or(90);
+    let default_days = req
+        .get("default_days")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(90);
     let max_days = req.get("max_days").and_then(|v| v.as_i64()).unwrap_or(365);
     let min_days = req.get("min_days").and_then(|v| v.as_i64()).unwrap_or(1);
 
@@ -149,13 +154,16 @@ pub async fn update_retention_policy(
     sqlx::query(
         r#"INSERT INTO admin_settings (key, value, description, updated_at, updated_by)
            VALUES ('retention', $1::jsonb, 'Global data retention policy', NOW(), $2)
-           ON CONFLICT (key) DO UPDATE SET value = $1::jsonb, updated_at = NOW(), updated_by = $2"#
+           ON CONFLICT (key) DO UPDATE SET value = $1::jsonb, updated_at = NOW(), updated_by = $2"#,
     )
-    .bind(json!({
-        "default_days": default_days,
-        "max_days": max_days,
-        "min_days": min_days
-    }).to_string())
+    .bind(
+        json!({
+            "default_days": default_days,
+            "max_days": max_days,
+            "min_days": min_days
+        })
+        .to_string(),
+    )
     .bind(admin_id)
     .execute(&state.db)
     .await?;
@@ -246,12 +254,11 @@ pub async fn admin_list_plans(
         let payment_provider: Option<String> = row.try_get("payment_provider").ok();
 
         // Get feature_limits for this plan
-        let limits = sqlx::query(
-            "SELECT feature_key, limit_value FROM feature_limits WHERE plan_id = $1"
-        )
-        .bind(id)
-        .fetch_all(&state.db)
-        .await?;
+        let limits =
+            sqlx::query("SELECT feature_key, limit_value FROM feature_limits WHERE plan_id = $1")
+                .bind(id)
+                .fetch_all(&state.db)
+                .await?;
 
         let mut limits_map = serde_json::Map::new();
         for lr in &limits {
@@ -294,26 +301,42 @@ pub async fn admin_create_plan(
 ) -> ApiResult<impl IntoResponse> {
     require_admin(&claims)?;
 
-    let name = req.get("name").and_then(|v| v.as_str())
+    let name = req
+        .get("name")
+        .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::Validation("Plan name is required".to_string()))?;
     let slug_default = name.to_lowercase().replace(' ', "-");
-    let slug = req.get("slug").and_then(|v| v.as_str()).unwrap_or(&slug_default);
+    let slug = req
+        .get("slug")
+        .and_then(|v| v.as_str())
+        .unwrap_or(&slug_default);
     let description = req.get("description").and_then(|v| v.as_str());
     let price_monthly = req.get("price_monthly").and_then(|v| {
-        v.as_str().map(|s| s.to_string())
+        v.as_str()
+            .map(|s| s.to_string())
             .or_else(|| v.as_f64().map(|n| format!("{:.2}", n)))
     });
     let price_yearly = req.get("price_yearly").and_then(|v| {
-        v.as_str().map(|s| s.to_string())
+        v.as_str()
+            .map(|s| s.to_string())
             .or_else(|| v.as_f64().map(|n| format!("{:.2}", n)))
     });
     let features = req.get("features").cloned();
-    let is_active = req.get("is_active").and_then(|v| v.as_bool()).unwrap_or(true);
-    let sort_order = req.get("sort_order").and_then(|v| v.as_i64()).map(|v| v as i32);
+    let is_active = req
+        .get("is_active")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    let sort_order = req
+        .get("sort_order")
+        .and_then(|v| v.as_i64())
+        .map(|v| v as i32);
 
     let features_json = features.unwrap_or(json!({}));
 
-    let payment_provider = req.get("payment_provider").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let payment_provider = req
+        .get("payment_provider")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
 
     let plan = sqlx::query(
         r#"INSERT INTO plan_tiers (id, name, slug, description, price_monthly, price_yearly, features, is_active, sort_order, payment_provider)
@@ -336,10 +359,13 @@ pub async fn admin_create_plan(
     let plan_id: Uuid = plan.try_get("id")?;
     let plan_name: String = plan.try_get("name")?;
 
-    Ok((StatusCode::CREATED, Json(json!({
-        "message": "Plan created",
-        "plan": { "id": plan_id.to_string(), "name": plan_name, "slug": slug }
-    }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "message": "Plan created",
+            "plan": { "id": plan_id.to_string(), "name": plan_name, "slug": slug }
+        })),
+    ))
 }
 
 /// PUT /api/v1/admin/plans/:id — full plan update
@@ -362,35 +388,60 @@ pub async fn admin_update_plan_full(
     let slug = req.get("slug").and_then(|v| v.as_str()).unwrap_or("");
     let description = req.get("description").and_then(|v| v.as_str());
     let price_monthly = req.get("price_monthly").and_then(|v| {
-        v.as_str().map(|s| s.to_string())
+        v.as_str()
+            .map(|s| s.to_string())
             .or_else(|| v.as_f64().map(|n| format!("{:.2}", n)))
     });
     let price_yearly = req.get("price_yearly").and_then(|v| {
-        v.as_str().map(|s| s.to_string())
+        v.as_str()
+            .map(|s| s.to_string())
             .or_else(|| v.as_f64().map(|n| format!("{:.2}", n)))
     });
     let features = req.get("features").and_then(|v| v.as_object());
     let is_active = req.get("is_active").and_then(|v| v.as_bool());
-    let sort_order = req.get("sort_order").and_then(|v| v.as_i64()).map(|v| v as i32);
-    let max_workflows = req.get("max_workflows").and_then(|v| v.as_i64()).map(|v| v as i32);
-    let max_users = req.get("max_users").and_then(|v| v.as_i64()).map(|v| v as i32);
-    let retention_days = req.get("retention_days").and_then(|v| v.as_i64()).map(|v| v as i32);
+    let sort_order = req
+        .get("sort_order")
+        .and_then(|v| v.as_i64())
+        .map(|v| v as i32);
+    let max_workflows = req
+        .get("max_workflows")
+        .and_then(|v| v.as_i64())
+        .map(|v| v as i32);
+    let max_users = req
+        .get("max_users")
+        .and_then(|v| v.as_i64())
+        .map(|v| v as i32);
+    let retention_days = req
+        .get("retention_days")
+        .and_then(|v| v.as_i64())
+        .map(|v| v as i32);
     let can_export = req.get("can_export").and_then(|v| v.as_bool());
     let can_deploy_n8n = req.get("can_deploy_n8n").and_then(|v| v.as_bool());
     let has_api_access = req.get("has_api_access").and_then(|v| v.as_bool());
-    let payment_provider = req.get("payment_provider").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let payment_provider = req
+        .get("payment_provider")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
 
     let name_use = if name.is_empty() {
         let n: String = sqlx::query_scalar("SELECT name FROM plan_tiers WHERE id = $1")
-            .bind(id).fetch_one(&state.db).await?;
+            .bind(id)
+            .fetch_one(&state.db)
+            .await?;
         n
-    } else { name.to_string() };
+    } else {
+        name.to_string()
+    };
 
     let slug_use = if slug.is_empty() {
         let s: String = sqlx::query_scalar("SELECT slug FROM plan_tiers WHERE id = $1")
-            .bind(id).fetch_one(&state.db).await?;
+            .bind(id)
+            .fetch_one(&state.db)
+            .await?;
         s
-    } else { slug.to_string() };
+    } else {
+        slug.to_string()
+    };
 
     sqlx::query(
         r#"UPDATE plan_tiers SET
@@ -407,10 +458,18 @@ pub async fn admin_update_plan_full(
             can_export = COALESCE($11, can_export),
             can_deploy_n8n = COALESCE($12, can_deploy_n8n),
             has_api_access = COALESCE($13, has_api_access)
-         WHERE id = $14"#
+         WHERE id = $14"#,
     )
-    .bind(if name.is_empty() { None } else { Some(&name_use) })
-    .bind(if slug.is_empty() { None } else { Some(&slug_use) })
+    .bind(if name.is_empty() {
+        None
+    } else {
+        Some(&name_use)
+    })
+    .bind(if slug.is_empty() {
+        None
+    } else {
+        Some(&slug_use)
+    })
     .bind(description)
     .bind(&price_monthly)
     .bind(&price_yearly)
@@ -434,7 +493,7 @@ pub async fn admin_update_plan_full(
                 sqlx::query(
                     r#"INSERT INTO feature_limits (plan_id, feature_key, limit_value)
                        VALUES ($1, $2, $3)
-                       ON CONFLICT (plan_id, feature_key) DO UPDATE SET limit_value = $3"#
+                       ON CONFLICT (plan_id, feature_key) DO UPDATE SET limit_value = $3"#,
                 )
                 .bind(id)
                 .bind(fkey)
@@ -447,16 +506,16 @@ pub async fn admin_update_plan_full(
 
     // Update features JSON if provided
     if let Some(feats) = features {
-        sqlx::query(
-            "UPDATE plan_tiers SET features = $1::jsonb WHERE id = $2"
-        )
-        .bind(serde_json::Value::Object(feats.clone()).to_string())
-        .bind(id)
-        .execute(&state.db)
-        .await?;
+        sqlx::query("UPDATE plan_tiers SET features = $1::jsonb WHERE id = $2")
+            .bind(serde_json::Value::Object(feats.clone()).to_string())
+            .bind(id)
+            .execute(&state.db)
+            .await?;
     }
 
-    Ok(Json(json!({"message": "Plan updated", "plan_id": id.to_string()})))
+    Ok(Json(
+        json!({"message": "Plan updated", "plan_id": id.to_string()}),
+    ))
 }
 
 /// DELETE /api/v1/admin/plans/:id — delete a plan
@@ -496,7 +555,7 @@ pub async fn admin_list_accounts(
            LEFT JOIN account_plans ap ON ap.aid = a.id AND ap.status = 'active'
            LEFT JOIN plan_tiers p ON p.id = ap.plan_id
            LEFT JOIN n8n_account_config n8n ON n8n.aid = a.id
-           ORDER BY a.created_at DESC"#
+           ORDER BY a.created_at DESC"#,
     )
     .fetch_all(&state.db)
     .await?;
@@ -509,7 +568,8 @@ pub async fn admin_list_accounts(
         let slug: Option<String> = row.try_get("account_slug").ok();
         let is_active: bool = row.try_get("is_active")?;
         let retention_days: Option<i32> = row.try_get("retention_days").ok();
-        let retention_purge_at: Option<chrono::DateTime<chrono::Utc>> = row.try_get("retention_purge_at").ok();
+        let retention_purge_at: Option<chrono::DateTime<chrono::Utc>> =
+            row.try_get("retention_purge_at").ok();
         let created_at: chrono::DateTime<chrono::Utc> = row.try_get("created_at")?;
         let plan_name: Option<String> = row.try_get("plan_name").ok();
         let plan_slug: Option<String> = row.try_get("plan_slug").ok();
@@ -539,13 +599,12 @@ pub async fn admin_delete_account(
 ) -> ApiResult<impl IntoResponse> {
     require_admin(&claims)?;
 
-    let exists = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM accounts WHERE id = $1)"
-    )
-    .bind(id)
-    .fetch_one(&state.db)
-    .await
-    .unwrap_or(false);
+    let exists =
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM accounts WHERE id = $1)")
+            .bind(id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(false);
 
     if !exists {
         return Err(AppError::NotFound("Account not found".to_string()));
@@ -563,7 +622,9 @@ pub async fn admin_delete_account(
         .await?;
 
     tracing::info!(%id, "Account and all associated data deleted");
-    Ok(Json(json!({"status": "deleted", "account_id": id.to_string()})))
+    Ok(Json(
+        json!({"status": "deleted", "account_id": id.to_string()}),
+    ))
 }
 
 /// PUT /api/v1/admin/accounts/:id/retention — override account retention
@@ -575,26 +636,30 @@ pub async fn admin_set_account_retention(
 ) -> ApiResult<impl IntoResponse> {
     require_admin(&claims)?;
 
-    let retention_days = req.get("retention_days").and_then(|v| v.as_i64())
-        .ok_or_else(|| AppError::Validation("retention_days is required".to_string()))? as i32;
+    let retention_days = req
+        .get("retention_days")
+        .and_then(|v| v.as_i64())
+        .ok_or_else(|| AppError::Validation("retention_days is required".to_string()))?
+        as i32;
 
-    let purge_at = req.get("purge_at")
+    let purge_at = req
+        .get("purge_at")
         .and_then(|v| v.as_str())
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc));
 
     if retention_days < 1 {
-        return Err(AppError::Validation("retention_days must be at least 1".to_string()));
+        return Err(AppError::Validation(
+            "retention_days must be at least 1".to_string(),
+        ));
     }
 
-    sqlx::query(
-        "UPDATE accounts SET retention_days = $1, retention_purge_at = $2 WHERE id = $3"
-    )
-    .bind(retention_days)
-    .bind(purge_at)
-    .bind(id)
-    .execute(&state.db)
-    .await?;
+    sqlx::query("UPDATE accounts SET retention_days = $1, retention_purge_at = $2 WHERE id = $3")
+        .bind(retention_days)
+        .bind(purge_at)
+        .bind(id)
+        .execute(&state.db)
+        .await?;
 
     Ok(Json(json!({
         "message": "Account retention updated",
@@ -630,7 +695,7 @@ pub async fn admin_usage_dashboard(
                GROUP BY aid
            ) wf ON wf.aid = a.id
            LEFT JOIN n8n_account_config n8n ON n8n.aid = a.id
-           ORDER BY a.created_at DESC"#
+           ORDER BY a.created_at DESC"#,
     )
     .fetch_all(&state.db)
     .await?;
@@ -669,14 +734,36 @@ pub async fn admin_create_account(
 ) -> ApiResult<impl IntoResponse> {
     require_admin(&claims)?;
 
-    let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let email = req.get("email").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let account_name = req.get("account_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let plan_slug = req.get("plan_slug").and_then(|v| v.as_str()).unwrap_or("starter").to_string();
-    let industry_slug = req.get("industry_slug").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let name = req
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let email = req
+        .get("email")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let account_name = req
+        .get("account_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let plan_slug = req
+        .get("plan_slug")
+        .and_then(|v| v.as_str())
+        .unwrap_or("starter")
+        .to_string();
+    let industry_slug = req
+        .get("industry_slug")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
     if name.is_empty() || email.is_empty() || account_name.is_empty() {
-        return Err(AppError::Validation("name, email, and account_name are required".to_string()));
+        return Err(AppError::Validation(
+            "name, email, and account_name are required".to_string(),
+        ));
     }
 
     // Check for existing user by email
@@ -687,16 +774,20 @@ pub async fn admin_create_account(
         .unwrap_or(0);
 
     if existing > 0 {
-        return Err(AppError::Duplicate("A user with this email already exists".to_string()));
+        return Err(AppError::Duplicate(
+            "A user with this email already exists".to_string(),
+        ));
     }
 
     // Create the account
     let account_id = Uuid::new_v4();
-    let slug = req.get("account_slug")
+    let slug = req
+        .get("account_slug")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .unwrap_or_else(|| {
-            account_name.to_lowercase()
+            account_name
+                .to_lowercase()
                 .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
                 .trim_matches('-')
                 .to_string()
@@ -704,7 +795,7 @@ pub async fn admin_create_account(
 
     sqlx::query(
         r#"INSERT INTO accounts (id, name, slug)
-           VALUES ($1, $2, $3)"#
+           VALUES ($1, $2, $3)"#,
     )
     .bind(account_id)
     .bind(&account_name)
@@ -713,19 +804,18 @@ pub async fn admin_create_account(
     .await?;
 
     // Resolve plan_id from slug or use default
-    let plan_id: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM plan_tiers WHERE slug = $1 AND is_active = true"
-    )
-    .bind(&plan_slug)
-    .fetch_optional(&state.db)
-    .await?;
+    let plan_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM plan_tiers WHERE slug = $1 AND is_active = true")
+            .bind(&plan_slug)
+            .fetch_optional(&state.db)
+            .await?;
 
     // Assign plan to account (via account_plans if found)
     if let Some(pid) = plan_id {
         sqlx::query(
             r#"INSERT INTO account_plans (aid, plan_id, status, started_at)
                VALUES ($1, $2, 'active', NOW())
-               ON CONFLICT (aid, plan_id) DO UPDATE SET status = 'active'"#
+               ON CONFLICT (aid, plan_id) DO UPDATE SET status = 'active'"#,
         )
         .bind(account_id)
         .bind(pid)
@@ -735,13 +825,12 @@ pub async fn admin_create_account(
 
     // Set industry if provided
     if !industry_slug.is_empty() {
-        let industry_id: Option<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM industries WHERE slug = $1"
-        )
-        .bind(&industry_slug)
-        .fetch_optional(&state.db)
-        .await?
-        .flatten();
+        let industry_id: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM industries WHERE slug = $1")
+                .bind(&industry_slug)
+                .fetch_optional(&state.db)
+                .await?
+                .flatten();
 
         if let Some(ind_id) = industry_id {
             let existing_industry = sqlx::query_scalar::<_, i64>(
@@ -755,7 +844,7 @@ pub async fn admin_create_account(
 
             if existing_industry == 0 {
                 sqlx::query(
-                    "INSERT INTO account_industries (account_id, industry_id) VALUES ($1, $2)"
+                    "INSERT INTO account_industries (account_id, industry_id) VALUES ($1, $2)",
                 )
                 .bind(account_id)
                 .bind(ind_id)
@@ -766,8 +855,8 @@ pub async fn admin_create_account(
     }
 
     // Generate temp password and create user
-    use argon2::{Argon2, PasswordHasher};
     use argon2::password_hash::SaltString;
+    use argon2::{Argon2, PasswordHasher};
     use rand::rngs::OsRng;
 
     let temp_password = Uuid::new_v4().to_string();
@@ -804,7 +893,8 @@ pub async fn admin_create_account(
             "password": temp_password,
             "app_url": "https://app.workflowswift.com",
         }),
-    ).await;
+    )
+    .await;
 
     match email_result {
         Ok(_) => tracing::info!("Welcome email sent to {}", email),
@@ -835,7 +925,7 @@ pub async fn admin_list_email_templates(
 
     let rows = sqlx::query(
         r#"SELECT id, name, subject, template_type, is_html, is_default, created_at, updated_at
-           FROM email_templates ORDER BY name ASC"#
+           FROM email_templates ORDER BY name ASC"#,
     )
     .fetch_all(&state.db)
     .await?;
@@ -874,16 +964,29 @@ pub async fn admin_create_email_template(
 ) -> ApiResult<impl IntoResponse> {
     require_admin(&claims)?;
 
-    let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let template_type = req.get("template_type").and_then(|v| v.as_str()).unwrap_or("custom").to_string();
+    let name = req
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let template_type = req
+        .get("template_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("custom")
+        .to_string();
     let subject = req.get("subject").and_then(|v| v.as_str());
     let body = req.get("body").and_then(|v| v.as_str());
     let html_body = req.get("html_body").and_then(|v| v.as_str());
     let is_html = req.get("is_html").and_then(|v| v.as_bool()).unwrap_or(true);
-    let is_default = req.get("is_default").and_then(|v| v.as_bool()).unwrap_or(false);
+    let is_default = req
+        .get("is_default")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     if name.is_empty() {
-        return Err(AppError::Validation("Template name is required".to_string()));
+        return Err(AppError::Validation(
+            "Template name is required".to_string(),
+        ));
     }
 
     let template_id = Uuid::new_v4();
@@ -902,7 +1005,10 @@ pub async fn admin_create_email_template(
     .execute(&state.db)
     .await?;
 
-    Ok((StatusCode::CREATED, Json(json!({"id": template_id.to_string(), "status": "created"}))))
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({"id": template_id.to_string(), "status": "created"})),
+    ))
 }
 
 /// PUT /api/v1/admin/email-templates/{id} — update an email template
@@ -914,13 +1020,12 @@ pub async fn admin_update_email_template(
 ) -> ApiResult<impl IntoResponse> {
     require_admin(&claims)?;
 
-    let existing = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM email_templates WHERE id = $1"
-    )
-    .bind(template_id)
-    .fetch_one(&state.db)
-    .await
-    .unwrap_or(0);
+    let existing =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM email_templates WHERE id = $1")
+            .bind(template_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(0);
 
     if existing == 0 {
         return Err(AppError::NotFound("Email template not found".to_string()));
@@ -985,13 +1090,12 @@ pub async fn admin_delete_email_template(
 ) -> ApiResult<impl IntoResponse> {
     require_admin(&claims)?;
 
-    let existing = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM email_templates WHERE id = $1"
-    )
-    .bind(template_id)
-    .fetch_one(&state.db)
-    .await
-    .unwrap_or(0);
+    let existing =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM email_templates WHERE id = $1")
+            .bind(template_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(0);
 
     if existing == 0 {
         return Err(AppError::NotFound("Email template not found".to_string()));
@@ -1007,14 +1111,14 @@ pub async fn admin_delete_email_template(
 
 // ── Helper ──
 
-
 /// POST /api/v1/admin/impersonate — generate JWT for impersonating a tenant
 pub async fn admin_impersonate(
     Extension(_claims): Extension<Claims>,
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let target_tenant_id = body.get("tenant_id")
+    let target_tenant_id = body
+        .get("tenant_id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("tenant_id is required".into()))?;
 
@@ -1029,12 +1133,11 @@ pub async fn admin_impersonate(
         .ok_or_else(|| AppError::NotFound("Tenant not found".into()))?;
 
     // Find a user in this tenant
-    let user: Option<(String, String)> = sqlx::query_as(
-        "SELECT id::text, name FROM users WHERE aid = $1 LIMIT 1"
-    )
-    .bind(tid)
-    .fetch_optional(&state.db)
-    .await?;
+    let user: Option<(String, String)> =
+        sqlx::query_as("SELECT id::text, name FROM users WHERE aid = $1 LIMIT 1")
+            .bind(tid)
+            .fetch_optional(&state.db)
+            .await?;
 
     let (user_id, user_name) = match user {
         Some(u) => u,
@@ -1073,7 +1176,6 @@ pub async fn admin_stop_impersonation() -> ApiResult<impl IntoResponse> {
         "note": "Drop impersonation token"
     })))
 }
-
 
 fn require_admin(claims: &Claims) -> Result<(), AppError> {
     if !claims.perm_is_super_admin.unwrap_or(false) {

@@ -1,12 +1,15 @@
 //! Tag Groups handler — auto-generated.
 
-use axum::{extract::{Path, State}, Json};
+use axum::{
+    extract::{Path, State},
+    Json,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::error::{ApiResult, AppError};
 use crate::state::AppState;
-use crate::error::{AppError, ApiResult};
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct Item {
@@ -34,9 +37,7 @@ pub struct UpdateInput {
 }
 
 /// GET /api/v1/tag-groups
-pub async fn list(
-    State(state): State<AppState>,
-) -> ApiResult<Json<Value>> {
+pub async fn list(State(state): State<AppState>) -> ApiResult<Json<Value>> {
     let limit = 50;
     let offset = 0;
     let items = sqlx::query_as::<_, Item>(
@@ -57,24 +58,28 @@ pub async fn create(
     let id = Uuid::new_v4();
     let aid = Uuid::nil();
     sqlx::query("INSERT INTO tag_groups (id, aid, name) VALUES ($1, $2, $3)")
-        .bind(id).bind(aid).bind(&body.name)
-        .execute(&state.db).await?;
+        .bind(id)
+        .bind(aid)
+        .bind(&body.name)
+        .execute(&state.db)
+        .await?;
     let item = sqlx::query_as::<_, Item>(
-        "SELECT id, aid, name, created_at, updated_at FROM tag_groups WHERE id = $1"
+        "SELECT id, aid, name, created_at, updated_at FROM tag_groups WHERE id = $1",
     )
-    .bind(id).fetch_one(&state.db).await?;
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
     Ok(Json(json!({"item": item})))
 }
 
 /// GET /api/v1/tag-groups/{id}
-pub async fn get(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> ApiResult<Json<Value>> {
+pub async fn get(State(state): State<AppState>, Path(id): Path<Uuid>) -> ApiResult<Json<Value>> {
     let item = sqlx::query_as::<_, Item>(
-        "SELECT id, aid, name, created_at, updated_at FROM tag_groups WHERE id = $1"
+        "SELECT id, aid, name, created_at, updated_at FROM tag_groups WHERE id = $1",
     )
-    .bind(id).fetch_optional(&state.db).await?
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?
     .ok_or_else(|| AppError::NotFound("Tag Groups not found".to_string()))?;
     Ok(Json(json!({"item": item})))
 }
@@ -87,21 +92,25 @@ pub async fn update(
 ) -> ApiResult<Json<Value>> {
     if let Some(name) = body.name {
         sqlx::query("UPDATE tag_groups SET name = $1, updated_at = now() WHERE id = $2")
-            .bind(&name).bind(id).execute(&state.db).await?;
+            .bind(&name)
+            .bind(id)
+            .execute(&state.db)
+            .await?;
     }
     let item = sqlx::query_as::<_, Item>(
-        "SELECT id, aid, name, created_at, updated_at FROM tag_groups WHERE id = $1"
+        "SELECT id, aid, name, created_at, updated_at FROM tag_groups WHERE id = $1",
     )
-    .bind(id).fetch_one(&state.db).await?;
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
     Ok(Json(json!({"item": item})))
 }
 
 /// DELETE /api/v1/tag-groups/{id}
-pub async fn delete(
-    State(state): State<AppState>,
-    Path(id): Path<Uuid>,
-) -> ApiResult<Json<Value>> {
+pub async fn delete(State(state): State<AppState>, Path(id): Path<Uuid>) -> ApiResult<Json<Value>> {
     sqlx::query("DELETE FROM tag_groups WHERE id = $1")
-        .bind(id).execute(&state.db).await?;
+        .bind(id)
+        .execute(&state.db)
+        .await?;
     Ok(Json(json!({"status": "deleted"})))
 }

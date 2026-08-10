@@ -1,29 +1,37 @@
-use axum::{extract::{State, Json, Query}, response::IntoResponse, Extension};
-use serde_json::json;
-use std::collections::HashMap;
-use uuid::Uuid;
-use sqlx::Row;
-use crate::AppState;
-use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;
+use crate::error::{ApiResult, AppError};
 use crate::handlers::provider_keys_handler;
 use crate::security::webhook_security;
+use crate::AppState;
+use axum::{
+    extract::{Json, Query, State},
+    response::IntoResponse,
+    Extension,
+};
+use serde_json::json;
+use sqlx::Row;
+use std::collections::HashMap;
+use uuid::Uuid;
 
 /// List available provider presets
-pub async fn list_provider_presets(
-    State(state): State<AppState>,
-) -> ApiResult<impl IntoResponse> {
-    let rows = sqlx::query("SELECT key, name, base_url, docs_url FROM integration_provider_presets ORDER BY name")
-        .fetch_all(&state.db).await?;
+pub async fn list_provider_presets(State(state): State<AppState>) -> ApiResult<impl IntoResponse> {
+    let rows = sqlx::query(
+        "SELECT key, name, base_url, docs_url FROM integration_provider_presets ORDER BY name",
+    )
+    .fetch_all(&state.db)
+    .await?;
 
-    let presets: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({
-            "key": r.try_get::<&str,_>("key").unwrap_or(""),
-            "name": r.try_get::<&str,_>("name").unwrap_or(""),
-            "base_url": r.try_get::<&str,_>("base_url").unwrap_or(""),
-            "docs_url": r.try_get::<Option<String>,_>("docs_url").unwrap_or(None)
+    let presets: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "key": r.try_get::<&str,_>("key").unwrap_or(""),
+                "name": r.try_get::<&str,_>("name").unwrap_or(""),
+                "base_url": r.try_get::<&str,_>("base_url").unwrap_or(""),
+                "docs_url": r.try_get::<Option<String>,_>("docs_url").unwrap_or(None)
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({"providers": presets})))
 }
@@ -39,8 +47,11 @@ pub async fn dispatch_integration(
     Json(payload): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let target_id_str = params.get("target_id").ok_or_else(|| AppError::BadRequest("target_id required".into()))?;
-    let target_id = Uuid::parse_str(target_id_str).map_err(|_| AppError::BadRequest("Invalid target_id".into()))?;
+    let target_id_str = params
+        .get("target_id")
+        .ok_or_else(|| AppError::BadRequest("target_id required".into()))?;
+    let target_id = Uuid::parse_str(target_id_str)
+        .map_err(|_| AppError::BadRequest("Invalid target_id".into()))?;
 
     // Security check before dispatching
     let (webhook_url, allowed_domains, daily_limit): (String, Vec<String>, i32) = sqlx::query_as::<_, (String, Vec<String>, i32)>(
@@ -54,9 +65,17 @@ pub async fn dispatch_integration(
     .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?
     .ok_or_else(|| AppError::NotFound("Integration target not found or inactive".into()))?;
 
-    webhook_security::check_webhook_security(&state.db, &target_id, &webhook_url, &allowed_domains, daily_limit).await?;
+    webhook_security::check_webhook_security(
+        &state.db,
+        &target_id,
+        &webhook_url,
+        &allowed_domains,
+        daily_limit,
+    )
+    .await?;
 
-    let result = forward_dispatch(&state.db, target_id, aid, &payload).await
+    let result = forward_dispatch(&state.db, target_id, aid, &payload)
+        .await
         .map_err(|e| AppError::Internal(format!("Dispatch failed: {}", e)))?;
 
     Ok(Json(json!({
@@ -81,7 +100,7 @@ pub async fn forward_dispatch(
         "SELECT it.webhook_url, it.provider_preset, pp.base_url as preset_base_url
          FROM integration_targets it
          LEFT JOIN integration_provider_presets pp ON pp.key = it.provider_preset
-         WHERE it.id = $1 AND it.aid = $2 AND it.is_active = true"
+         WHERE it.id = $1 AND it.aid = $2 AND it.is_active = true",
     )
     .bind(target_id)
     .bind(aid)
@@ -97,21 +116,30 @@ pub async fn forward_dispatch(
     // Determine the provider name from the preset or webhook_url
     let provider_name = preset_key.clone().unwrap_or_else(|| {
         // Try to extract from webhook URL domain
-        webhook_url.split('/').nth(2).unwrap_or("unknown").to_string()
+        webhook_url
+            .split('/')
+            .nth(2)
+            .unwrap_or("unknown")
+            .to_string()
     });
 
     // Look up the stored provider key from the provider_keys table
-    let (api_key, stored_base_url, metadata) = provider_keys_handler::get_provider_key(db, aid, &provider_name)
-        .await
-        .map_err(|e| format!("DB error fetching provider key: {}", e))?
-        .unwrap_or_else(|| (String::new(), None, json!({})));
+    let (api_key, stored_base_url, metadata) =
+        provider_keys_handler::get_provider_key(db, aid, &provider_name)
+            .await
+            .map_err(|e| format!("DB error fetching provider key: {}", e))?
+            .unwrap_or_else(|| (String::new(), None, json!({})));
 
     // Determine the actual URL to POST to
     let effective_base_url = stored_base_url.or(preset_base_url);
     let target_url = if !webhook_url.is_empty() {
         webhook_url
     } else if let Some(ref base) = effective_base_url {
-        format!("{}{}", base, payload.get("path").and_then(|v| v.as_str()).unwrap_or(""))
+        format!(
+            "{}{}",
+            base,
+            payload.get("path").and_then(|v| v.as_str()).unwrap_or("")
+        )
     } else {
         return Err("Integration target has no webhook_url or provider preset".to_string());
     };
@@ -122,8 +150,7 @@ pub async fn forward_dispatch(
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
-    let mut req = client.post(&target_url)
-        .json(payload);
+    let mut req = client.post(&target_url).json(payload);
 
     // Inject stored API key as Authorization header if available
     if !api_key.is_empty() {
@@ -141,13 +168,14 @@ pub async fn forward_dispatch(
     }
 
     // Forward the auth from the incoming request if the provider needs it
-    let auth_header = payload.get("_forward_auth")
-        .and_then(|v| v.as_str());
+    let auth_header = payload.get("_forward_auth").and_then(|v| v.as_str());
     if let Some(auth) = auth_header {
         req = req.header("Authorization", auth);
     }
 
-    let resp = req.send().await
+    let resp = req
+        .send()
+        .await
         .map_err(|e| format!("Failed to dispatch to provider: {}", e))?;
 
     let status = resp.status().as_u16();

@@ -1,17 +1,19 @@
 use axum::{
-    extract::{State, Json, Path, Query},
+    extract::{Json, Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Extension,
 };
+use chrono::{Duration, Utc};
 use serde_json::{json, Value};
 use uuid::Uuid;
-use chrono::{Utc, Duration};
 
-use crate::AppState;
-use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;
-use crate::models::rendition::{AccountRendition, CreateRenditionRequest, ListRenditionsQuery, UpdateRenditionRequest};
+use crate::error::{ApiResult, AppError};
+use crate::models::rendition::{
+    AccountRendition, CreateRenditionRequest, ListRenditionsQuery, UpdateRenditionRequest,
+};
+use crate::AppState;
 
 // ──────────────────────────────────────────────
 // Integration Hub — Provider Categories
@@ -27,13 +29,14 @@ pub async fn list_provider_categories(
         r#"SELECT key, name, description, category, requires_base_url, requires_metadata, icon
            FROM available_providers
            WHERE is_active = true OR is_active IS NULL
-           ORDER BY category NULLS LAST, name ASC"#
+           ORDER BY category NULLS LAST, name ASC"#,
     )
     .fetch_all(&state.db)
     .await?;
 
     // Group by category
-    let mut categories: std::collections::BTreeMap<String, Vec<serde_json::Value>> = std::collections::BTreeMap::new();
+    let mut categories: std::collections::BTreeMap<String, Vec<serde_json::Value>> =
+        std::collections::BTreeMap::new();
 
     for row in &rows {
         use sqlx::Row;
@@ -69,7 +72,7 @@ pub async fn get_category_providers(
         r#"SELECT key, name, description, category, requires_base_url, requires_metadata, icon
            FROM available_providers
            WHERE category = $1 AND (is_active = true OR is_active IS NULL)
-           ORDER BY name ASC"#
+           ORDER BY name ASC"#,
     )
     .bind(&category)
     .fetch_all(&state.db)
@@ -133,7 +136,9 @@ pub async fn get_step_types_for_category(
         ],
     };
 
-    Ok(Json(json!({"category": category, "step_types": step_types})))
+    Ok(Json(
+        json!({"category": category, "step_types": step_types}),
+    ))
 }
 
 // ──────────────────────────────────────────────
@@ -151,13 +156,12 @@ pub async fn create_rendition(
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
 
     // Look up provider category for the given provider
-    let provider_category: Option<String> = sqlx::query_scalar(
-        "SELECT category FROM available_providers WHERE key = $1"
-    )
-    .bind(&req.provider)
-    .fetch_optional(&state.db)
-    .await?
-    .flatten();
+    let provider_category: Option<String> =
+        sqlx::query_scalar("SELECT category FROM available_providers WHERE key = $1")
+            .bind(&req.provider)
+            .fetch_optional(&state.db)
+            .await?
+            .flatten();
 
     // Calculate retention expiry
     let retention_days = req.retention_days.unwrap_or(90);
@@ -212,9 +216,7 @@ pub async fn list_renditions(
     let limit = query.limit.unwrap_or(50).min(200);
     let offset = query.offset.unwrap_or(0);
 
-    let mut sql = String::from(
-        "SELECT * FROM account_renditions WHERE aid = $1"
-    );
+    let mut sql = String::from("SELECT * FROM account_renditions WHERE aid = $1");
     let mut param_idx = 2i32;
 
     // WHERE filters
@@ -259,8 +261,7 @@ pub async fn list_renditions(
     sql.push_str(" OFFSET $");
     sql.push_str(&param_idx.to_string());
 
-    let mut query_builder = sqlx::query_as::<_, AccountRendition>(&sql)
-        .bind(aid);
+    let mut query_builder = sqlx::query_as::<_, AccountRendition>(&sql).bind(aid);
 
     if let Some(ref _provider) = query.provider {
         query_builder = query_builder.bind(_provider);
@@ -286,13 +287,11 @@ pub async fn list_renditions(
     let renditions = query_builder.fetch_all(&state.db).await?;
 
     // Count total
-    let total: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM account_renditions WHERE aid = $1"
-    )
-    .bind(aid)
-    .fetch_one(&state.db)
-    .await
-    .unwrap_or(0);
+    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM account_renditions WHERE aid = $1")
+        .bind(aid)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(0);
 
     Ok(Json(json!({
         "renditions": renditions,
@@ -312,7 +311,7 @@ pub async fn get_rendition(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let rendition = sqlx::query_as::<_, AccountRendition>(
-        "SELECT * FROM account_renditions WHERE id = $1 AND aid = $2"
+        "SELECT * FROM account_renditions WHERE id = $1 AND aid = $2",
     )
     .bind(id)
     .bind(aid)
@@ -334,7 +333,7 @@ pub async fn update_rendition(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let existing = sqlx::query_as::<_, AccountRendition>(
-        "SELECT * FROM account_renditions WHERE id = $1 AND aid = $2"
+        "SELECT * FROM account_renditions WHERE id = $1 AND aid = $2",
     )
     .bind(id)
     .bind(aid)
@@ -410,7 +409,7 @@ pub async fn purge_expired_renditions(
          WHERE aid = $1
            AND status = 'active'
            AND retention_expires_at IS NOT NULL
-           AND retention_expires_at < NOW()"
+           AND retention_expires_at < NOW()",
     )
     .bind(aid)
     .execute(&state.db)
@@ -436,19 +435,22 @@ pub async fn rendition_summary(
            FROM account_renditions
            WHERE aid = $1 AND status = 'active'
            GROUP BY asset_type
-           ORDER BY count DESC"#
+           ORDER BY count DESC"#,
     )
     .bind(aid)
     .fetch_all(&state.db)
     .await?;
 
-    let types: Vec<serde_json::Value> = by_type.iter().map(|r| {
-        use sqlx::Row;
-        json!({
-            "asset_type": r.try_get::<&str,_>("asset_type").unwrap_or(""),
-            "count": r.try_get::<i64,_>("count").unwrap_or(0),
+    let types: Vec<serde_json::Value> = by_type
+        .iter()
+        .map(|r| {
+            use sqlx::Row;
+            json!({
+                "asset_type": r.try_get::<&str,_>("asset_type").unwrap_or(""),
+                "count": r.try_get::<i64,_>("count").unwrap_or(0),
+            })
         })
-    }).collect();
+        .collect();
 
     // Count by provider
     let by_provider = sqlx::query(
@@ -456,24 +458,27 @@ pub async fn rendition_summary(
            FROM account_renditions
            WHERE aid = $1 AND status = 'active'
            GROUP BY provider, provider_category
-           ORDER BY count DESC"#
+           ORDER BY count DESC"#,
     )
     .bind(aid)
     .fetch_all(&state.db)
     .await?;
 
-    let providers: Vec<serde_json::Value> = by_provider.iter().map(|r| {
-        use sqlx::Row;
-        json!({
-            "provider": r.try_get::<&str,_>("provider").unwrap_or(""),
-            "category": r.try_get::<Option<&str>,_>("provider_category").unwrap_or(None),
-            "count": r.try_get::<i64,_>("count").unwrap_or(0),
+    let providers: Vec<serde_json::Value> = by_provider
+        .iter()
+        .map(|r| {
+            use sqlx::Row;
+            json!({
+                "provider": r.try_get::<&str,_>("provider").unwrap_or(""),
+                "category": r.try_get::<Option<&str>,_>("provider_category").unwrap_or(None),
+                "count": r.try_get::<i64,_>("count").unwrap_or(0),
+            })
         })
-    }).collect();
+        .collect();
 
     // Total active count
     let total_active: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM account_renditions WHERE aid = $1 AND status = 'active'"
+        "SELECT COUNT(*) FROM account_renditions WHERE aid = $1 AND status = 'active'",
     )
     .bind(aid)
     .fetch_one(&state.db)
@@ -485,7 +490,7 @@ pub async fn rendition_summary(
         "SELECT COUNT(*) FROM account_renditions
          WHERE aid = $1 AND status = 'active'
            AND retention_expires_at IS NOT NULL
-           AND retention_expires_at < NOW() + INTERVAL '7 days'"
+           AND retention_expires_at < NOW() + INTERVAL '7 days'",
     )
     .bind(aid)
     .fetch_one(&state.db)
@@ -512,7 +517,7 @@ pub async fn list_workflow_renditions(
     let renditions = sqlx::query_as::<_, AccountRendition>(
         "SELECT * FROM account_renditions
          WHERE aid = $1 AND workflow_id = $2 AND status = 'active'
-         ORDER BY sort_order ASC, created_at ASC"
+         ORDER BY sort_order ASC, created_at ASC",
     )
     .bind(aid)
     .bind(workflow_id)
@@ -532,8 +537,12 @@ pub async fn create_stitch_group(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
 
-    let name = req.get("name").and_then(|v| v.as_str()).unwrap_or("Stitched Rendition");
-    let child_ids = req.get("child_ids")
+    let name = req
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("Stitched Rendition");
+    let child_ids = req
+        .get("child_ids")
         .and_then(|v| v.as_array())
         .ok_or_else(|| AppError::BadRequest("child_ids is required".into()))?;
 
@@ -549,7 +558,7 @@ pub async fn create_stitch_group(
            (id, aid, user_id, step_type, step_name, provider, provider_asset_id,
             provider_asset_url, asset_type, status, metadata)
            VALUES ($1, $2, $3, 'stitch_group', $4, 'workflowswift', 'stitch-' || $1::text,
-                   '', 'other', 'active', $5)"#
+                   '', 'other', 'active', $5)"#,
     )
     .bind(parent_id)
     .bind(aid)
@@ -563,7 +572,7 @@ pub async fn create_stitch_group(
     for child_id in child_ids {
         if let Some(cid) = child_id.as_str().and_then(|s| Uuid::parse_str(s).ok()) {
             let _ = sqlx::query(
-                "UPDATE account_renditions SET parent_rendition_id = $1 WHERE id = $2 AND aid = $3"
+                "UPDATE account_renditions SET parent_rendition_id = $1 WHERE id = $2 AND aid = $3",
             )
             .bind(parent_id)
             .bind(cid)
@@ -573,12 +582,11 @@ pub async fn create_stitch_group(
         }
     }
 
-    let parent = sqlx::query_as::<_, AccountRendition>(
-        "SELECT * FROM account_renditions WHERE id = $1"
-    )
-    .bind(parent_id)
-    .fetch_one(&state.db)
-    .await?;
+    let parent =
+        sqlx::query_as::<_, AccountRendition>("SELECT * FROM account_renditions WHERE id = $1")
+            .bind(parent_id)
+            .fetch_one(&state.db)
+            .await?;
 
     Ok((StatusCode::CREATED, Json(json!({"rendition": parent}))))
 }

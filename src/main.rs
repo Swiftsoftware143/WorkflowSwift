@@ -1,27 +1,34 @@
 #![allow(dead_code, unused_variables, unused_assignments, unused_must_use)]
-#![allow(clippy::doc_lazy_continuation, clippy::let_underscore_future, clippy::collapsible_match, clippy::redundant_pattern_matching, clippy::needless_late_init, clippy::type_complexity)]
-mod email;
+#![allow(
+    clippy::doc_lazy_continuation,
+    clippy::let_underscore_future,
+    clippy::collapsible_match,
+    clippy::redundant_pattern_matching,
+    clippy::needless_late_init,
+    clippy::type_complexity
+)]
+mod auth;
 mod config;
 mod db;
+mod email;
 mod error;
-mod state;
-mod models;
-mod handlers;
-mod auth;
 mod features;
-mod routes;
-mod rate_limit;
+mod handlers;
+mod models;
 mod n8n_converter;
 mod n8n_provision;
+mod rate_limit;
+mod routes;
 mod security;
+mod state;
 
 use std::time::Duration;
 use tokio::signal;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::EnvFilter;
 
-pub use state::AppState;
 pub use error::AppError;
+pub use state::AppState;
 
 #[tokio::main]
 async fn main() {
@@ -32,7 +39,12 @@ async fn main() {
         .init();
 
     let config = config::AppConfig::from_env();
-    let pool = db::connect(&config.database_url, config.db_min_connections, config.db_max_connections).await;
+    let pool = db::connect(
+        &config.database_url,
+        config.db_min_connections,
+        config.db_max_connections,
+    )
+    .await;
 
     // Run migrations using sqlx::query (no macro)
     tracing::info!("Running database migrations...");

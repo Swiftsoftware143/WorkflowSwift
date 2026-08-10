@@ -1,32 +1,28 @@
 use axum::{
-    extract::{State, Json, Path, Query},
+    extract::{Json, Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Extension,
 };
+use rand::Rng;
 use serde_json::json;
+use sqlx::Row;
 use std::collections::HashMap;
 use uuid::Uuid;
-use sqlx::Row;
-use rand::Rng;
 
-use crate::AppState;
-use crate::error::{AppError, ApiResult};
 use crate::auth::models::Claims;
+use crate::error::{ApiResult, AppError};
+use crate::AppState;
 
 // ──────────────────────────────────────────────
 // Destination fetch — powers the 3-level cascade
 // ──────────────────────────────────────────────
 
 /// Get the base URL for a given provider key (from the account stored provider_key or the preset)
-async fn get_provider_base_url(
-    db: &sqlx::PgPool,
-    aid: Uuid,
-    provider: &str,
-) -> Option<String> {
+async fn get_provider_base_url(db: &sqlx::PgPool, aid: Uuid, provider: &str) -> Option<String> {
     // First check provider_keys for a stored base_url
     if let Ok(row) = sqlx::query_scalar::<_, Option<String>>(
-        "SELECT base_url FROM provider_keys WHERE aid = $1 AND provider = $2 AND is_active = true"
+        "SELECT base_url FROM provider_keys WHERE aid = $1 AND provider = $2 AND is_active = true",
     )
     .bind(aid)
     .bind(provider)
@@ -42,7 +38,7 @@ async fn get_provider_base_url(
 
     // Fall back to provider presets
     if let Ok(row) = sqlx::query_scalar::<_, Option<String>>(
-        "SELECT base_url FROM integration_provider_presets WHERE key = $1"
+        "SELECT base_url FROM integration_provider_presets WHERE key = $1",
     )
     .bind(provider)
     .fetch_optional(db)
@@ -65,13 +61,9 @@ async fn get_provider_base_url(
 }
 
 /// Fetch API key for a given provider from the account stored keys
-async fn get_provider_api_key(
-    db: &sqlx::PgPool,
-    aid: Uuid,
-    provider: &str,
-) -> Option<String> {
+async fn get_provider_api_key(db: &sqlx::PgPool, aid: Uuid, provider: &str) -> Option<String> {
     sqlx::query_scalar::<_, String>(
-        "SELECT api_key FROM provider_keys WHERE aid = $1 AND provider = $2 AND is_active = true"
+        "SELECT api_key FROM provider_keys WHERE aid = $1 AND provider = $2 AND is_active = true",
     )
     .bind(aid)
     .bind(provider)
@@ -95,7 +87,7 @@ pub async fn get_destinations(
         let rows = sqlx::query(
             "SELECT DISTINCT ap.key, ap.name, ap.description, ap.icon
              FROM available_providers ap
-             ORDER BY ap.name"
+             ORDER BY ap.name",
         )
         .fetch_all(&state.db)
         .await?;
@@ -119,18 +111,21 @@ pub async fn get_destinations(
             "SELECT DISTINCT action_key, action_label
              FROM integration_destinations
              WHERE provider = $1
-             ORDER BY action_label"
+             ORDER BY action_label",
         )
         .bind(provider)
         .fetch_all(&state.db)
         .await?;
 
-        let actions: Vec<serde_json::Value> = rows.iter().map(|r| {
-            json!({
-                "key": r.try_get::<&str,_>("action_key").unwrap_or(""),
-                "label": r.try_get::<&str,_>("action_label").unwrap_or("")
+        let actions: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|r| {
+                json!({
+                    "key": r.try_get::<&str,_>("action_key").unwrap_or(""),
+                    "label": r.try_get::<&str,_>("action_label").unwrap_or("")
+                })
             })
-        }).collect();
+            .collect();
 
         return Ok(Json(json!({"actions": actions})));
     }
@@ -140,19 +135,22 @@ pub async fn get_destinations(
         "SELECT destination_type, destination_label, sort_order
          FROM integration_destinations
          WHERE provider = $1 AND action_key = $2
-         ORDER BY sort_order"
+         ORDER BY sort_order",
     )
     .bind(provider)
     .bind(action)
     .fetch_all(&state.db)
     .await?;
 
-    let destinations: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({
-            "type": r.try_get::<&str,_>("destination_type").unwrap_or(""),
-            "label": r.try_get::<&str,_>("destination_label").unwrap_or("")
+    let destinations: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "type": r.try_get::<&str,_>("destination_type").unwrap_or(""),
+                "label": r.try_get::<&str,_>("destination_label").unwrap_or("")
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({"destinations": destinations})))
 }
@@ -166,10 +164,15 @@ pub async fn get_destination_values(
     Query(params): Query<HashMap<String, String>>,
 ) -> ApiResult<impl IntoResponse> {
     let provider = params.get("provider").map(|s| s.as_str()).unwrap_or("");
-    let dest_type = params.get("destination_type").map(|s| s.as_str()).unwrap_or("");
+    let dest_type = params
+        .get("destination_type")
+        .map(|s| s.as_str())
+        .unwrap_or("");
 
     if provider.is_empty() || dest_type.is_empty() {
-        return Err(AppError::BadRequest("provider and destination_type are required".into()));
+        return Err(AppError::BadRequest(
+            "provider and destination_type are required".into(),
+        ));
     }
 
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
@@ -185,26 +188,20 @@ pub async fn get_destination_values(
 
     // Fall back to static/placeholder values so the UI never breaks
     let fallback = match (provider, dest_type) {
-        ("coreswift", "list") => vec![
-            json!({"id": "default-list", "label": "Default List"}),
-        ],
-        ("coreswift", "tags") => vec![
-            json!({"id": "default-tag", "label": "default"}),
-        ],
+        ("coreswift", "list") => vec![json!({"id": "default-list", "label": "Default List"})],
+        ("coreswift", "tags") => vec![json!({"id": "default-tag", "label": "default"})],
         ("coreswift", "pipeline_stage") => vec![
             json!({"id": "qualified", "label": "Qualified"}),
             json!({"id": "won", "label": "Won"}),
             json!({"id": "lost", "label": "Lost"}),
         ],
-        ("funnelswift", "landing_page") => vec![
-            json!({"id": "default-page", "label": "Default Page"}),
-        ],
-        ("funnelswift", "tags") => vec![
-            json!({"id": "default-tag", "label": "default"}),
-        ],
-        ("incentiveswift", "campaign") => vec![
-            json!({"id": "default-campaign", "label": "Default Campaign"}),
-        ],
+        ("funnelswift", "landing_page") => {
+            vec![json!({"id": "default-page", "label": "Default Page"})]
+        }
+        ("funnelswift", "tags") => vec![json!({"id": "default-tag", "label": "default"})],
+        ("incentiveswift", "campaign") => {
+            vec![json!({"id": "default-campaign", "label": "Default Campaign"})]
+        }
         ("incentiveswift", "milestone_level") => vec![
             json!({"id": "bronze", "label": "Bronze"}),
             json!({"id": "silver", "label": "Silver"}),
@@ -275,14 +272,10 @@ fn parse_provider_response(
         ("coreswift", "list") => {
             // CoreSwift returns { lists: [{id, name}, ...] }
             extract_array(body, "lists", "id", "name")
-                .unwrap_or_else(|| extract_array(body, "data", "id", "name")
-                .unwrap_or_default())
+                .unwrap_or_else(|| extract_array(body, "data", "id", "name").unwrap_or_default())
         }
-        ("coreswift", "tags") => {
-            extract_array(body, "tags", "id", "name")
-                .unwrap_or_else(|| extract_array(body, "data", "id", "name")
-                .unwrap_or_default())
-        }
+        ("coreswift", "tags") => extract_array(body, "tags", "id", "name")
+            .unwrap_or_else(|| extract_array(body, "data", "id", "name").unwrap_or_default()),
         ("coreswift", "pipeline_stage") => {
             // CoreSwift pipelines: { pipelines: [{id, name, stages: [{id, name}, ...]}] }
             // Flatten all stages across all pipelines
@@ -303,17 +296,16 @@ fn parse_provider_response(
             }
             Vec::new()
         }
-        ("funnelswift", "landing_page") => {
-            extract_array(body, "landing_pages", "id", "name")
-                .unwrap_or_else(|| extract_array(body, "data", "id", "name")
-                .unwrap_or_default())
-        }
-        ("funnelswift", "tags") | ("incentiveswift", "campaign") | ("incentiveswift", "milestone_level") => {
-            extract_array(body, "data", "id", "name")
-                .unwrap_or_else(|| extract_array(body, "campaigns", "id", "name")
-                .unwrap_or_else(|| extract_array(body, "milestones", "id", "name")
-                .unwrap_or_default()))
-        }
+        ("funnelswift", "landing_page") => extract_array(body, "landing_pages", "id", "name")
+            .unwrap_or_else(|| extract_array(body, "data", "id", "name").unwrap_or_default()),
+        ("funnelswift", "tags")
+        | ("incentiveswift", "campaign")
+        | ("incentiveswift", "milestone_level") => extract_array(body, "data", "id", "name")
+            .unwrap_or_else(|| {
+                extract_array(body, "campaigns", "id", "name").unwrap_or_else(|| {
+                    extract_array(body, "milestones", "id", "name").unwrap_or_default()
+                })
+            }),
         _ => Vec::new(),
     }
 }
@@ -352,21 +344,29 @@ fn extract_array(
             }
             // If field names don't match, use the raw id field and fallback
             if let Some(raw_id) = first.get("id").or_else(|| first.get("uuid")) {
-                return Some(arr.iter().map(|_item| {
-                    let id = raw_id.as_str().unwrap_or("");
-                    json!({"id": id, "label": id})
-                }).collect());
+                return Some(
+                    arr.iter()
+                        .map(|_item| {
+                            let id = raw_id.as_str().unwrap_or("");
+                            json!({"id": id, "label": id})
+                        })
+                        .collect(),
+                );
             }
             return None;
         }
     }
 
-    Some(arr.iter().map(|item| {
-        json!({
-            "id": item.get(id_field).and_then(|v| v.as_str()).unwrap_or(""),
-            "label": item.get(label_field).and_then(|v| v.as_str()).unwrap_or(""),
-        })
-    }).collect())
+    Some(
+        arr.iter()
+            .map(|item| {
+                json!({
+                    "id": item.get(id_field).and_then(|v| v.as_str()).unwrap_or(""),
+                    "label": item.get(label_field).and_then(|v| v.as_str()).unwrap_or(""),
+                })
+            })
+            .collect(),
+    )
 }
 
 // ──────────────────────────────────────────────
@@ -391,17 +391,20 @@ pub async fn list_user_keys(
     .fetch_all(&state.db)
     .await?;
 
-    let keys: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({
-            "id": r.try_get::<&str,_>("id").unwrap_or(""),
-            "key_type": r.try_get::<&str,_>("key_type").unwrap_or(""),
-            "prefix": r.try_get::<&str,_>("key_prefix").unwrap_or(""),
-            "label": r.try_get::<Option<&str>,_>("label").unwrap_or(None),
-            "is_active": r.try_get::<bool,_>("is_active").unwrap_or(false),
-            "last_used_at": r.try_get::<Option<&str>,_>("last_used_at").unwrap_or(None),
-            "created_at": r.try_get::<&str,_>("created_at").unwrap_or("")
+    let keys: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.try_get::<&str,_>("id").unwrap_or(""),
+                "key_type": r.try_get::<&str,_>("key_type").unwrap_or(""),
+                "prefix": r.try_get::<&str,_>("key_prefix").unwrap_or(""),
+                "label": r.try_get::<Option<&str>,_>("label").unwrap_or(None),
+                "is_active": r.try_get::<bool,_>("is_active").unwrap_or(false),
+                "last_used_at": r.try_get::<Option<&str>,_>("last_used_at").unwrap_or(None),
+                "created_at": r.try_get::<&str,_>("created_at").unwrap_or("")
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!({"keys": keys})))
 }
@@ -416,35 +419,48 @@ pub async fn generate_user_key(
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let key_type = req.get("key_type")
+    let key_type = req
+        .get("key_type")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::BadRequest("key_type is required (primary, webhook_secret, surface_token)".into()))?;
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "key_type is required (primary, webhook_secret, surface_token)".into(),
+            )
+        })?;
 
     if !["primary", "webhook_secret", "surface_token"].contains(&key_type) {
-        return Err(AppError::BadRequest("Invalid key_type. Must be primary, webhook_secret, or surface_token".into()));
+        return Err(AppError::BadRequest(
+            "Invalid key_type. Must be primary, webhook_secret, or surface_token".into(),
+        ));
     }
 
     let label = req.get("label").and_then(|v| v.as_str()).unwrap_or("");
 
     // Generate the key
-    let random_part: String = (0..32).map(|_| {
-        let idx = rand::thread_rng().gen_range(0..36);
-        "0123456789abcdefghijklmnopqrstuvwxyz"[idx..idx+1].to_string()
-    }).collect();
+    let random_part: String = (0..32)
+        .map(|_| {
+            let idx = rand::thread_rng().gen_range(0..36);
+            "0123456789abcdefghijklmnopqrstuvwxyz"[idx..idx + 1].to_string()
+        })
+        .collect();
 
     let prefix = match key_type {
         "primary" => "wf_swift_",
         "webhook_secret" => "whsec_",
         "surface_token" => "sf_",
-        _ => "key_"
+        _ => "key_",
     };
 
     let raw_key = format!("{}{}", prefix, random_part);
 
     // Hash for storage
     let salt = argon2::password_hash::SaltString::generate(&mut rand::thread_rng());
-    let hash = argon2::PasswordHasher::hash_password(&argon2::Argon2::default(), raw_key.as_bytes(), &salt)
-        .map_err(|e| AppError::Internal(format!("Hashing error: {}", e)))?;
+    let hash = argon2::PasswordHasher::hash_password(
+        &argon2::Argon2::default(),
+        raw_key.as_bytes(),
+        &salt,
+    )
+    .map_err(|e| AppError::Internal(format!("Hashing error: {}", e)))?;
     let key_hash = hash.serialize().to_string();
 
     let id = Uuid::new_v4();
@@ -452,7 +468,7 @@ pub async fn generate_user_key(
 
     sqlx::query(
         "INSERT INTO user_api_keys (id, user_id, aid, key_type, key_hash, key_prefix, label)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)"
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(id)
     .bind(user_id)
@@ -464,13 +480,16 @@ pub async fn generate_user_key(
     .execute(&state.db)
     .await?;
 
-    Ok((StatusCode::CREATED, Json(json!({
-        "id": id.to_string(),
-        "key": raw_key,
-        "prefix": prefix_display,
-        "key_type": key_type,
-        "message": "Save this key — it will not be shown again"
-    }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "id": id.to_string(),
+            "key": raw_key,
+            "prefix": prefix_display,
+            "key_type": key_type,
+            "message": "Save this key — it will not be shown again"
+        })),
+    ))
 }
 
 /// DELETE /api/v1/user-keys/{id}
@@ -513,10 +532,12 @@ pub async fn seed_user_keys(
     let prefixes = ["wf_swift_", "whsec_", "sf_"];
 
     for (i, key_type) in key_types.iter().enumerate() {
-        let random_part: String = (0..32).map(|_| {
-            let idx = rand::thread_rng().gen_range(0..36);
-            "0123456789abcdefghijklmnopqrstuvwxyz"[idx..idx+1].to_string()
-        }).collect();
+        let random_part: String = (0..32)
+            .map(|_| {
+                let idx = rand::thread_rng().gen_range(0..36);
+                "0123456789abcdefghijklmnopqrstuvwxyz"[idx..idx + 1].to_string()
+            })
+            .collect();
 
         let raw_key = format!("{}{}", prefixes[i], random_part);
         let salt = SaltString::generate(&mut rand::thread_rng());
@@ -528,7 +549,7 @@ pub async fn seed_user_keys(
 
         sqlx::query(
             "INSERT INTO user_api_keys (id, user_id, aid, key_type, key_hash, key_prefix)
-             VALUES ($1, $2, $3, $4, $5, $6)"
+             VALUES ($1, $2, $3, $4, $5, $6)",
         )
         .bind(Uuid::new_v4())
         .bind(user_id)
@@ -551,7 +572,8 @@ pub async fn check_provider_health(
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let provider = req.get("provider")
+    let provider = req
+        .get("provider")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("provider is required".into()))?;
 
@@ -570,7 +592,10 @@ pub async fn check_provider_health(
     let healthy = if let (Some(url), Some(_key)) = (&health_url, &api_key) {
         match reqwest::Client::new()
             .get(url)
-            .header("Authorization", format!("Bearer {}", api_key.as_ref().unwrap_or(&String::new())))
+            .header(
+                "Authorization",
+                format!("Bearer {}", api_key.as_ref().unwrap_or(&String::new())),
+            )
             .timeout(std::time::Duration::from_secs(5))
             .send()
             .await

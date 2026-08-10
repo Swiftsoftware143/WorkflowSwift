@@ -5,9 +5,9 @@ use axum::{
 };
 use std::sync::OnceLock;
 
-use crate::AppState;
-use crate::error::AppError;
 use super::models::Claims;
+use crate::error::AppError;
+use crate::AppState;
 
 static PUBLIC_PATHS: OnceLock<Vec<String>> = OnceLock::new();
 
@@ -50,7 +50,10 @@ pub async fn auth_middleware(
         return Ok(next.run(req).await);
     }
 
-    tracing::debug!("auth_middleware: checking Authorization header for {}", path);
+    tracing::debug!(
+        "auth_middleware: checking Authorization header for {}",
+        path
+    );
 
     let auth_header = req
         .headers()
@@ -58,11 +61,12 @@ pub async fn auth_middleware(
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| AppError::Unauthorized)?;
 
-    let token = auth_header.strip_prefix("Bearer ")
+    let token = auth_header
+        .strip_prefix("Bearer ")
         .ok_or_else(|| AppError::Unauthorized)?;
 
-    let claims = verify_token(token, &state.config.jwt_secret)
-        .map_err(|_| AppError::Unauthorized)?;
+    let claims =
+        verify_token(token, &state.config.jwt_secret).map_err(|_| AppError::Unauthorized)?;
 
     let mut req = req;
     req.extensions_mut().insert(claims);
@@ -71,7 +75,7 @@ pub async fn auth_middleware(
 }
 
 pub fn verify_token(token: &str, secret: &str) -> Result<Claims, AppError> {
-    use jsonwebtoken::{decode, DecodingKey, Validation, Algorithm};
+    use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 
     let decoding_key = DecodingKey::from_secret(secret.as_bytes());
     let mut validation = Validation::new(Algorithm::HS256);
@@ -83,7 +87,7 @@ pub fn verify_token(token: &str, secret: &str) -> Result<Claims, AppError> {
 }
 
 pub fn create_token(claims: &Claims, secret: &str) -> Result<String, AppError> {
-    use jsonwebtoken::{encode, Header, EncodingKey};
+    use jsonwebtoken::{encode, EncodingKey, Header};
 
     let encoding_key = EncodingKey::from_secret(secret.as_bytes());
     Ok(encode(&Header::default(), claims, &encoding_key)?)

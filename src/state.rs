@@ -1,7 +1,7 @@
 use sqlx::PgPool;
 
 use crate::config::AppConfig;
-use crate::rate_limit::{RateLimiters, ProviderKeyCache};
+use crate::rate_limit::{ProviderKeyCache, RateLimiters};
 
 #[derive(Clone)]
 pub struct AppState {

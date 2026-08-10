@@ -1,5 +1,5 @@
-pub mod models;
-pub mod middleware;
 pub mod handlers;
+pub mod middleware;
+pub mod models;
 
 pub use handlers::*;

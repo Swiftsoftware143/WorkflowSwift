@@ -1,6 +1,6 @@
 use sqlx::PgPool;
-use uuid::Uuid;
 use std::env;
+use uuid::Uuid;
 
 /// Provision n8n resources for a new account.
 /// Creates an n8n API key and stores the tenant config so the account's
@@ -10,8 +10,8 @@ pub async fn provision_n8n_for_account(pool: &PgPool, aid: Uuid) {
     let n8n_api_key = format!("ws-{}-{}", &aid.to_string()[..8], Uuid::new_v4());
 
     // Determine which n8n webhook URL to use (configurable via env, default to user-n8n-webhook)
-    let n8n_url = env::var("N8N_WEBHOOK_URL")
-        .unwrap_or_else(|_| "http://user-n8n-webhook:5679".to_string());
+    let n8n_url =
+        env::var("N8N_WEBHOOK_URL").unwrap_or_else(|_| "http://user-n8n-webhook:5679".to_string());
 
     // Upsert into n8n_account_config
     let result = sqlx::query(
