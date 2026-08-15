@@ -1,3 +1,4 @@
 *.api
 /target
 server.log
+workflowswift-api

@@ -111,6 +111,14 @@ pub async fn register(
     .execute(&state.db)
     .await?;
 
+    // Send welcome email with credentials
+    let welcome_vars = serde_json::json!({
+        "name": &req.name,
+        "email": &req.email,
+        "app_url": "https://app.workflowswift.com",
+    });
+    let _ = crate::email::send_email(&state, &req.email, "welcome", &welcome_vars).await;
+
     // Auto-generate API keys for the new user
     use crate::handlers::integration_center_handler;
     let _ = integration_center_handler::seed_user_keys(&state.db, user_id, aid).await;
