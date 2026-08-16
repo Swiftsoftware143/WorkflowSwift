@@ -816,6 +816,7 @@ async fn handle_checkout_completed(
             .unwrap_or("Valued Customer");
         let _session_account_id: Uuid = row.get("account_id");
         let _ptype: String = row.get("purchasable_type");
+        let purchasable_id: Option<Uuid> = row.try_get("purchasable_id").ok().flatten();
 
         if !customer_email.is_empty() {
             if let Err(e) = deliver_credentials(
@@ -849,6 +850,18 @@ async fn handle_checkout_completed(
                     .await;
             }
         });
+
+        // Credit the referring affiliate for the paid-plan upgrade (if this is a plan purchase).
+        if _ptype == "plan" {
+            if let Some(plan_id) = purchasable_id {
+                crate::handlers::plan_handler::attribute_plan_upgrade(
+                    state,
+                    _session_account_id,
+                    plan_id,
+                )
+                .await;
+            }
+        }
     }
 
     tracing::info!(
