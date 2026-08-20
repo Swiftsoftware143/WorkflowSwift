@@ -25,18 +25,6 @@ pub fn create_router(state: AppState) -> Router {
         .route("/profile", put(auth::update_profile));
 
     // Resource sub-routers
-    let client_routes = Router::new()
-        .route(
-            "/",
-            get(handlers::client_handler::list_clients)
-                .post(handlers::client_handler::create_client),
-        )
-        .route(
-            "/{id}",
-            get(handlers::client_handler::get_client)
-                .put(handlers::client_handler::update_client)
-                .delete(handlers::client_handler::delete_client),
-        );
 
     let template_routes = Router::new()
         .route(
@@ -432,30 +420,6 @@ pub fn create_router(state: AppState) -> Router {
                 .delete(handlers::tag_groups_handler::delete),
         );
 
-    let deals_routes = Router::new()
-        .route(
-            "/",
-            get(handlers::deals_handler::list).post(handlers::deals_handler::create),
-        )
-        .route(
-            "/{id}",
-            get(handlers::deals_handler::get)
-                .put(handlers::deals_handler::update)
-                .delete(handlers::deals_handler::delete),
-        );
-
-    let campaigns_routes = Router::new()
-        .route(
-            "/",
-            get(handlers::campaigns_handler::list).post(handlers::campaigns_handler::create),
-        )
-        .route(
-            "/{id}",
-            get(handlers::campaigns_handler::get)
-                .put(handlers::campaigns_handler::update)
-                .delete(handlers::campaigns_handler::delete),
-        );
-
     let tickets_routes = Router::new()
         .route(
             "/",
@@ -493,18 +457,6 @@ pub fn create_router(state: AppState) -> Router {
                 .delete(handlers::webhooks_handler::delete),
         );
 
-    let reviews_routes = Router::new()
-        .route(
-            "/",
-            get(handlers::reviews_handler::list).post(handlers::reviews_handler::create),
-        )
-        .route(
-            "/{id}",
-            get(handlers::reviews_handler::get)
-                .put(handlers::reviews_handler::update)
-                .delete(handlers::reviews_handler::delete),
-        );
-
     let surfaces_routes = Router::new()
         .route(
             "/",
@@ -527,80 +479,6 @@ pub fn create_router(state: AppState) -> Router {
             get(handlers::categories_handler::get)
                 .put(handlers::categories_handler::update)
                 .delete(handlers::categories_handler::delete),
-        );
-
-    let reports_routes = Router::new()
-        .route(
-            "/",
-            get(handlers::reports_handler::list).post(handlers::reports_handler::create),
-        )
-        .route(
-            "/{id}",
-            get(handlers::reports_handler::get)
-                .put(handlers::reports_handler::update)
-                .delete(handlers::reports_handler::delete),
-        );
-
-    let knowledge_base_routes = Router::new()
-        .route(
-            "/",
-            get(handlers::knowledge_base_handler::list)
-                .post(handlers::knowledge_base_handler::create),
-        )
-        .route(
-            "/{id}",
-            get(handlers::knowledge_base_handler::get)
-                .put(handlers::knowledge_base_handler::update)
-                .delete(handlers::knowledge_base_handler::delete),
-        );
-
-    let call_logs_routes = Router::new()
-        .route(
-            "/",
-            get(handlers::call_logs_handler::list).post(handlers::call_logs_handler::create),
-        )
-        .route(
-            "/{id}",
-            get(handlers::call_logs_handler::get)
-                .put(handlers::call_logs_handler::update)
-                .delete(handlers::call_logs_handler::delete),
-        );
-
-    let calendar_events_routes = Router::new()
-        .route(
-            "/",
-            get(handlers::calendar_events_handler::list)
-                .post(handlers::calendar_events_handler::create),
-        )
-        .route(
-            "/{id}",
-            get(handlers::calendar_events_handler::get)
-                .put(handlers::calendar_events_handler::update)
-                .delete(handlers::calendar_events_handler::delete),
-        );
-    let import_logs_routes = Router::new()
-        .route(
-            "/",
-            get(handlers::import_logs_handler::list).post(handlers::import_logs_handler::create),
-        )
-        .route(
-            "/{id}",
-            get(handlers::import_logs_handler::get)
-                .put(handlers::import_logs_handler::update)
-                .delete(handlers::import_logs_handler::delete),
-        );
-
-    let export_templates_routes = Router::new()
-        .route(
-            "/",
-            get(handlers::export_templates_handler::list)
-                .post(handlers::export_templates_handler::create),
-        )
-        .route(
-            "/{id}",
-            get(handlers::export_templates_handler::get)
-                .put(handlers::export_templates_handler::update)
-                .delete(handlers::export_templates_handler::delete),
         );
 
     let brand_monitor_routes = Router::new()
@@ -858,7 +736,6 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/auth", auth_protected)
         .nest("/accounts", account_routes)
         .nest("/users", user_routes)
-        .nest("/clients", client_routes)
         .nest("/templates", template_routes)
         .nest("/workflows", workflow_routes)
         .nest("/instances", instance_routes)
@@ -879,20 +756,11 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/affiliates", affiliates_routes)
         .nest("/leads", leads_routes)
         .nest("/tag-groups", tag_groups_routes)
-        .nest("/deals", deals_routes)
-        .nest("/campaigns", campaigns_routes)
         .nest("/tickets", tickets_routes)
         .nest("/email-templates", email_templates_routes)
         .nest("/webhooks", webhooks_routes)
-        .nest("/reviews", reviews_routes)
         .nest("/surfaces", surfaces_routes)
         .nest("/categories", categories_routes)
-        .nest("/reports", reports_routes)
-        .nest("/knowledge-base", knowledge_base_routes)
-        .nest("/call-logs", call_logs_routes)
-        .nest("/calendar-events", calendar_events_routes)
-        .nest("/import-logs", import_logs_routes)
-        .nest("/export-templates", export_templates_routes)
         .nest("/brand-monitors", brand_monitor_routes)
         .nest("/competitors", competitor_routes)
         .nest("/prospecting", prospecting_routes)
