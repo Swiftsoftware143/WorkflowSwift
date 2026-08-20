@@ -62,16 +62,29 @@ pub async fn list(
     Query(query): Query<ListQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let limit = if query.per_page > 0 { query.per_page } else { 50 };
-    let offset = if query.page > 0 { (query.page - 1) * limit } else { 0 };
+    let limit = if query.per_page > 0 {
+        query.per_page
+    } else {
+        50
+    };
+    let offset = if query.page > 0 {
+        (query.page - 1) * limit
+    } else {
+        0
+    };
     let rows = if query.status.is_some() {
         sqlx::query_as::<_, Ticket>("SELECT * FROM tickets WHERE aid=$1 AND status=$2 ORDER BY created_at DESC LIMIT $3 OFFSET $4")
             .bind(aid).bind(&query.status).bind(limit).bind(offset)
             .fetch_all(&state.db).await?
     } else {
-        sqlx::query_as::<_, Ticket>("SELECT * FROM tickets WHERE aid=$1 ORDER BY created_at DESC LIMIT $2 OFFSET $3")
-            .bind(aid).bind(limit).bind(offset)
-            .fetch_all(&state.db).await?
+        sqlx::query_as::<_, Ticket>(
+            "SELECT * FROM tickets WHERE aid=$1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+        )
+        .bind(aid)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&state.db)
+        .await?
     };
     Ok(Json(json!({ "items": rows, "count": rows.len() })))
 }
@@ -93,7 +106,9 @@ pub async fn create(
         .bind(id).bind(aid).bind(&b.subject).bind(&b.description).bind(&status).bind(&priority).bind(&source)
         .execute(&state.db).await?;
     let row = sqlx::query_as::<_, Ticket>(&format!("{COLS} WHERE id = $1"))
-        .bind(id).fetch_one(&state.db).await?;
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
     Ok((StatusCode::CREATED, Json(json!({ "item": row }))))
 }
 
@@ -104,8 +119,10 @@ pub async fn get(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let row = sqlx::query_as::<_, Ticket>(&format!("{COLS} WHERE id = $1 AND aid = $2"))
-        .bind(id).bind(aid)
-        .fetch_optional(&state.db).await?
+        .bind(id)
+        .bind(aid)
+        .fetch_optional(&state.db)
+        .await?
         .ok_or_else(|| AppError::NotFound("Ticket not found".into()))?;
     Ok(Json(json!({ "item": row })))
 }
@@ -118,8 +135,10 @@ pub async fn update(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let cur = sqlx::query_as::<_, Ticket>(&format!("{COLS} WHERE id = $1 AND aid = $2"))
-        .bind(id).bind(aid)
-        .fetch_optional(&state.db).await?
+        .bind(id)
+        .bind(aid)
+        .fetch_optional(&state.db)
+        .await?
         .ok_or_else(|| AppError::NotFound("Ticket not found".into()))?;
     sqlx::query("UPDATE tickets SET subject=COALESCE($2,subject), description=COALESCE($3,description), status=COALESCE($4,status), priority=COALESCE($5,priority), updated_at=NOW() WHERE id=$1 AND aid=$6")
         .bind(id)
@@ -130,7 +149,9 @@ pub async fn update(
         .bind(aid)
         .execute(&state.db).await?;
     let row = sqlx::query_as::<_, Ticket>(&format!("{COLS} WHERE id = $1"))
-        .bind(id).fetch_one(&state.db).await?;
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
     Ok(Json(json!({ "item": row })))
 }
 
@@ -141,8 +162,10 @@ pub async fn delete(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let r = sqlx::query("DELETE FROM tickets WHERE id=$1 AND aid=$2")
-        .bind(id).bind(aid)
-        .execute(&state.db).await?;
+        .bind(id)
+        .bind(aid)
+        .execute(&state.db)
+        .await?;
     if r.rows_affected() == 0 {
         return Err(AppError::NotFound("Ticket not found".into()));
     }
