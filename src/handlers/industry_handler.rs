@@ -834,6 +834,11 @@ pub async fn push_widget_data(
         .get("metric_key")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::Validation("metric_key required".to_string()))?;
+    let metric_key: String = if metric_key.starts_with("n8n_") {
+        metric_key.to_string()
+    } else {
+        format!("n8n_{}", metric_key)
+    };
     let metric_value = req
         .get("value")
         .ok_or_else(|| AppError::Validation("value required".to_string()))?;
@@ -896,7 +901,7 @@ pub async fn push_widget_data(
     .bind(data_id)
     .bind(dashboard_id)
     .bind(aid)
-    .bind(metric_key)
+    .bind(&metric_key)
     .bind(metric_value)
     .execute(&state.db)
     .await?;
