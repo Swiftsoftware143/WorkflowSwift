@@ -45,7 +45,16 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/{id}/install",
             post(handlers::template_handler::install_template_as_workflow),
-        );
+        )
+        .route(
+            "/{id}/export",
+            get(handlers::template_handler::export_template),
+        )
+        .route(
+            "/import",
+            post(handlers::template_handler::import_template),
+        )
+        ;
 
     let workflow_routes = Router::new()
         .route(

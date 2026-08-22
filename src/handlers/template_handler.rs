@@ -428,3 +428,110 @@ pub async fn get_template_steps(
 
     Ok(Json(json!({"steps": steps})))
 }
+
+
+// ===== Template JSON Export / Import (added 2026-08-22) =====
+
+// GET /templates/{id}/export?download=1
+// Returns a portable JSON payload: the template's metadata + its steps as an array.
+// The client can save this as a .json file and re-import it (here or on any account)
+// via POST /templates/import. Surface/timestamps/internal ids are not round-tripped.
+pub async fn export_template(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<impl IntoResponse> {
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+
+    let template = sqlx::query_as::<_, WorkflowTemplate>(
+        "SELECT * FROM workflow_templates WHERE id = $1 AND (aid = $2 OR is_public = true)",
+    )
+    .bind(id)
+    .bind(aid)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(AppError::NotFound("Template not found".to_string()))?;
+
+    let steps = sqlx::query_as::<_, WorkflowTemplateStep>(
+        "SELECT * FROM workflow_template_steps WHERE template_id = $1 ORDER BY sort_order ASC",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let steps_json: Vec<serde_json::Value> = steps
+        .iter()
+        .map(|s| {
+            json!({
+                "step_type": s.step_type,
+                "name": s.name,
+                "description": s.description,
+                "sort_order": s.sort_order,
+                "config": s.config,
+            })
+        })
+        .collect();
+
+    let payload = json!({
+        "schema_version": 1,
+        "template": {
+            "name": template.name,
+            "description": template.description,
+            "category": template.category,
+            "category_id": template.category_id,
+            "tags": template.tags,
+            "steps": steps_json,
+        }
+    });
+    Ok((
+        StatusCode::OK,
+        Json(json!({"template": payload, "exported": true})),
+    ))
+}
+
+// POST /templates/import
+// Body matches the CreateTemplateRequest shape ({ name, description, category, category_id, tags, steps[] }).
+// Creates a NEW template + steps owned by the calling account (account-private, is_public=false).
+// Mirrors create_template insertion so import behaves identically to manual creation.
+pub async fn import_template(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<CreateTemplateRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    features::enforce_feature_limit(&state.db, aid, "max_templates", "Templates").await?;
+
+    let template_id = Uuid::new_v4();
+    let template = sqlx::query_as::<_, WorkflowTemplate>(
+        r#"INSERT INTO workflow_templates (id, aid, name, description, category, tags, is_public)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           RETURNING *"#,
+    )
+    .bind(template_id)
+    .bind(aid)
+    .bind(&req.name)
+    .bind(&req.description)
+    .bind(&req.category)
+    .bind(&req.tags)
+    .bind(false)
+    .fetch_one(&state.db)
+    .await?;
+
+    for step in &req.steps {
+        sqlx::query(
+            r#"INSERT INTO workflow_template_steps (id, template_id, step_type, name, description, sort_order, config)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)"#,
+        )
+        .bind(Uuid::new_v4())
+        .bind(template_id)
+        .bind(&step.step_type)
+        .bind(&step.name)
+        .bind(&step.description)
+        .bind(step.sort_order)
+        .bind(&step.config)
+        .execute(&state.db)
+        .await?;
+    }
+
+    Ok((StatusCode::CREATED, Json(json!({"template": template, "imported": true}))))
+}
