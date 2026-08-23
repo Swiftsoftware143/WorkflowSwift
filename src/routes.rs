@@ -50,11 +50,7 @@ pub fn create_router(state: AppState) -> Router {
             "/{id}/export",
             get(handlers::template_handler::export_template),
         )
-        .route(
-            "/import",
-            post(handlers::template_handler::import_template),
-        )
-        ;
+        .route("/import", post(handlers::template_handler::import_template));
 
     let workflow_routes = Router::new()
         .route(
