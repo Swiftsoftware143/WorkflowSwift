@@ -37,6 +37,25 @@ pub async fn list_templates(
     .await?
     .flatten();
 
+    // Resolve plan tier so the client can gate on free vs paid (slug + price).
+    let plan_info: Option<serde_json::Value> = match plan_id {
+        Some(pid) => {
+            sqlx::query("SELECT slug, price_monthly AS price FROM plan_tiers WHERE id = $1")
+                .bind(pid)
+                .fetch_optional(&state.db)
+                .await?
+                .map(|row| {
+                    let slug: String = row.try_get("slug").unwrap_or_default();
+                    let price: Option<f64> = row.try_get("price").unwrap_or(None);
+                    json!({
+                        "slug": slug,
+                        "is_paid": price.unwrap_or(0.0) > 0.0,
+                    })
+                })
+        }
+        None => None,
+    };
+
     // If a specific industry is requested, also check user has access to it
     if let Some(ref industry_slug) = query.industry {
         let has_industry: bool = sqlx::query_scalar(
@@ -158,7 +177,8 @@ pub async fn list_templates(
 
     Ok(Json(json!({
         "templates": templates,
-        "available_public": available_public
+        "available_public": available_public,
+        "plan": plan_info
     })))
 }
 
@@ -429,7 +449,6 @@ pub async fn get_template_steps(
     Ok(Json(json!({"steps": steps})))
 }
 
-
 // ===== Template JSON Export / Import (added 2026-08-22) =====
 
 // GET /templates/{id}/export?download=1
@@ -533,5 +552,8 @@ pub async fn import_template(
         .await?;
     }
 
-    Ok((StatusCode::CREATED, Json(json!({"template": template, "imported": true}))))
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({"template": template, "imported": true})),
+    ))
 }
