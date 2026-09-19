@@ -1,5 +1,5 @@
 -- Seed super admin user for WorkflowSwift (idempotent)
--- Password: (rotated-2026-09-16)
+-- Password: (rotated 2026-09-16 - not stored in repo; see ADMIN_GUIDE)
 -- Hash: $2b$12$w9t7GUaZGrSIHZygcnoikOti2997EGKlQP3FSRBd92CluISxD.sOm
 
 -- First ensure the admin account exists
