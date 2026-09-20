@@ -3,14 +3,18 @@
 //! Templates are stored in the `email_templates` table and can be configured
 //! via the admin panel. HTML + text versions with toggle support.
 //!
-//! SMTP/API config comes from `admin_settings` (key: "email").
-//! Fallback: EMAIL_API_URL / EMAIL_API_KEY env vars.
+//! SMTP/API config comes from `admin_settings` (key: "email") — DB ONLY.
+//! There is no env-var credential fallback: an unconfigured provider logs and
+//! skips the send instead of silently using a server-wide env var.
 
 use serde_json::json;
-use std::env;
 use uuid::Uuid;
 
 use crate::state::AppState;
+
+/// Default From address — used only when the admin has not set one in
+/// Admin > Settings > Email. Not a credential, so it is safe as a constant.
+const DEFAULT_EMAIL_FROM: &str = "swiftsoftware143@yahoo.com";
 
 /// Render a template string by replacing {{key}} placeholders with values from `vars`.
 fn render_template(template: &str, vars: &serde_json::Value) -> String {
@@ -37,8 +41,20 @@ pub async fn send_email(
     template_type: &str,
     vars: &serde_json::Value,
 ) -> Result<(), String> {
-    // Get email config from DB admin_settings, fallback to env vars
-    let (api_url, api_key, from_address) = get_email_config(state).await;
+    // Get email config from DB admin_settings (DB only — no env fallback)
+    let cfg = match get_email_config(state).await {
+        Some(c) => c,
+        None => {
+            eprintln!(
+                "[email] skipping '{}' to {} — email provider not configured \
+                 (Admin > Settings > Email)",
+                template_type, to
+            );
+            return Err(
+                "Email not configured: set the provider in Admin > Settings > Email".to_string(),
+            );
+        }
+    };
 
     // Try to load template from DB
     let template = sqlx::query_as::<_, EmailTemplateRow>(
@@ -78,40 +94,66 @@ pub async fn send_email(
             let use_html = t.is_html.unwrap_or(true);
 
             if use_html && !html_body.is_empty() {
-                send_email_request(
-                    &api_url,
-                    &api_key,
-                    &from_address,
-                    to,
-                    &subject,
-                    &text_body,
-                    &html_body,
-                )
-                .await
+                send_email_request(&cfg, to, &subject, &text_body, &html_body).await
             } else {
-                send_email_request(
-                    &api_url,
-                    &api_key,
-                    &from_address,
-                    to,
-                    &subject,
-                    &text_body,
-                    "",
-                )
-                .await
+                send_email_request(&cfg, to, &subject, &text_body, "").await
             }
         }
         None => {
             // Fallback to hardcoded template
-            send_email_fallback(api_url, api_key, from_address, to, template_type, vars).await
+            send_email_fallback(&cfg, to, template_type, vars).await
         }
     }
 }
 
-/// Get email config: first from admin_settings DB, fallback to env vars.
-async fn get_email_config(state: &AppState) -> (String, String, String) {
-    // Try DB config
-    let db_config = sqlx::query_scalar::<_, serde_json::Value>(
+/// Email provider configuration, read from the `admin_settings` row keyed
+/// `email` (Admin > Settings > Email). The DB is the **only** source of
+/// credentials — no env-var fallback anywhere, so the admin UI is authoritative.
+#[derive(Debug, Clone)]
+struct EmailConfig {
+    /// `smtp` | `mailgun` | `sendgrid` | `sendiio`
+    provider: String,
+    /// API endpoint. mailgun: `https://api.mailgun.net/v3/<domain>/messages`,
+    /// sendgrid: blank → `https://api.sendgrid.com/v3/mail/send`, sendiio: the
+    /// account's send endpoint.
+    api_url: String,
+    api_key: String,
+    from_address: String,
+    from_name: String,
+    smtp_host: String,
+    smtp_port: u16,
+    smtp_username: String,
+    smtp_password: String,
+    /// `none` | `tls` (STARTTLS) | `ssl` (implicit TLS)
+    smtp_encryption: String,
+}
+
+impl EmailConfig {
+    /// Are the fields the selected provider needs present?
+    fn is_configured(&self) -> bool {
+        match self.provider.as_str() {
+            "smtp" | "mail" => !self.smtp_host.trim().is_empty(),
+            "sendgrid" => !self.api_key.trim().is_empty(),
+            _ => !self.api_url.trim().is_empty() && !self.api_key.trim().is_empty(),
+        }
+    }
+}
+
+fn cfg_str(cfg: &serde_json::Value, key: &str) -> String {
+    cfg.get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+/// Read the email provider config from `admin_settings`.
+///
+/// Returns `None` (after logging) when the admin has not configured a provider —
+/// the caller then refuses to send. There is deliberately **no** env-var
+/// fallback: a server-wide EMAIL_API_URL/EMAIL_API_KEY would silently shadow this.
+async fn get_email_config(state: &AppState) -> Option<EmailConfig> {
+    let cfg = sqlx::query_scalar::<_, serde_json::Value>(
         "SELECT value FROM admin_settings WHERE key = 'email'",
     )
     .fetch_optional(&state.db)
@@ -119,45 +161,77 @@ async fn get_email_config(state: &AppState) -> (String, String, String) {
     .ok()
     .flatten();
 
-    if let Some(cfg) = db_config {
-        let api_url = cfg
-            .get("api_url")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| env::var("EMAIL_API_URL").unwrap_or_default());
+    let cfg = match cfg {
+        Some(c) => c,
+        None => {
+            eprintln!(
+                "[email] not configured: admin_settings key 'email' is missing \
+                 (Admin > Settings > Email) — skipping send"
+            );
+            return None;
+        }
+    };
 
-        let api_key = cfg
-            .get("api_key")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| env::var("EMAIL_API_KEY").unwrap_or_default());
+    let provider = {
+        let p = cfg_str(&cfg, "provider").to_ascii_lowercase();
+        if p.is_empty() {
+            // Row predates the provider field: the Mailgun-compatible API was the
+            // only transport, so keep it as the stored default.
+            "mailgun".to_string()
+        } else {
+            p
+        }
+    };
 
-        let from = cfg
-            .get("from_address")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| {
-                env::var("EMAIL_FROM").unwrap_or_else(|_| "swiftsoftware143@yahoo.com".to_string())
-            });
+    let config = EmailConfig {
+        provider,
+        api_url: cfg_str(&cfg, "api_url"),
+        api_key: cfg_str(&cfg, "api_key"),
+        from_address: cfg_str(&cfg, "from_address"),
+        from_name: cfg_str(&cfg, "from_name"),
+        smtp_host: cfg_str(&cfg, "smtp_host"),
+        smtp_port: cfg.get("smtp_port").and_then(|v| v.as_u64()).unwrap_or(587) as u16,
+        smtp_username: cfg_str(&cfg, "smtp_username"),
+        smtp_password: cfg_str(&cfg, "smtp_password"),
+        smtp_encryption: {
+            let e = cfg_str(&cfg, "smtp_encryption").to_ascii_lowercase();
+            if e.is_empty() {
+                "tls".to_string()
+            } else {
+                e
+            }
+        },
+    };
 
-        (api_url, api_key, from)
+    if !config.is_configured() {
+        eprintln!(
+            "[email] not configured: provider '{}' is missing its credentials \
+             (Admin > Settings > Email) — skipping send",
+            config.provider
+        );
+        return None;
+    }
+
+    Some(config)
+}
+
+/// From header — `Name <addr>` when a name is set, else the bare address.
+fn from_header(cfg: &EmailConfig) -> String {
+    let addr = if cfg.from_address.is_empty() {
+        DEFAULT_EMAIL_FROM.to_string()
     } else {
-        let api_url = env::var("EMAIL_API_URL").unwrap_or_default();
-        let api_key = env::var("EMAIL_API_KEY").unwrap_or_default();
-        let from =
-            env::var("EMAIL_FROM").unwrap_or_else(|_| "swiftsoftware143@yahoo.com".to_string());
-        (api_url, api_key, from)
+        cfg.from_address.clone()
+    };
+    if cfg.from_name.is_empty() {
+        addr
+    } else {
+        format!("{} <{}>", cfg.from_name, addr)
     }
 }
 
 /// Fallback hardcoded templates (used when DB template not found)
 async fn send_email_fallback(
-    api_url: String,
-    api_key: String,
-    from: String,
+    cfg: &EmailConfig,
     to: &str,
     template_type: &str,
     vars: &serde_json::Value,
@@ -252,10 +326,7 @@ async fn send_email_fallback(
                 )
             };
 
-            send_email_request(
-                &api_url, &api_key, &from, to, &subject, &text_body, &html_body,
-            )
-            .await
+            send_email_request(cfg, to, &subject, &text_body, &html_body).await
         }
         "purchase_confirmed" => {
             let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
@@ -293,10 +364,7 @@ async fn send_email_fallback(
                 "Hello {},\n\nYour payment for {} has been confirmed. Thank you!\n\nYou can access your account at {}.\n\nBest regards,\nThe WorkflowSwift Team",
                 name, plan_name, app_url
             );
-            send_email_request(
-                &api_url, &api_key, &from, to, &subject, &text_body, &html_body,
-            )
-            .await
+            send_email_request(cfg, to, &subject, &text_body, &html_body).await
         }
         "password_reset" => {
             let token = vars.get("token").and_then(|v| v.as_str()).unwrap_or("");
@@ -324,29 +392,11 @@ async fn send_email_fallback(
                 token
             );
 
-            send_email_request(
-                &api_url,
-                &api_key,
-                &from,
-                to,
-                "Password Reset Request",
-                &text_body,
-                &html_body,
-            )
-            .await
+            send_email_request(cfg, to, "Password Reset Request", &text_body, &html_body).await
         }
         _ => {
             let text_body = format!("WorkflowSwift Notification:\n\n{}", vars);
-            send_email_request(
-                &api_url,
-                &api_key,
-                &from,
-                to,
-                "WorkflowSwift Notification",
-                &text_body,
-                "",
-            )
-            .await
+            send_email_request(cfg, to, "WorkflowSwift Notification", &text_body, "").await
         }
     }
 }
@@ -377,40 +427,85 @@ struct EmailTemplateRow {
 
 // ---- Core sender ----
 
-/// Core HTTP request to the email API provider (Mailgun-compatible).
-/// Uses Basic Auth (api:<key>) and form-encoded body as required by Mailgun REST API.
+/// Send one message through whichever provider the admin selected in
+/// Admin > Settings > Email. Providers: `smtp` | `mailgun` | `sendgrid` | `sendiio`.
+///
+/// The provider is a stored choice, not a compiled-in one: no branch here can be
+/// reached without a DB configuration, and an unknown value falls back to the
+/// Mailgun-compatible HTTP shape (which was the only transport before the field
+/// existed) rather than to an env var.
 async fn send_email_request(
-    api_url: &str,
-    api_key: &str,
-    from: &str,
+    cfg: &EmailConfig,
     to: &str,
     subject: &str,
     text_body: &str,
     html_body: &str,
 ) -> Result<(), String> {
-    if api_url.is_empty() || api_key.is_empty() {
-        return Err("Email not configured: set EMAIL_API_URL and EMAIL_API_KEY or configure in Admin > Settings > Email".to_string());
+    if !cfg.is_configured() {
+        return Err(
+            "Email not configured: set the provider in Admin > Settings > Email".to_string(),
+        );
     }
 
-    let mut params = std::collections::HashMap::new();
-    params.insert("from", from);
-    params.insert("to", to);
-    params.insert("subject", subject);
-    params.insert("text", text_body);
-
-    if !html_body.is_empty() {
-        params.insert("html", html_body);
+    match cfg.provider.as_str() {
+        "smtp" | "mail" => send_via_smtp(cfg, to, subject, text_body, html_body).await,
+        "sendgrid" => send_via_sendgrid(cfg, to, subject, text_body, html_body).await,
+        "sendiio" => send_via_sendiio(cfg, to, subject, text_body, html_body).await,
+        _ => send_via_mailgun(cfg, to, subject, text_body, html_body).await,
     }
+}
 
-    let client = reqwest::Client::new();
-    let resp = client
-        .post(api_url)
-        .basic_auth("api", Some(api_key))
-        .form(&params)
-        .timeout(std::time::Duration::from_secs(15))
+/// Plain JSON POST helper shared by the API transports.
+async fn post_json(
+    url: &str,
+    headers: Vec<(&'static str, String)>,
+    body: serde_json::Value,
+) -> Result<(), String> {
+    let mut req = reqwest::Client::new().post(url).json(&body);
+    for (name, value) in headers {
+        req = req.header(name, value);
+    }
+    let resp = req
+        .timeout(std::time::Duration::from_secs(20))
         .send()
         .await
-        .map_err(|e| format!("Failed to send email request: {}", e))?;
+        .map_err(|e| format!("Failed to reach email provider: {}", e))?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(format!("Email provider returned {}: {}", status, text));
+    }
+
+    Ok(())
+}
+
+/// Mailgun-compatible HTTP API: Basic Auth (`api:<key>`) + form-encoded body.
+async fn send_via_mailgun(
+    cfg: &EmailConfig,
+    to: &str,
+    subject: &str,
+    text_body: &str,
+    html_body: &str,
+) -> Result<(), String> {
+    let mut params = std::collections::HashMap::new();
+    params.insert("from", from_header(cfg));
+    params.insert("to", to.to_string());
+    params.insert("subject", subject.to_string());
+    params.insert("text", text_body.to_string());
+
+    if !html_body.is_empty() {
+        params.insert("html", html_body.to_string());
+    }
+
+    let resp = reqwest::Client::new()
+        .post(&cfg.api_url)
+        .basic_auth("api", Some(&cfg.api_key))
+        .form(&params)
+        .timeout(std::time::Duration::from_secs(20))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to reach mailgun: {}", e))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -419,4 +514,130 @@ async fn send_email_request(
     }
 
     Ok(())
+}
+
+/// SendGrid v3 `/mail/send` — Bearer key, JSON body.
+/// `api_url` may be left blank; the provider's endpoint is then used.
+async fn send_via_sendgrid(
+    cfg: &EmailConfig,
+    to: &str,
+    subject: &str,
+    text_body: &str,
+    html_body: &str,
+) -> Result<(), String> {
+    let url = if cfg.api_url.trim().is_empty() {
+        "https://api.sendgrid.com/v3/mail/send".to_string()
+    } else {
+        cfg.api_url.clone()
+    };
+
+    let content = if html_body.is_empty() {
+        json!({"type": "text/plain", "value": text_body})
+    } else {
+        json!({"type": "text/html", "value": html_body})
+    };
+
+    let sender = if cfg.from_address.is_empty() {
+        DEFAULT_EMAIL_FROM
+    } else {
+        cfg.from_address.as_str()
+    };
+
+    let body = json!({
+        "personalizations": [{"to": [{"email": to}]}],
+        "from": {"email": sender, "name": cfg.from_name},
+        "subject": subject,
+        "content": [content],
+    });
+
+    post_json(
+        &url,
+        vec![("Authorization", format!("Bearer {}", cfg.api_key))],
+        body,
+    )
+    .await
+}
+
+/// Sendiio JSON endpoint: `{email, subject, message, api_key}`.
+async fn send_via_sendiio(
+    cfg: &EmailConfig,
+    to: &str,
+    subject: &str,
+    text_body: &str,
+    html_body: &str,
+) -> Result<(), String> {
+    let message = if html_body.is_empty() {
+        text_body
+    } else {
+        html_body
+    };
+
+    let body = json!({
+        "email": to,
+        "subject": subject,
+        "message": message,
+        "api_key": cfg.api_key,
+    });
+
+    post_json(&cfg.api_url, Vec::new(), body).await
+}
+
+/// Plain SMTP via lettre. `smtp_encryption`: `ssl` = implicit TLS,
+/// `none` = plain, anything else = STARTTLS.
+async fn send_via_smtp(
+    cfg: &EmailConfig,
+    to: &str,
+    subject: &str,
+    text_body: &str,
+    html_body: &str,
+) -> Result<(), String> {
+    use lettre::message::MultiPart;
+    use lettre::transport::smtp::authentication::Credentials;
+    use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
+
+    let from = from_header(cfg);
+    let builder = Message::builder()
+        .from(
+            from.parse()
+                .map_err(|e| format!("Invalid from address '{}': {}", from, e))?,
+        )
+        .to(to
+            .parse()
+            .map_err(|e| format!("Invalid to address '{}': {}", to, e))?)
+        .subject(subject);
+
+    let email = if html_body.is_empty() {
+        builder.body(text_body.to_string())
+    } else {
+        builder.multipart(MultiPart::alternative_plain_html(
+            text_body.to_string(),
+            html_body.to_string(),
+        ))
+    }
+    .map_err(|e| format!("Failed to build email: {}", e))?;
+
+    let creds = Credentials::new(cfg.smtp_username.clone(), cfg.smtp_password.clone());
+
+    let mailer = match cfg.smtp_encryption.as_str() {
+        "ssl" | "implicit" => AsyncSmtpTransport::<Tokio1Executor>::relay(&cfg.smtp_host)
+            .map_err(|e| format!("SMTP relay error: {}", e))?
+            .port(cfg.smtp_port)
+            .credentials(creds)
+            .build(),
+        "none" | "plain" => AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&cfg.smtp_host)
+            .port(cfg.smtp_port)
+            .credentials(creds)
+            .build(),
+        _ => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&cfg.smtp_host)
+            .map_err(|e| format!("SMTP STARTTLS error: {}", e))?
+            .port(cfg.smtp_port)
+            .credentials(creds)
+            .build(),
+    };
+
+    mailer
+        .send(email)
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("SMTP send failed: {}", e))
 }

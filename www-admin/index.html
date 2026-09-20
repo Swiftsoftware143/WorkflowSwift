@@ -314,13 +314,78 @@ function renderAdminUsage(c){
   }).catch(()=>c.querySelector('#udata').innerHTML='<p class="text-red-400">Not available.</p>');
 }
 
+// Generic single-setting editor (any key in admin_settings is editable here).
+async function editSetting(key){
+  const d=await api('/admin/settings/'+encodeURIComponent(key));
+  if(!d){alert('Could not load setting '+key);return}
+  const cur=typeof d.value==='string'?d.value:JSON.stringify(d.value,null,2);
+  const next=prompt('Value for "'+key+'" (text or JSON):',cur);
+  if(next===null)return;
+  let value=next;
+  try{value=JSON.parse(next)}catch(e){/* keep as plain text */}
+  const r=await api('/admin/settings/'+encodeURIComponent(key),{method:'PUT',body:JSON.stringify({value})});
+  alert(r?'Saved '+key:'Save failed for '+key);
+  if(r)renderPage();
+}
+
 function renderAdminSettings(c){
-  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">Platform Settings</h2><div id="sdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
+  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">Platform Settings</h2><div id="sdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>'
+   +'<div class="card mt-4"><h2 class="text-xl font-bold mb-1">Email Provider</h2>'
+   +'<p class="text-xs text-gray-500 mb-4">Pick the transport WorkflowSwift sends with. These credentials live in the database and are read at send time &mdash; no server environment variables are consulted. Save, then send a test to prove it works.</p>'
+   +'<div id="emailform" class="grid grid-cols-2 gap-3"></div>'
+   +'<div class="flex gap-2 mt-4"><button class="btn btn-primary btn-sm" id="esave">Save email provider</button>'
+   +'<button class="btn btn-sm btn-ghost" id="etest">Send test email</button></div>'
+   +'<pre id="eresult" class="text-xs text-gray-600 mt-3 whitespace-pre-wrap"></pre></div>';
+
   api('/admin/settings').then(d=>{
     const el=c.querySelector('#sdata');
-    if(!d||!d.settings||!d.settings.length){el.innerHTML='<p class="text-gray-400 text-sm">No settings.</p>';return}
-    el.innerHTML=d.settings.map(s=>`<div class="flex justify-between p-3 border-b"><div><strong>${s.key}</strong><span class="text-xs text-gray-500 ml-2">${(s.value||'').slice(0,60)}</span></div><button class="btn btn-sm btn-ghost">Edit</button></div>`).join('');
+    if(!el)return;
+    const items=(d&&d.items)||[];
+    if(!items.length){el.innerHTML='<p class="text-gray-400 text-sm">No settings.</p>';return}
+    el.innerHTML=items.map(s=>{
+      const shown=typeof s.value==='string'?s.value:JSON.stringify(s.value);
+      return '<div class="flex justify-between p-3 border-b"><div><strong>'+s.key+'</strong><span class="text-xs text-gray-500 ml-2">'+String(shown||'').slice(0,90)+'</span></div><button class="btn btn-sm btn-ghost" data-k="'+s.key+'">Edit</button></div>';
+    }).join('');
+    el.querySelectorAll('button[data-k]').forEach(b=>b.onclick=()=>editSetting(b.getAttribute('data-k')));
   });
+
+  api('/admin/settings/email').then(d=>{
+    const form=c.querySelector('#emailform');
+    if(!form)return;
+    const v=(d&&d.value)||{};
+    const f=(id,label,ph,val)=>'<div><label class="text-xs text-gray-500">'+label+'</label><input id="'+id+'" class="input" placeholder="'+(ph||'')+'" value="'+String(val==null?'':val).replace(/"/g,'&quot;')+'"></div>';
+    form.innerHTML='<div><label class="text-xs text-gray-500">Provider</label><select id="e_provider" class="input">'
+      +['smtp','mailgun','sendgrid','sendiio'].map(p=>'<option value="'+p+'"'+((v.provider||'smtp')===p?' selected':'')+'>'+p+'</option>').join('')
+      +'</select></div>'
+      +f('e_from_address','From address','billing@yourdomain.com',v.from_address)
+      +f('e_from_name','From name','WorkflowSwift',v.from_name)
+      +f('e_api_url','API URL (mailgun / sendgrid / sendiio)','https://api.mailgun.net/v3/<domain>/messages',v.api_url)
+      +f('e_api_key','API key (leave the mask to keep the stored key)','',v.api_key)
+      +f('e_smtp_host','SMTP host','smtp.mailgun.org',v.smtp_host)
+      +f('e_smtp_port','SMTP port','587',v.smtp_port||587)
+      +f('e_smtp_username','SMTP username','postmaster@yourdomain.com',v.smtp_username)
+      +f('e_smtp_password','SMTP password (leave the mask to keep it)','',v.smtp_password)
+      +'<div><label class="text-xs text-gray-500">SMTP encryption</label><select id="e_smtp_encryption" class="input">'
+      +['tls','ssl','none'].map(p=>'<option value="'+p+'"'+((v.smtp_encryption||'tls')===p?' selected':'')+'>'+p+'</option>').join('')
+      +'</select></div>';
+  });
+
+  const esave=c.querySelector('#esave'), etest=c.querySelector('#etest');
+  if(esave)esave.onclick=async()=>{
+    const g=id=>{const e=c.querySelector('#'+id);return e?e.value:''};
+    const value={provider:g('e_provider'),from_address:g('e_from_address'),from_name:g('e_from_name'),
+      api_url:g('e_api_url'),api_key:g('e_api_key'),smtp_host:g('e_smtp_host'),
+      smtp_port:parseInt(g('e_smtp_port')||'587',10),smtp_username:g('e_smtp_username'),
+      smtp_password:g('e_smtp_password'),smtp_encryption:g('e_smtp_encryption')};
+    const r=await api('/admin/settings/email',{method:'PUT',body:JSON.stringify({value,description:'Email provider configuration'})});
+    c.querySelector('#eresult').textContent=r?'Saved email provider: '+value.provider:'Save failed.';
+  };
+  if(etest)etest.onclick=async()=>{
+    const to=prompt('Send a test email to:');if(!to)return;
+    c.querySelector('#eresult').textContent='Sending...';
+    const r=await api('/admin/settings/email/test',{method:'POST',body:JSON.stringify({to})});
+    c.querySelector('#eresult').textContent=r?JSON.stringify(r,null,2):'Request failed.';
+  };
 }
 
 function renderAdminUsers(c){

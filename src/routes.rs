@@ -664,6 +664,10 @@ pub fn create_router(state: AppState) -> Router {
             get(handlers::admin_settings_handler::list_settings),
         )
         .route(
+            "/settings/email/test",
+            post(handlers::admin_settings_handler::test_email_settings),
+        )
+        .route(
             "/settings/{key}",
             get(handlers::admin_settings_handler::get_setting)
                 .put(handlers::admin_settings_handler::update_setting),

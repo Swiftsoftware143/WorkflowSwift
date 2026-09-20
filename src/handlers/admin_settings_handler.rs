@@ -80,6 +80,7 @@ pub async fn list_settings(
             .await?;
 
     let mut settings = serde_json::Map::new();
+    let mut items = Vec::new();
     for row in &rows {
         let key: String = row.try_get("key")?;
         let mut value: serde_json::Value = row.try_get("value")?;
@@ -94,6 +95,12 @@ pub async fn list_settings(
         }
         let description: Option<String> = row.try_get("description").ok();
         let updated_at: chrono::DateTime<chrono::Utc> = row.try_get("updated_at")?;
+        items.push(json!({
+            "key": key,
+            "value": value,
+            "description": description,
+            "updated_at": updated_at.to_rfc3339()
+        }));
         settings.insert(
             key,
             json!({
@@ -104,7 +111,7 @@ pub async fn list_settings(
         );
     }
 
-    Ok(Json(json!({"settings": settings})))
+    Ok(Json(json!({ "settings": settings, "items": items })))
 }
 
 /// GET /api/v1/admin/settings/:key — get a specific setting
@@ -145,6 +152,31 @@ pub async fn get_setting(
     })))
 }
 
+/// Recursively replace values that look like our own mask (`abc...xyz`) with the
+/// value already stored, so a round-trip through the admin UI can never overwrite
+/// a real credential with its own mask.
+fn merge_masked_secrets(new: &mut serde_json::Value, old: &serde_json::Value) {
+    if let serde_json::Value::Object(map) = new {
+        for (k, v) in map.iter_mut() {
+            if is_secret_field(k) {
+                if let serde_json::Value::String(s) = v {
+                    let looks_masked = s.contains("...") || s == "***";
+                    if looks_masked {
+                        if let Some(serde_json::Value::String(existing)) = old.get(k) {
+                            if !existing.is_empty() {
+                                *s = existing.clone();
+                            }
+                        }
+                    }
+                }
+            } else {
+                let child = old.get(k).cloned().unwrap_or(serde_json::Value::Null);
+                merge_masked_secrets(v, &child);
+            }
+        }
+    }
+}
+
 /// PUT /api/v1/admin/settings/:key — update a setting
 pub async fn update_setting(
     State(state): State<AppState>,
@@ -156,8 +188,22 @@ pub async fn update_setting(
 
     let value = req
         .get("value")
-        .ok_or_else(|| AppError::Validation("value is required".to_string()))?;
+        .ok_or_else(|| AppError::Validation("value is required".to_string()))?
+        .clone();
     let description = req.get("description").and_then(|v| v.as_str());
+
+    // Keep stored credentials when the client sends back a masked placeholder.
+    let existing: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT value FROM admin_settings WHERE key = $1")
+            .bind(&key)
+            .fetch_optional(&state.db)
+            .await?;
+    let mut value = value;
+    if let Some(old) = existing {
+        if !is_secret_field(&key) {
+            merge_masked_secrets(&mut value, &old);
+        }
+    }
 
     let admin_id = Uuid::parse_str(&claims.sub).unwrap_or(Uuid::nil());
 
@@ -1248,6 +1294,42 @@ pub async fn admin_stop_impersonation() -> ApiResult<impl IntoResponse> {
         "status": "impersonation_stopped",
         "note": "Drop impersonation token"
     })))
+}
+
+/// POST /api/v1/admin/settings/email/test — send a REAL test message through the
+/// provider saved in Admin > Settings > Email.
+///
+/// The provider's actual outcome is returned (never a fabricated "OK"), so the
+/// admin can prove a configuration works after entering the credentials. When
+/// nothing is configured the send is skipped and the reason is reported.
+pub async fn test_email_settings(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<impl IntoResponse> {
+    require_admin(&claims)?;
+
+    let to = req
+        .get("to")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if !to.contains('@') {
+        return Err(AppError::Validation(
+            "a valid recipient email is required".to_string(),
+        ));
+    }
+
+    let vars = json!({
+        "name": "Admin",
+        "app_url": "https://app.workflowswift.com"
+    });
+
+    match crate::email::send_email(&state, &to, "email_test", &vars).await {
+        Ok(_) => Ok(Json(json!({ "status": "sent", "to": to }))),
+        Err(e) => Ok(Json(json!({ "status": "error", "detail": e }))),
+    }
 }
 
 fn require_admin(claims: &Claims) -> Result<(), AppError> {
