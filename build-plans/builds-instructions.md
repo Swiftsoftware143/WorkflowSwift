@@ -2,7 +2,7 @@
 
 ## Task: WorkflowSwift Full Build
 David has approved building the full multi-industry dashboard + workflow builder.
-I (Swift Hetzner VPS Bot/Prime) am handling the full build myself.
+I (Swift Miami VPS Bot/Prime) am handling the full build myself.
 
 ## If you get asked to help:
 1. The code is at /opt/swift/workflowswift/
