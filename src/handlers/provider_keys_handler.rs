@@ -109,10 +109,12 @@ pub async fn upsert_provider_key(
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
 
-    // Upsert
+    // Upsert. `aid` is the account scope in this app; `tenant_id` is the legacy column from
+    // before the tenant->account rename (migration 034) and is mirrored with the account id
+    // so older readers still find a value.
     let result = sqlx::query(
-        r#"INSERT INTO provider_keys (id, aid, provider, api_key, base_url, metadata, is_active)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
+        r#"INSERT INTO provider_keys (id, aid, tenant_id, provider, api_key, base_url, metadata, is_active)
+           VALUES ($1, $2, $2, $3, $4, $5, $6, $7)
            ON CONFLICT (aid, provider)
            DO UPDATE SET
                api_key = EXCLUDED.api_key,

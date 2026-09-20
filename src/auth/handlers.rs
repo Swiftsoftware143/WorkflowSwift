@@ -19,10 +19,6 @@ pub async fn register(
     State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    // Clone for CoreSwift push before req is consumed
-    let cs_email = req.email.clone();
-    let cs_name = req.name.clone();
-
     // Validate input
     if req.email.is_empty() || req.password.is_empty() || req.name.is_empty() {
         return Err(AppError::Validation(
@@ -263,16 +259,11 @@ pub async fn register(
         created_at: now,
     };
 
-    // Push to CoreSwift as a SwiftSoftware contact (fire-and-forget)
-    let cs_state = state.clone();
-    let cs_aid = aid;
-    let cs_plan = plan_slug.to_string();
-    tokio::spawn(async move {
-        crate::handlers::coreswift_push::push_signup_to_coreswift(
-            &cs_state, cs_aid, &cs_email, &cs_name, &cs_plan,
-        )
-        .await;
-    });
+    // NOTE: no CoreSwift push on signup. The fleet standard makes CoreSwift INBOUND only
+    // (captured leads flow down into the hub) and rejects the old pattern of pushing a
+    // tenant's signup into a hardcoded SwiftSoftware tenant with a global env key. Leads
+    // captured by this account's workflows are delivered by
+    // `handlers::coreswift_external::push_lead_to_coreswift` using the account's own BYOK key.
 
     Ok((
         StatusCode::CREATED,

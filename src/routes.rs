@@ -550,6 +550,10 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/{provider}",
             delete(handlers::provider_keys_handler::delete_provider_key),
+        )
+        .route(
+            "/{provider}/test",
+            post(handlers::coreswift_integration_handler::test_provider_key),
         );
 
     let integration_center_routes = Router::new()
@@ -575,6 +579,19 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/native/{provider}",
             post(handlers::user_integration_handler::toggle_native_integration),
+        )
+        // ── Canonical CoreSwift spoke (fleet standard paths) ──
+        .route(
+            "/coreswift/status",
+            get(handlers::coreswift_integration_handler::coreswift_status),
+        )
+        .route(
+            "/coreswift/lists",
+            get(handlers::coreswift_integration_handler::coreswift_lists),
+        )
+        .route(
+            "/coreswift/push",
+            post(handlers::coreswift_integration_handler::coreswift_push),
         )
         .route(
             "/{provider}",

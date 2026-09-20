@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+!function(){
+  var p = window.location.pathname;
+  if (p === '/login' || p === '/login.html' || p.startsWith('/api/') || p.startsWith('/ref/')) return;
+  var t = localStorage.getItem('ws_fs_token') || localStorage.getItem('token') || localStorage.getItem('access_token') || sessionStorage.getItem('wf_token');
+  if (!t) window.location.replace('/login');
+}();
+</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WorkflowSwift — App</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  *{box-sizing:border-box}
+  body{font-family:Inter,system-ui,sans-serif;background:#f1f5f9;margin:0}
+  .card{background:#fff;border-radius:16px;box-shadow:0 1px 3px rgba(0,0,0,.06);padding:24px;margin-bottom:16px}
+  .btn{background:#2563eb;color:#fff;padding:10px 20px;border-radius:10px;cursor:pointer;border:none;font-weight:600;font-size:14px;transition:all .15s;display:inline-block;text-decoration:none}
+  .btn:hover{background:#1d4ed8;transform:translateY(-1px);box-shadow:0 4px 12px rgba(37,99,235,.25)}
+  .btn:disabled{opacity:.6;cursor:not-allowed;transform:none;box-shadow:none}
+  .btn-red{background:#dc2626}.btn-red:hover{background:#b91c1c}
+  .btn-green{background:#16a34a}.btn-green:hover{background:#15803d}
+  .btn-outline{background:0 0;border:2px solid #e2e8f0;color:#475569}.btn-outline:hover{background:#f8fafc}
+  .input{border:2px solid #e2e8f0;border-radius:10px;padding:10px 14px;width:100%;font-size:14px;outline:0;transition:border-color .15s}
+  .input:focus{border-color:#2563eb;box-shadow:0 0 0 4px rgba(37,99,235,.08)}
+  .label{display:block;font-size:13px;font-weight:600;color:#475569;margin-bottom:6px}
+  textarea.input{font-family:inherit}
+  .nav-item{display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:10px;font-size:14px;font-weight:500;color:#475569;cursor:pointer;transition:all .12s;border:none;background:transparent;width:100%;text-align:left}
+  .nav-item:hover{background:#eef2ff;color:#2563eb}
+  .nav-item.active{background:#2563eb;color:#fff}
+  .badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600}
+  .b-green{background:#dcfce7;color:#166534}.b-gray{background:#f1f5f9;color:#64748b}.b-blue{background:#dbeafe;color:#1d4ed8}.b-red{background:#fee2e2;color:#b91c1c}.b-amber{background:#fef3c7;color:#b45309}
+  .table{width:100%;border-collapse:collapse;font-size:13px}
+  .table th{text-align:left;padding:10px 12px;border-bottom:2px solid #e2e8f0;color:#64748b;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.03em}
+  .table td{padding:12px;border-bottom:1px solid #f1f5f9;color:#334155;vertical-align:middle}
+  .table tr:hover td{background:#f8fafc}
+  .empty{padding:48px;text-align:center;color:#94a3b8;font-size:14px}
+  .chip{display:inline-block;padding:3px 10px;border-radius:6px;font-size:12px;background:#f1f5f9;color:#475569;margin:2px}
+  .toast{position:fixed;top:16px;right:16px;padding:12px 18px;border-radius:10px;font-size:13px;font-weight:600;color:#fff;z-index:99;box-shadow:0 4px 12px rgba(0,0,0,.2)}
+  .t-ok{background:#16a34a}.t-err{background:#dc2626}
+  .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px}
+  .modal{background:#fff;border-radius:16px;padding:24px;width:100%;max-width:480px;max-height:90vh;overflow:auto}
+  @media(max-width:768px){.sidebar{display:none}}
+
+  /* ── Modern visual dashboard layer ── */
+  :root{
+    --g-blue:#007bff;--g-cyan:#00d4ff;--g-green:#10b981;--g-emerald:#059669;
+    --g-purple:#8b5cf6;--g-pink:#ec4899;--g-red:#ef4444;--g-amber:#f59e0b;
+    --glass:rgba(30,33,48,.82);--card:rgba(255,255,255,.92);
+  }
+  body{background:linear-gradient(160deg,#0f172a 0%,#1e293b 55%,#0f172a 100%)}
+  .glass{background:var(--glass);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,.08);border-radius:18px}
+  .mwrap{display:grid;gap:16px;grid-auto-rows:auto}
+  .mcounter,.mrevenue,.mchart,.mfeed{position:relative;overflow:hidden;border-radius:18px;padding:22px;color:#fff;box-shadow:0 10px 30px rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.08);transition:transform .18s,box-shadow .18s}
+  .mcounter:hover,.mrevenue:hover,.mchart:hover,.mfeed:hover{transform:translateY(-3px);box-shadow:0 18px 40px rgba(0,0,0,.45)}
+  .mcounter.g-blue{background:linear-gradient(135deg,#007bff,#00d4ff)}.mcounter.g-green{background:linear-gradient(135deg,#10b981,#059669)}.mcounter.g-purple{background:linear-gradient(135deg,#8b5cf6,#ec4899)}.mcounter.g-amber{background:linear-gradient(135deg,#f59e0b,#ef4444)}.mcounter.g-slate{background:linear-gradient(135deg,#334155,#475569)}
+  .mrevenue{background:linear-gradient(135deg,#059669,#10b981)}.mrevenue.g-gold{background:linear-gradient(135deg,#b45309,#f59e0b)}
+  .mchart{background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.02))}
+  .mnum{font-size:2.2rem;font-weight:800;line-height:1;margin-top:6px;letter-spacing:-.02em}
+  .msub{font-size:.72rem;text-transform:uppercase;letter-spacing:.06em;opacity:.85;font-weight:600}
+  .mico{position:absolute;top:16px;right:16px;font-size:1.6rem;opacity:.9}
+  .mtrend{display:inline-flex;align-items:center;gap:4px;font-size:.72rem;font-weight:700;margin-top:10px;padding:3px 9px;border-radius:999px;background:rgba(255,255,255,.18)}
+  .mtrend.up{color:#d1fae5}.mtrend.down{color:#fee2e2}
+  .mtitle-chart{font-weight:700;font-size:.95rem;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center}
+  .svgchart{width:100%;height:140px}
+  .mfeed li{display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px dashed rgba(255,255,255,.12);font-size:.85rem}
+  .mfeed li:last-child{border-bottom:none}
+  .milestone{font-weight:700;color:#fcd34d}
+  .widget-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px}
+  .ind-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px}
+  .ind-card{background:var(--card);border:2px solid #e2e8f0;border-radius:16px;padding:20px;text-align:center;cursor:pointer;transition:all .15s}
+  .ind-card:hover{transform:translateY(-3px);border-color:#2563eb;box-shadow:0 10px 25px rgba(37,99,235,.2)}
+  .ind-card.sel{border-color:#2563eb;background:#eff6ff;box-shadow:0 0 0 4px rgba(37,99,235,.12)}
+  .ind-ico{font-size:2.2rem;margin-bottom:8px}
+  .topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px}
+  .dash-title{font-size:1.5rem;font-weight:800;color:#0f172a}
+  .tb-tabs{display:flex;gap:8px;flex-wrap:wrap}
+  .tb-tab{background:#eef2ff;color:#2563eb;font-weight:600;font-size:.8rem;padding:7px 14px;border-radius:999px;cursor:pointer;border:none;transition:all .12s}
+  .tb-tab:hover,.tb-tab.active{background:#2563eb;color:#fff}
+  .ind-switch{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:8px 14px;font-weight:600;font-size:.85rem;color:#0f172a;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
+  .ind-switch:hover{border-color:#2563eb;color:#2563eb}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script type="module">
+import { h, render } from 'https://esm.sh/preact@10.26.4';
+import htm from 'https://esm.sh/htm@3.1.1';
+const html = htm.bind(h);
+const root = document.getElementById('app');
+
+const API = (() => {
+  const base = '/api/v1';
+  let token = sessionStorage.getItem('wf_token');
+  let user = JSON.parse(sessionStorage.getItem('wf_user') || 'null');
+  const headers = () => ({ 'Content-Type': 'application/json', ...(token ? { 'Authorization': 'Bearer ' + token } : {}) });
+  const handle = async (r) => {
+    const ct = r.headers.get('content-type') || '';
+    const d = ct.includes('json') ? await r.json() : await r.text();
+    if (!r.ok) throw new Error(d && (d.error || d.message) ? (d.error || d.message) : (typeof d === 'string' ? d : 'Request failed'));
+    return d;
+  };
+  return {
+    register: (name, email, password) => fetch(base + '/auth/register', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, email, password}) }).then(handle),
+    login: (email, password) => fetch(base + '/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, password}) }).then(handle),
+    get: (p) => fetch(base + p, { headers: headers() }).then(handle),
+    post: (p, b) => fetch(base + p, { method:'POST', headers: headers(), body: b === undefined ? undefined : JSON.stringify(b) }).then(handle),
+    put: (p, b) => fetch(base + p, { method:'PUT', headers: headers(), body: JSON.stringify(b) }).then(handle),
+    del: (p) => fetch(base + p, { method:'DELETE', headers: headers() }).then(handle),
+    getIndustries: () => fetch(base + '/industries', { headers: headers() }).then(handle),
+    getAccountIndustry: () => fetch(base + '/accounts/industry', { headers: headers() }).then(handle),
+    putAccountIndustry: (slug, primary) => fetch(base + '/accounts/industry', { method:'PUT', headers: headers(), body: JSON.stringify({ industry_slug: slug, set_as_primary: !!primary }) }).then(handle),
+    getDashboardWidgets: (slug) => fetch(base + '/dashboard/widgets' + (slug ? ('?industry=' + encodeURIComponent(slug)) : ''), { headers: headers() }).then(handle),
+    getDashboardTabs: (slug) => fetch(base + '/dashboard/tabs' + (slug ? ('?industry=' + encodeURIComponent(slug)) : ''), { headers: headers() }).then(handle),
+    getDashboardMetric: (key) => fetch(base + '/dashboard/data/' + encodeURIComponent(key), { headers: headers() }).then(handle),
+    pushDashboardData: (industry_slug, metric_key, value) => fetch(base + '/dashboard/push-widget-data', { method:'POST', headers: headers(), body: JSON.stringify({ industry_slug, metric_key, value }) }).then(handle),
+    get token(){ return token; }, get user(){ return user; },
+    get isLoggedIn(){ return !!sessionStorage.getItem('wf_token'); },
+    setAuth(t, u){ token = t; user = u; sessionStorage.setItem('wf_token', t); sessionStorage.setItem('wf_user', JSON.stringify(u)); },
+    logout(){ token = null; user = null; sessionStorage.removeItem('wf_token'); sessionStorage.removeItem('wf_user'); }
+  };
+})();
+
+const S = { view:'login', loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, dataVer:0 };
+
+const renderApp = () => render(html`<${App} />`, root);
+const toast = (msg, type) => { S.toast = { msg, type: type==='err'?'t-err':'t-ok' }; renderApp(); setTimeout(() => { S.toast = null; renderApp(); }, 3000); };
+const setView = (v, params) => { S.current = v; S.viewParams = params || {}; renderApp(); };
+const closeModal = () => { S.modal = null; renderApp(); };
+
+const statusBadge = (s) => {
+  const m = { active:'b-green', pending:'b-amber', running:'b-blue', completed:'b-green', failed:'b-red', draft:'b-gray', paused:'b-gray', won:'b-green', lost:'b-red', open:'b-blue', closed:'b-gray' };
+  return html`<span class="badge ${m[String(s).toLowerCase()] || 'b-gray'}">${s || '—'}</span>`;
+};
+const fmtDate = (d) => d ? new Date(d).toLocaleString() : '—';
+const fmtAmt = (n) => n === undefined || n === null ? '—' : Number(n).toLocaleString();
+
+// ---- Auth views ----
+const LoginView = () => {
+  let email='', password='';
+  const submit = async (e) => { e.preventDefault(); if(!email||!password) return; S.loading=true; S.error=null; renderApp();
+    try { const r = await API.login(email, password); API.setAuth(r.token || r.access_token, r.user || r); S.view='app'; }
+    catch(err){ S.error=err.message; } S.loading=false; renderApp(); };
+  return html`
+    <div class="flex items-center justify-center min-h-screen px-4">
+      <div class="card w-full max-w-md">
+        <div class="text-center mb-8"><div class="text-4xl mb-3">⚡</div><h1 class="text-2xl font-extrabold text-gray-900">WorkflowSwift</h1><p class="text-sm text-gray-500 mt-2">Sign in to your workspace</p></div>
+        <form onSubmit=${submit} class="space-y-5">
+          <div><label class="label">Email</label><input type="email" class="input" onInput=${e=>email=e.target.value} placeholder="you@company.com" autocomplete="email" required /></div>
+          <div><label class="label">Password</label><input type="password" class="input" onInput=${e=>password=e.target.value} placeholder="••••••••" autocomplete="current-password" required /></div>
+          ${S.error && html`<div class="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3 flex items-center gap-2"><span>⚠️</span> ${S.error}</div>`}
+          <button type="submit" class="btn w-full" disabled=${S.loading}>${S.loading?'Signing in...':'Sign In'}</button>
+        </form>
+        <button class="btn-outline w-full mt-4 text-sm" onClick=${()=>{S.showRegister=true;S.error=null;renderApp();}}>Create Free Account</button>
+        <div class="mt-6 text-center text-xs text-gray-400"><p>WorkflowSwift v2.0</p></div>
+      </div>
+    </div>`;
+};
+const RegisterView = () => {
+  let name='', email='', password='';
+  const submit = async (e) => { e.preventDefault(); if(!name||!email||!password) return; S.loading=true; S.error=null; renderApp();
+    try { const r = await API.register(name, email, password); API.setAuth(r.token || r.access_token, r.user || r); S.view='pick'; S.pickingIndustry=true; }
+    catch(err){ S.error=err.message; } S.loading=false; renderApp(); };
+  return html`
+    <div class="flex items-center justify-center min-h-screen px-4">
+      <div class="card w-full max-w-md">
+        <div class="text-center mb-8"><div class="text-4xl mb-3">🚀</div><h1 class="text-2xl font-extrabold text-gray-900">Create your account</h1><p class="text-sm text-gray-500 mt-2">Start automating with WorkflowSwift</p></div>
+        <form onSubmit=${submit} class="space-y-5">
+          <div><label class="label">Full Name</label><input type="text" class="input" onInput=${e=>name=e.target.value} placeholder="Jane Doe" required /></div>
+          <div><label class="label">Email</label><input type="email" class="input" onInput=${e=>email=e.target.value} placeholder="you@company.com" required /></div>
+          <div><label class="label">Password</label><input type="password" class="input" onInput=${e=>password=e.target.value} placeholder="••••••••" minlength="6" autocomplete="new-password" required /></div>
+          ${S.error && html`<div class="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3 flex items-center gap-2"><span>⚠️</span> ${S.error}</div>`}
+          <button type="submit" class="btn w-full" disabled=${S.loading}>${S.loading?'Creating...':'Create Free Account'}</button>
+        </form>
+        <button class="btn-outline w-full mt-4 text-sm" onClick=${()=>{S.showRegister=false;S.error=null;renderApp();}}>Back to Sign In</button>
+      </div>
+    </div>`;
+};
+
+// ---- Industry picker (signup step: industry = category) ----
+const IndustryPickerView = ({ asModal }) => {
+  if (!S.industries && !S.loading) { loadIndustries(); }
+  const list = S.industries || [];
+  let sel = S.selectedIndustry || null;
+  const pick = async (ic) => { try { sel = ic.slug || ic.industry_slug || ic.id; S.selectedIndustry = sel; renderApp(); } catch(e){} };
+  const done = async () => { if(!sel) return toast('Pick an industry to continue','err'); S.loading=true; renderApp();
+    try { await API.putAccountIndustry(sel, true); toast('Dashboard ready for ' + (S.selectedIndustryName||sel));
+      if (S.pickingIndustry) { S.pickingIndustry=false; S.view='app'; S.current='dashboard'; S.widgets=null; S.widgetsSlug=null; S.accIndustry=null; S.accLoaded=false; S.viewParams={industry: sel}; }
+      else { closeModal(); }
+    } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+  const card = (ic) => { const slug = ic.slug || ic.industry_slug || ic.id; const nm = ic.name || ic.industry_name || slug; const up = (slug||'').replace(/_/g,'-');
+    const ICONS = { 'site-flipping':'💻', 'e-commerce':'🛒', 'saas':'☁️', 'real-estate':'🏠', 'marketing-agency':'🎯', 'government-contracting':'🏛️', 'dental':'🦷', 'healthcare':'🏥', 'construction':'🏗️', 'auto':'🚗', 'restaurant':'🍽️', 'legal':'⚖️', 'finance':'🏦', 'education':'🎓', 'fitness':'💪', 'beauty':'💅', 'home-services':'🔧', 'travel':'✈️', 'logistics':'🚚', 'tech':'💻' };
+    const icon = ICONS[up] || ic.icon || ['📁','🏢','🛠️','🛒','🎓','⚕️','🚜','🖥️','💼','📊'][Math.abs((up||'').split('').reduce((a,c)=>a+c.charCodeAt(0),0))%10];
+    return html`<div class="ind-card ${sel===slug?'sel':''}" key=${slug} onClick=${()=>{sel=slug;S.selectedIndustry=slug;S.selectedIndustryName=nm;renderApp();}}><div class="ind-ico">${icon}</div><div class="font-bold text-gray-900">${nm}</div><div class="text-xs text-gray-400 mt-1">${ic.template_count!=null ? (ic.template_count + (ic.template_count===1?' template':' templates')) : ''}</div></div>`; };
+  const inner = html`
+    <div class="p-2"><h2 class="text-xl font-extrabold text-gray-900 mb-1">${asModal?'Switch industry':'Welcome! Pick your industry'}</h2>
+    <p class="text-sm text-gray-500 mb-5">Your industry determines your dashboard. You can change it anytime.</p>
+    ${list.length===0 ? html`<div class="empty">Loading industries…</div>` : html`<div class="ind-grid">${list.map(card)}</div>`}
+    <div class="mt-6 flex items-center justify-between gap-3">
+      <button class="btn-outline text-sm" onClick=${()=>{ if(S.pickingIndustry){API.logout();S.pickingIndustry=false;S.view='login';S.showRegister=false;} else closeModal(); renderApp(); }}>Not now</button>
+      <button class="btn" onClick=${done} disabled=${!sel || S.loading}>${S.loading?'Saving…':'Continue'}</button>
+    </div></div>`;
+  if (asModal) return html`<${ModalShell} title=${''} onClose=${closeModal}>${inner}</${ModalShell}>`;
+  return html`<div class="flex items-center justify-center min-h-screen px-4"><div class="card w-full max-w-3xl">${inner}</div></div>`;
+};
+const loadIndustries = async () => { if(S.loading)return; S.loading=true; renderApp(); try { const r = await API.getIndustries(); S.industries = r.industries || r.categories || r.items || r || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+const openIndustryPicker = () => { if(!S.industries && !S.loading) loadIndustries(); S.pickingIndustry=false; S.modal='industry'; renderApp(); };
+const loadAccountIndustry = async () => { if(S.accLoaded) return S.accIndustry; S.accLoaded=true; try { S.accIndustry = await API.getAccountIndustry(); } catch(e){ S.accIndustry=null; } if (S.accIndustry && !S.accIndustry.primary_industry && S.accIndustry.industries && S.accIndustry.industries[0]) S.accIndustry.primary_industry = S.accIndustry.industries[0].industry_slug || S.accIndustry.industries[0].slug; return S.accIndustry; };
+const currentIndustrySlug = () => { const a = S.accIndustry; const s = (a && (a.primary_industry || (a.industries&&a.industries[0]&&(a.industries[0].industry_slug||a.industries[0].slug)))); if (s) return s; if (S.viewParams?.industry) return S.viewParams.industry; return null; };
+const currentIndustryName = () => { const a=S.accIndustry; const slug=currentIndustrySlug(); if(a&&a.industries){ const it=a.industries.find(x=>x.industry_slug===slug||x.slug===slug||x.id===slug); if(it) return it.industry_name||it.name||slug; } return S.selectedIndustryName||slug; };
+
+// ---- Modal helpers ----
+const ModalShell = ({title, children, onClose}) => html`
+  <div class="modal-bg">
+    <div class="modal"><h2 class="text-lg font-bold text-gray-900 mb-4">${title}</h2>${children}<div class="mt-4 flex justify-end gap-2"><button class="btn-outline text-sm" onClick=${onClose}>Close</button></div></div>
+  </div>`;
+
+const spinner = () => html`<span class="spinner"></span>`;
+
+
+// ===== Dashboard (per-category visual dashboard) =====
+const loadWidgets = async (slug) => { if(S.loading)return; S.loading=true; renderApp(); try { const r = await API.getDashboardWidgets(slug || currentIndustrySlug()); const w = (Array.isArray(r)? r : (Array.isArray(r.widgets)? r.widgets : (Array.isArray(r.data)? r.data : (r && r.data && Array.isArray(r.data.widgets)? r.data.widgets : [])))); S.widgets = w; S.widgetMeta = { dashboard_id: r?.dashboard_id, industry_name: r?.industry_name }; } catch(e){ S.widgets=[]; } S.loading=false; renderApp(); setTimeout(applyCountUps, 80); };
+const applyCountUps = () => { (S.widgets||[]).forEach((w,i)=>{ const n=wnum(w); const id='wc_'+(w.id||i); const idc='wcur_'+(w.id||i); if(n!=null){ document.getElementById(id) && countUp(id,n); document.getElementById(idc) && countUp(idc,n); } }); };
+const loadDashTabs = async (slug) => { try { const r = await API.getDashboardTabs(slug || currentIndustrySlug()); S.dashboardTabs = r.tabs || r.items || r || []; } catch(e){ S.dashboardTabs=[]; } };
+
+// Sample-value generator so any account can populate its widgets without waiting on n8n.
+const sampleValueFor = (w, idx) => {
+  const t = String(w.title || w.widget_type || '').toLowerCase();
+  const mk = String((w.config||{}).metric_key || '').toLowerCase();
+  const wt = wtype(w);
+  if (wt.includes('trend') || wt.includes('chart')) return [12,18,25,20,30,42,55];
+  if (wt.includes('feed') || wt.includes('activity')) return 4;
+  if (t.includes('solicit') || mk.includes('solicit')) return 23;
+  if (t.includes('bid') || mk.includes('bid')) return 9;
+  if (t.includes('awarded') || t.includes('revenu') || t.includes('value') || mk.includes('awarded') || mk.includes('revenue')) return 125000;
+  if ((t.includes('pending') || t.includes('task') || mk.includes('pending')) && !mk.includes('activity')) return 12;
+  if (t.includes('today')) return 3;
+  if (t.includes('milestone')) return 5;
+  if (t.includes('complete') || mk.includes('complete')) return 41;
+  if (t.includes('active') || mk.includes('active')) return 7;
+  if (t.includes('integratio')) return 6;
+  return 3 + (idx || 0);
+};
+const seedSampleData = async () => {
+  const slug = currentIndustrySlug(); if(!slug) return;
+  S.loading = true; renderApp();
+  try {
+    const r = await API.getDashboardWidgets(slug);
+    const ws = Array.isArray(r) ? r : (Array.isArray(r.widgets) ? r.widgets : []);
+    let n = 0;
+    for (let i=0;i<ws.length;i++){
+      const mk = (ws[i].config||{}).metric_key; if(!mk) continue;
+      const val = sampleValueFor(ws[i], i);
+      try { await API.pushDashboardData(slug, mk, val); n++; } catch(e){}
+    }
+    toast('Sample data populated — '+n+' widget(s)','');
+    S.loading = false; S.widgets = null; await loadWidgets(slug);
+  } catch(e){ toast('Could not populate sample data','err'); }
+  S.loading = false; renderApp();
+};
+const DashboardView = () => {
+  const slug = currentIndustrySlug();
+  if (slug && !S.loading && S.widgetsSlug !== slug) { S.widgetsSlug = slug; loadDashTabs(slug); loadWidgets(slug); }
+  else if (!slug && !S.loading && !S.widgetsSlug) { loadAccountIndustry(); }
+  const widgets = S.widgets || [];
+  const metas = { bg:'#fff', fg:'#0f172a' };
+  return html`
+    <div>
+      <div class="topbar">
+        <div><div class="dash-title">📊 ${currentIndustryName()} Dashboard</div><p class="text-sm text-gray-500 mt-1">Live KPIs for ${currentIndustrySlug()} — updated by your automations</p></div>
+        <div class="flex items-center gap-2">
+          ${(S.dashboardTabs||[]).length ? html`<div class="tb-tabs">${S.dashboardTabs.map(t=>html`<button class="tb-tab" onClick=${()=>toast('Tab: '+ (t.title||t.name||t) )}>${(t.title||t.name||t)}</button>`)}</div>` : ''}
+          <button class="ind-switch" onClick=${openIndustryPicker}>🏷 ${currentIndustryName()} ▾</button>
+          <button class="btn-outline text-sm" onClick=${seedSampleData} disabled=${S.loading} title="Push sample KPI values to populate widgets">⚡ Sample data</button>
+          <button class="btn-outline text-sm" onClick=${()=>{S.widgets=null;loadWidgets(slug);}} disabled=${S.loading}>${S.loading?'Loading…':'Refresh'}</button>
+        </div>
+      </div>
+      ${widgets.length === 0 ? html`
+        <div class="card"><div class="empty">
+          <div class="text-4xl mb-3">📈</div>
+          ${!S.accIndustry || !currentIndustrySlug() ? html`
+            <p class="font-semibold text-gray-800 mb-1">Pick your industry to build your dashboard</p>
+            <p class="text-sm text-gray-500 mb-4">Industry = category. Your dashboard and templates adapt to it.</p>
+            <button class="btn text-sm" onClick=${openIndustryPicker}>Choose Industry</button>`
+          : html`
+            <p class="font-semibold text-gray-800 mb-1">Your ${currentIndustryName()} dashboard is ready</p>
+            <p class="text-sm text-gray-500 mb-4">Widgets appear here as your automations push data. Use Sample data to preview, or run a workflow to populate real metrics.</p>
+            <div class="flex items-center gap-2 justify-center">
+              <button class="btn text-sm" onClick=${seedSampleData} disabled=${S.loading}>⚡ Populate sample data</button>
+              <button class="btn-outline text-sm" onClick=${()=>setView('workflows')}>Open Workflows</button>
+            </div>`}
+        </div></div>`
+      : html`<div class="widget-grid">
+        ${widgets.map(w => renderWidget(w))}
+      </div>`}
+    </div>`;
+};
+
+// ---- Widget renderers (modern visual layer) ----
+const wtype = (w) => String(w.widget_type || w.type || '').toLowerCase();
+const wnum = (w) => {
+  const d = w.data;
+  if (typeof d === 'number' || typeof d === 'string') return d;
+  if (d && typeof d === 'object') {
+    for (const k of ['value','current','total','count','amount','revenue']) if (d[k]!=null) return d[k];
+  }
+  return null;
+};
+const wcfg = (w) => w.config || {};
+const gradientFor = (w) => { const t=wtype(w); if(t.includes('revenue')||(wcfg(w).currency)) return 'g-gold'; if(t.includes('trend')||t.includes('chart')) return 'g-blue'; if(t.includes('feed')||t.includes('activity')) return 'g-purple'; if(t.startsWith('stat')) return 'g-green'; return 'g-slate'; };
+const countUp = (id, target) => {
+  const el = document.getElementById(id); if(!el || target==null) return;
+  const isCurrency = el.getAttribute('data-cur')==='1';
+  const s = isCurrency ? Number(target) : Number(target);
+  const dur=900, t0=performance.now();
+  const step=(now)=>{ const p=Math.min((now-t0)/dur,1); const v=s*p; el.textContent = isCurrency ? fmtAmt(v) : Math.round(v).toLocaleString(); if(p<1) requestAnimationFrame(step); };
+  requestAnimationFrame(step);
+};
+const renderWidget = (w, idx) => {
+  const t = wtype(w); const slug = currentIndustrySlug();
+  const title = w.title || 'KPI'; const icon = w.icon || (t.includes('revenue')?'💰':t.includes('trend')?'📈':t.includes('feed')?'🗞️':'＃');
+  if (t.includes('feed') || t.includes('activity')) {
+    const items = Array.isArray(w.data) ? w.data : (w.data && w.data.items ? w.data.items : []);
+    return html`<div class="mfeed" key=${w.id||idx} style="grid-row:span ${Math.min(2,Math.max(1,(w.position&&w.position.row)?1:2))}"><div class="mtitle-chart"><span>${icon} ${title}</span></div>${items.length?html`<ul class="mfeed">${items.map(it=>html`<li><span>${it.label||it.name||it.title||''}</span><span class="milestone">${fmtAmt(it.value??it.count??(it.milestone?'✓':'—'))}</span></li>`)}</ul>`:html`<div class="text-sm opacity-70">No activity yet.</div>`}</div>`;
+  }
+  const n = wnum(w);
+  if (t.includes('revenue') || (wcfg(w).currency)) {
+    const cur = (wcfg(w).currency || 'USD');
+    const suffix = wcfg(w).suffix || '';
+    const id = 'wcur_'+ (w.id||idx);
+    const hasVal = n != null;
+    return html`<div class="mrevenue ${gradientFor(w)}" key=${w.id||idx}><span class="mico">${icon}</span><div class="msub">${title}</div><div class="mnum" id="${hasVal?id:''}" data-cur="${hasVal?1:''}">${hasVal?'…':'—'}</div>${hasVal ? html`${wcfg(w).delta!=null?html`<div class="mtrend ${Number(wcfg(w).delta)>=0?'up':'down'}">${Number(wcfg(w).delta)>=0?'▲':'▼'} ${Math.abs(wcfg(w).delta)}${suffix||''}</div>`:''}<div class="text-xs opacity-75 mt-1">${cur} · live</div>` : html`<div class="text-xs opacity-75 mt-2">Awaiting data…</div>`}</div>`; }
+  if (t.includes('trend') || t.includes('chart')) {
+    return html`<div class="mchart g-blue" key=${w.id||idx} style="grid-column:span 2"><div class="mtitle-chart"><span>${icon} ${title}</span><span class="text-xs opacity-60">live</span></div>${renderSvgChart(w)}</div>`;
+  }
+  const suffix = wcfg(w).suffix || '';
+  const id = 'wc_'+ (w.id||idx);
+  const hasVal = n != null;
+  return html`<div class="mcounter ${gradientFor(w)}" key=${w.id||idx}><span class="mico">${icon}</span><div class="msub">${title}</div><div class="mnum" id="${hasVal?id:''}">${hasVal?'…':'—'}</div>${hasVal ? (wcfg(w).delta!=null?html`<div class="mtrend ${Number(wcfg(w).delta)>=0?'up':'down'}">${Number(wcfg(w).delta)>=0?'▲':'▼'} ${Math.abs(wcfg(w).delta)}${suffix}</div>`:html`<div>&nbsp</div>`) : html`<div class="text-xs opacity-75 mt-2">Awaiting data…</div>`}</div>`; };
+const renderSvgChart = (w) => {
+  const d = w.data || {};
+  const points = Array.isArray(d) ? d : (d.points || d.series || d.values || []);
+  const labels = Array.isArray(d) ? null : (d.labels||null);
+  const vals = points.map(p => typeof p==='number' ? p : (p.value ?? p.y ?? 0));
+  const max = Math.max(1, ...vals); const W=320, H=130; const n=Math.max(1,vals.length);
+  const pts = vals.map((v,i)=>({x:(i/(n-1))*W, y:H-(v/max)*(H-16)-6}));
+  const path = pts.map((p,i)=>(i===0?'M':'L')+p.x.toFixed(1)+' '+p.y.toFixed(1)).join(' ');
+  const area = path + ' L'+W+' '+H+' L0 '+H+' Z';
+  const gLabels = labels || vals.map((_,i)=>'m'+(i+1));
+  return html`<svg viewBox="0 0 ${W} ${H}" class="svgchart" preserveAspectRatio="none">
+    <defs><linearGradient id="fillg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#00d4ff" stop-opacity=".45"/><stop offset="100%" stop-color="#00d4ff" stop-opacity="0"/></linearGradient></defs>
+    ${[0.25,0.5,0.75].map(f=>html`<line x1=0 x2=${W} y1=${H*f} y2=${H*f} stroke="rgba(255,255,255,.08)"/>`) }
+    <path d=${area} fill="url(#fillg)"/>
+    <path d=${path} fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    ${pts.map((p,i)=>html`<circle cx=${p.x.toFixed(1)} cy=${p.y.toFixed(1)} r="3" fill="#fff"><title>${gLabels[i]}: ${vals[i]}</title></circle>`)}
+  </svg>`;
+};
+const statCard = (label, value, icon) => html`<div class="card flex items-center gap-4" style="padding:20px;margin-bottom:0"><div class="text-3xl">${icon}</div><div><div class="text-2xl font-bold text-gray-900">${fmtAmt(value)}</div><div class="text-xs text-gray-500 mt-0.5">${label}</div></div></div>`;
+const loadStats = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.stats = await API.get('/dashboard/stats'); } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+
+// ===== Workflows =====
+const WorkflowsView = () => {
+  if (!S.workflows && !S.loading) loadWorkflows();
+  const list = S.workflows || [];
+  return html`
+    <div>
+      <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
+        <div><h1 class="text-xl font-extrabold text-gray-900">Workflows</h1><p class="text-sm text-gray-500 mt-1">All your automation workflows</p></div>
+        <div class="flex gap-2"><button class="btn text-sm" onClick=${openWfModal}>+ New Workflow</button><button class="btn-outline text-sm" onClick=${loadWorkflows} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button></div>
+      </header>
+      ${list.length === 0 ? html`<div class="empty">No workflows yet. Create your first one.</div>` : html`
+      <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Category</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>
+        ${list.map(w => html`<tr key=${w.id}><td class="font-semibold">${w.name}</td><td>${w.category || '—'}</td><td>${statusBadge(w.is_active?'active':'draft')}</td><td>${fmtDate(w.created_at)}</td>
+          <td class="text-right whitespace-nowrap"><button class="btn-outline text-xs" onClick=${()=>setView('builder',{id:w.id})}>Builder</button> <button class="btn-green text-xs" onClick=${()=>runWf(w.id)}>Run</button> <button class="btn-red text-xs" onClick=${()=>delWf(w.id)}>Del</button></td></tr>`)}
+      </tbody></table></div>`}
+    </div>`;
+};
+const loadWorkflows = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.workflows = (await API.get('/workflows')).workflows || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+const runWf = async (id) => { try { await API.post('/workflows/'+id+'/run'); toast('Workflow run triggered'); } catch(e){ toast(e.message,'err'); } };
+const delWf = async (id) => { if(!confirm('Delete this workflow?'))return; try { await API.del('/workflows/'+id); toast('Workflow deleted'); S.workflows=null; loadWorkflows(); } catch(e){ toast(e.message,'err'); } };
+
+// ===== Templates =====
+const TemplatesView = () => {
+  if (S.templates && S.templates.length && !S.loading) setTimeout(renderTplGrid,0);
+  if (!S.templates && !S.loading) loadTemplates();
+  const slug = currentIndustrySlug();
+  let indName=''; try { indName = currentIndustryName()||slug; } catch(e){ indName = slug; }
+  const esc = (x) => String(x==null?'':x).replace(/[<>&"]/g, c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+  return html`
+    <div>
+      <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
+        <div><h1 class="text-xl font-extrabold text-gray-900">Templates</h1><p class="text-sm text-gray-500 mt-1" id="tpl-plan-msg">Loading templates…</p></div>
+        <input type="file" id="tpl-import-input" accept=".json,application/json" style="display:none" onChange=${onTemplateFile}/>
+        <button class="btn-outline text-sm" onClick=${()=>document.getElementById('tpl-import-input').click()}>Import JSON</button>
+        <button class="btn-outline text-sm" onClick=${()=>{S.templates=null; loadTemplates();}} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button>
+      </header>
+      <div id="tpl-grid"></div>
+    </div>`;
+};
+const renderTplGrid = () => {
+  const root = document.getElementById('tpl-grid'); if (!root) return;
+  const list = S.templates || [];
+  const slug = currentIndustrySlug();
+  let indName=''; try { indName = currentIndustryName()||slug; } catch(e){ indName = slug; }
+  const esc = (x) => String(x==null?'':x).replace(/[<>&"]/g, c=>({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+  const isPaid = S.plan ? !!S.plan.is_paid : false;
+  const lockAll = !isPaid;
+  const unlock = (t) => (!lockAll && t.category && slug && t.category === slug);
+  const msgEl = document.getElementById('tpl-plan-msg');
+  if (msgEl) {
+    const isPaid = S.plan ? !!S.plan.is_paid : false;
+    const indTxt = (slug ? ((indName||slug)) : 'all industries');
+    msgEl.textContent = isPaid ? ("Industry: " + indTxt + " — templates outside your industry require an upgrade") : ("Free plan (" + (S.plan&&S.plan.slug||'free') + ") — upgrade to unlock templates");
+  }
+  if (!list.length) { root.innerHTML = '<div class="empty">No templates available.</div>'; return; }
+  const cards = list.map(t => {
+    if (unlock(t)) {
+      return '<div class="card" style="margin-bottom:0">'
+        +'<div class="flex items-start justify-between"><h3 class="font-semibold text-gray-800">'+esc(t.name)+'</h3><span class="badge '+(t.is_public?'b-green':'b-gray')+'">'+(t.is_public?'Public':'Private')+'</span></div>'
+        +'<p class="text-sm text-gray-500 mt-1 mb-3">'+esc(t.description||'No description')+'</p>'
+        +'<div class="mb-3">'+(t.category?'<span class="chip">'+esc(t.category)+'</span>':'')+'</div>'
+        +'<div class="flex gap-2"><button class="btn text-sm flex-1" data-tpl-install="'+esc(t.id)+'">Install as Workflow</button><button class="btn-outline text-sm flex-1" data-tpl-export="'+esc(t.id)+'|'+esc(t.name)+'">Export JSON</button></div>'
+        +'</div>';
+    }
+    return '<div class="card" style="margin-bottom:0;opacity:.92">'
+      +'<div class="flex items-start justify-between"><h3 class="font-semibold text-gray-800">'+esc(t.name)+'</h3><span class="badge b-gray">Locked</span></div>'
+      +'<p class="text-sm text-gray-500 mt-1 mb-3">'+esc(t.description||'No description')+'</p>'
+      +'<div class="mb-3">'+(t.category?'<span class="chip">'+esc(t.category)+'</span>':'')+'<span class="chip">'+(slug?'Not in '+esc(indName||slug):'Upgrade required')+'</span></div>'
+      +'<div class="flex gap-2"><button class="btn text-sm flex-1" data-tpl-upgrade="1">Upgrade to Unlock</button><button class="btn-outline text-sm flex-1" data-tpl-export="'+esc(t.id)+'|'+esc(t.name)+'">View JSON</button></div>'
+      +'</div>';
+  }).join('');
+  root.innerHTML = '<div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">'+cards+'</div>';
+  root.querySelectorAll('[data-tpl-install]').forEach(b=>b.addEventListener('click',()=>installTemplate(b.getAttribute('data-tpl-install'))));
+  root.querySelectorAll('[data-tpl-export]').forEach(b=>{ const p=b.getAttribute('data-tpl-export').split('|'); b.addEventListener('click',()=>exportTemplate(p[0],p[1])); });
+  root.querySelectorAll('[data-tpl-upgrade]').forEach(b=>b.addEventListener('click',()=>upgradeTemplates()));
+};
+const upgradeTemplates = () => { window.open('https://workflowswift.com/#features','_blank'); toast('Upgrade required to unlock this template'); };
+const loadTemplates = async () => { if(S.loading)return; S.loading=true; renderApp(); try { const _r = await API.get('/templates'); S.templates = _r.templates || []; S.templateAvail = _r.available_public || []; S.plan = _r.plan || null; } catch(e){ S.templates=[]; S.templateAvail=[]; S.plan=null; } S.loading=false; S.dataVer=(S.dataVer||0)+1; renderApp(); renderTplGrid(); };
+const installTemplate = async (id) => { try { await API.post('/templates/'+id+'/install'); toast('Template installed as workflow'); setView('workflows'); S.workflows=null; } catch(e){ toast(e.message,'err'); } };
+const exportTemplate = async (id, name) => { try { const data = await API.get('/templates/'+id+'/export'); const payload = (data && data.template) || data; const blob = new Blob([JSON.stringify(payload,null,2)], { type:'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = (name||'template').replace(/[^A-Za-z0-9._-]/g,'_') + '.workflowswift.json'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url), 4000); toast('Template exported'); } catch(e){ toast(e.message,'err'); } };
+const onTemplateFile = async (ev) => { const file = ev.target.files && ev.target.files[0]; ev.target.value = ''; if(!file) return; try { const text = await file.text(); const j = JSON.parse(text); const payload = (j && j.template) ? j.template : j; await API.post('/templates/import', payload); toast('Template imported'); S.templates=null; loadTemplates(); } catch(e){ toast('Import failed: ' + e.message, 'err'); } };
+
+// ===== Instances =====
+const InstancesView = () => {
+  if (!S.instances && !S.loading) loadInstances();
+  const list = S.instances || [];
+  return html`
+    <div>
+      <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
+        <div><h1 class="text-xl font-extrabold text-gray-900">Instances</h1><p class="text-sm text-gray-500 mt-1">Running and historical workflow instances</p></div>
+        <button class="btn-outline text-sm" onClick=${loadInstances} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button>
+      </header>
+      ${list.length === 0 ? html`<div class="empty">No instances yet.</div>` : html`
+      <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Status</th><th>Step</th><th>Started</th><th>Completed</th><th></th></tr></thead><tbody>
+        ${list.map(i => html`<tr key=${i.id}><td class="font-semibold">${i.name}</td><td>${statusBadge(i.status)}</td><td>${i.current_step_order ?? '—'}</td><td>${fmtDate(i.started_at)}</td><td>${fmtDate(i.completed_at)}</td><td class="text-right"><button class="btn-outline text-xs" onClick=${()=>advanceInstance(i.id)}>Advance</button></td></tr>`)}
+      </tbody></table></div>`}
+    </div>`;
+};
+const loadInstances = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.instances = (await API.get('/instances')).instances || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+const advanceInstance = async (id) => { try { await API.post('/instances/'+id+'/advance'); toast('Instance advanced'); S.instances=null; loadInstances(); } catch(e){ toast(e.message,'err'); } };
+
+// ===== Automations =====
+const AutomationsView = () => {
+  if (!S.automations && !S.loading) loadAutomations();
+  const list = S.automations || [];
+  return html`
+    <div>
+      <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
+        <div><h1 class="text-xl font-extrabold text-gray-900">Automations</h1><p class="text-sm text-gray-500 mt-1">Trigger-based automations</p></div>
+        <button class="btn-outline text-sm" onClick=${loadAutomations} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button>
+      </header>
+      ${list.length === 0 ? html`<div class="empty">No automations yet.</div>` : html`
+      <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Trigger</th><th>Action</th><th>Status</th><th></th></tr></thead><tbody>
+        ${list.map(a => html`<tr key=${a.id}><td class="font-semibold">${a.name}</td><td>${a.trigger_type}</td><td>${a.action_type}</td><td>${statusBadge(a.is_active?'active':'paused')}</td><td class="text-right"><button class="btn-green text-xs" onClick=${()=>runAuto(a.id)}>Run</button></td></tr>`)}
+      </tbody></table></div>`}
+    </div>`;
+};
+const loadAutomations = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.automations = (await API.get('/automations')).automations || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+const runAuto = async (id) => { try { await API.post('/automations/'+id+'/run'); toast('Automation triggered'); } catch(e){ toast(e.message,'err'); } };
+
+
+// ===== Prospecting (search + results only; no list endpoint) =====
+const ProspectingView = () => {
+  return html`
+    <div>
+      <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
+        <div><h1 class="text-xl font-extrabold text-gray-900">Prospecting</h1><p class="text-sm text-gray-500 mt-1">Search and enrich target businesses</p></div>
+      </header>
+      <div class="card">
+        <h3 class="font-semibold text-gray-800 mb-3">🔍 Search Businesses</h3>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+          ${quickSearchField('industryInput','Industry','e.g. Dental')}
+          ${quickSearchField('cityInput','City','e.g. Miami')}
+          ${quickSearchField('stateInput','State','e.g. FL')}
+        </div>
+        <button class="btn" onClick=${runSearch} disabled=${S.loading}>${S.loading?spinner():'Search'}</button>
+      </div>
+    </div>`;
+};
+const quickSearchField = (id, label, ph) => html`<div><label class="label">${label}</label><input class="input" id=${id} placeholder=${ph} /></div>`;
+const runSearch = async () => {
+  const industry=document.getElementById('industryInput').value; const city=document.getElementById('cityInput').value; const state=document.getElementById('stateInput').value;
+  if(!industry || !city || !state){ toast('Industry, city and state are required','err'); return; }
+  S.loading=true; renderApp();
+  try { const r = await API.post('/prospecting/search', { industry, city, state }); S.searchResults = r.results || r; toast('Search complete'); setView('prospecting-results'); }
+  catch(e){ toast(e.message,'err'); } S.loading=false; renderApp();
+};
+
+const ProspectingResultsView = () => {
+  const res = S.searchResults || [];
+  const arr = Array.isArray(res) ? res : (res.items || res.results || []);
+  return html`
+    <div>
+      <header class="flex items-start justify-between mb-5"><div><h1 class="text-xl font-extrabold text-gray-900">Search Results</h1><p class="text-sm text-gray-500 mt-1">${arr.length} businesses found</p></div><button class="btn-outline text-sm" onClick=${()=>setView('prospecting')}>Back</button></header>
+      ${arr.length === 0 ? html`<div class="empty">No results.</div>` : html`
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        ${arr.map((b,i) => html`<div class="card" key=${i} style="margin-bottom:0"><h3 class="font-semibold text-gray-800">${b.name || b.business_name || 'Business '+(i+1)}</h3>
+          ${b.website ? html`<a class="text-sm text-blue-600" href=${b.website} target="_blank">${b.website}</a>` : ''}
+          ${b.address ? html`<p class="text-sm text-gray-500 mt-1">${b.address}</p>` : ''}
+          ${b.phone ? html`<p class="text-sm text-gray-500">${b.phone}</p>` : ''}
+          ${b.social_links && Object.keys(b.social_links).length ? html`<div class="mt-2">${Object.entries(b.social_links).filter(([k,v])=>v).map(([k,v])=>html`<span class="chip">${k}</span>`)}</div>` : ''}
+        </div>`)}
+      </div>`}
+    </div>`;
+};
+
+// ===== Brand Monitor (/brand-monitors -> {brand_monitors: [...]}) =====
+const BrandMonitorView = () => {
+  if (!S.brands && !S.loading) loadBrands();
+  const list = S.brands || [];
+  return html`
+    <div>
+      <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
+        <div><h1 class="text-xl font-extrabold text-gray-900">Brand Monitor</h1><p class="text-sm text-gray-500 mt-1">Track mentions of your brand</p></div>
+        <button class="btn text-sm" onClick=${openBrandModal}>+ New Monitor</button>
+      </header>
+      ${list.length === 0 ? html`<div class="empty">No brand monitors yet.</div>` : html`
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        ${list.map(b => html`<div class="card" key=${b.id} style="margin-bottom:0"><h3 class="font-semibold text-gray-800">${b.brand_name}</h3>
+          <div class="mt-2">${(b.platforms||[]).map(p=>html`<span class="chip">${p}</span>`)}</div>
+          ${b.keywords && b.keywords.length ? html`<p class="text-xs text-gray-400 mt-1">${b.keywords.join(', ')}</p>` : ''}
+          <p class="text-sm text-gray-500 mt-2">${statusBadge(b.is_active?'active':'paused')}${b.last_scanned_at ? ' · scanned ' + fmtDate(b.last_scanned_at) : ''}</p>
+          <div class="mt-3 flex gap-2"><button class="btn-red text-xs" onClick=${()=>delBrand(b.id)}>Delete</button></div></div>`)}
+      </div>`}
+    </div>`;
+};
+const loadBrands = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.brands = (await API.get('/brand-monitors')).brand_monitors || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+const delBrand = async (id) => { if(!confirm('Delete this monitor?'))return; try { await API.del('/brand-monitors/'+id); toast('Monitor deleted'); S.brands=null; loadBrands(); } catch(e){ toast(e.message,'err'); } };
+
+// ===== Competitors (/competitors -> {competitors: [...]}, field=name/website) =====
+const CompetitorsView = () => {
+  if (!S.competitors && !S.loading) loadCompetitors();
+  const list = S.competitors || [];
+  return html`
+    <div>
+      <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
+        <div><h1 class="text-xl font-extrabold text-gray-900">Competitors</h1><p class="text-sm text-gray-500 mt-1">Watch changes from competitors</p></div>
+        <button class="btn text-sm" onClick=${openCompetitorModal}>+ Add Competitor</button>
+      </header>
+      ${list.length === 0 ? html`<div class="empty">No competitors tracked yet.</div>` : html`
+      <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Website</th><th>Status</th><th>Last Checked</th><th></th></tr></thead><tbody>
+        ${list.map(c => html`<tr key=${c.id}><td class="font-semibold">${c.name}</td><td>${c.website ? html`<a class="text-blue-600" href=${c.website} target="_blank">${c.website}</a>` : '—'}</td><td>${statusBadge(c.is_active?'active':'paused')}</td><td>${fmtDate(c.last_checked_at)}</td><td class="text-right"><button class="btn-outline text-xs" onClick=${()=>checkCompetitor(c.id)}>Check</button> <button class="btn-red text-xs" onClick=${()=>delCompetitor(c.id)}>Del</button></td></tr>`)}
+      </tbody></table></div>`}
+    </div>`;
+};
+const loadCompetitors = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.competitors = (await API.get('/competitors')).competitors || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+const checkCompetitor = async (id) => { try { const r = await API.post('/competitors/'+id+'/check'); toast('Check complete'); S.checkResult = r.check_result || r; } catch(e){ toast(e.message,'err'); } };
+const delCompetitor = async (id) => { if(!confirm('Delete this competitor?'))return; try { await API.del('/competitors/'+id); toast('Competitor removed'); S.competitors=null; loadCompetitors(); } catch(e){ toast(e.message,'err'); } };
+
+// ===== Leads (/leads -> {leads: [...], count}, fields: name/email/phone/company/status) =====
+const LeadsView = () => {
+  if (!S.leads && !S.loading) loadLeads();
+  const list = S.leads || [];
+  return html`
+    <div>
+      <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
+        <div><h1 class="text-xl font-extrabold text-gray-900">Leads</h1><p class="text-sm text-gray-500 mt-1">Your captured leads</p></div>
+        <button class="btn-outline text-sm" onClick=${loadLeads} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button>
+      </header>
+      ${list.length === 0 ? html`<div class="empty">No leads yet.</div>` : html`
+      <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Email</th><th>Company</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>
+        ${list.map(l => html`<tr key=${l.id}><td class="font-semibold">${l.name || '—'}</td><td>${l.email || '—'}</td><td>${l.company || '—'}</td><td>${statusBadge(l.status || 'new')}</td><td>${fmtDate(l.created_at)}</td><td class="text-right"><button class="btn-red text-xs" onClick=${()=>delLead(l.id)}>Del</button></td></tr>`)}
+      </tbody></table></div>`}
+    </div>`;
+};
+const loadLeads = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.leads = (await API.get('/leads')).leads || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+const delLead = async (id) => { if(!confirm('Delete this lead?'))return; try { await API.del('/leads/'+id); toast('Lead deleted'); S.leads=null; loadLeads(); } catch(e){ toast(e.message,'err'); } };
+
+
+// ===== Surfaces =====
+const SurfacesView = () => {
+  if (!S.surfaces && !S.loading) loadSurfaces();
+  const list = S.surfaces || [];
+  return html`
+    <div>
+      <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
+        <div><h1 class="text-xl font-extrabold text-gray-900">Surfaces</h1><p class="text-sm text-gray-500 mt-1">Channels and surfaces for your workflows</p></div>
+        <button class="btn text-sm" onClick=${openSurfaceModal}>+ New Surface</button>
+      </header>
+      ${list.length === 0 ? html`<div class="empty">No surfaces yet.</div>` : html`
+      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        ${list.map(s => html`<div class="card" key=${s.id} style="margin-bottom:0"><h3 class="font-semibold text-gray-800">${s.name || s.type || 'Surface'}</h3><p class="text-sm text-gray-500 mt-1">${s.type || ''}</p></div>`)}
+      </div>`}
+    </div>`;
+};
+const loadSurfaces = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.surfaces = (await API.get('/surfaces')).surfaces || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+
+// ===== Credits =====
+const CreditsView = () => {
+  if (!S.creditInfo && !S.loading) loadCredits();
+  const bal = S.creditInfo?.balance ?? S.creditInfo?.credits ?? '—';
+  const txs = S.creditInfo?.transactions || S.transactions || [];
+  const pkgs = S.creditInfo?.packages || S.packages || [];
+  return html`
+    <div>
+      <header class="flex items-start justify-between mb-5"><div><h1 class="text-xl font-extrabold text-gray-900">Credits</h1><p class="text-sm text-gray-500 mt-1">Your credit balance and usage</p></div><button class="btn-outline text-sm" onClick=${loadCredits} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button></header>
+      <div class="card flex items-center gap-4" style="margin-bottom:16px"><div class="text-4xl">💰</div><div><div class="text-3xl font-bold text-gray-900">${fmtAmt(bal)}</div><div class="text-xs text-gray-500 mt-0.5">Available credits</div></div></div>
+      ${pkgs.length ? html`<div class="card"><h3 class="font-semibold text-gray-800 mb-3">Credit Packages</h3><div class="grid grid-cols-1 md:grid-cols-3 gap-3">${pkgs.map(p=>html`<div class="border rounded-lg p-3"><div class="font-bold">${p.name||p.title||'Package'}</div><div class="text-sm text-gray-500">${fmtAmt(p.credits||p.amount)} credits</div></div>`)}</div></div>` : ''}
+      <div class="card"><h3 class="font-semibold text-gray-800 mb-3">Recent Transactions</h3>${txs.length===0?html`<div class="empty">No transactions.</div>`:html`<div class="overflow-auto"><table class="table"><thead><tr><th>Type</th><th>Amount</th><th>Date</th></tr></thead><tbody>${txs.map((t,i)=>html`<tr key=${i}><td>${t.type||t.description||'—'}</td><td>${fmtAmt(t.amount ?? t.credits)}</td><td>${fmtDate(t.created_at)}</td></tr>`)}</tbody></table></div>`}</div>
+    </div>`;
+};
+const loadCredits = async () => { if(S.loading)return; S.loading=true; renderApp(); try { const [bal, tx, pk] = await Promise.allSettled([API.get('/credits/balance'), API.get('/credits/transactions'), API.get('/credits/packages')]); S.creditInfo = { balance: bal.status==='fulfilled'?(bal.value.balance ?? bal.value.credits ?? bal.value):null, transactions: tx.status==='fulfilled'?(tx.value.transactions||tx.value||[]):[], packages: pk.status==='fulfilled'?(pk.value.packages||pk.value||[]):[] }; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+
+// ===== Tickets =====
+const TicketsView = () => {
+  if (!S.tickets && !S.loading) loadTickets();
+  const list = S.tickets || [];
+  return html`
+    <div>
+      <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
+        <div><h1 class="text-xl font-extrabold text-gray-900">Tickets</h1><p class="text-sm text-gray-500 mt-1">Your support tickets</p></div>
+        <button class="btn-outline text-sm" onClick=${loadTickets} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button>
+      </header>
+      ${list.length === 0 ? html`<div class="empty">No tickets.</div>` : html`
+      <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Subject</th><th>Status</th><th>Created</th></tr></thead><tbody>
+        ${list.map(t => html`<tr key=${t.id}><td class="font-semibold">${t.name || t.subject || t.title || '—'}</td><td>${statusBadge(t.status || 'open')}</td><td>${fmtDate(t.created_at)}</td></tr>`)}
+      </tbody></table></div>`}
+    </div>`;
+};
+const loadTickets = async () => { if(S.loading)return; S.loading=true; renderApp(); try { const r = await API.get('/tickets'); S.tickets = r.items || r.tickets || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+
+// ===== Profile =====
+const ProfileView = () => {
+  const u = API.user || {};
+  return html`
+    <div>
+      <header class="mb-5"><h1 class="text-xl font-extrabold text-gray-900">Profile</h1><p class="text-sm text-gray-500 mt-1">Your account settings</p></header>
+      <div class="card">
+        <div class="space-y-4">
+          <div><label class="label">Email</label><div class="font-semibold">${u.email || '—'}</div></div>
+          <div><label class="label">Name</label><div class="font-semibold">${u.name || u.full_name || '—'}</div></div>
+          <div><label class="label">Account</label><div class="text-sm text-gray-600">${u.aid || u.account_id || u.id || '—'}</div></div>
+        </div>
+        <div class="mt-6 pt-4 border-t flex gap-2"><button class="btn-outline text-sm" onClick=${()=>{API.logout(); window.location.reload();}}>Sign Out</button></div>
+      </div>
+    </div>`;
+};
+
+// ===== Modal forms =====
+const openWfModal = () => { S.modal='wf'; renderApp(); };
+const openProspectModal = () => { S.modal='prospect'; renderApp(); };
+const openBrandModal = () => { S.modal='brand'; renderApp(); };
+const openCompetitorModal = () => { S.modal='comp'; renderApp(); };
+const openSurfaceModal = () => { S.modal='surface'; renderApp(); };
+
+const WfModal = () => { let name='', desc='', cat='';
+  const save = async () => { if(!name) return toast('Name required','err'); S.loading=true; renderApp(); try { await API.post('/workflows', { name, description: desc, category: cat }); toast('Workflow created'); S.workflows=null; closeModal(); } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+  return html`<${ModalShell} title="New Workflow" onClose=${closeModal}>
+    <div class="mb-4"><label class="label">Name</label><input class="input" onInput=${e=>name=e.target.value} placeholder="My Workflow" /></div>
+    <div class="mb-4"><label class="label">Category</label><input class="input" onInput=${e=>cat=e.target.value} placeholder="e.g. Sales" /></div>
+    <div class="mb-4"><label class="label">Description</label><textarea class="input" rows=3 onInput=${e=>desc=e.target.value} placeholder="What does this workflow do?"></textarea></div>
+    <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Create Workflow'}</button>
+  <//>`; };
+const BrandModal = () => { let name='', kw='';
+  const save = async () => { if(!name) return toast('Brand name required','err'); const keywords = kw.split(',').map(s=>s.trim()).filter(Boolean); S.loading=true; renderApp(); try { await API.post('/brand-monitors', { brand_name: name, keywords, platforms: ['web','news','social'] }); toast('Brand monitor created'); S.brands=null; closeModal(); } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+  return html`<${ModalShell} title="New Brand Monitor" onClose=${closeModal}>
+    <div class="mb-4"><label class="label">Brand Name</label><input class="input" onInput=${e=>name=e.target.value} placeholder="Your Company" /></div>
+    <div class="mb-4"><label class="label">Keywords (comma separated)</label><input class="input" onInput=${e=>kw=e.target.value} placeholder="brand, product, keyword" /></div>
+    <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Create Monitor'}</button>
+  <//>`; };
+const CompetitorModal = () => { let name='', web='';
+  const save = async () => { if(!name) return toast('Name required','err'); S.loading=true; renderApp(); try { await API.post('/competitors', { name, website: web }); toast('Competitor added'); S.competitors=null; closeModal(); } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+  return html`<${ModalShell} title="Add Competitor" onClose=${closeModal}>
+    <div class="mb-4"><label class="label">Competitor Name</label><input class="input" onInput=${e=>name=e.target.value} placeholder="Competitor Inc" /></div>
+    <div class="mb-4"><label class="label">Website</label><input class="input" onInput=${e=>web=e.target.value} placeholder="https://competitor.com" /></div>
+    <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Add Competitor'}</button>
+  <//>`; };
+const SurfaceModal = () => { let name='', type='';
+  const save = async () => { if(!name) return toast('Name required','err'); S.loading=true; renderApp(); try { await API.post('/surfaces', { name, type }); toast('Surface created'); S.surfaces=null; closeModal(); } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+  return html`<${ModalShell} title="New Surface" onClose=${closeModal}>
+    <div class="mb-4"><label class="label">Name</label><input class="input" onInput=${e=>name=e.target.value} placeholder="e.g. Website Chat" /></div>
+    <div class="mb-4"><label class="label">Type</label><input class="input" onInput=${e=>type=e.target.value} placeholder="e.g. web" /></div>
+    <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Create Surface'}</button>
+  <//>`; };
+
+// ===== Builder =====
+const BuilderView = () => {
+  const wf = (S.workflows||[]).find(w => w.id === S.viewParams?.id);
+  if (!S.builder && !S.loading) { S.builder={}; renderApp(); }
+  return html`
+    <div>
+      <header class="flex items-start justify-between mb-5"><div><h1 class="text-xl font-extrabold text-gray-900">Workflow Builder</h1><p class="text-sm text-gray-500 mt-1">${wf ? wf.name : (S.viewParams?.id || 'Workflow')}</p></div><button class="btn-outline text-sm" onClick=${()=>setView('workflows')}>Back</button></header>
+      <div class="card"><div class="empty">Builder interface — step configuration coming next.</div></div>
+    </div>`;
+};
+
+
+// ===== App shell + router =====
+const NAV = [
+  { id:'dashboard', label:'Dashboard', icon:'📊' },
+  { id:'workflows', label:'Workflows', icon:'⚙️' },
+  { id:'builder', label:'Builder', icon:'🛠️' },
+  { id:'templates', label:'Templates', icon:'🗂️' },
+  { id:'instances', label:'Instances', icon:'▶️' },
+  { id:'automations', label:'Automations', icon:'🔁' },
+  { id:'leads', label:'Leads', icon:'👤' },
+  { id:'surfaces', label:'Surfaces', icon:'📡' },
+  { id:'prospecting', label:'Prospecting', icon:'🎯' },
+  { id:'brand-monitor', label:'Brand Monitor', icon:'📣' },
+  { id:'competitors', label:'Competitors', icon:'👁️' },
+  { id:'credits', label:'Credits', icon:'💰' },
+  { id:'tickets', label:'Tickets', icon:'🎫' },
+  { id:'profile', label:'Profile', icon:'👤' },
+];
+
+const VIEW_MAP = {
+  dashboard: DashboardView, workflows: WorkflowsView, builder: BuilderView, templates: TemplatesView,
+  instances: InstancesView, automations: AutomationsView, leads: LeadsView, surfaces: SurfacesView,
+  prospecting: ProspectingView, 'prospecting-results': ProspectingResultsView, 'brand-monitor': BrandMonitorView,
+  competitors: CompetitorsView, credits: CreditsView, tickets: TicketsView, profile: ProfileView,
+  pick: IndustryPickerView,
+};
+
+const App = () => {
+  if (S.view === 'login') return S.showRegister ? html`<${RegisterView} />` : html`<${LoginView} />`;
+  if (S.view === 'pick') return html`<${IndustryPickerView} />`;
+
+  if (!S.accIndustry && !S.loading) loadAccountIndustry();
+  const Current = VIEW_MAP[S.current] || DashboardView;
+  const user = API.user || {};
+  const indName = (S.accIndustry && currentIndustryName()) || 'Set industry';
+
+  return html`
+    <div class="flex min-h-screen">
+      <aside class="sidebar w-60 bg-white border-r border-gray-200 flex flex-col flex-shrink-0 sticky top-0 h-screen">
+        <div class="p-4 border-b border-gray-100">
+          <div class="flex items-center gap-2">
+            <span class="text-2xl">⚡</span><span class="font-extrabold text-gray-900">WorkflowSwift</span>
+          </div>
+          <button class="ind-switch w-full mt-3 justify-center" onClick=${openIndustryPicker}>🏷 ${indName} ▾</button>
+        </div>
+        <nav class="flex-1 overflow-y-auto p-3 space-y-1">
+          ${NAV.map(n => html`<button class="nav-item ${S.current===n.id?'active':''}" onClick=${()=>setView(n.id)}><span>${n.icon}</span> ${n.label}</button>`)}
+          <a class="nav-item" href="/integrations.html" style="text-decoration:none"><span>🔌</span> Integrations</a>
+        </nav>
+        <div class="p-3 border-t border-gray-100">
+          <div class="text-xs text-gray-500 mb-2 truncate">${user.email || 'signed in'}</div>
+          <button class="nav-item text-red-600" onClick=${()=>{API.logout(); window.location.reload();}}>Sign Out</button>
+        </div>
+      </aside>
+      <main class="flex-1 p-6 md:p-8 overflow-x-hidden">
+        <${Current} key=${S.current + "|" + S.dataVer} />
+      </main>
+    </div>
+    ${S.modal && (S.modal==='wf' ? html`<${WfModal} />` : S.modal==='brand' ? html`<${BrandModal} />` : S.modal==='comp' ? html`<${CompetitorModal} />` : S.modal==='surface' ? html`<${SurfaceModal} />` : S.modal==='industry' ? html`<${IndustryPickerView} asModal />` : null)}
+    ${S.toast && html`<div class="toast ${S.toast.type}">${S.toast.msg}</div>`}
+    ${S.loading && html`<div style="position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:60"><span class="spinner"></span></div>`}
+  `;
+};
+
+renderApp();
+// Boot into the app view when a session token exists (avoids landing on login
+// even after a successful sign-in that navigated/reloaded to /app?token=...).
+(function () {
+  if (sessionStorage.getItem('wf_token') && S.view === 'login') {
+    S.view = 'app'; S.current = S.current || 'dashboard'; renderApp();
+  }
+})();
+
+
+</script>
+</body>
+</html>

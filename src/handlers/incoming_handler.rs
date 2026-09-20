@@ -17,6 +17,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::error::{ApiResult, AppError};
+use crate::handlers::coreswift_external::{push_lead_to_coreswift, CapturedLead};
 use crate::state::AppState;
 
 /// Payload that any Swift tool sends to WorkflowSwift.
@@ -166,6 +167,36 @@ pub async fn receive_incoming(
     .execute(&state.db)
     .await
     .map_err(|e| AppError::Internal(format!("Failed to create workflow instance: {}", e)))?;
+
+    // ── INBOUND CORE SWIFT PUSH (fleet standard R2) ──
+    // A real capture just happened: the lead is recorded locally as a workflow instance.
+    // Deliver it to the hub too, with the account's own BYOK key. Not connected (or hub
+    // down) => this quietly does nothing and the run continues exactly as before.
+    {
+        let lead = CapturedLead::from_parts(
+            payload.contact.first_name.clone(),
+            payload.contact.last_name.clone(),
+            payload.contact.email.clone(),
+            payload.contact.phone.clone(),
+            payload.contact.business_name.clone(),
+            Some(source.to_string()),
+        );
+        let fields = payload.data.clone().unwrap_or_else(|| json!({}));
+        let workflow_name = workflow.name.clone();
+        let pushed = push_lead_to_coreswift(
+            &state,
+            aid,
+            &lead,
+            None,
+            &[],
+            fields,
+            &format!("incoming run on workflow '{workflow_name}'"),
+        )
+        .await;
+        tracing::info!(
+            "Incoming capture for aid {aid} (source={source}) — CoreSwift push delivered={pushed}"
+        );
+    }
 
     // Execute each workflow step
     let mut step_results: Vec<Value> = vec![];

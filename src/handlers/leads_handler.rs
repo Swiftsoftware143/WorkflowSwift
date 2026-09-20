@@ -1,6 +1,7 @@
 //! Leads handler — workflow inputs. Tenant-scoped real CRUD (lead captured -> workflow runs on it).
 use crate::auth::models::Claims;
 use crate::error::{ApiResult, AppError};
+use crate::handlers::coreswift_external::{push_lead_to_coreswift, CapturedLead};
 use crate::state::AppState;
 use axum::{
     extract::{Path, Query, State},
@@ -115,6 +116,28 @@ pub async fn create(
         .bind(id)
         .fetch_one(&state.db)
         .await?;
+
+    // INBOUND CORE SWIFT PUSH (fleet standard R2): a captured lead belongs in the hub.
+    // Uses the account's own BYOK key; not connected => nothing happens, capture still
+    // succeeds and the lead stays local.
+    let lead_for_push = CapturedLead::from_name(
+        &b.name,
+        b.email.clone(),
+        b.phone.clone(),
+        b.company.clone(),
+        b.source.clone(),
+    );
+    push_lead_to_coreswift(
+        &state,
+        aid,
+        &lead_for_push,
+        None,
+        &[],
+        json!({}),
+        "lead capture (POST /api/v1/leads)",
+    )
+    .await;
+
     Ok((StatusCode::CREATED, Json(json!({"lead": row}))))
 }
 pub async fn get(

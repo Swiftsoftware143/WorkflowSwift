@@ -19,7 +19,11 @@ use crate::AppState;
 // ──────────────────────────────────────────────
 
 /// Get the base URL for a given provider key (from the account stored provider_key or the preset)
-async fn get_provider_base_url(db: &sqlx::PgPool, aid: Uuid, provider: &str) -> Option<String> {
+pub(crate) async fn get_provider_base_url(
+    db: &sqlx::PgPool,
+    aid: Uuid,
+    provider: &str,
+) -> Option<String> {
     // First check provider_keys for a stored base_url
     if let Ok(row) = sqlx::query_scalar::<_, Option<String>>(
         "SELECT base_url FROM provider_keys WHERE aid = $1 AND provider = $2 AND is_active = true",
@@ -61,7 +65,11 @@ async fn get_provider_base_url(db: &sqlx::PgPool, aid: Uuid, provider: &str) -> 
 }
 
 /// Fetch API key for a given provider from the account stored keys
-async fn get_provider_api_key(db: &sqlx::PgPool, aid: Uuid, provider: &str) -> Option<String> {
+pub(crate) async fn get_provider_api_key(
+    db: &sqlx::PgPool,
+    aid: Uuid,
+    provider: &str,
+) -> Option<String> {
     sqlx::query_scalar::<_, String>(
         "SELECT api_key FROM provider_keys WHERE aid = $1 AND provider = $2 AND is_active = true",
     )
