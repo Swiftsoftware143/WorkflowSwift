@@ -12,6 +12,61 @@ use crate::auth::models::Claims;
 use crate::error::{ApiResult, AppError};
 use crate::AppState;
 
+/// Field-name hints that mark a stored value as a secret.
+const SECRET_HINTS: [&str; 8] = [
+    "password",
+    "api_key",
+    "apikey",
+    "secret",
+    "token",
+    "private_key",
+    "credential",
+    "smtp_pass",
+];
+
+/// Mask a secret value — keep first/last 3 chars so an admin can tell which
+/// key is configured, while the full value never leaves the server.
+fn mask_secret(value: &str) -> String {
+    if value.len() > 6 {
+        format!("{}...{}", &value[..3], &value[value.len() - 3..])
+    } else {
+        "***".to_string()
+    }
+}
+
+fn is_secret_field(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    SECRET_HINTS.iter().any(|h| n.contains(h))
+}
+
+/// Recursively replace secret-looking string values with a masked form.
+/// The raw value stays in the DB (email.rs reads it directly) — only API
+/// responses are redacted.
+fn redact_secrets(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (k, v) in map.iter_mut() {
+                if is_secret_field(k) {
+                    if let serde_json::Value::String(s) = v {
+                        if !s.is_empty() {
+                            let masked = mask_secret(s);
+                            *s = masked;
+                        }
+                    }
+                } else {
+                    redact_secrets(v);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items.iter_mut() {
+                redact_secrets(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// GET /api/v1/admin/settings — list all admin settings
 pub async fn list_settings(
     State(state): State<AppState>,
@@ -27,7 +82,16 @@ pub async fn list_settings(
     let mut settings = serde_json::Map::new();
     for row in &rows {
         let key: String = row.try_get("key")?;
-        let value: serde_json::Value = row.try_get("value")?;
+        let mut value: serde_json::Value = row.try_get("value")?;
+        if is_secret_field(&key) {
+            if let serde_json::Value::String(s) = &value {
+                if !s.is_empty() {
+                    value = json!(mask_secret(s));
+                }
+            }
+        } else {
+            redact_secrets(&mut value);
+        }
         let description: Option<String> = row.try_get("description").ok();
         let updated_at: chrono::DateTime<chrono::Utc> = row.try_get("updated_at")?;
         settings.insert(
@@ -60,7 +124,16 @@ pub async fn get_setting(
     .ok_or_else(|| AppError::NotFound(format!("Setting '{}' not found", key)))?;
 
     let key_str: String = row.try_get("key")?;
-    let value: serde_json::Value = row.try_get("value")?;
+    let mut value: serde_json::Value = row.try_get("value")?;
+    if is_secret_field(&key_str) {
+        if let serde_json::Value::String(s) = &value {
+            if !s.is_empty() {
+                value = json!(mask_secret(s));
+            }
+        }
+    } else {
+        redact_secrets(&mut value);
+    }
     let description: Option<String> = row.try_get("description").ok();
     let updated_at: chrono::DateTime<chrono::Utc> = row.try_get("updated_at")?;
 
