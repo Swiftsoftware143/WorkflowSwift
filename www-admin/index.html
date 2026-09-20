@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WorkflowSwift — Admin</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+body{font-family:system-ui,-apple-system,sans-serif;background:#f1f5f9;margin:0}
+.card{background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.08);padding:20px}
+.input{border:1px solid #d1d5db;border-radius:8px;padding:8px 12px;width:100%;font-size:14px;color:#111827}
+.input:focus{outline:none;border-color:#3b82f6;box-shadow:0 0 0 3px rgba(59,130,246,.15)}
+.btn{padding:8px 16px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;border:none;transition:all .15s}
+.btn-primary{background:#2563eb;color:#fff}.btn-primary:hover{background:#1d4ed8}
+.btn-danger{background:#dc2626;color:#fff}.btn-danger:hover{background:#b91c1c}
+.btn-success{background:#059669;color:#fff}.btn-success:hover{background:#047857}
+.btn-sm{padding:4px 10px;font-size:12px}
+.btn-ghost{background:transparent;color:#6b7280}.btn-ghost:hover{background:#f3f4f6}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:50}
+.modal-box{background:#fff;border-radius:12px;padding:24px;max-width:520px;width:90%;max-height:85vh;overflow-y:auto}
+.table{width:100%;border-collapse:collapse}.table th,.table td{padding:10px 12px;text-align:left;font-size:13px}
+.table th{background:#f8fafc;color:#64748b;font-weight:600;border-bottom:2px solid #e2e8f0}
+.table td{border-bottom:1px solid #f1f5f9}
+.badge{padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600}
+.sidebar{width:240px;background:#fff;min-height:100vh;border-right:1px solid #e5e7eb;position:fixed;top:0;left:0;overflow-y:auto;z-index:10}
+.main{margin-left:240px;padding:24px}
+.tab-btn{display:block;width:100%;text-align:left;padding:10px 16px;font-size:14px;color:#374151;cursor:pointer;border:none;background:none;border-radius:6px;transition:all .1s}
+.tab-btn:hover{background:#f3f4f6}
+.tab-btn.active{background:#eff6ff;color:#2563eb;font-weight:600}
+.sub-item{padding:6px 16px 6px 36px;font-size:13px;color:#6b7280;cursor:pointer;border:none;background:none;display:block;width:100%;text-align:left;border-radius:4px}
+.sub-item:hover{background:#f3f4f6;color:#374151}
+.sub-item.active{color:#2563eb;font-weight:600;background:#eff6ff}
+</style>
+<script>
+const API='/api/v1';
+let TOKEN=localStorage.getItem('ws_token')||'';
+let app={tab:'dashboard',sub:'overview',data:{}};
+
+async function api(path,opts={}){
+  const h={...opts.headers,'Content-Type':'application/json'};
+  if(TOKEN)h['Authorization']='Bearer '+TOKEN;
+  const r=await fetch(API+path,{...opts,headers:h});
+  if(r.status===401){TOKEN='';localStorage.removeItem('ws_token');renderLogin();return null}
+  if(!r.ok)return null;
+  if(r.status===204)return null;
+  return r.json();
+}
+
+async function login(email,pw){
+  const r=await fetch(API+'/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password:pw})});
+  if(!r.ok){alert('Login failed');return}
+  const d=await r.json();
+  TOKEN=d.access_token||'';
+  localStorage.setItem('ws_token',TOKEN);
+  renderApp();
+}
+
+function logout(){TOKEN='';localStorage.removeItem('ws_token');renderLogin()}
+
+function h(tag,props={},...children){
+  const el=document.createElement(tag);
+  Object.entries(props).forEach(([k,v])=>{
+    if(k==='className')el.className=v;
+    else if(k.startsWith('on'))el[k.toLowerCase()]=v;
+    else el.setAttribute(k,v);
+  });
+  children.forEach(c=>{if(typeof c==='string')el.appendChild(document.createTextNode(c));else if(c)el.appendChild(c)});
+  return el;
+}
+
+function showMsg(msg,type='info'){
+  const el=h('div',{className:'fixed top-4 right-4 px-4 py-3 rounded-lg text-white text-sm font-semibold z-50 '+(type==='error'?'bg-red-600':'bg-green-600')},msg);
+  document.body.appendChild(el);
+  setTimeout(()=>el.remove(),3000);
+}
+
+function renderLogin(){
+  document.body.innerHTML='';
+  const div=h('div',{className:'flex items-center justify-center min-h-screen bg-gray-100'});
+  const box=h('div',{className:'card w-full max-w-sm'});
+  box.innerHTML=`
+    <h1 class="text-2xl font-bold mb-6 text-center text-gray-800">WorkflowSwift Admin</h1>
+    <input id="le" class="input mb-3" placeholder="Email" value="swiftsoftware143@yahoo.com">
+    <input id="lp" class="input mb-4" type="password" placeholder="Password">
+    <button id="lb" class="btn btn-primary w-full">Log In</button>
+    <p id="err" class="text-red-500 text-sm mt-3 hidden text-center"></p>
+  `;
+  box.querySelector('#lb').onclick=()=>{
+    const e=box.querySelector('#le').value,p=box.querySelector('#lp').value;
+    login(e,p).then(()=>{if(!TOKEN){const er=box.querySelector('#err');er.className='text-red-500 text-sm mt-3 text-center';er.textContent='Login failed';}});
+  };
+  div.appendChild(box);
+  document.body.appendChild(div);
+}
+
+function renderApp(){
+  document.body.innerHTML='';
+  document.body.appendChild(h('div',{className:'sidebar'},sidebar()));
+  document.body.appendChild(h('div',{className:'main'},content()));
+}
+
+const tabs=[
+  {id:'dashboard',label:'📊 Dashboard',subs:['Overview','Brand Monitor','Competitor Watch','Prospecting']},
+  {id:'workflows',label:'⚙️ Workflows',subs:['All Workflows','Instances','Templates']},
+  {id:'automation',label:'🤖 Automation',subs:['Automations','Agents','Workspaces']},
+  {id:'crm',label:'👥 CRM',subs:['Leads']},
+  {id:'tags',label:'🏷️ Tags & Labels',subs:['Tags','Tag Groups']},
+  {id:'integrations',label:'🔌 Integrations',subs:['My Integrations','Integration Targets','Provider Keys','API Keys','n8n Proxy','Bridge']},
+  {id:'support',label:'🎫 Support',subs:['Tickets']},
+  {id:'profile',label:'👤 Profile & Account',subs:['My Profile','Team','Plans & Credits','Invoices','Payments']},
+  {id:'comms',label:'📧 Communications',subs:['Email Templates','Webhooks']},
+  {id:'admin',label:'🛠️ Admin',subs:['Usage','Settings','Users','Portfolio Companies','Plans','Email Templates','Industry Sources','Site Config']},
+];
+
+function sidebar(){
+  const nav=h('div',{className:'py-4'});
+  nav.appendChild(h('div',{className:'px-4 py-2 text-lg font-bold text-gray-800'},'WorkflowSwift'));
+  nav.appendChild(h('div',{className:'px-4 text-xs text-gray-400 mb-4'},'Admin Dashboard'));
+  tabs.forEach(t=>{
+    const btn=h('button',{className:'tab-btn'+(app.tab===t.id?' active':''),onclick:()=>{app.tab=t.id;app.sub=t.subs[0];renderApp()}},t.label);
+    nav.appendChild(btn);
+    if(app.tab===t.id){
+      t.subs.forEach(s=>{
+        const sid=s.toLowerCase().replace(/\s+&?\s*/g,'-').replace(/[^a-z0-9-]/g,'');
+        const sub=h('button',{className:'sub-item'+(app.sub===sid?' active':''),onclick:()=>{app.sub=sid;renderApp()}},s);
+        nav.appendChild(sub);
+      });
+    }
+  });
+  nav.appendChild(h('div',{className:'px-4 mt-6'},h('button',{className:'btn btn-ghost text-red-500 w-full',onclick:logout},'Log Out')));
+  return nav;
+}
+
+function content(){
+  const c=h('div',{});
+  const t=app.tab,s=app.sub;
+
+  if(t==='dashboard'){
+    if(s==='overview')renderDashboardOverview(c);
+    else if(s==='brand-monitor')renderCRUD(c,'brand-monitor','Brand Monitor',['name','query','active'],'/dashboard/brand-monitor');
+    else if(s==='competitor-watch')renderCRUD(c,'competitor-watch','Competitor',['name','url','active'],'/dashboard/competitor-watch');
+    else if(s==='prospecting')renderCRUD(c,'prospecting','Prospect',['name','industry','status'],'/dashboard/prospecting');
+  }else if(t==='workflows'){
+    if(s==='all-workflows')renderCRUD(c,'workflows','Workflow',['name','status','created_at'],'/workflows');
+    else if(s==='instances')renderCRUD(c,'instances','Instance',['workflow_id','status','created_at'],'/instances');
+    else if(s==='templates')renderCRUD(c,'templates','Template',['name','category','is_public'],'/templates');
+  }else if(t==='automation'){
+    if(s==='automations')renderCRUD(c,'automations','Automation',['name','trigger_type','enabled'],'/automations');
+    else if(s==='agents')renderCRUD(c,'agents','Agent',['name','provider','is_active'],'/agents');
+    else if(s==='workspaces')renderCRUD(c,'workspaces','Workspace',['name','created_at'],'/workspaces');
+  }else if(t==='crm'){
+    if(s==='leads')renderCRUD(c,'leads','Lead',['name','status','source'],'/leads');
+  }else if(t==='tags'){
+    if(s==='tags')renderCRUD(c,'tags','Tag',['name','color'],'/tags');
+    else if(s==='tag-groups')renderCRUD(c,'tag-groups','Tag Group',['name','description'],'/tag-groups');
+  }else if(t==='integrations'){
+    if(s==='my-integrations')renderIntegrations(c);
+    else if(s==='integration-targets')renderCRUD(c,'integration-targets','Integration Target',['name','provider','is_active'],'/integration-targets');
+    else if(s==='provider-keys')renderProviderKeys(c);
+    else if(s==='api-keys')renderCRUD(c,'api-keys','API Key',['name','key_prefix','is_active'],'/api-keys');
+    else if(s==='n8n-proxy')renderN8N(c);
+    else if(s==='bridge')renderBridge(c);
+  }else if(t==='support'){
+    if(s==='tickets')renderCRUD(c,'tickets','Ticket',['title','status','priority'],'/tickets');
+  }else if(t==='profile'){
+    if(s==='my-profile')renderProfile(c);
+    else if(s==='team')renderCRUD(c,'team','Team Member',['name','email','role'],'/users/team');
+    else if(s==='plans-credits')renderPlansCredits(c);
+    else if(s==='invoices')renderList(c,'invoices','Invoice','/invoices');
+    else if(s==='payments')renderCRUD(c,'payments','Payment Provider',['provider_type','is_active'],'/payment-providers');
+  }else if(t==='comms'){
+    if(s==='email-templates')renderCRUD(c,'email-templates','Email Template',['name','subject','template_type'],'/email-templates');
+    else if(s==='webhooks')renderCRUD(c,'webhooks','Webhook',['name','url','is_active'],'/webhooks');
+  }else if(t==='admin'){
+    if(s==='usage')renderAdminUsage(c);
+    else if(s==='settings')renderAdminSettings(c);
+    else if(s==='users')renderAdminUsers(c);
+    else if(s==='portfolio-companies')renderAdminPortfolio(c);
+    else if(s==='plans')renderAdminPlans(c);
+    else if(s==='email-templates')renderCRUD(c,'admin-email-templates','Email Template',['name','subject'],'/admin/email-templates');
+    else if(s==='industry-sources')renderIndustrySources(c);
+    else if(s==='site-config')renderSiteConfig(c);
+  }
+  return c;
+}
+
+// --- Generic CRUD ---
+async function renderCRUD(container,key,label,fields,ep){
+  container.innerHTML=`<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">${label}s</h2><button class="btn btn-primary btn-sm" id="addBtn">+ Add</button></div><div id="list"><p class="text-gray-400 text-sm">Loading...</p></div></div>`;
+  const data=await api(ep);
+  const items=(data&&data.items)||(data&&Array.isArray(data)?data:[])||[];
+  const list=container.querySelector('#list');
+  if(!items.length){
+    list.innerHTML='<p class="text-gray-400 text-sm">No items yet.</p>';
+    container.querySelector('#addBtn').onclick=()=>showForm(key,label,fields,ep,null,()=>renderPage());
+    return;
+  }
+  let cols=fields;
+  if(!cols.length&&items[0])cols=Object.keys(items[0]).filter(k=>k!=='id'&&k!=='aid'&&k!=='updated_at'&&k!=='created_at').slice(0,5);
+  const thead=cols.map(f=>`<th>${f.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase())}</th>`).join('');
+  const tbody=items.map(it=>'<tr>'+cols.map(f=>`<td>${String(it[f]||'')}</td>`).join('')+
+    `<td class="text-right"><button class="btn btn-sm btn-ghost" onclick="event.preventDefault();editIt('${key}','${label}','${ep}','${it.id}')">Edit</button>`+
+    `<button class="btn btn-sm btn-danger" onclick="event.preventDefault();delIt('${key}','${label}','${ep}','${it.id}')">Del</button></td></tr>`).join('');
+  list.innerHTML=`<table class="table"><thead><tr>${thead}<th style="width:140px"></th></tr></thead><tbody>${tbody}</tbody></table>`;
+  container.querySelector('#addBtn').onclick=()=>showForm(key,label,cols,ep,null,()=>renderPage());
+}
+
+function renderPage(){renderApp()}
+window.editIt=function(key,label,ep,id){showForm(key,label,['name'],ep,id,renderPage)}
+window.delIt=async function(key,label,ep,id){if(!confirm('Delete?'))return;await api(ep+'/'+id,{method:'DELETE'});showMsg('Deleted');renderPage()}
+
+async function showForm(key,label,fields,ep,id,cb){
+  const data=id?await api(ep+'/'+id):null;
+  const item=data||{};
+  const modal=h('div',{className:'modal-overlay',onclick:function(e){if(e.target===modal)modal.remove()}});
+  const box=h('div',{className:'modal-box'});
+  box.innerHTML=`<h2 class="text-lg font-bold mb-4">${id?'Edit':'Add'} ${label}</h2><form id="mf">`+
+    fields.map(f=>`<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">${f.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase())}</label><input class="input" name="${f}" value="${item[f]||''}"></div>`).join('')+
+    `</form><div class="flex justify-end gap-2 mt-4"><button class="btn btn-ghost" id="cancelBtn">Cancel</button><button class="btn btn-primary" id="saveBtn">Save</button></div>`;
+  box.querySelector('#cancelBtn').onclick=()=>modal.remove();
+  box.querySelector('#saveBtn').onclick=async()=>{
+    const body={};box.querySelectorAll('#mf input').forEach(inp=>{body[inp.name]=inp.value});
+    const r=await api(id?ep+'/'+id:ep,{method:id?'PUT':'POST',body:JSON.stringify(body)});
+    if(r)showMsg('Saved!');else showMsg('Error saving','error');
+    modal.remove();if(cb)cb();
+  };
+  modal.appendChild(box);document.body.appendChild(modal);
+}
+
+// --- Dashboard ---
+function renderDashboardOverview(c){
+  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">Dashboard Overview</h2><div id="stats" class="grid grid-cols-3 gap-4"><p class="text-gray-400">Loading...</p></div></div>';
+  api('/dashboard/stats').then(d=>{
+    const s=c.querySelector('#stats');
+    if(!d||!d.stats){s.innerHTML='<p class="text-gray-400">No stats available.</p>';return}
+    s.innerHTML=[{l:'Workflows',v:d.stats.total_workflows||d.total_workflows||0},{l:'Instances',v:d.stats.total_instances||d.total_instances||0},{l:'Credits',v:d.stats.credits||d.credits||0}]
+      .map(x=>`<div class="card text-center"><div class="text-3xl font-bold text-blue-600">${x.v}</div><div class="text-sm text-gray-500">${x.l}</div></div>`).join('');
+  }).catch(()=>c.querySelector('#stats').innerHTML='<p class="text-red-400">Failed.</p>');
+}
+
+function renderIntegrations(c){
+  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">My Integrations</h2><div id="idata"></div></div>';
+  api('/integrations').then(d=>{
+    const el=c.querySelector('#idata');
+    if(!d||!d.items||!d.items.length){el.innerHTML='<p class="text-gray-400 text-sm">No integrations configured.</p>';return}
+    el.innerHTML=d.items.map(i=>`<div class="flex justify-between items-center p-3 border-b"><div><strong>${i.provider||i.name}</strong><span class="text-xs text-gray-500 ml-2">${i.is_active?'Active':'Inactive'}</span></div><div class="flex gap-2"><button class="btn btn-sm btn-ghost">Test</button><button class="btn btn-sm btn-danger">Remove</button></div></div>`).join('');
+  });
+}
+
+function renderProviderKeys(c){
+  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">Provider Keys</h2><p class="text-xs text-gray-400 mb-4">Per-user API keys for third-party providers.</p><div id="pkdata"></div></div>';
+  renderCRUD(c.querySelector('#pkdata'),'provider-keys','Provider Key',['provider','key_prefix','is_active'],'/provider-keys');
+}
+
+function renderN8N(c){
+  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">n8n Proxy</h2><div id="n8ndata"></div></div>';
+  api('/n8n/health').then(d=>{
+    c.querySelector('#n8ndata').innerHTML=d?`<div class="p-4 bg-green-50 rounded-lg"><p class="text-green-700 font-semibold">✅ n8n Connected</p><pre class="text-xs text-green-600 mt-2 overflow-x-auto">${JSON.stringify(d,null,2)}</pre></div>`:'<p class="text-red-400">n8n unreachable.</p>';
+  });
+}
+
+function renderBridge(c){
+  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">Bridge (OpenClaw)</h2><div id="bridata"></div></div>';
+  api('/bridge-tasks').then(d=>{
+    const el=c.querySelector('#bridata');
+    if(!d||!d.tasks||!d.tasks.length){el.innerHTML='<p class="text-gray-400 text-sm">No pending bridge tasks.</p>';return}
+    el.innerHTML=d.tasks.map(t=>`<div class="p-3 border-b"><strong>${t.name||t.id}</strong><span class="text-xs text-gray-500 ml-2">${t.status}</span></div>`).join('');
+  });
+}
+
+function renderProfile(c){
+  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">My Profile</h2><div id="pdata"><p class="text-gray-400">Loading...</p></div></div>';
+  api('/auth/me').then(d=>{
+    if(!d){c.querySelector('#pdata').innerHTML='<p class="text-red-400">Failed.</p>';return}
+    c.querySelector('#pdata').innerHTML=`
+      <div class="grid grid-cols-2 gap-4">
+        <div><label class="text-xs text-gray-500">Name</label><p class="font-semibold">${d.name||d.user?.name||'-'}</p></div>
+        <div><label class="text-xs text-gray-500">Email</label><p class="font-semibold">${d.email||d.user?.email||'-'}</p></div>
+        <div><label class="text-xs text-gray-500">Role</label><p class="font-semibold">${d.role||d.user?.role||'-'}</p></div>
+        <div><label class="text-xs text-gray-500">Account</label><p class="font-semibold">${d.account_name||d.user?.account_name||'-'}</p></div>
+      </div>`;
+  });
+}
+
+function renderPlansCredits(c){
+  c.innerHTML=`<div class="space-y-4">
+    <div class="card"><h2 class="text-xl font-bold mb-4">My Plan</h2><div id="pldata"><p class="text-gray-400 text-sm">Loading...</p></div></div>
+    <div class="card"><h2 class="text-xl font-bold mb-4">Credits</h2><div id="crdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>
+  </div>`;
+  api('/plans').then(d=>{
+    const el=c.querySelector('#pldata');
+    if(!d||!d.plans||!d.plans.length){el.innerHTML='<p class="text-gray-400 text-sm">No plans.</p>';return}
+    el.innerHTML=d.plans.map(p=>`<div class="flex justify-between p-3 border-b"><div><strong>${p.name}</strong><span class="text-xs text-gray-500 ml-2">${p.slug}</span></div><span class="font-semibold text-sm">$${p.price_monthly||p.price||0}/mo</span></div>`).join('');
+  });
+  api('/credits/balance').then(d=>{
+    c.querySelector('#crdata').innerHTML=`<div class="text-center py-4"><div class="text-4xl font-bold text-blue-600">${d&&d.balance||0}</div><div class="text-xs text-gray-500 mt-1">credits remaining</div></div>`;
+  });
+}
+
+function renderList(c,key,label,ep){
+  c.innerHTML=`<div class="card"><h2 class="text-xl font-bold mb-4">${label}s</h2><div id="ldata"></div></div>`;
+  api(ep).then(d=>{
+    const el=c.querySelector('#ldata');
+    if(!d||!d.items||!d.items.length){el.innerHTML='<p class="text-gray-400 text-sm">No items.</p>';return}
+    el.innerHTML=`<table class="table"><tbody>`+d.items.map(i=>`<tr><td>${i.id||'-'}</td><td class="text-xs text-gray-500">${JSON.stringify(i).slice(0,80)}</td></tr>`).join('')+'</tbody></table>';
+  });
+}
+
+// --- Admin Views ---
+function renderAdminUsage(c){
+  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">Platform Usage</h2><div id="udata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
+  api('/admin/usage').then(d=>{
+    c.querySelector('#udata').innerHTML=d?`<pre class="text-xs bg-gray-50 p-4 rounded-lg overflow-x-auto">${JSON.stringify(d,null,2)}</pre>`:'<p class="text-red-400">Not available.</p>';
+  }).catch(()=>c.querySelector('#udata').innerHTML='<p class="text-red-400">Not available.</p>');
+}
+
+function renderAdminSettings(c){
+  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">Platform Settings</h2><div id="sdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
+  api('/admin/settings').then(d=>{
+    const el=c.querySelector('#sdata');
+    if(!d||!d.settings||!d.settings.length){el.innerHTML='<p class="text-gray-400 text-sm">No settings.</p>';return}
+    el.innerHTML=d.settings.map(s=>`<div class="flex justify-between p-3 border-b"><div><strong>${s.key}</strong><span class="text-xs text-gray-500 ml-2">${(s.value||'').slice(0,60)}</span></div><button class="btn btn-sm btn-ghost">Edit</button></div>`).join('');
+  });
+}
+
+function renderAdminUsers(c){
+  c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Users (Tenants)</h2><button class="btn btn-primary btn-sm">+ Add Tenants</button></div><p class="text-xs text-gray-400 mb-4">All registered tenants. Tenants manage their own workflows, automations, and integrations. Their portfolio companies are managed here under Admin → Portfolio Companies.</p><div id="audata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
+  api('/admin/accounts').then(d=>{
+    const items=(d&&d.accounts)||(d&&d.items)||[];
+    const el=c.querySelector('#audata');
+    if(!items.length){el.innerHTML='<p class="text-gray-400 text-sm">No tenants yet.</p>';return}
+    el.innerHTML=`<table class="table"><thead><tr><th>Name</th><th>Slug</th><th>Plan</th><th>Active</th><th>Created</th><th></th></tr></thead><tbody>`+
+      items.map(i=>`<tr>
+        <td><strong>${i.name||'-'}</strong>${i.email?`<div class="text-xs text-gray-400">${i.email}</div>`:''}</td>
+        <td>${i.account_slug||i.slug||'-'}</td>
+        <td>${i.plan_name||i.plan_slug||'-'}</td>
+        <td><span class="badge ${i.is_active?'bg-green-100 text-green-700':'bg-red-100 text-red-700'}">${i.is_active?'Active':'Inactive'}</span></td>
+        <td class="text-xs text-gray-400">${(i.created_at||'').slice(0,10)}</td>
+        <td class="text-right"><button class="btn btn-sm btn-ghost">View</button><button class="btn btn-sm btn-danger">Suspend</button></td>
+      </tr>`).join('')+'</tbody></table>';
+  });
+}
+
+function renderAdminPortfolio(c){
+  c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Portfolio Companies</h2><button class="btn btn-primary btn-sm" id="addP">+ Add Company</button></div><p class="text-xs text-gray-400 mb-4">Your portfolio companies — SwiftSoftware, SwiftImpact, Giraudy Capital, etc. Admin-only.</p><div id="plist"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
+  api('/portfolio-companies').then(d=>{
+    const items=(d&&d.items)||[];
+    const el=c.querySelector('#plist');
+    if(!items.length){el.innerHTML='<p class="text-gray-400 text-sm">No companies yet.</p>';c.querySelector('#addP').onclick=()=>showForm('portfolio','Portfolio Company',['name','website','industry','description','account_slug'],'/portfolio-companies',null,()=>renderPage());return}
+    el.innerHTML=`<table class="table"><thead><tr><th>Name</th><th>Website</th><th>Industry</th><th style="width:140px"></th></tr></thead><tbody>`+
+      items.map(i=>`<tr><td><strong>${i.name}</strong></td><td>${i.website||'-'}</td><td>${i.industry||'-'}</td><td class="text-right">
+        <button class="btn btn-sm btn-ghost" onclick="event.preventDefault();editIt('portfolio','Portfolio Company','/portfolio-companies','${i.id}')">Edit</button>
+        <button class="btn btn-sm btn-danger" onclick="event.preventDefault();delIt('portfolio','Portfolio Company','/portfolio-companies','${i.id}')">Del</button>
+      </td></tr>`).join('')+'</tbody></table>';
+    c.querySelector('#addP').onclick=()=>showForm('portfolio','Portfolio Company',['name','website','industry','description','account_slug'],'/portfolio-companies',null,()=>renderPage());
+  });
+}
+
+function renderAdminPlans(c){
+  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">Plans Management</h2><div id="apldata"></div></div>';
+  renderCRUD(c.querySelector('#apldata'),'plans','Plan',['name','slug','price_monthly','is_active'],'/admin/plans');
+}
+
+function renderIndustrySources(c){
+  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">Industry Sources</h2><div id="isdata"></div></div>';
+  renderCRUD(c.querySelector('#isdata'),'industry-sources','Industry Source',['industry_slug','source_name','is_active'],'/admin/industry-sources');
+}
+
+function renderSiteConfig(c){
+  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">Site Configuration</h2><p class="text-xs text-gray-400 mb-4">SEO, tracking, legal pages, and homepage content. Changes regenerate the live marketing page on save.</p><div id="scdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
+  var L=function(n,v,t){var tp=t||"text";return tp==="textarea"?"<div class=\"form-group\"><label class=\"block text-xs font-medium text-gray-500\">"+v+"</label><textarea class=\"input\" name=\""+n+"\" rows=\"3\"></textarea></div>":"<div class=\"form-group\"><label class=\"block text-xs font-medium text-gray-500\">"+v+"</label><input class=\"input\" type=\""+tp+"\" name=\""+n+"\"></div>"};
+  var GV=function(id){var el=document.querySelector('[name="'+id+'"]');return el?el.value:""};
+  api("/admin/site").then(function(d){
+    if(!d){c.querySelector("#scdata").innerHTML="<p class=\"text-red-400\">Not available.</p>";return}
+    var hp=d.homepage||{};
+    var h="";
+    h+="<div class=\"space-y-4\">";
+    h+="<div class=\"border-b pb-4\"><h3 class=\"font-semibold text-gray-700 mb-2\">🔍 SEO & Meta</h3>";
+    h+=L("title","Page Title")+L("description","Meta Description","textarea");
+    h+=L("keywords","Keywords","textarea")+L("canonical_url","Canonical URL");
+    h+=L("og_title","OG Title")+L("og_description","OG Description","textarea");
+    h+=L("og_image_url","OG Image URL")+L("favicon_url","Favicon URL");
+    h+="</div>";
+    h+="<div class=\"border-b pb-4\"><h3 class=\"font-semibold text-gray-700 mb-2\">📊 Analytics & Tracking</h3>";
+    h+=L("ga_id","Google Analytics ID")+L("gtm_id","Google Tag Manager ID");
+    h+=L("head_scripts","Head Scripts","textarea")+L("body_scripts","Body Scripts","textarea");
+    h+="</div>";
+    h+="<div class=\"border-b pb-4\"><h3 class=\"font-semibold text-gray-700 mb-2\">🏠 Homepage</h3>";
+    h+=L("homepage_logo_text","Logo Text")+L("homepage_sign_in_url","Sign In URL");
+    h+=L("homepage_nav_cta_text","Nav CTA Text")+L("homepage_headline","Headline (HTML ok)","textarea");
+    h+=L("homepage_subheadline","Subheadline","textarea")+L("homepage_button_text","CTA Button");
+    h+=L("homepage_secondary_button_text","Secondary Button");
+    h+=L("homepage_features_heading","Features Heading");
+    h+=L("homepage_cta_heading","CTA Heading")+L("homepage_cta_text","CTA Text","textarea");
+    h+=L("homepage_footer_text","Footer Text");
+    h+="</div>";
+    h+="<div class=\"border-b pb-4\"><h3 class=\"font-semibold text-gray-700 mb-2\">⚖️ Legal Pages</h3>";
+    h+="<p class=\"text-xs text-gray-400 mb-2\">These render on your marketing site at /terms.html, /privacy.html, and /refunds.html.</p>";
+    h+=L("legal_tos","Terms of Service","textarea")+L("legal_privacy","Privacy Policy","textarea");
+    h+=L("legal_refunds","Refund & Cancellation Policy","textarea");
+    h+="</div>";
+    h+="<div><h3 class=\"font-semibold text-gray-700 mb-2\">📋 Structured Data (JSON-LD)</h3>";
+    h+=L("schema_json","Schema.org JSON","textarea");
+    h+="</div>";
+    h+="<button class=\"btn btn-primary\" id=\"savesite\">Save Site Configuration</button><span id=\"savestatus\" class=\"text-sm ml-3\"></span></div>";
+    c.querySelector("#scdata").innerHTML=h;
+    // Populate values
+    var fv=function(nm,v){var el=document.querySelector('[name="'+nm+'"]');if(el)el.value=v||""};
+    fv("title",d.title);fv("description",d.description);fv("keywords",d.keywords);
+    fv("canonical_url",d.canonical_url);fv("og_title",d.og_title);fv("og_description",d.og_description);
+    fv("og_image_url",d.og_image_url);fv("favicon_url",d.favicon_url);
+    fv("ga_id",d.ga_id);fv("gtm_id",d.gtm_id);fv("head_scripts",d.head_scripts);fv("body_scripts",d.body_scripts);
+    fv("homepage_logo_text",hp.logo_text);fv("homepage_sign_in_url",hp.sign_in_url);
+    fv("homepage_nav_cta_text",hp.nav_cta_text);fv("homepage_headline",hp.headline);
+    fv("homepage_subheadline",hp.subheadline);fv("homepage_button_text",hp.button_text);
+    fv("homepage_secondary_button_text",hp.secondary_button_text);
+    fv("homepage_features_heading",hp.features_heading);fv("homepage_cta_heading",hp.cta_heading);
+    fv("homepage_cta_text",hp.cta_text);fv("homepage_footer_text",hp.footer_text);
+    fv("legal_tos",d.legal_tos);fv("legal_privacy",d.legal_privacy);fv("legal_refunds",d.legal_refunds);
+    fv("schema_json",d.schema_json);
+    document.getElementById("savesite").onclick=async function(){
+      var body={};
+      body.title=GV("title");body.description=GV("description");body.keywords=GV("keywords");
+      body.canonical_url=GV("canonical_url");body.og_title=GV("og_title");body.og_description=GV("og_description");
+      body.og_image_url=GV("og_image_url");body.favicon_url=GV("favicon_url");
+      body.ga_id=GV("ga_id");body.gtm_id=GV("gtm_id");body.head_scripts=GV("head_scripts");body.body_scripts=GV("body_scripts");
+      body.homepage={logo_text:GV("homepage_logo_text"),sign_in_url:GV("homepage_sign_in_url"),nav_cta_text:GV("homepage_nav_cta_text"),headline:GV("homepage_headline"),subheadline:GV("homepage_subheadline"),button_text:GV("homepage_button_text"),secondary_button_text:GV("homepage_secondary_button_text"),features_heading:GV("homepage_features_heading"),cta_heading:GV("homepage_cta_heading"),cta_text:GV("homepage_cta_text"),footer_text:GV("homepage_footer_text"),features:[]};
+      body.legal_tos=GV("legal_tos");body.legal_privacy=GV("legal_privacy");body.legal_refunds=GV("legal_refunds");
+      body.schema_json=GV("schema_json");
+      var st=document.getElementById("savestatus");st.textContent="Saving...";st.className="text-sm ml-3 text-blue-600";
+      var r=await api("/admin/site",{method:"PUT",body:JSON.stringify(body)});
+      if(r){st.textContent="Saved! Marketing page regenerated.";st.className="text-sm ml-3 text-green-600"}
+      else{st.textContent="Error saving.";st.className="text-sm ml-3 text-red-600"}
+    };
+  }).catch(function(){c.querySelector("#scdata").innerHTML="<p class=\"text-red-400\">Not available.</p>"});
+}
+// Init
+if(TOKEN)renderApp();else renderLogin();
+</script>
+</head><body></body></html>
