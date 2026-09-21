@@ -192,7 +192,7 @@ pub fn convert_steps_to_n8n(
         "main".to_string(),
         json!([
             [{"node": "deduct_credit", "type": "main", "index": 0}],
-            [{"node": "respond"}]
+            [{"node": "respond", "type": "main", "index": 0}]
         ]),
     );
     connections_map.insert("balance_check".to_string(), Value::Object(balance_conn));
@@ -247,22 +247,110 @@ pub fn convert_steps_to_n8n(
     // Collect all nodes from user steps
     nodes.extend(step_nodes);
 
-    // Settings
+    // Settings.
+    // `callerPolicy` is an enum in n8n's public API spec and was previously
+    // "workflowsWithSameOwner", which is NOT a member — n8n 2.34.6 answers
+    // 400 request/body/settings/callerPolicy must be equal to one of the allowed
+    // values: any, none, workflowsFromAList, workflowsFromSameOwner.
+    // `workflowsFromSameOwner` is the valid spelling of the same intent.
     let settings = json!({
         "timezone": "America/New_York",
         "saveDataErrorExecution": "all",
         "saveDataSuccessExecution": "all",
         "saveManualExecutions": true,
-        "callerPolicy": "workflowsWithSameOwner",
+        "callerPolicy": "workflowsFromSameOwner",
     });
+
+    // n8n addresses connections by NODE NAME, not by the node's `id`. Its validator
+    // answers `unknown_connection_source` / `unknown_connection_target` for ids, so the
+    // graph built above (keyed by ids such as "credit_check") is rejected with 400.
+    // Rewrite it to names, forcing the names to be unique first — n8n resolves a name to
+    // exactly one node, and a user step may repeat a name or be called "Webhook".
+    let (nodes, connections) = names_and_connections(nodes, connections_map);
 
     N8nWorkflow {
         name: format!("WFS {}", workflow_id),
         nodes,
-        connections: Value::Object(connections_map),
+        connections,
         settings,
         webhook_path: webhook_path.clone(),
     }
+}
+
+/// Rewrite the id-keyed connection graph into n8n's name-keyed one, de-duplicating node
+/// names on the way, and give every connection target the `type`/`index` fields n8n's
+/// workflow-structure validator requires. See `to_n8n_json` for the other half of what
+/// this n8n build accepts.
+fn names_and_connections(
+    nodes: Vec<Value>,
+    connections_map: serde_json::Map<String, Value>,
+) -> (Vec<Value>, Value) {
+    use std::collections::{HashMap, HashSet};
+
+    let mut used: HashSet<String> = HashSet::new();
+    let mut id_to_name: HashMap<String, String> = HashMap::new();
+    let mut out_nodes: Vec<Value> = Vec::with_capacity(nodes.len());
+
+    for mut node in nodes {
+        let id = node
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let base = node
+            .get("name")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&id)
+            .to_string();
+        let mut name = base.clone();
+        let mut n = 1;
+        while used.contains(&name) {
+            n += 1;
+            name = format!("{} ({})", base, n);
+        }
+        used.insert(name.clone());
+        if !id.is_empty() {
+            id_to_name.insert(id, name.clone());
+        }
+        if let Some(obj) = node.as_object_mut() {
+            obj.insert("name".to_string(), Value::String(name));
+        }
+        out_nodes.push(node);
+    }
+
+    let mut out_conns = serde_json::Map::new();
+    for (src_id, conn) in connections_map.iter() {
+        let src = id_to_name
+            .get(src_id)
+            .cloned()
+            .unwrap_or_else(|| src_id.clone());
+        let mut conn = conn.clone();
+        if let Some(main) = conn.get_mut("main").and_then(|m| m.as_array_mut()) {
+            for output in main.iter_mut() {
+                if let Some(targets) = output.as_array_mut() {
+                    for target in targets.iter_mut() {
+                        if let Some(obj) = target.as_object_mut() {
+                            let target_name = obj
+                                .get("node")
+                                .and_then(|v| v.as_str())
+                                .and_then(|v| id_to_name.get(v))
+                                .cloned();
+                            if let Some(target_name) = target_name {
+                                obj.insert("node".to_string(), Value::String(target_name));
+                            }
+                            obj.entry("type")
+                                .or_insert_with(|| Value::String("main".to_string()));
+                            obj.entry("index").or_insert_with(|| json!(0));
+                        }
+                    }
+                }
+            }
+        }
+        out_conns.insert(src, conn);
+    }
+
+    (out_nodes, Value::Object(out_conns))
 }
 
 fn get_node_id(node: &Value) -> String {
@@ -1495,25 +1583,25 @@ return output;
     (nodes, step_output_ids)
 }
 
-/// Serialize the generated workflow to n8n-compatible JSON.
+/// Serialize the generated workflow to the JSON n8n's PUBLIC API accepts.
+///
+/// `POST {N8N_URL}/api/v1/workflows` validates the body against n8n's public
+/// OpenAPI spec and is strict in both directions, so this payload is exactly the
+/// accepted surface — measured against the live n8n 2.34.6 on this box, not guessed:
+///   * required:      name, nodes, connections, settings
+///   * accepted extra: staticData, nodeGroups, pinData
+///   * rejected — "must NOT have additional properties": description
+///   * rejected — read-only: id, versionId, active, createdAt, updatedAt,
+///     isArchived, meta, tags
+/// Sending more (as an earlier revision did) fails the whole mirror with
+/// `400 request/body must NOT have additional properties`. n8n assigns the id,
+/// versionId and timestamps itself and returns them in the 201/200 response.
 pub fn to_n8n_json(wf: &N8nWorkflow) -> Value {
-    let now = chrono::Utc::now().to_rfc3339();
     json!({
-        "id": Uuid::new_v4().to_string(),
         "name": wf.name,
         "nodes": wf.nodes,
         "connections": wf.connections,
         "settings": wf.settings,
-        "versionId": Uuid::new_v4().to_string(),
-        "active": false,
-        "createdAt": &now,
-        "updatedAt": &now,
-        "description": null,
-        "isArchived": false,
         "staticData": null,
-        "meta": null,
-        "nodeGroups": [],
-        "pinData": null,
-        "tags": [],
     })
 }
