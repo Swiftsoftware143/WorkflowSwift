@@ -171,7 +171,18 @@ credits per call.
 - Checkout: `/api/v1/checkout/create`, `/checkout/sessions`; providers configured per plan via
   `/api/v1/payment-providers`. Webhooks: `POST /api/v1/webhooks/stripe`,
   `POST /api/v1/webhooks/paypal` (signature-verified in the handler).
-- Affiliate system: `/api/v1/affiliates`.
+- Affiliate attribution is owned by FunnelSwift, not by this app: WorkflowSwift stores no affiliate
+  records and exposes **no** `/api/v1/affiliates` endpoint (the auto-generated stub that answered
+  500 was deleted — kanban t_01fa9bbc). Checkout reports a conversion
+  (`POST {FUNNELSWIFT_URL}/api/v1/webhooks/conversion`) and a paid plan upgrade notifies
+  `POST {FUNNELSWIFT_URL}/api/v1/internal/affiliate/upgrade-event`; the referral is credited there.
+- Per-account registries backed by real tables: `/api/v1/tag-groups` (Tags & Labels -> Tag Groups,
+  `tag_groups`, migration 054) and `/api/v1/webhooks` (Communications -> Webhooks, `webhooks`,
+  migration 055). The `webhooks` table is the tenant's own endpoint registry — it is not the
+  inbound `stripe`/`paypal` receivers above, whose event log is `payment_webhook_events`.
+- Invoices: `/api/v1/invoices` and `/api/v1/invoices/{id}` read `invoices`; `amount` is
+  `NUMERIC(10,2)` and is returned as a decimal **string** (`amount::text`), like `plan_tiers`
+  prices — sqlx cannot decode NUMERIC into a JSON value.
 
 ## Rate limiting
 

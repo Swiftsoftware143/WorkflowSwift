@@ -35,7 +35,11 @@ pub struct Invoice {
     pub id: Uuid,
     pub aid: Uuid,
     pub plan_id: Uuid,
-    pub amount: serde_json::Value,
+    /// `invoices.amount` is NUMERIC(10,2) (migrations/010_create_plans.sql). sqlx cannot decode
+    /// NUMERIC into `serde_json::Value` — it is not a Postgres type at all — so the read paths in
+    /// invoice_handler cast the column to text (`amount::text`) and it lands here as a decimal
+    /// string, the same convention `plan_tiers.price_monthly` already uses (kanban t_01fa9bbc).
+    pub amount: String,
     pub status: String,
     pub due_date: Option<DateTime<Utc>>,
     pub paid_at: Option<DateTime<Utc>>,

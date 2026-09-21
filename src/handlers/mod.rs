@@ -15,11 +15,9 @@ pub mod user_handler;
 pub mod workflow_handler;
 
 pub mod admin_settings_handler;
-pub mod affiliates_handler;
 pub mod agent_handler;
 pub mod brand_monitor_handler;
 pub mod bridge_handler;
-pub mod categories_handler;
 pub mod checkout_handler;
 pub mod competitor_watch_handler;
 pub mod coreswift_external;
