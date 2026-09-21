@@ -529,6 +529,10 @@ pub fn create_router(state: AppState) -> Router {
 
     let bridge_routes = Router::new()
         .route("/ingest", post(handlers::bridge_handler::ingest_data))
+        .route(
+            "/commands/ack",
+            post(handlers::bridge_handler::acknowledge_command),
+        )
         .route("/commands", get(handlers::bridge_handler::get_commands))
         .route("/status", get(handlers::bridge_handler::bridge_status));
 
