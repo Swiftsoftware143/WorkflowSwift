@@ -335,8 +335,14 @@ pub async fn get_usage_json(db: &PgPool, aid: Uuid) -> serde_json::Value {
 
 async fn count_usage(db: &PgPool, aid: Uuid, feature_key: &str) -> Result<i64, AppError> {
     match feature_key {
+        // A deleted workflow is SOFT-deleted (`delete_workflow` sets `is_active = false`), so it
+        // must not keep consuming a plan seat: counting every row means `DELETE` frees nothing,
+        // the count only ever grows, and an account at its limit can never create another
+        // workflow. Evidenced live on the probe account: "Workflows limit reached (3/3)" while
+        // it held 3 rows and only 2 active ones (kanban t_0e15946c). Same rule as `max_users`
+        // below, which already excludes inactive rows.
         "max_workflows" | "workflows" => Ok(sqlx::query_scalar(
-            "SELECT COUNT(*) FROM workflows WHERE aid = $1",
+            "SELECT COUNT(*) FROM workflows WHERE aid = $1 AND is_active = true",
         )
         .bind(aid)
         .fetch_one(db)
