@@ -913,8 +913,9 @@ async fn deliver_credentials(
         } else {
             // User exists but no password — set one and send credentials
             let password = generate_temp_password();
-            let hash =
-                hash_password(&password).map_err(|e| format!("Password hashing failed: {}", e))?;
+            let hash = hash_password(&password)
+                .await
+                .map_err(|e| format!("Password hashing failed: {}", e))?;
 
             sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
                 .bind(&hash)
@@ -936,8 +937,9 @@ async fn deliver_credentials(
         let account_id = Uuid::new_v4();
         let user_id = Uuid::new_v4();
         let password = generate_temp_password();
-        let hash =
-            hash_password(&password).map_err(|e| format!("Password hashing failed: {}", e))?;
+        let hash = hash_password(&password)
+            .await
+            .map_err(|e| format!("Password hashing failed: {}", e))?;
         let slug = format!("cust-{}", &user_id.to_string()[..8]);
 
         // Create account
@@ -990,18 +992,17 @@ fn generate_temp_password() -> String {
     pass
 }
 
-/// Hash a password using Argon2
-fn hash_password(password: &str) -> Result<String, String> {
-    use argon2::{
-        password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
-        Argon2,
-    };
-    let salt = SaltString::generate(&mut OsRng);
-    let argon2 = Argon2::default();
-    argon2
-        .hash_password(password.as_bytes(), &salt)
-        .map(|h| h.to_string())
-        .map_err(|e| format!("Argon2 error: {}", e))
+/// Hash a password using Argon2 — off the reactor and bounded by the process-wide Argon2
+/// semaphore (`auth::api_key_auth::argon2_hash`), so a webhook-triggered credential delivery
+/// cannot park a tokio worker thread while it computes 19 MiB of Argon2.
+///
+/// The `Result<_, String>` contract is unchanged (callers map the error to
+/// `format!("Password hashing failed: {e}")`); only the inner message is now the hash
+/// helper's own reason instead of the raw `argon2::password_hash::Error` display.
+async fn hash_password(password: &str) -> Result<String, String> {
+    crate::auth::api_key_auth::argon2_hash(password.to_string())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // ── Data types for credential delivery ──

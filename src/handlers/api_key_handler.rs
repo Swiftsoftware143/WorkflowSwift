@@ -38,14 +38,11 @@ pub async fn create_api_key(
     // key's identifier in GET /api-keys, and it reveals nothing about the key itself.
     let prefix = crate::auth::api_key_auth::discriminator(&raw_key);
 
-    let salt = argon2::password_hash::SaltString::generate(&mut rand::thread_rng());
-    let hash = argon2::PasswordHasher::hash_password(
-        &argon2::Argon2::default(),
-        raw_key.as_bytes(),
-        &salt,
-    )
-    .map_err(|e| AppError::Internal(format!("Hashing error: {}", e)))?;
-    let key_hash = hash.serialize().to_string();
+    // Hashing is a 19 MiB CPU-bound job that never awaits: it runs off the reactor under the
+    // process-wide Argon2 semaphore (auth::api_key_auth::argon2_hash) so minting a key cannot
+    // park a tokio worker thread. The failure is still a 500 — `AppError::Hash` displays as
+    // "Hashing error: {msg}", i.e. the same words the old `Internal` mapping logged.
+    let key_hash = crate::auth::api_key_auth::argon2_hash(raw_key.clone()).await?;
 
     sqlx::query(
         r#"INSERT INTO api_keys (id, aid, user_id, name, key_hash, prefix, target_url)

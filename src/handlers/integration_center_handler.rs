@@ -474,14 +474,9 @@ pub async fn generate_user_key(
     let raw_key = format!("{}{}", prefix, random_part);
 
     // Hash for storage
-    let salt = argon2::password_hash::SaltString::generate(&mut rand::thread_rng());
-    let hash = argon2::PasswordHasher::hash_password(
-        &argon2::Argon2::default(),
-        raw_key.as_bytes(),
-        &salt,
-    )
-    .map_err(|e| AppError::Internal(format!("Hashing error: {}", e)))?;
-    let key_hash = hash.serialize().to_string();
+    // Off the reactor, under the shared Argon2 semaphore (auth::api_key_auth::argon2_hash) —
+    // this route is authenticated, but the hash is the same 19 MiB job as everywhere else.
+    let key_hash = crate::auth::api_key_auth::argon2_hash(raw_key.clone()).await?;
 
     let id = Uuid::new_v4();
     let prefix_display = &raw_key[..raw_key.len().min(12)];
@@ -545,9 +540,6 @@ pub async fn seed_user_keys(
     user_id: Uuid,
     aid: Uuid,
 ) -> Result<(), sqlx::Error> {
-    use argon2::password_hash::SaltString;
-    use argon2::PasswordHasher;
-
     let key_types = ["primary", "webhook_secret", "surface_token"];
     let prefixes = ["wf_swift_", "whsec_", "sf_"];
 
@@ -560,11 +552,13 @@ pub async fn seed_user_keys(
             .collect();
 
         let raw_key = format!("{}{}", prefixes[i], random_part);
-        let salt = SaltString::generate(&mut rand::thread_rng());
-        let hash = argon2::Argon2::default()
-            .hash_password(raw_key.as_bytes(), &salt)
-            .map_err(|e| sqlx::Error::Protocol(format!("Hashing error: {}", e)))?;
-        let key_hash = hash.serialize().to_string();
+        // Three 19 MiB Argon2 hashes per call, and the only caller is `register` — an
+        // UNAUTHENTICATED route. They run off the reactor under the shared Argon2 semaphore
+        // (auth::api_key_auth::argon2_hash) like every other hash site, so a registration
+        // flood queues in the scheduler instead of occupying the tokio worker threads.
+        let key_hash = crate::auth::api_key_auth::argon2_hash(raw_key.clone())
+            .await
+            .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
         let prefix_display = &raw_key[..raw_key.len().min(12)];
 
         sqlx::query(

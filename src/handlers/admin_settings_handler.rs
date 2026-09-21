@@ -1011,8 +1011,8 @@ pub async fn admin_create_account(
         });
 
     sqlx::query(
-        r#"INSERT INTO accounts (id, name, slug)
-           VALUES ($1, $2, $3)"#,
+        r#"INSERT INTO accounts (id, name, slug, account_slug)
+           VALUES ($1, $2, $3, $3)"#,
     )
     .bind(account_id)
     .bind(&account_name)
@@ -1027,12 +1027,16 @@ pub async fn admin_create_account(
             .fetch_optional(&state.db)
             .await?;
 
-    // Assign plan to account (via account_plans if found)
+    // Assign plan to account (via account_plans if found). Plain INSERT, not
+    // `ON CONFLICT (aid, plan_id)`: the live account_plans table has no unique or exclusion
+    // constraint on (aid, plan_id) — only its PK on id — so that clause made every call to
+    // this handler a 500 ("no unique or exclusion constraint matching the ON CONFLICT
+    // specification"). account_id here is a brand-new Uuid, so there is nothing to conflict
+    // with; this mirrors what `register` already does (auth/handlers.rs).
     if let Some(pid) = plan_id {
         sqlx::query(
             r#"INSERT INTO account_plans (aid, plan_id, status, started_at)
-               VALUES ($1, $2, 'active', NOW())
-               ON CONFLICT (aid, plan_id) DO UPDATE SET status = 'active'"#,
+               VALUES ($1, $2, 'active', NOW())"#,
         )
         .bind(account_id)
         .bind(pid)
@@ -1071,17 +1075,10 @@ pub async fn admin_create_account(
         }
     }
 
-    // Generate temp password and create user
-    use argon2::password_hash::SaltString;
-    use argon2::{Argon2, PasswordHasher};
-    use rand::rngs::OsRng;
-
+    // Generate temp password and create user. Off the reactor, under the shared Argon2
+    // semaphore (auth::api_key_auth::argon2_hash) — same bound as every other hash site.
     let temp_password = Uuid::new_v4().to_string();
-    let salt = SaltString::generate(&mut OsRng);
-    let hash = Argon2::default()
-        .hash_password(temp_password.as_bytes(), &salt)
-        .map_err(|e| AppError::Hash(e.to_string()))?
-        .to_string();
+    let hash = crate::auth::api_key_auth::argon2_hash(temp_password.clone()).await?;
 
     let user_id = Uuid::new_v4();
     let now = chrono::Utc::now();

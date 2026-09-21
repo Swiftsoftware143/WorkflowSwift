@@ -332,6 +332,55 @@ async fn verify_candidates(
 mod tests {
     use super::*;
 
+    /// A source-level guard, because the defect this module's helpers fix kept coming back:
+    /// an `Argon2::default()` inlined in an `async fn` parks a tokio worker thread for the
+    /// whole 19 MiB hash, so the runtime (not the DB, not the network) becomes the bottleneck
+    /// for every unrelated request. Every hash and every verification in this crate must go
+    /// through [`argon2_hash`] / [`argon2_verify_result`], which hold the shared
+    /// [`argon2_permits`] semaphore and run on the blocking pool. THIS file is the only place
+    /// allowed to construct Argon2 directly — it is where the permits live.
+    ///
+    /// Sites this guard would have caught: the API-key path (t_5154cfcd), the password paths
+    /// (t_b94d6d57), and then checkout `deliver_credentials`, `invite_user`,
+    /// `admin_create_account`, `create_api_key`, `generate_user_key` and `seed_user_keys`
+    /// (t_d8a2b14c — two of those reached from UNAUTHENTICATED routes).
+    #[test]
+    fn argon2_is_only_constructed_in_this_module() {
+        fn rs_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("read src dir") {
+                let path = entry.expect("dir entry").path();
+                if path.is_dir() {
+                    rs_files(&path, out);
+                } else if path.extension().map(|e| e == "rs").unwrap_or(false) {
+                    out.push(path);
+                }
+            }
+        }
+
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        rs_files(&src, &mut files);
+
+        let mut offenders = Vec::new();
+        for file in files {
+            if file.to_string_lossy().ends_with("auth/api_key_auth.rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&file).expect("read source file");
+            for (n, line) in text.lines().enumerate() {
+                if line.contains("Argon2::default()") || line.contains(".hash_password(") {
+                    offenders.push(format!("{}:{}", file.display(), n + 1));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "Argon2 must be constructed only in auth::api_key_auth (off the reactor, under \
+             argon2_permits); found inline uses at: {}",
+            offenders.join(", ")
+        );
+    }
+
     #[test]
     fn empty_permissions_mean_account_scope() {
         assert!(permissions_allow(&serde_json::json!([]), "read"));

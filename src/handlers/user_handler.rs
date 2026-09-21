@@ -174,17 +174,11 @@ pub async fn invite_user(
         ));
     }
 
-    // Generate temp password
-    use argon2::password_hash::SaltString;
-    use argon2::{Argon2, PasswordHasher};
-    use rand::rngs::OsRng;
-
+    // Generate temp password. A 19 MiB Argon2 hash is CPU-bound work that never awaits: it
+    // goes through the process-wide semaphore on the blocking pool (see
+    // auth::api_key_auth::argon2_hash) so inviting a user cannot park a tokio worker thread.
     let temp_password = Uuid::new_v4().to_string();
-    let salt = SaltString::generate(&mut OsRng);
-    let hash = Argon2::default()
-        .hash_password(temp_password.as_bytes(), &salt)
-        .map_err(|e| AppError::Hash(e.to_string()))?
-        .to_string();
+    let hash = crate::auth::api_key_auth::argon2_hash(temp_password.clone()).await?;
 
     let user_id = Uuid::new_v4();
     sqlx::query(
