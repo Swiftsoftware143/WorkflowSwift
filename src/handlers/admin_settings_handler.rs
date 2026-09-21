@@ -1430,7 +1430,10 @@ pub async fn test_email_settings(
     }
 }
 
-fn require_admin(claims: &Claims) -> Result<(), AppError> {
+/// Tenant-admin gate. The canonical 403 for this app (`{"code":403,"error":true,
+/// "message":"Admin access required"}`) — reused by surfaces_handler so there is exactly
+/// one place that decides who may write tenant-wide definitions.
+pub(crate) fn require_admin(claims: &Claims) -> Result<(), AppError> {
     if !claims.perm_is_super_admin.unwrap_or(false) {
         return Err(AppError::Forbidden("Admin access required".to_string()));
     }

@@ -51,6 +51,9 @@ pub struct UpdateWorkflowRequest {
     pub category: Option<String>,
     pub lifecycle_summary: Option<String>,
     pub tags: Option<serde_json::Value>,
+    /// Reassign the workflow to another surface. Absent (or `null`) in the body keeps
+    /// the stored value — see update_workflow, which does `req.surface_id.or(existing.surface_id)`.
+    pub surface_id: Option<Uuid>,
     pub trigger_type: Option<String>,
     pub trigger_config: Option<serde_json::Value>,
 }

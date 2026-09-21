@@ -32,6 +32,9 @@ pub struct CreateTemplateRequest {
     pub category: Option<String>,
     pub category_id: Option<Uuid>,
     pub tags: Option<serde_json::Value>,
+    /// Optional surface binding. Nothing could write this before, which is what made
+    /// the `?surface=` filter in list_templates dead code.
+    pub surface_id: Option<Uuid>,
     pub steps: Vec<TemplateStep>,
 }
 

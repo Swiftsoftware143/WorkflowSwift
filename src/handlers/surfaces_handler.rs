@@ -1,5 +1,10 @@
 //! Surfaces handler — David's specified feature. Admin CRUD; users filter workflows by surface.
 //! Tenant-scoped real CRUD (name, slug, description, is_active).
+//!
+//! WRITE paths (create/update/delete) are tenant-admin only: a surface is a tenant-wide
+//! definition, not user data, so a `role=user` token gets the standard 403. READ paths
+//! (list/get) stay open to any authenticated tenant member — the user-facing surface
+//! *selector* in the app SPA reads this registry.
 use crate::auth::models::Claims;
 use crate::error::{ApiResult, AppError};
 use crate::state::AppState;
@@ -13,6 +18,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::FromRow;
 use uuid::Uuid;
+
+pub(crate) use super::admin_settings_handler::require_admin;
 
 #[derive(Debug, Serialize, FromRow)]
 pub struct Surface {
@@ -89,6 +96,7 @@ pub async fn create(
     Extension(claims): Extension<Claims>,
     Json(b): Json<CreateInput>,
 ) -> ApiResult<impl IntoResponse> {
+    require_admin(&claims)?;
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let id = Uuid::new_v4();
     let slug = b
@@ -136,6 +144,7 @@ pub async fn update(
     Path(id): Path<Uuid>,
     Json(b): Json<UpdateInput>,
 ) -> ApiResult<impl IntoResponse> {
+    require_admin(&claims)?;
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let c = sqlx::query_as::<_, Surface>(&format!("{COLS} WHERE id = $1 AND aid = $2"))
         .bind(id)
@@ -165,6 +174,7 @@ pub async fn delete(
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
+    require_admin(&claims)?;
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let r = sqlx::query("DELETE FROM surfaces WHERE id=$1 AND aid=$2")
         .bind(id)

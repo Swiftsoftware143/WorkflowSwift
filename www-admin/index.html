@@ -35,14 +35,24 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#f1f5f9;margin:0}
 const API='/api/v1';
 let TOKEN=localStorage.getItem('ws_token')||'';
 let app={tab:'dashboard',sub:'overview',data:{}};
+// Last failed request's server message. api() otherwise swallows the body (returns null),
+// so a refused write (e.g. the 403 on surface CRUD for non-admins, or the Duplicate slug
+// error) had no way to reach the operator. showForm surfaces this on failure.
+let LAST_ERR='';
 
 async function api(path,opts={}){
   const h={...opts.headers,'Content-Type':'application/json'};
   if(TOKEN)h['Authorization']='Bearer '+TOKEN;
   const r=await fetch(API+path,{...opts,headers:h});
   if(r.status===401){TOKEN='';localStorage.removeItem('ws_token');renderLogin();return null}
-  if(!r.ok)return null;
+  if(!r.ok){
+    let msg='HTTP '+r.status;
+    try{const j=await r.json();msg=(j&&(j.message||(typeof j.error==='string'&&j.error)))||msg;}catch(e){}
+    LAST_ERR=String(msg);
+    return null;
+  }
   if(r.status===204)return null;
+  LAST_ERR='';
   return r.json();
 }
 
@@ -109,7 +119,7 @@ const tabs=[
   {id:'support',label:'🎫 Support',subs:['Tickets']},
   {id:'profile',label:'👤 Profile & Account',subs:['My Profile','Team','Plans & Credits','Invoices','Payments']},
   {id:'comms',label:'📧 Communications',subs:['Email Templates','Webhooks']},
-  {id:'admin',label:'🛠️ Admin',subs:['Usage','Settings','Users','Portfolio Companies','Plans','Email Templates','Industry Sources','Site Config']},
+  {id:'admin',label:'🛠️ Admin',subs:['Usage','Settings','Users','Portfolio Companies','Plans','Surfaces','Email Templates','Industry Sources','Site Config']},
 ];
 
 function sidebar(){
@@ -177,6 +187,7 @@ function content(){
     else if(s==='users')renderAdminUsers(c);
     else if(s==='portfolio-companies')renderAdminPortfolio(c);
     else if(s==='plans')renderAdminPlans(c);
+    else if(s==='surfaces')renderSurfaces(c);
     else if(s==='email-templates')renderCRUD(c,'admin-email-templates','Email Template',['name','subject'],'/admin/email-templates');
     else if(s==='industry-sources')renderIndustrySources(c);
     else if(s==='site-config')renderSiteConfig(c);
@@ -203,9 +214,23 @@ function rowId(it){
   if(!it||typeof it!=='object')return '';
   return it.id||it.provider_type||it.slug||it.uuid||it.api_key_id||it.industry_slug||it.name||'';
 }
+// GET <ep>/<id> answers a NAMED single envelope too ({surface:{…}}, {user:{…}}), so the edit
+// form prefilled every field blank. Unwrap one level when the payload is a wrapper object.
+function unwrapOne(d){
+  if(!d||typeof d!=='object'||Array.isArray(d))return {};
+  if(d.id||d.name||d.slug||d.provider_type)return d;
+  for(const k of Object.keys(d)){
+    const v=d[k];
+    if(v&&typeof v==='object'&&!Array.isArray(v))return v;
+  }
+  return d;
+}
 
 // --- Generic CRUD ---
-async function renderCRUD(container,key,label,fields,ep){
+// `editFields` (optional) = the fields the Edit form exposes; without it Edit stays on
+// ['name'] as before. Sections whose real shape is name/slug/description (surfaces) pass it
+// so an edit can actually change the slug/description, not just the name.
+async function renderCRUD(container,key,label,fields,ep,editFields){
   container.innerHTML=`<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">${label}s</h2><button class="btn btn-primary btn-sm" id="addBtn">+ Add</button></div><div id="list"><p class="text-gray-400 text-sm">Loading...</p></div></div>`;
   const data=await api(ep);
   const items=unwrapList(data);
@@ -217,34 +242,46 @@ async function renderCRUD(container,key,label,fields,ep){
   }
   let cols=fields;
   if(!cols.length&&items[0])cols=Object.keys(items[0]).filter(k=>k!=='id'&&k!=='aid'&&k!=='updated_at'&&k!=='created_at').slice(0,5);
+  const ef=(editFields||['name']).join(',');
   const thead=cols.map(f=>`<th>${f.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase())}</th>`).join('');
-  const tbody=items.map(it=>'<tr>'+cols.map(f=>`<td>${String(it[f]||'')}</td>`).join('')+
-    `<td class="text-right"><button class="btn btn-sm btn-ghost" onclick="event.preventDefault();editIt('${key}','${label}','${ep}','${rowId(it)}')">Edit</button>`+
+  const tbody=items.map(it=>'<tr>'+cols.map(f=>`<td>${String(it[f]===undefined||it[f]===null?'':it[f])}</td>`).join('')+
+    `<td class="text-right"><button class="btn btn-sm btn-ghost" onclick="event.preventDefault();editIt('${key}','${label}','${ep}','${rowId(it)}','${ef}')">Edit</button>`+
     `<button class="btn btn-sm btn-danger" onclick="event.preventDefault();delIt('${key}','${label}','${ep}','${rowId(it)}')">Del</button></td></tr>`).join('');
   list.innerHTML=`<table class="table"><thead><tr>${thead}<th style="width:140px"></th></tr></thead><tbody>${tbody}</tbody></table>`;
   container.querySelector('#addBtn').onclick=()=>showForm(key,label,cols,ep,null,()=>renderPage());
 }
 
 function renderPage(){renderApp()}
-window.editIt=function(key,label,ep,id){showForm(key,label,['name'],ep,id,renderPage)}
-window.delIt=async function(key,label,ep,id){if(!confirm('Delete?'))return;await api(ep+'/'+id,{method:'DELETE'});showMsg('Deleted');renderPage()}
+window.editIt=function(key,label,ep,id,ef){showForm(key,label,ef?ef.split(','):['name'],ep,id,renderPage)}
+window.delIt=async function(key,label,ep,id){if(!confirm('Delete?'))return;const r=await api(ep+'/'+id,{method:'DELETE'});showMsg(r?'Deleted':('Delete failed: '+LAST_ERR),r?undefined:'error');renderPage()}
 
 async function showForm(key,label,fields,ep,id,cb){
   const data=id?await api(ep+'/'+id):null;
-  const item=data||{};
+  const item=unwrapOne(data);
   const modal=h('div',{className:'modal-overlay',onclick:function(e){if(e.target===modal)modal.remove()}});
   const box=h('div',{className:'modal-box'});
   box.innerHTML=`<h2 class="text-lg font-bold mb-4">${id?'Edit':'Add'} ${label}</h2><form id="mf">`+
-    fields.map(f=>`<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">${f.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase())}</label><input class="input" name="${f}" value="${item[f]||''}"></div>`).join('')+
+    fields.map(f=>`<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">${f.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase())}</label><input class="input" name="${f}" value="${item[f]===undefined||item[f]===null?'':String(item[f]).replace(/"/g,'&quot;')}"></div>`).join('')+
     `</form><div class="flex justify-end gap-2 mt-4"><button class="btn btn-ghost" id="cancelBtn">Cancel</button><button class="btn btn-primary" id="saveBtn">Save</button></div>`;
   box.querySelector('#cancelBtn').onclick=()=>modal.remove();
   box.querySelector('#saveBtn').onclick=async()=>{
-    const body={};box.querySelectorAll('#mf input').forEach(inp=>{body[inp.name]=inp.value});
+    // Skip blank inputs: an empty string is not "unset" server-side — POST /surfaces would
+    // store slug='' instead of slugifying the name, and PUT uses COALESCE (blank can't clear).
+    const body={};box.querySelectorAll('#mf input').forEach(inp=>{if(String(inp.value).trim()!=='')body[inp.name]=inp.value});
     const r=await api(id?ep+'/'+id:ep,{method:id?'PUT':'POST',body:JSON.stringify(body)});
-    if(r)showMsg('Saved!');else showMsg('Error saving','error');
-    modal.remove();if(cb)cb();
+    if(r)showMsg('Saved!');else showMsg('Error saving: '+LAST_ERR,'error');
+    if(r){modal.remove();if(cb)cb();}
   };
   modal.appendChild(box);document.body.appendChild(modal);
+}
+
+// --- Surfaces (tenant-wide definition; the ONLY place they may be created) ---
+// The API refuses writes from non-admin tokens with 403 "Admin access required" and refuses a
+// duplicate per-tenant slug with 409 — both now reach the operator via LAST_ERR above.
+// Fields are the API's real ones (name, slug, description); slug may be omitted and is
+// slugified from name. The user-facing app only *selects* from this registry.
+function renderSurfaces(c){
+  renderCRUD(c,'surfaces','Surface',['name','slug','description'],'/surfaces',['name','slug','description']);
 }
 
 // --- Dashboard ---

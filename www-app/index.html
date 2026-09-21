@@ -418,20 +418,24 @@ const loadStats = async () => { if(S.loading)return; S.loading=true; renderApp()
 const WorkflowsView = () => {
   if (!S.workflows && !S.loading) loadWorkflows();
   const list = S.workflows || [];
+  const surName = (id) => { const s = (S.surfaces||[]).find(x=>x.id===id); return s ? s.name : ''; };
   return html`
     <div>
       <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
         <div><h1 class="text-xl font-extrabold text-gray-900">Workflows</h1><p class="text-sm text-gray-500 mt-1">All your automation workflows</p></div>
-        <div class="flex gap-2"><button class="btn text-sm" onClick=${openWfModal}>+ New Workflow</button><button class="btn-outline text-sm" onClick=${loadWorkflows} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button></div>
+        <div class="flex gap-2 items-center"><${SurfaceFilter} value=${S.wfSurface} onChange=${setWfSurface} /><button class="btn text-sm" onClick=${()=>openWfModal()}>+ New Workflow</button><button class="btn-outline text-sm" onClick=${loadWorkflows} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button></div>
       </header>
       ${list.length === 0 ? html`<div class="empty">No workflows yet. Create your first one.</div>` : html`
-      <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Category</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>
-        ${list.map(w => html`<tr key=${w.id}><td class="font-semibold">${w.name}</td><td>${w.category || '—'}</td><td>${statusBadge(w.is_active?'active':'draft')}</td><td>${fmtDate(w.created_at)}</td>
-          <td class="text-right whitespace-nowrap"><button class="btn-outline text-xs" onClick=${()=>setView('builder',{id:w.id})}>Builder</button> <button class="btn-green text-xs" onClick=${()=>runWf(w.id)}>Run</button> <button class="btn-red text-xs" onClick=${()=>delWf(w.id)}>Del</button></td></tr>`)}
+      <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Category</th><th>Surface</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>
+        ${list.map(w => html`<tr key=${w.id}><td class="font-semibold">${w.name}</td><td>${w.category || '—'}</td><td>${surName(w.surface_id) || '—'}</td><td>${statusBadge(w.is_active?'active':'draft')}</td><td>${fmtDate(w.created_at)}</td>
+          <td class="text-right whitespace-nowrap"><button class="btn-outline text-xs" onClick=${()=>setView('builder',{id:w.id})}>Builder</button> <button class="btn-outline text-xs" onClick=${()=>openWfModal(w)}>Edit</button> <button class="btn-green text-xs" onClick=${()=>runWf(w.id)}>Run</button> <button class="btn-red text-xs" onClick=${()=>delWf(w.id)}>Del</button></td></tr>`)}
       </tbody></table></div>`}
     </div>`;
 };
-const loadWorkflows = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.workflows = (await API.get('/workflows')).workflows || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+// Server filters on `(surface_id = $2 OR surface_id IS NULL)` — unassigned rows deliberately
+// show under every surface, so a filtered list is a superset by design.
+const loadWorkflows = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.workflows = (await API.get('/workflows' + (S.wfSurface ? '?surface=' + encodeURIComponent(S.wfSurface) : ''))).workflows || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+const setWfSurface = (v) => { S.wfSurface = v; S.workflows = null; loadWorkflows(); };
 const runWf = async (id) => { try { await API.post('/workflows/'+id+'/run'); toast('Workflow run triggered'); } catch(e){ toast(e.message,'err'); } };
 const delWf = async (id) => { if(!confirm('Delete this workflow?'))return; try { await API.del('/workflows/'+id); toast('Workflow deleted'); S.workflows=null; loadWorkflows(); } catch(e){ toast(e.message,'err'); } };
 
@@ -446,6 +450,7 @@ const TemplatesView = () => {
     <div>
       <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
         <div><h1 class="text-xl font-extrabold text-gray-900">Templates</h1><p class="text-sm text-gray-500 mt-1" id="tpl-plan-msg">Loading templates…</p></div>
+        <${SurfaceFilter} value=${S.tplSurface} onChange=${setTplSurface} />
         <input type="file" id="tpl-import-input" accept=".json,application/json" style="display:none" onChange=${onTemplateFile}/>
         <button class="btn-outline text-sm" onClick=${()=>document.getElementById('tpl-import-input').click()}>Import JSON</button>
         <button class="btn-outline text-sm" onClick=${()=>{S.templates=null; loadTemplates();}} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button>
@@ -491,7 +496,8 @@ const renderTplGrid = () => {
   root.querySelectorAll('[data-tpl-upgrade]').forEach(b=>b.addEventListener('click',()=>upgradeTemplates()));
 };
 const upgradeTemplates = () => { window.open('https://workflowswift.com/#features','_blank'); toast('Upgrade required to unlock this template'); };
-const loadTemplates = async () => { if(S.loading)return; S.loading=true; renderApp(); try { const _r = await API.get('/templates'); S.templates = _r.templates || []; S.templateAvail = _r.available_public || []; S.plan = _r.plan || null; } catch(e){ S.templates=[]; S.templateAvail=[]; S.plan=null; } S.loading=false; S.dataVer=(S.dataVer||0)+1; renderApp(); renderTplGrid(); };
+const loadTemplates = async () => { if(S.loading)return; S.loading=true; renderApp(); try { const _r = await API.get('/templates' + (S.tplSurface ? '?surface=' + encodeURIComponent(S.tplSurface) : '')); S.templates = _r.templates || []; S.templateAvail = _r.available_public || []; S.plan = _r.plan || null; } catch(e){ S.templates=[]; S.templateAvail=[]; S.plan=null; } S.loading=false; S.dataVer=(S.dataVer||0)+1; renderApp(); renderTplGrid(); };
+const setTplSurface = (v) => { S.tplSurface = v; S.templates = null; loadTemplates(); };
 const installTemplate = async (id) => { try { await API.post('/templates/'+id+'/install'); toast('Template installed as workflow'); setView('workflows'); S.workflows=null; } catch(e){ toast(e.message,'err'); } };
 const exportTemplate = async (id, name) => { try { const data = await API.get('/templates/'+id+'/export'); const payload = (data && data.template) || data; const blob = new Blob([JSON.stringify(payload,null,2)], { type:'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = (name||'template').replace(/[^A-Za-z0-9._-]/g,'_') + '.workflowswift.json'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url), 4000); toast('Template exported'); } catch(e){ toast(e.message,'err'); } };
 const onTemplateFile = async (ev) => { const file = ev.target.files && ev.target.files[0]; ev.target.value = ''; if(!file) return; try { const text = await file.text(); const j = JSON.parse(text); const payload = (j && j.template) ? j.template : j; await API.post('/templates/import', payload); toast('Template imported'); S.templates=null; loadTemplates(); } catch(e){ toast('Import failed: ' + e.message, 'err'); } };
@@ -631,7 +637,7 @@ const LeadsView = () => {
     <div>
       <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
         <div><h1 class="text-xl font-extrabold text-gray-900">Leads</h1><p class="text-sm text-gray-500 mt-1">Your captured leads</p></div>
-        <button class="btn-outline text-sm" onClick=${loadLeads} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button>
+        <div class="flex gap-2 items-center"><${SurfaceFilter} value=${S.leadSurface} onChange=${setLeadSurface} /><button class="btn-outline text-sm" onClick=${loadLeads} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button></div>
       </header>
       ${list.length === 0 ? html`<div class="empty">No leads yet.</div>` : html`
       <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Email</th><th>Company</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>
@@ -639,27 +645,61 @@ const LeadsView = () => {
       </tbody></table></div>`}
     </div>`;
 };
-const loadLeads = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.leads = (await API.get('/leads')).leads || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+// NOTE the param name: the leads endpoint is `?surface_id=`, NOT `?surface=` (which it ignores).
+const loadLeads = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.leads = (await API.get('/leads' + (S.leadSurface ? '?surface_id=' + encodeURIComponent(S.leadSurface) : ''))).leads || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+const setLeadSurface = (v) => { S.leadSurface = v; S.leads = null; loadLeads(); };
 const delLead = async (id) => { if(!confirm('Delete this lead?'))return; try { await API.del('/leads/'+id); toast('Lead deleted'); S.leads=null; loadLeads(); } catch(e){ toast(e.message,'err'); } };
 
 
-// ===== Surfaces =====
-const SurfacesView = () => {
-  if (!S.surfaces && !S.loading) loadSurfaces();
-  const list = S.surfaces || [];
-  return html`
-    <div>
-      <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
-        <div><h1 class="text-xl font-extrabold text-gray-900">Surfaces</h1><p class="text-sm text-gray-500 mt-1">Channels and surfaces for your workflows</p></div>
-        <button class="btn text-sm" onClick=${openSurfaceModal}>+ New Surface</button>
-      </header>
-      ${list.length === 0 ? html`<div class="empty">No surfaces yet.</div>` : html`
-      <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        ${list.map(s => html`<div class="card" key=${s.id} style="margin-bottom:0"><h3 class="font-semibold text-gray-800">${s.name || s.type || 'Surface'}</h3><p class="text-sm text-gray-500 mt-1">${s.type || ''}</p></div>`)}
-      </div>`}
-    </div>`;
+// ===== Surface selector =====
+// Surfaces are DEFINED in the admin panel (admin.workflowswift.com → Admin → Surfaces).
+// The user app must not create them, so the standalone Surfaces page + create modal were
+// removed. What remains here is a FILTER fed by the same read-only registry, and it only
+// renders when the tenant actually has >=1 surface.
+//
+// Param names differ by endpoint and are NOT interchangeable:
+//   GET /workflows?surface=<uuid>      (workflow_handler::list_workflows)
+//   GET /templates?surface=<uuid>      (template_handler::list_templates)
+//   GET /leads?surface_id=<uuid>       (leads_handler::list_leads)
+Object.assign(S, { surfaces:null, surfacesTried:false, surfaceCbs:null, wfSurface:'', tplSurface:'', leadSurface:'', wfEdit:null });
+
+// Load the registry at most once per session.
+// CRITICAL: nothing here may call renderApp() *synchronously* while a view is rendering.
+// Views call ensureSurfaces() from inside their render body; renderApp() defers a re-entrant
+// render (`__pendingRender`) and then re-runs it, so a synchronous renderApp() from inside a
+// render loops forever (Maximum call stack size exceeded) and leaves the old DOM in place
+// because the render that threw never removed it. Everything below is therefore async-only,
+// and `surfacesTried` latches so the request is issued exactly once.
+const fetchSurfaces = (done) => {
+  API.get('/surfaces')
+    .then(r => { S.surfaces = (r && r.surfaces) || []; })
+    .catch(() => { S.surfaces = []; })
+    .then(() => { const q = (S.surfaceCbs || []).concat(done || []); S.surfaceCbs = []; q.forEach(f => f()); });
 };
-const loadSurfaces = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.surfaces = (await API.get('/surfaces')).surfaces || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+const ensureSurfaces = () => {
+  if (S.surfacesTried) return;          // loaded, in flight, or already failed — never re-render
+  S.surfacesTried = true;
+  fetchSurfaces([() => { if (!S.modal) renderApp(); }]);
+};
+// Open the create/edit workflow modal. The surface select needs the registry, so wait for it
+// (asynchronously) before mounting the form — mounting first and re-rendering later would wipe
+// whatever the operator had typed.
+const loadSurfacesOnce = (cb) => {
+  if (S.surfaces) { if (cb) cb(); return; }
+  if (S.surfacesTried) { S.surfaceCbs = (S.surfaceCbs || []).concat(cb || []); return; }
+  S.surfacesTried = true;
+  fetchSurfaces(cb ? [cb] : []);
+};
+
+const SurfaceFilter = ({ value, onChange }) => {
+  ensureSurfaces();
+  const list = S.surfaces || [];
+  if (!list.length) return null;
+  return html`<select class="input text-sm" style="max-width:200px" value=${value || ''} onChange=${e => onChange(e.target.value)}>
+    <option value="">Surface: All</option>
+    ${list.map(s => html`<option key=${s.id} value=${s.id}>Surface: ${s.name}</option>`)}
+  </select>`;
+};
 
 // ===== Credits =====
 const CreditsView = () => {
@@ -866,11 +906,16 @@ const ProfileView = () => {
 };
 
 // ===== Modal forms =====
-const openWfModal = () => { S.modal='wf'; renderApp(); };
+const openWfModal = (wf) => {
+  // Surface reassignment lives here (item: the update path). Load the registry BEFORE mounting
+  // so the form never re-renders under the operator's keystrokes.
+  S.wfEdit = wf || null;
+  if (S.surfaces) { S.modal='wf'; renderApp(); return; }
+  loadSurfacesOnce(() => { S.modal='wf'; renderApp(); });
+};
 const openProspectModal = () => { S.modal='prospect'; renderApp(); };
 const openBrandModal = () => { S.modal='brand'; renderApp(); };
 const openCompetitorModal = () => { S.modal='comp'; renderApp(); };
-const openSurfaceModal = () => { S.modal='surface'; renderApp(); };
 const openApiKeyModal = () => { S.modal='apikey'; S.modalErr=null; renderApp(); };
 
 const ApiKeyModal = () => { let name='';
@@ -885,13 +930,33 @@ const ApiKeyModal = () => { let name='';
     <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Create API Key'}</button>
   <//>`; };
 
-const WfModal = () => { let name='', desc='', cat='';
-  const save = async () => { if(!name) return toast('Name required','err'); S.loading=true; renderApp(); try { await API.post('/workflows', { name, description: desc, category: cat }); toast('Workflow created'); S.workflows=null; closeModal(); } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
-  return html`<${ModalShell} title="New Workflow" onClose=${closeModal}>
-    <div class="mb-4"><label class="label">Name</label><input class="input" onInput=${e=>name=e.target.value} placeholder="My Workflow" /></div>
-    <div class="mb-4"><label class="label">Category</label><input class="input" onInput=${e=>cat=e.target.value} placeholder="e.g. Sales" /></div>
-    <div class="mb-4"><label class="label">Description</label><textarea class="input" rows=3 onInput=${e=>desc=e.target.value} placeholder="What does this workflow do?"></textarea></div>
-    <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Create Workflow'}</button>
+// Create AND edit. In edit mode the Surface select is the reassign control: surface_id is only
+// sent when a surface is chosen, and the API keeps the stored value when the field is absent
+// (`req.surface_id.or(existing.surface_id)`), so an untouched form never clears it.
+const WfModal = () => {
+  const wf = S.wfEdit || null;
+  let name = wf ? (wf.name || '') : '', desc = wf ? (wf.description || '') : '', cat = wf ? (wf.category || '') : '';
+  let surface = (wf && wf.surface_id) ? wf.surface_id : '';
+  const surfaces = S.surfaces || [];
+  const save = async () => { if(!name) return toast('Name required','err'); S.loading=true; renderApp();
+    try {
+      const body = { name, description: desc, category: cat };
+      if (surface) body.surface_id = surface;
+      if (wf) { await API.put('/workflows/' + wf.id, body); toast('Workflow updated'); }
+      else { await API.post('/workflows', body); toast('Workflow created'); }
+      S.workflows = null; closeModal();
+    } catch(e){ toast(e.message,'err'); }
+    S.loading=false; renderApp(); };
+  return html`<${ModalShell} title=${wf ? 'Edit Workflow' : 'New Workflow'} onClose=${closeModal}>
+    <div class="mb-4"><label class="label">Name</label><input class="input" value=${name} onInput=${e=>name=e.target.value} placeholder="My Workflow" /></div>
+    <div class="mb-4"><label class="label">Category</label><input class="input" value=${cat} onInput=${e=>cat=e.target.value} placeholder="e.g. Sales" /></div>
+    <div class="mb-4"><label class="label">Description</label><textarea class="input" rows=3 onInput=${e=>desc=e.target.value} placeholder="What does this workflow do?">${desc}</textarea></div>
+    ${surfaces.length ? html`<div class="mb-4"><label class="label">Surface</label>
+      <select class="input" value=${surface} onChange=${e=>surface=e.target.value}>
+        <option value="">No surface</option>
+        ${surfaces.map(s=>html`<option key=${s.id} value=${s.id}>${s.name}</option>`)}
+      </select></div>` : ''}
+    <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():(wf?'Save Workflow':'Create Workflow')}</button>
   <//>`; };
 const BrandModal = () => { let name='', kw='';
   const save = async () => { if(!name) return toast('Brand name required','err'); const keywords = kw.split(',').map(s=>s.trim()).filter(Boolean); S.loading=true; renderApp(); try { await API.post('/brand-monitors', { brand_name: name, keywords, platforms: ['web','news','social'] }); toast('Brand monitor created'); S.brands=null; closeModal(); } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
@@ -907,14 +972,6 @@ const CompetitorModal = () => { let name='', web='';
     <div class="mb-4"><label class="label">Website</label><input class="input" onInput=${e=>web=e.target.value} placeholder="https://competitor.com" /></div>
     <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Add Competitor'}</button>
   <//>`; };
-const SurfaceModal = () => { let name='', type='';
-  const save = async () => { if(!name) return toast('Name required','err'); S.loading=true; renderApp(); try { await API.post('/surfaces', { name, type }); toast('Surface created'); S.surfaces=null; closeModal(); } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
-  return html`<${ModalShell} title="New Surface" onClose=${closeModal}>
-    <div class="mb-4"><label class="label">Name</label><input class="input" onInput=${e=>name=e.target.value} placeholder="e.g. Website Chat" /></div>
-    <div class="mb-4"><label class="label">Type</label><input class="input" onInput=${e=>type=e.target.value} placeholder="e.g. web" /></div>
-    <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Create Surface'}</button>
-  <//>`; };
-
 // ===== Builder =====
 const BuilderView = () => {
   const wf = (S.workflows||[]).find(w => w.id === S.viewParams?.id);
@@ -936,7 +993,6 @@ const NAV = [
   { id:'instances', label:'Instances', icon:'▶️' },
   { id:'automations', label:'Automations', icon:'🔁' },
   { id:'leads', label:'Leads', icon:'👤' },
-  { id:'surfaces', label:'Surfaces', icon:'📡' },
   { id:'prospecting', label:'Prospecting', icon:'🎯' },
   { id:'brand-monitor', label:'Brand Monitor', icon:'📣' },
   { id:'competitors', label:'Competitors', icon:'👁️' },
@@ -949,7 +1005,7 @@ const NAV = [
 
 const VIEW_MAP = {
   dashboard: DashboardView, workflows: WorkflowsView, builder: BuilderView, templates: TemplatesView,
-  instances: InstancesView, automations: AutomationsView, leads: LeadsView, surfaces: SurfacesView,
+  instances: InstancesView, automations: AutomationsView, leads: LeadsView,
   prospecting: ProspectingView, 'prospecting-results': ProspectingResultsView, 'brand-monitor': BrandMonitorView,
   competitors: CompetitorsView, credits: CreditsView, tickets: TicketsView, profile: ProfileView,
   'api-keys': ApiKeysView,
@@ -988,7 +1044,7 @@ const App = () => {
         <${Current} key=${S.current + "|" + S.dataVer} />
       </main>
     </div>
-    ${S.modal && (S.modal==='wf' ? html`<${WfModal} />` : S.modal==='brand' ? html`<${BrandModal} />` : S.modal==='comp' ? html`<${CompetitorModal} />` : S.modal==='surface' ? html`<${SurfaceModal} />` : S.modal==='apikey' ? html`<${ApiKeyModal} />` : S.modal==='invite' ? html`<${InviteModal} />` : S.modal==='perms' ? html`<${PermsModal} />` : S.modal==='industry' ? html`<${IndustryPickerView} asModal />` : null)}
+    ${S.modal && (S.modal==='wf' ? html`<${WfModal} />` : S.modal==='brand' ? html`<${BrandModal} />` : S.modal==='comp' ? html`<${CompetitorModal} />` : S.modal==='apikey' ? html`<${ApiKeyModal} />` : S.modal==='invite' ? html`<${InviteModal} />` : S.modal==='perms' ? html`<${PermsModal} />` : S.modal==='industry' ? html`<${IndustryPickerView} asModal />` : null)}
     ${S.toast && html`<div class="toast ${S.toast.type}">${S.toast.msg}</div>`}
     ${S.loading && html`<div style="position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:60"><span class="spinner"></span></div>`}
   `;

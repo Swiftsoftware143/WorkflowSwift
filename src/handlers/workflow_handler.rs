@@ -118,6 +118,10 @@ pub async fn update_workflow(
             .await?
             .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
+    // Surface is reassignable here. `Option` semantics: an absent (or null) field in the body
+    // preserves the stored surface instead of clearing it. Read this before the field moves below.
+    let surface_id = req.surface_id.or(existing.surface_id);
+
     let name = req.name.unwrap_or(existing.name);
     let description = req.description.or(existing.description);
     let category = req.category.or(existing.category);
@@ -132,8 +136,8 @@ pub async fn update_workflow(
     let trigger_config = req.trigger_config.or(existing.trigger_config);
 
     let workflow = sqlx::query_as::<_, Workflow>(
-        r#"UPDATE workflows SET name=$1, description=$2, category=$3, lifecycle_summary=$4, tags=$5, trigger_type=$6, trigger_config=$7, updated_at=NOW()
-           WHERE id=$8 RETURNING *"#,
+        r#"UPDATE workflows SET name=$1, description=$2, category=$3, lifecycle_summary=$4, tags=$5, trigger_type=$6, trigger_config=$7, surface_id=$8, updated_at=NOW()
+           WHERE id=$9 RETURNING *"#,
     )
     .bind(&name)
     .bind(&description)
@@ -142,6 +146,7 @@ pub async fn update_workflow(
     .bind(&tags)
     .bind(&trigger_type)
     .bind(&trigger_config)
+    .bind(surface_id)
     .bind(id)
     .fetch_one(&state.db)
     .await?;

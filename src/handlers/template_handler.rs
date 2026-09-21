@@ -192,8 +192,8 @@ pub async fn create_template(
 
     let template_id = Uuid::new_v4();
     let template = sqlx::query_as::<_, WorkflowTemplate>(
-        r#"INSERT INTO workflow_templates (id, aid, name, description, category, tags, is_public)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
+        r#"INSERT INTO workflow_templates (id, aid, name, description, category, tags, is_public, surface_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
            RETURNING *"#,
     )
     .bind(template_id)
@@ -203,6 +203,7 @@ pub async fn create_template(
     .bind(&req.category)
     .bind(&req.tags)
     .bind(false)
+    .bind(req.surface_id)
     .fetch_one(&state.db)
     .await?;
 
@@ -274,6 +275,13 @@ pub async fn update_template(
         .and_then(|v| v.as_str())
         .unwrap_or(&existing.name)
         .to_string();
+    // Surface is reassignable here too. A body field that is absent (or null / not a uuid)
+    // keeps the stored surface; read before `existing` is partially moved below.
+    let surface_id = req
+        .get("surface_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .or(existing.surface_id);
     let description = req
         .get("description")
         .and_then(|v| v.as_str())
@@ -287,12 +295,13 @@ pub async fn update_template(
     let tags = req.get("tags").cloned().or(existing.tags);
 
     sqlx::query(
-        r#"UPDATE workflow_templates SET name=$1, description=$2, category=$3, tags=$4 WHERE id=$5"#,
+        r#"UPDATE workflow_templates SET name=$1, description=$2, category=$3, tags=$4, surface_id=$5 WHERE id=$6"#,
     )
     .bind(&name)
     .bind(&description)
     .bind(&category)
     .bind(&tags)
+    .bind(surface_id)
     .bind(id)
     .execute(&state.db)
     .await?;
@@ -522,8 +531,8 @@ pub async fn import_template(
 
     let template_id = Uuid::new_v4();
     let template = sqlx::query_as::<_, WorkflowTemplate>(
-        r#"INSERT INTO workflow_templates (id, aid, name, description, category, tags, is_public)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)
+        r#"INSERT INTO workflow_templates (id, aid, name, description, category, tags, is_public, surface_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
            RETURNING *"#,
     )
     .bind(template_id)
@@ -533,6 +542,7 @@ pub async fn import_template(
     .bind(&req.category)
     .bind(&req.tags)
     .bind(false)
+    .bind(req.surface_id)
     .fetch_one(&state.db)
     .await?;
 
