@@ -20,6 +20,11 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::AppError;
+// The dashboard series key space lives with its writers; the `data-card` step below reads through
+// the same helpers so a step's metric_key resolves exactly like a widget's config.metric_key does.
+use crate::handlers::industry_handler::{
+    canonical_metric_key, latest_widget_metric, metric_key_candidates,
+};
 use crate::state::AppState;
 
 /// Everything a step can see about the run that triggered it.
@@ -119,6 +124,44 @@ fn step_error_text(result: &Value) -> Option<String> {
     match result.get("status") {
         Some(Value::Number(n)) => Some(format!("upstream returned HTTP {}", n)),
         _ => None,
+    }
+}
+
+/// Result of a `data-card` step.
+///
+/// A lookup failure becomes `status: "error"` with the reason in `error`: `classify_step_status`
+/// reads that as `failed` (so the step — and the run — report the truth) and `step_error_text`
+/// copies it into the `workflow_execution_logs.error_message`. The pre-fix arm used
+/// `unwrap_or(None)`, so a query that never ran produced `metric_value: null` and a *completed*
+/// step, indistinguishable from a widget nobody had pushed to.
+fn data_card_result(
+    step: usize,
+    widget_name: &str,
+    metric_key: &str,
+    lookup: Result<Option<Value>, sqlx::Error>,
+) -> Value {
+    match lookup {
+        Ok(metric_value) => json!({
+            "step": step,
+            "type": "data-card",
+            "status": "completed",
+            "widget_name": widget_name,
+            "metric_key": metric_key,
+            "resolved_metric_key": if metric_key.is_empty() {
+                String::new()
+            } else {
+                canonical_metric_key(metric_key)
+            },
+            "metric_value": metric_value,
+        }),
+        Err(e) => json!({
+            "step": step,
+            "type": "data-card",
+            "status": "error",
+            "widget_name": widget_name,
+            "metric_key": metric_key,
+            "error": format!("dashboard series lookup failed: {e}"),
+        }),
     }
 }
 
@@ -1053,7 +1096,14 @@ async fn walk(
                 }
             }
             "data-card" | "data_card" => {
-                // Pull data from dashboard and attach to context
+                // Pull data from dashboard and attach to context.
+                //
+                // `metric_key` is a widget's `config.metric_key`, so it is resolved through the SAME
+                // key space every writer uses (`metric_key_candidates`): a bare config key resolves to
+                // its canonical `n8n_` row, and an already-prefixed config key keeps the legacy
+                // double-prefixed row readable. The raw equality lookup this arm used to do matched
+                // NEITHER shape, so a Data Card added from the Builder's own widget picker (which
+                // stores `config.metric_key` verbatim) silently produced an empty card.
                 let widget_name = step_config
                     .get("widget_name")
                     .and_then(|v| v.as_str())
@@ -1063,21 +1113,25 @@ async fn walk(
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
 
-                // Query dashboard_data for latest value
-                let metric_value: Option<serde_json::Value> = if !metric_key.is_empty() {
-                    sqlx::query_scalar(
-                            r#"SELECT metric_value FROM dashboard_data WHERE aid = $1 AND metric_key = $2 ORDER BY recorded_at DESC LIMIT 1"#
-                        )
-                        .bind(aid)
-                        .bind(metric_key)
-                        .fetch_optional(&state.db)
-                        .await
-                        .unwrap_or(None)
+                let lookup: Result<Option<Value>, sqlx::Error> = if metric_key.is_empty() {
+                    Ok(None)
                 } else {
-                    None
+                    let lookup_keys = metric_key_candidates(metric_key);
+                    latest_widget_metric(&state.db, aid, &lookup_keys)
+                        .await
+                        .map_err(|e| {
+                            tracing::error!(
+                                error = %e,
+                                %aid,
+                                metric_keys = ?lookup_keys,
+                                "dashboard data-card lookup failed — failing the step instead of \
+                                 returning an empty card"
+                            );
+                            e
+                        })
                 };
 
-                json!({"step": i, "type": "data-card", "status": "completed", "widget_name": widget_name, "metric_key": metric_key, "metric_value": metric_value})
+                data_card_result(i, widget_name, metric_key, lookup)
             }
             "fork" => {
                 let branches: Vec<serde_json::Value> = step_config
@@ -1279,5 +1333,90 @@ mod tests {
         let plan = ResumePlan::fresh();
         assert!(plan.advance.is_none());
         assert!(plan.existing.is_empty());
+    }
+
+    #[test]
+    fn a_failing_data_card_lookup_is_a_failed_step_not_an_empty_card() {
+        let broken = data_card_result(
+            1,
+            "Trends",
+            "site-flipping_trends",
+            Err(sqlx::Error::RowNotFound),
+        );
+        assert_eq!(classify_step_status(&broken), "failed");
+        assert_eq!(
+            step_error_text(&broken)
+                .unwrap_or_default()
+                .starts_with("dashboard series lookup failed"),
+            true,
+            "the reason must reach the execution log: {broken}"
+        );
+
+        // A widget nobody has pushed to stays a successful, legitimately empty card.
+        let empty = data_card_result(1, "Trends", "site-flipping_trends", Ok(None));
+        assert_eq!(classify_step_status(&empty), "completed");
+        assert!(empty.get("metric_value").unwrap().is_null());
+        assert_eq!(
+            empty.get("resolved_metric_key").unwrap(),
+            "n8n_site-flipping_trends",
+            "the result names the canonical key the read used"
+        );
+        assert_eq!(
+            empty.get("metric_key").unwrap(),
+            "site-flipping_trends",
+            "and still echoes the key the step was configured with"
+        );
+
+        // A series that IS there comes back in the step result.
+        let found = data_card_result(
+            1,
+            "Trends",
+            "n8n_site-flipping_trends",
+            Ok(Some(json!({"value": 42}))),
+        );
+        assert_eq!(classify_step_status(&found), "completed");
+        assert_eq!(found.get("metric_value").unwrap()["value"], json!(42));
+    }
+
+    /// Executed, not asserted on paper: a lazy pool pointed at a closed port makes the exact query
+    /// the `data-card` arm now runs fail, and the result is classified the way the walk classifies
+    /// it. The control leg is the exact pre-fix shape — the same failing query with
+    /// `.unwrap_or(None)` — which the walk recorded as a *completed* step with a null metric.
+    #[tokio::test]
+    async fn a_broken_lookup_fails_the_step_while_the_pre_fix_shape_looked_like_success() {
+        let db = sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_millis(500))
+            .connect_lazy("postgres://probe:***@127.0.0.1:1/none")
+            .expect("lazy pool");
+        let lookup_keys = metric_key_candidates("site-flipping_trends");
+
+        let lookup = latest_widget_metric(&db, Uuid::nil(), &lookup_keys).await;
+        assert!(
+            lookup.is_err(),
+            "a query that cannot run must be an error, got {lookup:?}"
+        );
+        let result = data_card_result(1, "Trends", "site-flipping_trends", lookup);
+        assert_eq!(classify_step_status(&result), "failed");
+        assert!(step_error_text(&result)
+            .unwrap_or_default()
+            .starts_with("dashboard series lookup failed"));
+
+        // control: the pre-fix read, on the same failing query, produced a null metric that the walk
+        // reported as a completed step — indistinguishable from a widget nobody had pushed to.
+        let swallowed: Option<Value> = sqlx::query_scalar(
+            r#"SELECT metric_value FROM dashboard_data WHERE aid = $1 AND metric_key = $2 ORDER BY recorded_at DESC LIMIT 1"#,
+        )
+        .bind(Uuid::nil())
+        .bind("site-flipping_trends")
+        .fetch_optional(&db)
+        .await
+        .unwrap_or(None);
+        assert_eq!(swallowed, None, "the pre-fix shape hid the failure");
+        let control = json!({"step": 1, "type": "data-card", "status": "completed", "metric_value": swallowed});
+        assert_eq!(
+            classify_step_status(&control),
+            "completed",
+            "and the walk called that success"
+        );
     }
 }

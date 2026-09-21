@@ -126,7 +126,9 @@ const API = (() => {
     putAccountIndustry: (slug, primary) => fetch(base + '/accounts/industry', { method:'PUT', headers: headers(), body: JSON.stringify({ industry_slug: slug, set_as_primary: !!primary }) }).then(handle),
     getDashboardWidgets: (slug) => fetch(base + '/dashboard/widgets' + (slug ? ('?industry=' + encodeURIComponent(slug)) : ''), { headers: headers() }).then(handle),
     getDashboardTabs: (slug) => fetch(base + '/dashboard/tabs' + (slug ? ('?industry=' + encodeURIComponent(slug)) : ''), { headers: headers() }).then(handle),
-    getDashboardMetric: (key) => fetch(base + '/dashboard/data/' + encodeURIComponent(key), { headers: headers() }).then(handle),
+    // The per-metric SPA helper that called that route was removed with it (kanban t_0fffb921): it
+    // was defined here and never called, and the per-widget data the dashboard needs already arrives
+    // in getDashboardWidgets (each widget carries its own `data`).
     pushDashboardData: (industry_slug, metric_key, value) => fetch(base + '/dashboard/push-widget-data', { method:'POST', headers: headers(), body: JSON.stringify({ industry_slug, metric_key, value }) }).then(handle),
     listApiKeys: () => fetch(base + '/api-keys', { headers: headers() }).then(handle),
     createApiKey: (name) => fetch(base + '/api-keys', { method:'POST', headers: headers(), body: JSON.stringify({ name }) }).then(handle),

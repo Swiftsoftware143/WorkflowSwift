@@ -837,29 +837,20 @@ pub async fn get_dashboard_widgets(
     })))
 }
 
-/// GET /api/v1/dashboard/data/{metric_key} — get specific metric data
-pub async fn get_dashboard_metric(
-    State(state): State<AppState>,
-    Extension(claims): Extension<Claims>,
-    Path(metric_key): Path<String>,
-) -> ApiResult<impl IntoResponse> {
-    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-
-    let data: Option<serde_json::Value> = sqlx::query_scalar(
-        r#"SELECT metric_value FROM dashboard_data
-           WHERE aid = $1 AND metric_key = $2
-           ORDER BY recorded_at DESC LIMIT 1"#,
-    )
-    .bind(aid)
-    .bind(&metric_key)
-    .fetch_optional(&state.db)
-    .await?;
-
-    Ok(Json(json!({
-        "metric_key": metric_key,
-        "data": data.unwrap_or(json!(null))
-    })))
-}
+// `GET /api/v1/dashboard/data/{metric_key}` used to be handled here (removed in kanban t_0fffb921).
+//
+// It was the second raw reader of `dashboard_data`: it bound the path segment straight into
+// `metric_key = $2`, so it could only ever find a key that no writer stores (every writer stores the
+// canonical `n8n_` form via `canonical_metric_key`), and it answered `{"data": null}` for a widget
+// that plainly had data.
+//
+// It was DELETED rather than canonicalised because it had no caller anywhere — the SPA defined
+// `getDashboardMetric` and never called it, and nothing in this repo, the served shells, the n8n
+// templates or the feature spec references the path — and because the read it offered is already
+// served, per widget, by `get_dashboard_widgets` above (each widget carries its own latest
+// `data`, resolved through `latest_widget_metric`). Keeping a second reader of the same table with
+// its own key rule is exactly the drift that produced this class of defect; the single canonical
+// reader is `latest_widget_metric`, used by the widgets endpoint and by the executor's data-card step.
 
 /// POST /api/v1/dashboard/push-widget-data — push data for a specific widget
 /// This is the universal endpoint used by n8n workflows, external API calls,

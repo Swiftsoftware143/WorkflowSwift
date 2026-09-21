@@ -280,10 +280,6 @@ pub fn create_router(state: AppState) -> Router {
             get(handlers::industry_handler::get_dashboard_widgets),
         )
         .route(
-            "/data/{metric_key}",
-            get(handlers::industry_handler::get_dashboard_metric),
-        )
-        .route(
             "/push-widget-data",
             post(handlers::industry_handler::push_widget_data),
         )
