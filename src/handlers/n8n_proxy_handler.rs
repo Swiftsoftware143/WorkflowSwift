@@ -209,11 +209,22 @@ async fn fire_n8n_webhook(
             n8n_body = %body,
             "n8n refused the trigger; no credit charged"
         );
-        return Err(AppError::Upstream(format!(
+        let message = format!(
             "n8n refused the trigger (HTTP {}): {}. Nothing ran, so no credit was charged.",
             status_code.as_u16(),
             body.to_string().chars().take(300).collect::<String>()
-        )));
+        );
+        // A 4xx from n8n is a configuration answer the caller can act on (webhook
+        // not registered, workflow not active, malformed trigger), and it has to
+        // reach the client INTACT: Cloudflare replaces the body of a 5xx with its
+        // own "error code: 502" page, so mapping this to 502 left the extension
+        // able to say nothing more useful than "HTTP 502" (kanban t_dd19dc40).
+        // n8n 5xx stays a 502 Upstream — that one really is an upstream failure.
+        return Err(if status_code.is_client_error() {
+            AppError::Validation(message)
+        } else {
+            AppError::Upstream(message)
+        });
     }
 
     // n8n accepted the trigger — charge exactly one credit, now.

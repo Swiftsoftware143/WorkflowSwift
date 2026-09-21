@@ -269,6 +269,34 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = { PlatformDetectors };
 }
 
+/**
+ * Success text for a trigger response (kanban t_dd19dc40).
+ *
+ * A 2xx only means WorkflowSwift accepted the request — the workflow itself is run
+ * by n8n, and its result comes back in `n8n_response`. An earlier build reported
+ * "✓ Request sent to WorkflowSwift" on any accepted HTTP call, which was a lie
+ * whenever n8n had no such webhook. Say what actually executed.
+ */
+function describeRun(body) {
+  const run = (body && body.n8n_response) || {};
+  const summary = run.analysis && run.analysis.summary;
+  if (summary) return `✓ Workflow executed — ${String(summary).slice(0, 90)}`;
+  if (run.ingest_id) return `✓ Workflow executed (run ${String(run.ingest_id).slice(0, 8)})`;
+  return '✓ Workflow executed';
+}
+
+/** Reason string for a failed trigger, preferring the server's own words. */
+function triggerError(status, rawBody) {
+  let why = '';
+  try {
+    const parsed = rawBody ? JSON.parse(rawBody) : null;
+    why = (parsed && (parsed.message || parsed.error)) || '';
+  } catch {
+    why = (rawBody || '').slice(0, 200);
+  }
+  return `Workflow could not run (HTTP ${status}${why ? `: ${why}` : ''})`;
+}
+
 
 /**
  * Swift Market Intel — Popup Script
@@ -508,7 +536,11 @@ class SwiftMarketIntelPopup {
 
       // Send via background (which uses the WorkflowSwift client)
       if (data.sentToWorkflow) {
-        this.showToast('✓ Already sent to WorkflowSwift', false);
+        this.showToast(describeRun(data.workflowResponse), false);
+      } else if (data.workflowError) {
+        // The send that ran while scraping already failed — surface its reason
+        // instead of scraping again and reporting a generic failure.
+        throw new Error(data.workflowError);
       } else {
         // Manual send via background
         const result = await chrome.runtime.sendMessage({
@@ -519,9 +551,9 @@ class SwiftMarketIntelPopup {
           }
         });
         if (result && result.sentToWorkflow) {
-          this.showToast('✓ Sent to WorkflowSwift', false);
+          this.showToast(describeRun(result.workflowResponse), false);
         } else {
-          throw new Error('Failed to send to WorkflowSwift');
+          throw new Error((result && result.workflowError) || 'Failed to send to WorkflowSwift');
         }
       }
 
@@ -584,9 +616,22 @@ class SwiftMarketIntelPopup {
         })
       });
 
-      if (!result.ok) throw new Error(`Server error: ${result.status}`);
+      if (!result.ok) {
+        throw new Error(triggerError(result.status, await result.text().catch(() => '')));
+      }
 
-      this.showToast('✓ Request sent to WorkflowSwift', false);
+      // 2xx is not the finish line: read the body and require the workflow to have
+      // actually run (the server reports n8n's own status in `n8n_status` and only
+      // charges once n8n accepted it).
+      const body = await result.json().catch(() => null);
+      if (!body || (typeof body.n8n_status === 'number' && body.n8n_status >= 400)) {
+        throw new Error(
+          body ? `The workflow could not run (n8n HTTP ${body.n8n_status}). Nothing was charged.`
+               : 'WorkflowSwift returned an empty response — nothing ran.'
+        );
+      }
+
+      this.showToast(describeRun(body), false);
       input.value = '';
       this.loadRecentScans();
 

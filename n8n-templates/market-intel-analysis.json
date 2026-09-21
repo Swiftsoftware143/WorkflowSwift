@@ -1,0 +1,193 @@
+{
+  "id": "b1f0c3a4-5d2e-4f77-9a10-6c8d1e2f3a40",
+  "name": "WS::Swift Market Intel::market-intel-analysis",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "market-intel-analysis",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "mi-webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "market-intel-analysis"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// Deterministic analysis of the page the extension scraped. No LLM: this is the\n// orchestrator leg. Every number below is derived from the payload itself.\nconst webhook = $input.first().json;\nconst body = webhook.body || webhook;\nconst aid = String(body.aid || '').trim();\nconst triggeredBy = String(body.triggered_by || '');\nconst payload = (body.payload && typeof body.payload === 'object') ? body.payload : {};\nconst meta = (body.webhook_data && typeof body.webhook_data === 'object') ? body.webhook_data : {};\nconst uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\n\nif (!uuidRe.test(aid)) {\n  return [{ json: { ok: false, error: 'aid (account id) is required and must be a UUID', received_aid: aid } }];\n}\n\n// Flatten the scraped object into dotted scalar fields so key-based signals work\n// whatever shape the platform extractor produced.\nconst flat = {};\n(function walk(node, prefix) {\n  if (node === null || node === undefined) return;\n  if (Array.isArray(node)) { node.forEach((v, i) => walk(v, prefix + '[' + i + ']')); return; }\n  if (typeof node === 'object') { Object.keys(node).forEach(k => walk(node[k], prefix ? prefix + '.' + k : k)); return; }\n  flat[prefix] = String(node);\n})(payload, '');\n\nconst keys = Object.keys(flat);\nconst text = JSON.stringify(payload) + ' ' + JSON.stringify(meta);\nconst has = (re) => keys.some(k => re.test(k) || re.test(flat[k]));\nconst pick = (names) => { for (const n of names) { const v = flat[n]; if (v) return v; } return ''; };\n\nconst email = (text.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}/) || [''])[0];\nconst phone = (text.match(/\\+?[0-9][0-9().\\-\\s]{7,}[0-9]/) || [''])[0];\nconst url = pick(['url', 'data.url', 'page_url', 'meta.url']);\nlet domain = '';\ntry { domain = new URL(url).hostname.replace(/^www\\./, ''); } catch (e) { domain = ''; }\nconst title = pick(['title', 'data.title', 'page_title']);\nconst businessName = pick(['businessName', 'business_name', 'data.businessName', 'data.business_name', 'name']) || title;\nconst platform = pick(['platform', 'source', 'data.platform']) || 'unknown';\nconst prompt = pick(['prompt']);\n\nconst STOP = new Set(['the','and','for','with','that','this','from','your','you','are','was','were','have','has','had','not','but','all','can','will','our','their','them','they','its','into','out','over','more','most','other','some','such','than','then','there','these','those','when','where','which','while','who','whom','why','how','about','above','after','again','against','because','before','below','between','both','during','each','few','her','here','him','his','itself','just','only','own','same','she','should','too','under','until','very','what','been','being','does','doing','don','http','https','www','com','html','page','site','click','read','view']);\n\nconst words = (businessName + ' ' + title + ' ' + keys.map(k => flat[k]).filter(v => v.length > 3 && v.length < 140).join(' '))\n  .toLowerCase().replace(/[^a-z0-9\\s-]/g, ' ').split(/\\s+/)\n  .filter(w => w.length > 3 && !STOP.has(w));\nconst freq = {};\nwords.forEach(w => { freq[w] = (freq[w] || 0) + 1; });\nconst keywords = Object.keys(freq).sort((a, b) => freq[b] - freq[a] || a.localeCompare(b)).slice(0, 8);\n\nconst signals = {\n  has_email: !!email,\n  has_phone: !!phone,\n  has_address: has(/address|location|city|postal|zip|street/i),\n  has_social: has(/facebook|instagram|linkedin|twitter|youtube|tiktok/i),\n  has_pricing: has(/price|pricing|cost|rate|plan|fee/i),\n  has_reviews: has(/review|rating|stars|testimonial/i),\n  has_hours: has(/hours|opening|schedule/i),\n  has_contact_name: has(/contact|owner|founder|manager/i)\n};\n\nlet score = 0;\nif (signals.has_email) score += 15;\nif (signals.has_phone) score += 15;\nif (signals.has_address) score += 10;\nif (signals.has_social) score += 10;\nif (signals.has_pricing) score += 15;\nif (signals.has_reviews) score += 10;\nif (businessName) score += 10;\nscore += Math.min(15, Math.round(keys.length / 3));\nscore = Math.max(0, Math.min(100, score));\n\nconst missing = Object.keys(signals).filter(k => signals[k] === false).map(k => k.replace(/^has_/, ''));\nconst summary = (businessName || domain || 'Page') + ': ' + keys.length + ' fields parsed, ' +\n  keywords.length + ' keywords, contact ' + ((email || phone) ? 'present' : 'missing') +\n  ', opportunity score ' + score + '/100' + (missing.length ? ', missing ' + missing.slice(0, 4).join('/') : '');\n\nconst analysis = {\n  workflow: 'market-intel-analysis',\n  business_name: businessName,\n  title: title,\n  url: url,\n  domain: domain,\n  platform: platform,\n  prompt: prompt,\n  contact: { email: email, phone: phone },\n  signals: signals,\n  keywords: keywords,\n  field_count: keys.length,\n  opportunity_score: score,\n  summary: summary,\n  analyzed_at: new Date().toISOString()\n};\n\nreturn [{ json: {\n  ok: true,\n  aid: aid,\n  triggered_by: triggeredBy,\n  analysis: analysis,\n  log_payload: { analysis: analysis, request: payload, webhook_data: meta, workflow: 'market-intel-analysis' }\n} }];\n"
+      },
+      "id": "mi-analyze",
+      "name": "Validate & Analyze",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "payload-valid",
+              "leftValue": "={{ $json.ok === true }}",
+              "rightValue": "={{ true }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "id": "mi-valid",
+      "name": "Payload valid?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ins AS (INSERT INTO extension_ingest_log (id, aid, source, payload, status) SELECT gen_random_uuid(), $1::uuid, $2::varchar, $3::jsonb, 'executed' WHERE $4::boolean AND NOT EXISTS (SELECT 1 FROM extension_ingest_log WHERE aid = $1::uuid AND source = $2::varchar AND created_at > now() - interval '5 minutes' AND payload->'request'->>'url' = $5::varchar) RETURNING id) SELECT (SELECT id FROM ins) AS ingest_id, (SELECT count(*) FROM ins) AS inserted",
+        "options": {
+          "queryReplacement": "={{ [ $json.aid, 'market-intel-analysis', JSON.stringify($json.log_payload), $json.ok, String(($json.log_payload.request && $json.log_payload.request.url) || '') ] }}"
+        }
+      },
+      "id": "mi-record",
+      "name": "Record analysis",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        660,
+        -80
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "c7f5a1b2-3d4e-4f60-8a91-b2c3d4e5f601",
+          "name": "WorkflowSwift :: extension ingest (n8n_market_intel)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": {
+          "status": "executed",
+          "workflow": "market-intel-analysis",
+          "ingest_id": "={{ $json.ingest_id }}",
+          "ingested": "={{ $json.ingest_id !== null }}",
+          "duplicate": "={{ $json.ingest_id === null }}",
+          "analysis": "={{ $('Validate & Analyze').first().json.analysis }}"
+        },
+        "options": {}
+      },
+      "id": "mi-respond-ok",
+      "name": "Respond: executed",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.2,
+      "position": [
+        880,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": {
+          "status": "rejected",
+          "workflow": "market-intel-analysis",
+          "error": "={{ $json.error }}"
+        },
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "mi-respond-bad",
+      "name": "Respond: rejected",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.2,
+      "position": [
+        660,
+        120
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Validate & Analyze",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate & Analyze": {
+      "main": [
+        [
+          {
+            "node": "Payload valid?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Payload valid?": {
+      "main": [
+        [
+          {
+            "node": "Record analysis",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond: rejected",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record analysis": {
+      "main": [
+        [
+          {
+            "node": "Respond: executed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "pinData": {},
+  "tags": [],
+  "notes": "Target of the shipped Swift Market Intel extension (workflow_id 'market-intel-analysis'). Contract: POST {aid, triggered_by, payload, webhook_data} -> 200 {status:'executed', ingest_id, analysis{...}} ; 400 {status:'rejected', error} when aid is not a UUID. Writes one aid-scoped row into extension_ingest_log through the least-privilege role n8n_market_intel (INSERT+SELECT on that table only). Authored by kanban t_dd19dc40."
+}

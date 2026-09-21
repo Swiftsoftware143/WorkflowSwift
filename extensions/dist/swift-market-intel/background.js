@@ -1,5 +1,69 @@
 importScripts('config.js'); // WORKFLOWSWIFT_API_BASE — the single source of truth
 
+// ─── Trigger-result honesty helpers (kanban t_dd19dc40) ───
+/**
+ * POST /workflows/trigger answers 2xx only when WorkflowSwift accepted the request
+ * AND n8n accepted the run (the charge follows n8n's 2xx). The body carries n8n's own
+ * status in `n8n_status`.
+ *
+ * An earlier build treated any HTTP 200 as "sent", so an n8n 404 ("webhook is not
+ * registered") was reported to the user as "✓ Request sent to WorkflowSwift" while
+ * nothing ran and one credit was burned. A send is only successful when the body
+ * says the workflow was triggered — never infer success from the HTTP status alone.
+ */
+function triggerFailureFromHttp(status, rawBody) {
+  let why = '';
+  try {
+    const parsed = rawBody ? JSON.parse(rawBody) : null;
+    why = (parsed && (parsed.message || parsed.error)) || '';
+  } catch {
+    why = (rawBody || '').slice(0, 200);
+  }
+  return `WorkflowSwift could not run the workflow (HTTP ${status}${why ? `: ${why}` : ''}). Nothing was charged.`;
+}
+
+function assertTriggered(body) {
+  if (!body || typeof body !== 'object') {
+    throw new Error('WorkflowSwift returned an empty response — the workflow did not run.');
+  }
+  const n8nStatus = body.n8n_status;
+  if (typeof n8nStatus === 'number' && n8nStatus >= 400) {
+    throw new Error(`The workflow could not run (n8n HTTP ${n8nStatus}). Nothing was charged.`);
+  }
+  if (body.status !== 'triggered') {
+    throw new Error(body.message || body.error || `Workflow did not run (status: ${body.status || 'unknown'}).`);
+  }
+  return body;
+}
+
+/** One-line description of what a successful trigger actually executed. */
+function describeTriggeredRun(body) {
+  const run = (body && body.n8n_response) || {};
+  const summary = run.analysis && run.analysis.summary;
+  if (summary) return `✓ Workflow executed — ${String(summary).slice(0, 90)}`;
+  if (run.ingest_id) return `✓ Workflow executed (run ${String(run.ingest_id).slice(0, 8)})`;
+  return '✓ Workflow executed';
+}
+
+/**
+ * The generic client error text for a non-2xx is `Server error <code>: <raw body>`,
+ * which for the trigger endpoint is a JSON blob (and for a 5xx is Cloudflare's own
+ * error page). Turn it into one readable sentence for the toast.
+ */
+function readableTriggerError(err) {
+  const text = String((err && err.message) || err || '');
+  const m = text.match(/^Server error (\d+):\s*([\s\S]*)$/);
+  if (!m) return text;
+  let why = '';
+  try {
+    const parsed = JSON.parse(m[2]);
+    why = parsed.message || parsed.error || '';
+  } catch {
+    why = m[2].slice(0, 200);
+  }
+  return `Workflow could not run (HTTP ${m[1]}${why ? `: ${why}` : ''})`;
+}
+
 // ─── workflowswift-client.js ───
 /**
  * workflowswift-client.js
@@ -179,11 +243,24 @@ const WorkflowSwiftClient = {
       timestamp: new Date().toISOString()
     };
 
-    const result = await this._fetchWithRetry(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload)
-    });
+    // retries = 0: this POST runs a workflow and bills one credit, so a blind retry
+    // can execute and charge twice. The server is authoritative — if it answers
+    // non-2xx or the body says the run did not happen, the caller decides.
+    let result;
+    try {
+      result = await this._fetchWithRetry(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload)
+      }, 0);
+    } catch (err) {
+      // One readable sentence, never a raw JSON blob in a toast.
+      throw new Error(readableTriggerError(err));
+    }
+
+    // 2xx means WorkflowSwift accepted the request; only the body says whether n8n
+    // actually ran the workflow (see assertTriggered). Check before recording.
+    assertTriggered(result);
 
     // Store in local history if requested
     if (storeLocally) {
@@ -1689,11 +1766,15 @@ async function handleScrape(tabOrId, payload = {}) {
 
     // Send to WorkflowSwift if we're connected
     let workflowResponse = null;
+    let workflowError = null;
     if (STATE.connected) {
       try {
         workflowResponse = await sendToWorkflow(tagged, payload);
       } catch (err) {
-        // Non-fatal — data is saved locally even if send fails
+        // Non-fatal — data is saved locally even if send fails. The reason is
+        // returned to the popup so it can say WHY instead of a generic failure
+        // (kanban t_dd19dc40: an n8n 404 used to read as "✓ Request sent").
+        workflowError = err.message;
         console.warn('[Swift Market Intel] Failed to send to WorkflowSwift:', err.message);
       }
     }
@@ -1705,7 +1786,8 @@ async function handleScrape(tabOrId, payload = {}) {
       data: scraped,
       tags: tagged._tags,
       sentToWorkflow: !!workflowResponse,
-      workflowResponse
+      workflowResponse,
+      workflowError
     };
 
   } catch (error) {
@@ -1994,8 +2076,12 @@ async function sendToWorkflow(data, payload = {}) {
     })
   });
 
-  if (!response.ok) throw new Error(`Server error: ${response.status}`);
-  return response.json();
+  const rawBody = await response.text();
+  if (!response.ok) throw new Error(triggerFailureFromHttp(response.status, rawBody));
+  let body = null;
+  try { body = rawBody ? JSON.parse(rawBody) : null; } catch { body = null; }
+  assertTriggered(body);
+  return body;
 }
 
 async function testConnection() {

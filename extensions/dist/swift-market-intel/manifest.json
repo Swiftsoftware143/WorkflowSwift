@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Swift Market Intel",
-  "version": "1.2.1",
+  "version": "1.2.3",
   "description": "Browser bridge for WorkflowSwift. Collect market intelligence from 12+ platforms including Etsy, Amazon, Facebook Marketplace, Shopify, and more.",
   "permissions": [
     "activeTab",
