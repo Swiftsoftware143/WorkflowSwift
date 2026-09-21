@@ -584,8 +584,9 @@ pub async fn seed_user_keys(
     Ok(())
 }
 
-/// POST /api/v1/integration-destinations/health-check
+/// POST /api/v1/user-keys/health-check
 /// Run a health check on a connected provider and update its status
+/// (mounted in the `/user-keys` nest in src/routes.rs; the path was previously documented wrong).
 pub async fn check_provider_health(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,

@@ -284,6 +284,20 @@ pub async fn advance_instance(
             Ok(resp) => {
                 let status = resp.status().as_u16();
                 let body: serde_json::Value = resp.json().await.unwrap_or(json!({"status": "ok"}));
+                crate::security::webhook_security::record_delivery(
+                    &state.db,
+                    &raw_target_id,
+                    &aid,
+                    &target_url,
+                    if (200..300).contains(&status) {
+                        "success"
+                    } else {
+                        "rejected"
+                    },
+                    Some(status as i32),
+                    None,
+                )
+                .await;
                 dispatch_results.push(json!({
                     "target_id": target_id,
                     "status": status,
@@ -291,6 +305,16 @@ pub async fn advance_instance(
                 }));
             }
             Err(e) => {
+                crate::security::webhook_security::record_delivery(
+                    &state.db,
+                    &raw_target_id,
+                    &aid,
+                    &target_url,
+                    "failed",
+                    None,
+                    Some(&e.to_string()),
+                )
+                .await;
                 dispatch_results.push(json!({
                     "target_id": target_id,
                     "status": "error",

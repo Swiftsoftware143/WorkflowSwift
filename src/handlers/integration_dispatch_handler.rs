@@ -74,16 +74,50 @@ pub async fn dispatch_integration(
     )
     .await?;
 
-    let result = forward_dispatch(&state.db, target_id, aid, &payload)
-        .await
-        .map_err(|e| AppError::Internal(format!("Dispatch failed: {}", e)))?;
+    let result = forward_dispatch(&state.db, target_id, aid, &payload).await;
 
-    Ok(Json(json!({
-        "dispatched": true,
-        "target_id": target_id_str,
-        "status": result.get("status").and_then(|v| v.as_u64()),
-        "response": result.get("body"),
-    })))
+    // Every attempt the guard allowed is counted against the target's daily quota, whichever way
+    // it ends — that row is what check_daily_limit reads on the next call.
+    match result {
+        Ok(result) => {
+            let status = result.get("status").and_then(|v| v.as_u64());
+            webhook_security::record_delivery(
+                &state.db,
+                &target_id,
+                &aid,
+                &webhook_url,
+                if status.is_some_and(|s| (200..300).contains(&s)) {
+                    "success"
+                } else {
+                    "rejected"
+                },
+                status.map(|s| s as i32),
+                None,
+            )
+            .await;
+
+            Ok(Json(json!({
+                "dispatched": true,
+                "target_id": target_id_str,
+                "status": status,
+                "response": result.get("body"),
+            })))
+        }
+        Err(e) => {
+            webhook_security::record_delivery(
+                &state.db,
+                &target_id,
+                &aid,
+                &webhook_url,
+                "failed",
+                None,
+                Some(&e),
+            )
+            .await;
+
+            Err(AppError::Internal(format!("Dispatch failed: {}", e)))
+        }
+    }
 }
 
 /// Internal: forward a payload to an integration target using stored provider keys.

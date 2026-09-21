@@ -4,7 +4,8 @@
 //! 1. Domain allowlist — the hostname of the webhook URL must be in the target's active
 //!    allowlist, unless the allowlist is empty (allow all).
 //! 2. Daily rate cap — each integration target has a configurable daily limit. We count
-//!    delivery_log entries for that target URL today and reject if over the limit.
+//!    delivery_log entries for that target today and reject if over the limit. delivery_log is
+//!    written by record_delivery, which every dispatch path must call after the attempt.
 
 use crate::error::AppError;
 use sqlx::PgPool;
@@ -42,6 +43,10 @@ pub fn validate_webhook_url(webhook_url: &str, allowed_domains: &[String]) -> Re
 
 /// Check whether a given integration target has exceeded its daily webhook limit.
 /// Returns Ok(true) if the target can fire, Ok(false) if over limit, or Err on DB failure.
+///
+/// Counts `delivery_log` rows written by `record_delivery` for this target since midnight UTC.
+/// The count keys on `target_id` (not the webhook URL) so editing a target's URL does not
+/// reset — or share — its quota with another target pointing at the same URL.
 pub async fn check_daily_limit(
     pool: &PgPool,
     target_id: &uuid::Uuid,
@@ -53,9 +58,9 @@ pub async fn check_daily_limit(
 
     let count: i64 = sqlx::query_scalar(
         r#"SELECT COUNT(*) FROM delivery_log
-           WHERE target = (SELECT webhook_url FROM integration_targets WHERE id = $1)
+           WHERE target_id = $1
              AND attempted_at >= date_trunc('day', now() AT TIME ZONE 'UTC')::timestamptz
-             AND attempted_at < date_trunc('day', now() AT TIME ZONE 'UTC')::timestamptz + INTERVAL '1 day'"#
+             AND attempted_at < date_trunc('day', now() AT TIME ZONE 'UTC')::timestamptz + INTERVAL '1 day'"#,
     )
     .bind(target_id)
     .fetch_one(pool)
@@ -67,6 +72,45 @@ pub async fn check_daily_limit(
     }
 
     Ok(true)
+}
+
+/// Record one outbound webhook attempt against a target's daily quota.
+///
+/// Must be called for every attempt the guard allowed (success, non-2xx, or transport error) —
+/// it is the only writer of `delivery_log`, so a dispatch path that skips it silently disables
+/// the daily cap for that path.
+///
+/// Never fails the caller: a lost log row degrades the rate limiter to "one free call", which is
+/// strictly better than failing a delivery that already happened. Errors are logged, not returned.
+pub async fn record_delivery(
+    pool: &PgPool,
+    target_id: &uuid::Uuid,
+    aid: &uuid::Uuid,
+    target: &str,
+    outcome: &str,
+    status_code: Option<i32>,
+    error_message: Option<&str>,
+) {
+    let res = sqlx::query(
+        r#"INSERT INTO delivery_log (target_id, aid, target, outcome, status_code, error_message)
+           VALUES ($1, $2, $3, $4, $5, $6)"#,
+    )
+    .bind(target_id)
+    .bind(aid)
+    .bind(target)
+    .bind(outcome)
+    .bind(status_code)
+    .bind(error_message)
+    .execute(pool)
+    .await;
+
+    if let Err(e) = res {
+        tracing::warn!(
+            error = %e,
+            target_id = %target_id,
+            "Failed to record webhook delivery in delivery_log (daily limit will undercount)"
+        );
+    }
 }
 
 /// Run both security checks before delivering a webhook.
@@ -83,7 +127,15 @@ pub async fn check_webhook_security(
         AppError::Forbidden(format!("Webhook blocked by security policy: {}", msg))
     })?;
 
-    // 2. Daily limit check
+    // 2. Daily limit check. A non-positive cap is a misconfigured target, not a server fault:
+    //    answer 400 instead of letting check_daily_limit's Err surface as a 500.
+    if daily_limit <= 0 {
+        return Err(AppError::BadRequest(format!(
+            "Integration target daily_limit must be greater than 0 (currently {})",
+            daily_limit
+        )));
+    }
+
     let within_limit = check_daily_limit(pool, target_id, daily_limit)
         .await
         .map_err(|msg| AppError::Internal(format!("Security check error: {}", msg)))?;
