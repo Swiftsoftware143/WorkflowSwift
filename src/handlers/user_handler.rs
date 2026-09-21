@@ -12,7 +12,41 @@ use crate::auth::models::Claims;
 use crate::email;
 use crate::error::{ApiResult, AppError};
 use crate::models::user::User;
-use crate::AppState;
+use crate::{features, AppState};
+
+/// Roles a workspace member may hold. The platform vocabulary is deliberately excluded:
+/// `user` is the account owner, `admin` is the singleton platform admin (`idx_unique_admin`
+/// allows exactly one row for it), `super_admin` is platform staff and `agency_admin` is the
+/// platform-operations role — `plan_handler` authorizes global plan list/update/delete on
+/// `admin`/`agency_admin`, so a tenant must never be able to mint one of those from its own
+/// team screen. `company_admin` is this fleet's tenant-admin role (ADASwift, IncentiveSwift,
+/// missedcallrespondr and multi-directory all write it for a tenant's own admin).
+const TENANT_ROLES: [&str; 2] = ["team_member", "company_admin"];
+
+/// Canonical tenant role for a user-supplied string, or `None` when it is not invitable.
+fn tenant_role(raw: &str) -> Option<&'static str> {
+    let r = raw.trim();
+    TENANT_ROLES.iter().find(|k| **k == r).copied()
+}
+
+/// Managing the team (invite / remove / re-role) is an admin action: a plain member must not
+/// be able to add people (each one consumes a paid seat) or widen anyone's permissions.
+fn is_tenant_admin(claims: &Claims) -> bool {
+    matches!(
+        claims.role.as_str(),
+        "user" | "company_admin" | "admin" | "super_admin" | "agency_admin"
+    )
+}
+
+fn require_tenant_admin(claims: &Claims) -> Result<(), AppError> {
+    if is_tenant_admin(claims) {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(
+            "Only the account owner or an account admin can manage the team".to_string(),
+        ))
+    }
+}
 
 /// GET /api/v1/users — list users in the current account
 pub async fn list_users(
@@ -82,6 +116,7 @@ pub async fn invite_user(
     Extension(claims): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
+    require_tenant_admin(&claims)?;
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let email = req
@@ -101,13 +136,17 @@ pub async fn invite_user(
         .to_string();
     let permissions = req.get("permissions").cloned().unwrap_or(json!({}));
 
-    // Only allow valid roles — can't create another 'user' (account owner) or 'super_admin' via invite
-    if role == "user" || role == "admin" || role == "super_admin" {
-        return Err(AppError::Validation(
-            "Cannot create account owners via invite. Use admin account creation for that."
-                .to_string(),
-        ));
-    }
+    // Only tenant-level roles are invitable. 'user' (account owner), 'admin' (singleton
+    // platform admin), 'super_admin' and 'agency_admin' (platform operations — plan CRUD)
+    // are refused: a tenant workspace must not be able to mint a platform role.
+    let role = match tenant_role(&role) {
+        Some(r) => r.to_string(),
+        None => {
+            return Err(AppError::Validation(
+                "Role must be one of: team_member, company_admin".to_string(),
+            ))
+        }
+    };
 
     if email.is_empty() || name.is_empty() {
         return Err(AppError::Validation(
@@ -115,7 +154,14 @@ pub async fn invite_user(
         ));
     }
 
-    // Check duplicate
+    // max_users is sold as a per-plan seat limit — enforce it here or the paid limit is a
+    // no-op. The count includes the account owner (Free = 2 seats = owner + 1 invitee).
+    features::enforce_feature_limit(&state.db, aid, "max_users", "Team members").await?;
+
+    // Check duplicate. Deliberately GLOBAL, not per-account: `email` is the login key
+    // (`SELECT * FROM users WHERE email = $1` in auth::handlers) and register() makes the same
+    // global check, so one email must map to exactly one user. `users_aid_email_key` alone
+    // would let two tenants own the same address and make login ambiguous.
     let existing = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE email = $1")
         .bind(&email)
         .fetch_one(&state.db)
@@ -210,8 +256,7 @@ pub async fn remove_user(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let caller_is_super = claims.perm_is_super_admin.unwrap_or(false);
-
-    // Find the user to remove
+    require_tenant_admin(&claims)?;
     let user = sqlx::query_as::<_, User>(
         "SELECT id, aid, email, password_hash, name, role, is_active, last_login_at, created_at, updated_at, perm_is_super_admin, permissions FROM users WHERE id = $1",
     )
@@ -240,8 +285,10 @@ pub async fn remove_user(
         ));
     }
 
-    // If not super_admin, can only remove team_members
-    if !caller_is_super && user.role != "team_member" {
+    // If not super_admin, can only remove tenant-level members (never the account owner or a
+    // platform role). Membership in TENANT_ROLES is what makes the team screen's Remove button
+    // reversible for every role it can hand out.
+    if !caller_is_super && !TENANT_ROLES.contains(&user.role.as_str()) {
         return Err(AppError::Forbidden(
             "You can only remove team members".to_string(),
         ));
@@ -264,6 +311,7 @@ pub async fn update_user_permissions(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let caller_is_super = claims.perm_is_super_admin.unwrap_or(false);
+    require_tenant_admin(&claims)?;
 
     let permissions = req
         .get("permissions")
@@ -292,6 +340,14 @@ pub async fn update_user_permissions(
         ));
     }
 
+    // Only tenant-level members are scoped here: the account owner's and the platform roles'
+    // scope is not tenant-editable.
+    if !caller_is_super && !TENANT_ROLES.contains(&user.role.as_str()) {
+        return Err(AppError::Forbidden(
+            "You can only scope team members".to_string(),
+        ));
+    }
+
     sqlx::query("UPDATE users SET permissions = $1::jsonb WHERE id = $2")
         .bind(permissions.to_string())
         .bind(id)
@@ -299,6 +355,75 @@ pub async fn update_user_permissions(
         .await?;
 
     Ok(Json(json!({"message": "Permissions updated"})))
+}
+
+/// PUT /api/v1/users/{id}/role — set a team member's role inside the caller's account.
+/// The card this exists for asks the team screen to *set* each role, not only show it: before
+/// this there was no way to promote a member to tenant admin (or demote one) without SQL.
+pub async fn set_user_role(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<impl IntoResponse> {
+    require_tenant_admin(&claims)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let caller_is_super = claims.perm_is_super_admin.unwrap_or(false);
+
+    let requested = req.get("role").and_then(|v| v.as_str()).unwrap_or("");
+    let role = match tenant_role(requested) {
+        Some(r) => r,
+        None => {
+            return Err(AppError::Validation(
+                "Role must be one of: team_member, company_admin".to_string(),
+            ))
+        }
+    };
+
+    let user = sqlx::query_as::<_, User>(
+        "SELECT id, aid, email, password_hash, name, role, is_active, last_login_at, created_at, updated_at, perm_is_super_admin, permissions FROM users WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("User not found".to_string()))?;
+
+    if user.aid != aid && !caller_is_super {
+        return Err(AppError::Forbidden(
+            "User is not in your account".to_string(),
+        ));
+    }
+
+    // Never re-role the account owner, the super admin, or a platform role.
+    if user.perm_is_super_admin || user.role == "user" {
+        return Err(AppError::Forbidden(
+            "The account owner's role cannot be changed".to_string(),
+        ));
+    }
+    if !TENANT_ROLES.contains(&user.role.as_str()) {
+        return Err(AppError::Forbidden(
+            "Only team members can be re-roled".to_string(),
+        ));
+    }
+
+    // Self-demotion on the last admin is how a workspace locks itself out.
+    let caller_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+    if user.id == caller_id {
+        return Err(AppError::Validation(
+            "You cannot change your own role".to_string(),
+        ));
+    }
+
+    sqlx::query("UPDATE users SET role = $1, updated_at = now() WHERE id = $2")
+        .bind(role)
+        .bind(id)
+        .execute(&state.db)
+        .await?;
+
+    Ok(Json(json!({
+        "message": "Role updated",
+        "user": { "id": user.id, "email": user.email, "name": user.name, "role": role }
+    })))
 }
 
 #[derive(Deserialize)]

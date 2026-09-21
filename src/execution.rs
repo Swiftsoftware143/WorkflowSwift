@@ -854,17 +854,32 @@ mod tests {
         assert_eq!(classify_step_status(&json!({"status": 404})), "failed");
         assert_eq!(classify_step_status(&json!({"status": 503})), "failed");
         // Named statuses keep their meaning.
-        assert_eq!(classify_step_status(&json!({"status": "pending"})), "pending");
+        assert_eq!(
+            classify_step_status(&json!({"status": "pending"})),
+            "pending"
+        );
         assert_eq!(classify_step_status(&json!({"status": "error"})), "failed");
-        assert_eq!(classify_step_status(&json!({"status": "skipped"})), "skipped");
+        assert_eq!(
+            classify_step_status(&json!({"status": "skipped"})),
+            "skipped"
+        );
         assert_eq!(classify_step_status(&json!({})), "completed");
     }
 
     #[test]
     fn error_text_prefers_the_reason_and_falls_back_to_the_code() {
-        assert_eq!(step_error_text(&json!({"error": "boom"})).as_deref(), Some("boom"));
-        assert_eq!(step_error_text(&json!({"reason": "No URL configured"})).as_deref(), Some("No URL configured"));
-        assert_eq!(step_error_text(&json!({"status": 404})).as_deref(), Some("upstream returned HTTP 404"));
+        assert_eq!(
+            step_error_text(&json!({"error": "boom"})).as_deref(),
+            Some("boom")
+        );
+        assert_eq!(
+            step_error_text(&json!({"reason": "No URL configured"})).as_deref(),
+            Some("No URL configured")
+        );
+        assert_eq!(
+            step_error_text(&json!({"status": 404})).as_deref(),
+            Some("upstream returned HTTP 404")
+        );
         assert_eq!(step_error_text(&json!({"status": "completed"})), None);
     }
 }

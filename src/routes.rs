@@ -201,7 +201,8 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/{id}/permissions",
             put(handlers::user_handler::update_user_permissions),
-        );
+        )
+        .route("/{id}/role", put(handlers::user_handler::set_user_role));
 
     // ── Workspace routes ──
     let workspace_routes = Router::new()

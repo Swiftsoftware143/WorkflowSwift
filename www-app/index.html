@@ -136,6 +136,7 @@ const API = (() => {
     listUsers: () => fetch(base + '/users', { headers: headers() }).then(handle),
     inviteUser: (b) => fetch(base + '/users/invite', { method:'POST', headers: headers(), body: JSON.stringify(b) }).then(handle),
     setUserPermissions: (id, permissions) => fetch(base + '/users/' + encodeURIComponent(id) + '/permissions', { method:'PUT', headers: headers(), body: JSON.stringify({ permissions }) }).then(handle),
+    setUserRole: (id, role) => fetch(base + '/users/' + encodeURIComponent(id) + '/role', { method:'PUT', headers: headers(), body: JSON.stringify({ role }) }).then(handle),
     removeUser: (id) => fetch(base + '/users/' + encodeURIComponent(id), { method:'DELETE', headers: headers() }).then(handle),
     // --- Panel wiring: endpoints that were served but reachable from no shipped surface ---
     getTimeline: () => fetch(base + '/dashboard/timeline', { headers: headers() }).then(handle),
@@ -817,8 +818,16 @@ const copyApiKey = async () => { const t = S.newApiKey || ''; try { await naviga
 // DELETE /users/{id}; no served surface called any of them, so a tenant could not add,
 // re-scope or remove a team member from the product at all.
 const TEAM_PERMS = ['dashboard','workflows','templates','instances','automations','leads','surfaces','prospecting','brand_monitor','competitors','credits','api_keys','tickets'];
-const teamRoleLabel = (r) => ({ user:'Owner', admin:'Admin', super_admin:'Super admin', agency_admin:'Agency admin', team_member:'Team member' })[r] || r || '—';
+const teamRoleLabel = (r) => ({ user:'Owner', admin:'Admin', super_admin:'Super admin', agency_admin:'Agency admin', company_admin:'Admin', team_member:'Team member' })[r] || r || '—';
 const permChips = (p) => { const ks = Object.keys(p || {}).filter(k => p[k]); return ks.length ? ks.join(', ') : 'none'; };
+// The two roles a workspace can hand out. `user` (owner), `admin`/`agency_admin` (platform) and
+// `super_admin` are not tenant-editable — the API refuses them, so the screen does not offer them.
+const TEAM_ROLES = ['team_member','company_admin'];
+const teamEditable = (r) => TEAM_ROLES.indexOf(r) !== -1;
+const teamRoleName = (r) => r === 'company_admin' ? 'Admin' : 'Member';
+// Only account admins can manage the team (the API enforces it too). Unknown role -> show the
+// controls and let the server answer, so a missing field never locks an owner out.
+const teamAmAdmin = () => { const r = (API.user || {}).role; return !r || ['user','company_admin','admin','super_admin','agency_admin'].indexOf(r) !== -1; };
 
 const TeamView = () => {
   if (!S.users && !S.loading) loadUsers();
@@ -830,7 +839,7 @@ const TeamView = () => {
         <div><h1 class="text-xl font-extrabold text-gray-900">Team</h1><p class="text-sm text-gray-500 mt-1">Invite people to this account, scope what they can reach, and remove them.</p></div>
         <div class="flex gap-2">
           <button class="btn-outline text-sm" onClick=${loadUsers} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button>
-          <button class="btn text-sm" onClick=${()=>{S.invited=null;S.teamErr=null;S.modal='invite';renderApp();}}>+ Invite Member</button>
+          ${teamAmAdmin() ? html`<button class="btn text-sm" onClick=${()=>{S.invited=null;S.teamErr=null;S.modal='invite';renderApp();}}>+ Invite Member</button>` : ''}
         </div>
       </header>
       ${fresh ? html`<div class="card" style="border:2px solid #16a34a">
@@ -846,16 +855,31 @@ const TeamView = () => {
         ${list.map(u => html`<tr key=${u.id}>
           <td class="font-semibold">${u.name || '—'}</td>
           <td>${u.email || '—'}</td>
-          <td>${teamRoleLabel(u.role)}</td>
+          <td>${teamEditable(u.role) && teamAmAdmin() ? html`
+            <select class="input" style="padding:4px 8px;font-size:13px;width:auto" value=${u.role} disabled=${S.loading} onChange=${e=>setMemberRole(u, e.target.value)}>
+              <option value="team_member">Member</option>
+              <option value="company_admin">Admin</option>
+            </select>` : html`<span>${teamRoleLabel(u.role)}</span>`}</td>
           <td>${statusBadge(u.is_active === false ? 'paused' : 'active')}</td>
           <td style="font-size:12px;color:#64748b">${permChips(u.permissions)}</td>
           <td class="text-right whitespace-nowrap">
-            <button class="btn-outline text-xs" onClick=${()=>{S.permsTarget=u;S.modalErr=null;S.modal='perms';renderApp();}}>Permissions</button>
-            ${u.role === 'user' || u.role === 'super_admin' ? '' : html`<button class="btn-red text-xs" style="margin-left:6px" onClick=${()=>removeTeamMember(u)}>Remove</button>`}
+            ${teamEditable(u.role) ? html`
+              <button class="btn-outline text-xs" onClick=${()=>{S.permsTarget=u;S.modalErr=null;S.modal='perms';renderApp();}}>Permissions</button>
+              <button class="btn-red text-xs" style="margin-left:6px" onClick=${()=>removeTeamMember(u)}>Remove</button>
+            ` : html`<span class="text-xs" style="color:#94a3b8">view only</span>`}
           </td></tr>`)}
       </tbody></table></div>`}
-      <p class="text-xs text-gray-500 mt-2">Roles: Owner and Super admin cannot be invited or removed here. Team members lose access the moment they are removed.</p>
+      <p class="text-xs text-gray-500 mt-2">Roles: <strong>Member</strong> can reach only what you tick for them; <strong>Admin</strong> can manage the team too. The account owner and platform roles are view-only here — they cannot be invited, re-roled or removed.</p>
+      <p class="text-xs text-gray-500 mt-1">Seats: your plan's user allowance (Free includes 2: you plus one teammate). Inviting past it is refused until you upgrade.</p>
     </div>`;
+};
+const setMemberRole = async (u, role) => {
+  const who = u.name || u.email;
+  if (!confirm('Change ' + who + ' to ' + teamRoleName(role) + '?')) { S.users = null; loadUsers(); return; }
+  S.loading = true; renderApp();
+  try { await API.setUserRole(u.id, role); toast(who + ' is now ' + teamRoleName(role)); }
+  catch(e){ toast(e.message,'err'); }
+  S.users = null; S.loading = false; loadUsers();
 };
 const loadUsers = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.users = (await API.listUsers()).users || []; } catch(e){ toast(e.message,'err'); S.users=[]; } S.loading=false; renderApp(); };
 const removeTeamMember = async (u) => {
@@ -882,9 +906,10 @@ const InviteModal = () => {
     <div class="mb-4"><label class="label">Email</label><input class="input" onInput=${e=>email=e.target.value} placeholder="jordan@company.com" /></div>
     <div class="mb-4"><label class="label">Role</label>
       <select class="input" onChange=${e=>role=e.target.value}>
-        <option value="team_member">Team member</option>
-        <option value="agency_admin">Agency admin</option>
-      </select></div>
+        <option value="team_member">Member — only the permissions you tick below</option>
+        <option value="company_admin">Admin — full workspace access, can manage the team</option>
+      </select>
+      <p class="text-xs text-gray-500 mt-1">Platform roles (super admin, agency admin) cannot be granted from a workspace.</p></div>
     <div class="mb-4"><label class="label">Permissions</label>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 14px">${TEAM_PERMS.map(k=>html`<label style="font-size:13px;display:flex;gap:8px;align-items:center"><input type="checkbox" onChange=${e=>{perms[k]=e.target.checked;}} />${k.replace(/_/g,' ')}</label>`)}</div></div>
     ${S.modalErr && html`<div style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:12px;border-radius:10px;font-size:13px;margin-bottom:16px">${S.modalErr}</div>`}
