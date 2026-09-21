@@ -212,7 +212,7 @@ async fn fire_n8n_webhook(
         let message = format!(
             "n8n refused the trigger (HTTP {}): {}. Nothing ran, so no credit was charged.",
             status_code.as_u16(),
-            body.to_string().chars().take(300).collect::<String>()
+            n8n_reason(&body).trim_end_matches(|c: char| c == '.' || c.is_whitespace())
         );
         // A 4xx from n8n is a configuration answer the caller can act on (webhook
         // not registered, workflow not active, malformed trigger), and it has to
@@ -254,6 +254,23 @@ async fn fire_n8n_webhook(
         "n8n_response": body,
         "remaining_balance": new_balance,
     })))
+}
+
+/// n8n's reason for refusing, in a form a human can read.
+///
+/// An n8n 404 body is ~430 bytes of JSON, and truncating it at 300 cuts exactly the
+/// sentence that tells the caller what to fix (`…"message":"The requested webhook
+/// "POST x" is not registered.`). Prefer the machine-readable `message`, then `hint`
+/// (which names the fix: activate the workflow), and only fall back to a blob.
+fn n8n_reason(body: &serde_json::Value) -> String {
+    for key in ["message", "hint"] {
+        if let Some(text) = body.get(key).and_then(|v| v.as_str()) {
+            if !text.is_empty() {
+                return text.to_string();
+            }
+        }
+    }
+    body.to_string().chars().take(300).collect()
 }
 
 pub async fn check_n8n_health(
