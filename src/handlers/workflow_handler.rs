@@ -174,30 +174,60 @@ pub async fn delete_workflow(
     Ok(Json(json!({"message": "Workflow deleted"})))
 }
 
-pub async fn start_workflow(
-    State(state): State<AppState>,
-    Extension(claims): Extension<Claims>,
-    Path(id): Path<Uuid>,
-    Json(req): Json<serde_json::Value>,
-) -> ApiResult<impl IntoResponse> {
-    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    features::enforce_feature_limit(&state.db, aid, "max_instances", "Instances").await?;
-
-    let client_id = req
+/// How a user-facing run resolves the client the instance belongs to.
+/// `workflow_instances.client_id` is NOT NULL, so a body without `client_id`
+/// falls back to the account's system client instead of failing.
+async fn resolve_client_id(
+    state: &AppState,
+    aid: Uuid,
+    req: &serde_json::Value,
+) -> Result<Uuid, AppError> {
+    if let Some(cid) = req
         .get("client_id")
         .and_then(|v| v.as_str())
         .and_then(|s| Uuid::parse_str(s).ok())
-        .ok_or(AppError::Validation("client_id is required".to_string()))?;
+    {
+        let owned: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM clients WHERE id = $1 AND aid = $2")
+                .bind(cid)
+                .bind(aid)
+                .fetch_optional(&state.db)
+                .await?;
+        return owned.ok_or_else(|| {
+            AppError::Validation("client_id does not belong to this account".to_string())
+        });
+    }
+    crate::execution::find_or_create_system_client(&state.db, aid, "manual").await
+}
 
-    let workflow =
-        sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE id = $1 AND aid = $2")
-            .bind(id)
-            .bind(aid)
-            .fetch_optional(&state.db)
-            .await?
-            .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
+struct RunOutcome {
+    instance_id: Uuid,
+    status: String,
+    steps: Vec<serde_json::Value>,
+    warnings: Vec<String>,
+    n8n: serde_json::Value,
+    remaining_balance: i64,
+}
 
-    // Check credits
+/// The ONE user-facing execution path. Creates the instance row, executes every
+/// step in this process, charges one credit, then *optionally* mirrors the
+/// workflow into n8n — but only when the tenant's plan enables `n8n_deploy`,
+/// and only ever as a warning. Nothing here can turn Run into a 500.
+async fn run_in_process(
+    state: &AppState,
+    aid: Uuid,
+    workflow: &Workflow,
+    client_id: Uuid,
+    req: &serde_json::Value,
+    triggered_by: &str,
+) -> Result<RunOutcome, AppError> {
+    let steps = crate::execution::load_steps(&state.db, workflow.id).await?;
+    if steps.is_empty() {
+        return Err(AppError::BadRequest(
+            "Workflow has no steps. Add at least one step before running.".to_string(),
+        ));
+    }
+
     let balance: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
     )
@@ -212,144 +242,24 @@ pub async fn start_workflow(
         ));
     }
 
-    let instance_id = Uuid::new_v4();
     let name = req
         .get("name")
         .and_then(|v| v.as_str())
         .unwrap_or(&workflow.name)
         .to_string();
+    let payload = req.get("payload").cloned().unwrap_or_else(|| json!({}));
 
-    // Define callback base URL for n8n node callbacks
-    let callback_base_url = std::env::var("CALLBACK_BASE_URL")
-        .unwrap_or_else(|_| "http://workflowswift:8085".to_string());
+    // 1. the instance exists before anything else — a run always leaves a row.
+    let instance_id =
+        crate::execution::create_instance(&state.db, workflow.id, aid, client_id, &name, "running")
+            .await?;
 
-    // Check if already deployed; if not, deploy now
-    let needs_deploy = match &workflow.lifecycle_summary {
-        Some(summary) => !summary.contains("n8n_deployed"),
-        None => true,
-    };
+    // 2. execute every step here and now.
+    let ctx = crate::execution::StepContext::manual(aid, workflow.id, triggered_by, payload);
+    let outcome =
+        crate::execution::execute_steps(state, aid, workflow.id, instance_id, &ctx).await?;
 
-    let webhook_path = if needs_deploy {
-        let steps = sqlx::query_as::<_, WorkflowStep>(
-            "SELECT * FROM workflow_steps WHERE workflow_id = $1 ORDER BY sort_order ASC",
-        )
-        .bind(id)
-        .fetch_all(&state.db)
-        .await?;
-
-        if steps.is_empty() {
-            return Err(AppError::BadRequest(
-                "Workflow has no steps. Add at least one step before running.".to_string(),
-            ));
-        }
-
-        let step_values: Vec<serde_json::Value> = steps
-            .iter()
-            .map(|s| {
-                json!({
-                    "step_type": s.step_type,
-                    "name": s.name,
-                    "description": s.description,
-                    "sort_order": s.sort_order,
-                    "config": s.config,
-                })
-            })
-            .collect();
-
-        let n8n_wf = n8n_converter::convert_steps_to_n8n(&step_values, aid, id, &callback_base_url);
-        let n8n_json = n8n_converter::to_n8n_json(&n8n_wf);
-        let n8n_json_str = serde_json::to_string_pretty(&n8n_json)
-            .map_err(|e| AppError::Internal(format!("JSON serialization: {}", e)))?;
-
-        // Import via n8n CLI on user-n8n-main container
-        // n8n CE doesn't expose REST API without owner auth, so use docker exec
-        let temp_path = format!("/tmp/wfs_run_{}.json", id);
-        tokio::fs::write(&temp_path, &n8n_json_str)
-            .await
-            .map_err(|e| AppError::Internal(format!("Write temp file: {}", e)))?;
-
-        use std::process::Command as StdCommand;
-        let _ = StdCommand::new("docker")
-            .args(["cp", &temp_path, "user-n8n-main:/tmp/"])
-            .output();
-
-        let import_filename = format!("wfs_run_{}.json", id);
-        let import_output = StdCommand::new("docker")
-            .args([
-                "exec",
-                "user-n8n-main",
-                "n8n",
-                "import:workflow",
-                &format!("--input=/tmp/{}", import_filename),
-                "--activeState=fromJson",
-            ])
-            .output()
-            .map_err(|e| AppError::Internal(format!("n8n import exec failed: {}", e)))?;
-
-        if !import_output.status.success() {
-            let stderr = String::from_utf8_lossy(&import_output.stderr);
-            let _ = tokio::fs::remove_file(&temp_path).await;
-            return Err(AppError::Internal(format!("n8n import failed: {}", stderr)));
-        }
-
-        let _ = tokio::fs::remove_file(&temp_path).await;
-        let _ = StdCommand::new("docker")
-            .args([
-                "exec",
-                "user-n8n-main",
-                "rm",
-                &format!("/tmp/{}", import_filename),
-            ])
-            .output();
-
-        let _ = sqlx::query("UPDATE workflows SET lifecycle_summary = $1 WHERE id = $2")
-            .bind(
-                json!({
-                    "n8n_deployed": true,
-                    "n8n_webhook_path": n8n_wf.webhook_path,
-                    "deployed_at": chrono::Utc::now().to_rfc3339(),
-                })
-                .to_string(),
-            )
-            .bind(id)
-            .execute(&state.db)
-            .await;
-
-        n8n_wf.webhook_path
-    } else {
-        // Extract from lifecycle summary
-        let summary: serde_json::Value = workflow
-            .lifecycle_summary
-            .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or(json!({}));
-        summary
-            .get("n8n_webhook_path")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string()
-    };
-
-    if webhook_path.is_empty() {
-        return Err(AppError::Internal(
-            "Failed to determine webhook path for this workflow.".to_string(),
-        ));
-    }
-
-    // Create instance record
-    sqlx::query(
-        r#"INSERT INTO workflow_instances (id, workflow_id, client_id, aid, name, status, started_at)
-           VALUES ($1, $2, $3, $4, $5, 'running', NOW())"#,
-    )
-    .bind(instance_id)
-    .bind(id)
-    .bind(client_id)
-    .bind(aid)
-    .bind(&name)
-    .execute(&state.db)
-    .await?;
-
-    // Deduct 1 execution credit
+    // 3. charge only now that the run has actually happened.
     sqlx::query(
         r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
            VALUES ($1, $2, -1, 'workflow_execution', $3)"#,
@@ -360,90 +270,197 @@ pub async fn start_workflow(
     .execute(&state.db)
     .await?;
 
-    // Trigger n8n webhook with instance context
-    let n8n_url = format!(
-        "{}/webhook/{}",
-        state.config.n8n_webhook_url.trim_end_matches('/'),
-        webhook_path
-    );
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|e| AppError::Internal(format!("HTTP client: {}", e)))?;
-
-    let trigger_payload = json!({
-        "instance_id": instance_id.to_string(),
-        "workflow_id": id.to_string(),
-        "aid": claims.aid,
-        "triggered_by": claims.sub,
-        "client_id": client_id.to_string(),
-        "payload": req.get("payload").cloned().unwrap_or(json!({})),
-        "callback_url": format!("{}/api/v1/instances/{}/callback", callback_base_url, instance_id),
-        "dashboard_url": format!("{}/api/v1/dashboard/push-widget-data", callback_base_url),
-        "headers": {
-            "authorization": req.get("authorization").and_then(|v| v.as_str()).unwrap_or(""),
-        }
-    });
-
-    // Fire-and-forget the n8n trigger in background
-    let db = state.db.clone();
-    let inst_id = instance_id;
-    let wf_name = workflow.name.clone();
-    let tid = aid;
-
-    tokio::spawn(async move {
-        match client.post(&n8n_url).json(&trigger_payload).send().await {
-            Ok(resp) => {
-                let status_code = resp.status().as_u16();
-                if (200..300).contains(&status_code) {
-                    tracing::info!(instance_id = %inst_id, "n8n accepted workflow");
-                } else {
-                    let _ = sqlx::query(
-                        "UPDATE workflow_instances SET status = 'failed', completed_at = NOW() WHERE id = $1"
-                    )
-                    .bind(inst_id)
-                    .execute(&db)
-                    .await;
-                    let _ = sqlx::query(
-                        r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
-                           VALUES ($1, $2, 1, 'refund', $3)"#
-                    )
-                    .bind(Uuid::new_v4())
-                    .bind(tid)
-                    .bind(format!("Refund for failed execution: {}", wf_name))
-                    .execute(&db)
-                    .await;
-                    tracing::warn!(instance_id = %inst_id, status = status_code, "n8n rejected workflow");
+    // 4. n8n mirror — optional, per-plan, never fatal.
+    let mut warnings: Vec<String> = Vec::new();
+    let n8n = match features::plan_flag(&state.db, aid, "n8n_deploy").await {
+        Ok(false) => json!({
+            "requested": false,
+            "deployed": false,
+            "skipped": "plan does not include n8n_deploy"
+        }),
+        Ok(true) => {
+            if state.config.n8n_api_key.trim().is_empty() {
+                warnings.push(
+                    "n8n mirror skipped: n8n deployment is enabled on your plan but no n8n API key is provisioned on this fleet. The workflow ran in-process."
+                        .to_string(),
+                );
+                json!({
+                    "requested": true,
+                    "deployed": false,
+                    "error": "no n8n API key provisioned on this fleet"
+                })
+            } else {
+                match mirror_to_n8n(state, aid, workflow).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        warnings.push(format!("n8n mirror failed: {}", e));
+                        json!({ "requested": true, "deployed": false, "error": e })
+                    }
                 }
             }
-            Err(e) => {
-                let _ = sqlx::query(
-                    "UPDATE workflow_instances SET status = 'failed', completed_at = NOW() WHERE id = $1"
-                )
-                .bind(inst_id)
-                .execute(&db)
-                .await;
-                let _ = sqlx::query(
-                    r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
-                       VALUES ($1, $2, 1, 'refund', $3)"#
-                )
-                .bind(Uuid::new_v4())
-                .bind(tid)
-                .bind(format!("Refund for n8n error: {}", wf_name))
-                .execute(&db)
-                .await;
-                tracing::error!(instance_id = %inst_id, error = %e, "n8n webhook call failed");
-            }
         }
-    });
+        Err(e) => {
+            warnings.push(format!("n8n mirror skipped: plan flag unreadable: {}", e));
+            json!({ "requested": true, "deployed": false, "error": "plan flag unreadable" })
+        }
+    };
+
+    let remaining_balance: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
+    )
+    .bind(aid)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0);
+
+    let _ =
+        sqlx::query("UPDATE workflow_instances SET result = $1, updated_at = NOW() WHERE id = $2")
+            .bind(json!({
+                "runner": "in_process",
+                "steps_total": outcome.steps.len(),
+                "warnings": warnings,
+                "n8n": n8n,
+            }))
+            .bind(instance_id)
+            .execute(&state.db)
+            .await;
+
+    Ok(RunOutcome {
+        instance_id,
+        status: outcome.status,
+        steps: outcome.steps,
+        warnings,
+        n8n,
+        remaining_balance,
+    })
+}
+
+/// Mirror a workflow into n8n over its REST API with an API key.
+/// Called only when the plan enables `n8n_deploy`; the caller turns any Err
+/// into a warning. Never uses docker: this container has no docker binary and
+/// no docker socket.
+async fn mirror_to_n8n(
+    state: &AppState,
+    aid: Uuid,
+    workflow: &Workflow,
+) -> Result<serde_json::Value, String> {
+    let api_key = state.config.n8n_api_key.trim();
+    if api_key.is_empty() {
+        return Err("no n8n API key is provisioned on this fleet".to_string());
+    }
+
+    let steps = crate::execution::load_steps(&state.db, workflow.id)
+        .await
+        .map_err(|e| format!("{}", e))?;
+    if steps.is_empty() {
+        return Err("workflow has no steps".to_string());
+    }
+
+    let step_values: Vec<serde_json::Value> = steps
+        .iter()
+        .map(|s| {
+            json!({
+                "step_type": s.step_type,
+                "name": s.name,
+                "description": serde_json::Value::Null,
+                "sort_order": s.sort_order,
+                "config": s.config,
+            })
+        })
+        .collect();
+
+    let callback_base_url = std::env::var("CALLBACK_BASE_URL")
+        .unwrap_or_else(|_| "http://workflowswift:8085".to_string());
+    let n8n_wf =
+        n8n_converter::convert_steps_to_n8n(&step_values, aid, workflow.id, &callback_base_url);
+    let n8n_json = n8n_converter::to_n8n_json(&n8n_wf);
+
+    // n8n's public REST API (the one an API key works against).
+    let url = format!(
+        "{}/api/v1/workflows",
+        state.config.n8n_url.trim_end_matches('/')
+    );
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client: {}", e))?;
+
+    let resp = client
+        .post(&url)
+        .header("X-N8N-API-KEY", api_key)
+        .json(&n8n_json)
+        .send()
+        .await
+        .map_err(|e| format!("n8n request failed: {}", e))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        let body = body.chars().take(200).collect::<String>();
+        return Err(format!("n8n rejected the import ({}) {}", status, body));
+    }
+
+    let _ = sqlx::query("UPDATE workflows SET lifecycle_summary = $1 WHERE id = $2")
+        .bind(
+            json!({
+                "n8n_deployed": true,
+                "n8n_webhook_path": n8n_wf.webhook_path,
+                "deployed_at": chrono::Utc::now().to_rfc3339(),
+            })
+            .to_string(),
+        )
+        .bind(workflow.id)
+        .execute(&state.db)
+        .await;
+
+    Ok(json!({
+        "requested": true,
+        "deployed": true,
+        // The steps already ran in-process, so re-triggering n8n here would
+        // execute the same workflow twice (duplicate emails/API calls).
+        "triggered": false,
+        "trigger_note": "steps were executed in-process; the n8n copy is available for external triggers",
+        "webhook_path": n8n_wf.webhook_path,
+        "name": n8n_wf.name,
+        "node_count": n8n_wf.nodes.len(),
+    }))
+}
+
+/// POST /api/v1/workflows/{id}/start — start a workflow now (optional body).
+pub async fn start_workflow(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(id): Path<Uuid>,
+    body: Option<Json<serde_json::Value>>,
+) -> ApiResult<impl IntoResponse> {
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    features::enforce_feature_limit(&state.db, aid, "max_instances", "Instances").await?;
+
+    let req = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
+
+    let workflow =
+        sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE id = $1 AND aid = $2")
+            .bind(id)
+            .bind(aid)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
+
+    let client_id = resolve_client_id(&state, aid, &req).await?;
+    let run = run_in_process(&state, aid, &workflow, client_id, &req, &claims.sub).await?;
 
     Ok((
         StatusCode::CREATED,
         Json(json!({
-            "instance_id": instance_id.to_string(),
-            "status": "running",
-            "webhook_path": webhook_path,
-            "message": format!("Workflow '{}' started. Check instance for results.", workflow.name)
+            "instance_id": run.instance_id.to_string(),
+            "status": run.status,
+            "execution": "in_process",
+            "steps_total": run.steps.len(),
+            "steps": run.steps,
+            "n8n": run.n8n,
+            "warnings": run.warnings,
+            "remaining_balance": run.remaining_balance,
+            "message": format!("Workflow '{}' started: instance created and steps executed.", workflow.name)
         })),
     ))
 }
@@ -635,6 +652,9 @@ pub async fn reorder_workflow_steps(
 /// POST /api/v1/workflows/:id/deploy — convert WorkflowSwift steps to n8n and import
 /// Generates an n8n-compatible workflow JSON from the stored steps,
 /// and imports it via the n8n REST API using `POST /rest/workflows`.
+/// POST /api/v1/workflows/{id}/deploy — mirror a workflow into n8n.
+/// Plan-gated on `n8n_deploy`; a failure here is reported plainly instead of
+/// surfacing as an opaque 500. Deploying never runs the workflow.
 pub async fn deploy_workflow_to_n8n(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -651,102 +671,50 @@ pub async fn deploy_workflow_to_n8n(
             .await?
             .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
-    let steps = sqlx::query_as::<_, WorkflowStep>(
-        "SELECT * FROM workflow_steps WHERE workflow_id = $1 ORDER BY sort_order ASC",
-    )
-    .bind(id)
-    .fetch_all(&state.db)
-    .await?;
-
+    let steps = crate::execution::load_steps(&state.db, workflow.id).await?;
     if steps.is_empty() {
         return Err(AppError::BadRequest(
             "Workflow has no steps. Add at least one step before deploying.".to_string(),
         ));
     }
 
-    // Convert to n8n JSON via the converter
-    let step_values: Vec<serde_json::Value> = steps
-        .iter()
-        .map(|s| {
-            json!({
-                "step_type": s.step_type,
-                "name": s.name,
-                "description": s.description,
-                "sort_order": s.sort_order,
-                "config": s.config,
-            })
-        })
-        .collect();
-
-    let callback_base_url = std::env::var("CALLBACK_BASE_URL")
-        .unwrap_or_else(|_| "http://workflowswift:8085".to_string());
-    let n8n_wf = n8n_converter::convert_steps_to_n8n(&step_values, aid, id, &callback_base_url);
-    let n8n_json = n8n_converter::to_n8n_json(&n8n_wf);
-
-    // Deploy via n8n REST API
-    let n8n_api_url = format!(
-        "{}/rest/workflows",
-        state.config.n8n_url.trim_end_matches('/')
-    );
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| AppError::Internal(format!("HTTP client: {}", e)))?;
-
-    let mut req_builder = client.post(&n8n_api_url).json(&n8n_json);
-    if !state.config.n8n_api_key.is_empty() {
-        req_builder = req_builder.header("X-N8N-API-KEY", &state.config.n8n_api_key);
+    match mirror_to_n8n(&state, aid, &workflow).await {
+        Ok(v) => Ok(Json(json!({
+            "deployed": true,
+            "webhook_path": v.get("webhook_path").cloned().unwrap_or(serde_json::Value::Null),
+            "name": v.get("name").cloned().unwrap_or(serde_json::Value::Null),
+            "node_count": v.get("node_count").cloned().unwrap_or(serde_json::Value::Null),
+            "message": "Workflow deployed to n8n via its REST API."
+        }))),
+        Err(e) => Err(AppError::BadRequest(format!(
+            "n8n deployment failed: {}",
+            e
+        ))),
     }
-
-    let api_resp = req_builder
-        .send()
-        .await
-        .map_err(|e| AppError::Internal(format!("n8n API request failed: {}", e)))?;
-
-    let api_status = api_resp.status();
-    if !api_status.is_success() {
-        let error_text = api_resp
-            .text()
-            .await
-            .unwrap_or_else(|_| "unknown error".to_string());
-        return Err(AppError::Internal(format!(
-            "n8n workflow import failed ({}): {}",
-            api_status, error_text
-        )));
-    }
-
-    // Store the webhook path so the frontend can trigger it
-    sqlx::query("UPDATE workflows SET lifecycle_summary = $1 WHERE id = $2")
-        .bind(
-            json!({
-                "n8n_deployed": true,
-                "n8n_webhook_path": n8n_wf.webhook_path,
-                "deployed_at": chrono::Utc::now().to_rfc3339(),
-            })
-            .to_string(),
-        )
-        .bind(id)
-        .execute(&state.db)
-        .await?;
-
-    Ok(Json(json!({
-        "deployed": true,
-        "webhook_path": n8n_wf.webhook_path,
-        "name": n8n_wf.name,
-        "node_count": n8n_wf.nodes.len(),
-        "message": "Workflow deployed to n8n via REST API. Trigger it from the workflow runner."
-    })))
 }
 
 /// POST /api/v1/workflows/:id/run — deploy (if needed) and execute the workflow
 /// Deploys the workflow to n8n if not yet deployed, then triggers the webhook.
+/// POST /api/v1/workflows/{id}/run — execute the workflow NOW, in this process.
+///
+/// The steps run through the shared engine (crate::execution) — the same code
+/// that serves POST /api/v1/incoming. n8n is NOT a dependency of Run: when the
+/// tenant's plan enables `n8n_deploy` the workflow is additionally mirrored
+/// into n8n, and any problem there is surfaced as a warning, never as a failed
+/// run. A run always leaves a `workflow_instances` row behind; a 200 without an
+/// instance row is not a run.
 pub async fn run_workflow(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
-    Json(req): Json<serde_json::Value>,
+    body: Option<Json<serde_json::Value>>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    features::enforce_feature_limit(&state.db, aid, "max_instances", "Instances").await?;
+
+    // The shipped SPA posts with no body at all; treat that as an empty object
+    // rather than rejecting the request.
+    let req = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
 
     let workflow =
         sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE id = $1 AND aid = $2")
@@ -756,186 +724,25 @@ pub async fn run_workflow(
             .await?
             .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
-    // Check if already deployed; if not, deploy first
-    let needs_deploy = match &workflow.lifecycle_summary {
-        Some(summary) => !summary.contains("n8n_deployed"),
-        None => true,
-    };
+    let client_id = resolve_client_id(&state, aid, &req).await?;
+    let run = run_in_process(&state, aid, &workflow, client_id, &req, &claims.sub).await?;
 
-    if needs_deploy {
-        let steps = sqlx::query_as::<_, WorkflowStep>(
-            "SELECT * FROM workflow_steps WHERE workflow_id = $1 ORDER BY sort_order ASC",
+    Ok(Json(json!({
+        "status": run.status,
+        "instance_id": run.instance_id.to_string(),
+        "execution": "in_process",
+        "workflow": workflow.name,
+        "steps_total": run.steps.len(),
+        "steps": run.steps,
+        "n8n": run.n8n,
+        "warnings": run.warnings,
+        "remaining_balance": run.remaining_balance,
+        "message": format!(
+            "Workflow '{}' ran: {} step(s) executed in-process.",
+            workflow.name,
+            run.steps.len()
         )
-        .bind(id)
-        .fetch_all(&state.db)
-        .await?;
-
-        if steps.is_empty() {
-            return Err(AppError::BadRequest(
-                "Workflow has no steps. Add at least one step before running.".to_string(),
-            ));
-        }
-
-        let step_values: Vec<serde_json::Value> = steps
-            .iter()
-            .map(|s| {
-                json!({
-                    "step_type": s.step_type,
-                    "name": s.name,
-                    "description": s.description,
-                    "sort_order": s.sort_order,
-                    "config": s.config,
-                })
-            })
-            .collect();
-
-        let callback_base_url = std::env::var("CALLBACK_BASE_URL")
-            .unwrap_or_else(|_| "http://workflowswift:8085".to_string());
-        let n8n_wf = n8n_converter::convert_steps_to_n8n(&step_values, aid, id, &callback_base_url);
-        let n8n_json = n8n_converter::to_n8n_json(&n8n_wf);
-
-        // Deploy via n8n REST API
-        let n8n_api_url = format!(
-            "{}/rest/workflows",
-            state.config.n8n_url.trim_end_matches('/')
-        );
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(|e| AppError::Internal(format!("HTTP client: {}", e)))?;
-
-        let mut req_builder = client.post(&n8n_api_url).json(&n8n_json);
-        if !state.config.n8n_api_key.is_empty() {
-            req_builder = req_builder.header("X-N8N-API-KEY", &state.config.n8n_api_key);
-        }
-
-        let api_resp = req_builder
-            .send()
-            .await
-            .map_err(|e| AppError::Internal(format!("n8n API request failed: {}", e)))?;
-
-        let api_status = api_resp.status();
-        if !api_status.is_success() {
-            let error_text = api_resp
-                .text()
-                .await
-                .unwrap_or_else(|_| "unknown error".to_string());
-            return Err(AppError::Internal(format!(
-                "n8n workflow import failed ({}): {}",
-                api_status, error_text
-            )));
-        }
-
-        sqlx::query("UPDATE workflows SET lifecycle_summary = $1 WHERE id = $2")
-            .bind(
-                json!({
-                    "n8n_deployed": true,
-                    "n8n_webhook_path": n8n_wf.webhook_path,
-                    "deployed_at": chrono::Utc::now().to_rfc3339(),
-                })
-                .to_string(),
-            )
-            .bind(id)
-            .execute(&state.db)
-            .await?;
-    }
-
-    // Get the webhook path from lifecycle_summary
-    let summary: serde_json::Value = workflow
-        .lifecycle_summary
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or(json!({}));
-
-    let webhook_path = summary
-        .get("n8n_webhook_path")
-        .and_then(|v| v.as_str())
-        .ok_or(AppError::Internal(
-            "Workflow deployed but missing webhook path. Try deploying again.".to_string(),
-        ))?;
-
-    // Check credits before triggering
-    let balance = sqlx::query_scalar::<_, i64>(
-        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
-    )
-    .bind(aid)
-    .fetch_one(&state.db)
-    .await
-    .unwrap_or(0);
-
-    if balance < 1 {
-        return Err(AppError::BadRequest(
-            "Insufficient credits. Please purchase more credits.".to_string(),
-        ));
-    }
-
-    // Deduct 1 credit
-    sqlx::query(
-        r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
-           VALUES ($1, $2, -1, 'workflow_execution', $3)"#,
-    )
-    .bind(Uuid::new_v4())
-    .bind(aid)
-    .bind(format!("Workflow execution: {}", workflow.name))
-    .execute(&state.db)
-    .await?;
-
-    // Trigger n8n webhook
-    let n8n_url = format!(
-        "{}/webhook/{}",
-        state.config.n8n_webhook_url.trim_end_matches('/'),
-        webhook_path
-    );
-    let client = reqwest::Client::new();
-    let trigger_payload = json!({
-        "aid": claims.aid,
-        "triggered_by": claims.sub,
-        "payload": req.get("payload").cloned().unwrap_or(json!({})),
-        "headers": {
-            "authorization": req.get("authorization").and_then(|v| v.as_str()).unwrap_or(""),
-        }
-    });
-
-    match client.post(&n8n_url).json(&trigger_payload).send().await {
-        Ok(resp) => {
-            let status = resp.status().as_u16();
-            let body: serde_json::Value = resp
-                .json()
-                .await
-                .unwrap_or(json!({"note": "n8n responded without body"}));
-
-            let new_balance = sqlx::query_scalar::<_, i64>(
-                "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
-            )
-            .bind(aid)
-            .fetch_one(&state.db)
-            .await
-            .unwrap_or(0);
-
-            Ok(Json(json!({
-                "status": "triggered",
-                "n8n_status": status,
-                "n8n_response": body,
-                "remaining_balance": new_balance,
-            })))
-        }
-        Err(e) => {
-            // Refund on failure
-            let _ = sqlx::query(
-                r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
-                   VALUES ($1, $2, 1, 'refund', $3)"#,
-            )
-            .bind(Uuid::new_v4())
-            .bind(aid)
-            .bind(format!("Refund for failed execution: {}", workflow.name))
-            .execute(&state.db)
-            .await;
-
-            Err(AppError::Internal(format!(
-                "n8n webhook call failed: {}",
-                e
-            )))
-        }
-    }
+    })))
 }
 
 /// POST /api/v1/workflows/validate-steps — validate a sequence of steps before deploy
