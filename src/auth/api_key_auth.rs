@@ -18,6 +18,8 @@ use axum::http::Method;
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use sqlx::Row;
+use std::sync::{Arc, OnceLock};
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 use super::models::Claims;
@@ -48,6 +50,59 @@ pub fn discriminator(raw_key: &str) -> String {
 /// Longest credential we will even attempt to hash-verify, so a huge header
 /// cannot turn into unbounded argon2 work.
 const MAX_KEY_LEN: usize = 128;
+
+/// How many API-key verifications may run concurrently.
+///
+/// Argon2id with the default parameters (`m=19456, t=2`) is pure CPU work that never
+/// awaits: run inline in the async handler it parks a tokio worker thread for its whole
+/// duration, so enough concurrent key requests pin every worker and the *runtime* (not
+/// the database) becomes the bottleneck. Measured on this box 2026-09-21 with 40
+/// concurrent valid-key requests: the median latency of a request that performs exactly
+/// one verification went 27 ms -> 280 ms, and an unrelated unauthenticated
+/// `GET /api/v1/health` — which does no hashing at all — went from ~2 ms to 131 ms median
+/// (249 ms max), i.e. it was waiting for a free worker.
+///
+/// Verification therefore runs on the blocking pool, bounded by this semaphore so a
+/// credential flood queues in the scheduler instead of occupying every worker: the permit
+/// count is the machine's usable parallelism, i.e. exactly as many 19 MiB hash jobs as
+/// there are cores to run them on. Excess requests wait here, not on a worker thread, so
+/// the runtime keeps accepting, throttling (a 429 is produced without hashing) and
+/// answering everyone else.
+static VERIFY_PERMITS: OnceLock<Arc<Semaphore>> = OnceLock::new();
+
+fn verify_permits() -> Arc<Semaphore> {
+    VERIFY_PERMITS
+        .get_or_init(|| {
+            let n = std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+                .clamp(1, 16);
+            Arc::new(Semaphore::new(n))
+        })
+        .clone()
+}
+
+/// One Argon2 verification against one stored hash, off the reactor and bounded by
+/// [`verify_permits`]. `false` means "does not match" — or "unusable stored hash" — which
+/// is what every caller already treats as "not this credential".
+async fn argon2_verify(hash: String, token: Arc<str>) -> bool {
+    let Ok(permit) = verify_permits().acquire_owned().await else {
+        // The semaphore is only closed on shutdown, where no key should authenticate.
+        return false;
+    };
+    tokio::task::spawn_blocking(move || {
+        // Held for the whole verification, released when this closure returns.
+        let _permit = permit;
+        let Ok(parsed) = PasswordHash::new(&hash) else {
+            return false;
+        };
+        Argon2::default()
+            .verify_password(token.as_bytes(), &parsed)
+            .is_ok()
+    })
+    .await
+    .unwrap_or(false)
+}
 
 /// True when a bearer credential is an API key rather than a JWT.
 pub fn is_api_key(token: &str) -> bool {
@@ -211,18 +266,13 @@ async fn verify_candidates(
     .fetch_all(&state.db)
     .await?;
 
+    let token: Arc<str> = Arc::from(token);
     for row in rows {
         let hash: String = row.try_get("key_hash").unwrap_or_default();
         if hash.is_empty() {
             continue;
         }
-        let Ok(parsed) = PasswordHash::new(&hash) else {
-            continue;
-        };
-        if Argon2::default()
-            .verify_password(token.as_bytes(), &parsed)
-            .is_ok()
-        {
+        if argon2_verify(hash, Arc::clone(&token)).await {
             return Ok(Some(row));
         }
     }
@@ -267,5 +317,183 @@ mod tests {
         assert_ne!(d, discriminator("workflowswift_0123456789abcdee"));
         assert_ne!(d, LEGACY_PREFIX);
         assert!(!key.contains(&d));
+    }
+
+    /// The bound is what stops a credential flood from saturating the runtime: it must
+    /// exist, be shared for the process lifetime, and match the machine's parallelism.
+    #[test]
+    fn verify_permits_is_bounded_and_process_wide() {
+        let a = verify_permits();
+        let b = verify_permits();
+        assert!(
+            Arc::ptr_eq(&a, &b),
+            "one semaphore per process, not one per call"
+        );
+        let want = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .clamp(1, 16);
+        assert_eq!(a.available_permits(), want);
+    }
+
+    /// The off-reactor path must not change what authenticates: matching secret -> true,
+    /// wrong secret -> false, unusable stored hash -> false (never a panic).
+    #[tokio::test]
+    async fn argon2_verify_decides_correctly_from_the_blocking_pool() {
+        use argon2::password_hash::SaltString;
+        use argon2::PasswordHasher;
+        use rand::rngs::OsRng;
+
+        let raw = "workflowswift_0123456789abcdef";
+        let salt = SaltString::generate(&mut OsRng);
+        let hash = Argon2::default()
+            .hash_password(raw.as_bytes(), &salt)
+            .expect("hash a test key")
+            .to_string();
+
+        assert!(argon2_verify(hash.clone(), Arc::from(raw)).await);
+        assert!(!argon2_verify(hash.clone(), Arc::from("workflowswift_fedcba9876543210")).await);
+        assert!(!argon2_verify("not-a-phc-string".to_string(), Arc::from(raw)).await);
+    }
+
+    /// Controlled A/B of exactly the change on this card, in one runtime, on one machine.
+    ///
+    /// 40 concurrent verifications are run twice on an 8-worker runtime. Alongside them a
+    /// "heartbeat" task does `sleep(2ms)` in a loop and records how much LATER than 2 ms it
+    /// was actually woken: that delay is the runtime failing to schedule an unrelated task,
+    /// which is what a request from any other tenant experiences.
+    ///
+    /// * `inline` reproduces the pre-fix shape — `verify_password` called straight from the
+    ///   async task body, so the worker thread is parked for the whole hash.
+    /// * `bounded` is the shipped shape — [`argon2_verify`], off the reactor and behind
+    ///   [`verify_permits`].
+    ///
+    /// The two phases measure the same work on the same box seconds apart, so a busy
+    /// neighbour moves BOTH numbers and the ratio is the signal, not the absolute value.
+    ///
+    /// The fixture hash uses deliberately cheap parameters (4 MiB, t=1) to keep the test
+    /// around a second long: the mechanism under test is "CPU-bound work that never
+    /// yields", which is the same for any parameter set. Verifying with `Argon2::default()`
+    /// also pins down that the PHC string stored in the row — not the verifier's own
+    /// parameters — decides the work done, which is what the card's candidate 2 would hinge
+    /// on.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn off_reactor_verification_keeps_the_runtime_responsive() {
+        use argon2::password_hash::SaltString;
+        use argon2::PasswordHasher;
+        use argon2::{Algorithm, Params, Version};
+        use rand::rngs::OsRng;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Mutex;
+        use std::time::{Duration, Instant};
+
+        /// The pre-fix code path, verbatim: verify on the worker thread.
+        fn verify_inline(hash: &str, token: &str) -> bool {
+            let Ok(parsed) = PasswordHash::new(hash) else {
+                return false;
+            };
+            Argon2::default()
+                .verify_password(token.as_bytes(), &parsed)
+                .is_ok()
+        }
+
+        let raw = "workflowswift_0123456789abcdef";
+        let salt = SaltString::generate(&mut OsRng);
+        let cheap = Params::new(4 * 1024, 1, 1, None).expect("test params");
+        let hash = Argon2::new(Algorithm::Argon2id, Version::V0x13, cheap)
+            .hash_password(raw.as_bytes(), &salt)
+            .expect("hash a test key")
+            .to_string();
+        assert!(verify_inline(&hash, raw), "the fixture hash must verify");
+
+        // Measure how late the runtime wakes an unrelated 2 ms sleep.
+        async fn heartbeat_ms(during: Duration) -> Vec<f64> {
+            let stop = Arc::new(AtomicBool::new(false));
+            let out = Arc::new(Mutex::new(Vec::<f64>::new()));
+            let task = {
+                let (stop, out) = (Arc::clone(&stop), Arc::clone(&out));
+                tokio::spawn(async move {
+                    while !stop.load(Ordering::Relaxed) {
+                        let t0 = Instant::now();
+                        tokio::time::sleep(Duration::from_millis(2)).await;
+                        let late = t0.elapsed().as_secs_f64() * 1000.0 - 2.0;
+                        out.lock().unwrap_or_else(|e| e.into_inner()).push(late);
+                    }
+                })
+            };
+            tokio::time::sleep(during).await;
+            stop.store(true, Ordering::Relaxed);
+            let _ = task.await;
+            // Bound to a local: a guard in tail position outlives `out` itself.
+            let collected = out.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            collected
+        }
+
+        fn p(v: &mut Vec<f64>, q: f64) -> f64 {
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            if v.is_empty() {
+                return 0.0;
+            }
+            v[((v.len() - 1) as f64 * q) as usize]
+        }
+
+        // Phase 1 — the pre-fix shape.
+        let inline_phase = {
+            let (hash, raw) = (hash.clone(), Arc::<str>::from(raw));
+            let beat = tokio::spawn(heartbeat_ms(Duration::from_millis(600)));
+            let t0 = Instant::now();
+            let jobs: Vec<_> = (0..40)
+                .map(|_| {
+                    let (hash, raw) = (hash.clone(), Arc::clone(&raw));
+                    tokio::spawn(async move { verify_inline(&hash, &raw) })
+                })
+                .collect();
+            for job in jobs {
+                assert!(job.await.expect("inline job did not panic"));
+            }
+            let wall = t0.elapsed();
+            (beat.await.expect("heartbeat"), wall)
+        };
+        // Phase 2 — the shipped shape.
+        let bounded_phase = {
+            let (hash, raw) = (hash.clone(), Arc::<str>::from(raw));
+            let beat = tokio::spawn(heartbeat_ms(Duration::from_millis(600)));
+            let t0 = Instant::now();
+            let jobs: Vec<_> = (0..40)
+                .map(|_| {
+                    let (hash, raw) = (hash.clone(), Arc::clone(&raw));
+                    tokio::spawn(async move { argon2_verify(hash, raw).await })
+                })
+                .collect();
+            for job in jobs {
+                assert!(job.await.expect("off-reactor job did not panic"));
+            }
+            let wall = t0.elapsed();
+            (beat.await.expect("heartbeat"), wall)
+        };
+
+        let (mut inline_late, inline_wall) = inline_phase;
+        let (mut bounded_late, bounded_wall) = bounded_phase;
+        let (ime, bme) = (p(&mut inline_late, 0.5), p(&mut bounded_late, 0.5));
+        let (imm, bmm) = (p(&mut inline_late, 1.0), p(&mut bounded_late, 1.0));
+        let (inn, bnn) = (inline_late.len(), bounded_late.len());
+        println!(
+            "off-reactor A/B: inline n={inn} median={ime:.0}ms max={imm:.0}ms wall={inline_wall:.2?} \
+             | bounded n={bnn} median={bme:.0}ms max={bmm:.0}ms wall={bounded_wall:.2?}"
+        );
+
+        // A starved runtime cannot deliver the 2 ms heartbeat at all, so the COUNT of
+        // delivered beats and the WORST delay are the signal — a percentile over a handful
+        // of samples would hide the stall.
+        assert!(
+            bmm * 5.0 < imm.max(1.0),
+            "unrelated work must not wait behind verification: inline max={imm:.1}ms \
+             (n={inn}) vs bounded max={bmm:.1}ms (n={bnn})"
+        );
+        assert!(
+            bnn >= 3 * inn.max(1),
+            "the off-reactor phase must deliver many more heartbeats: inline n={inn} vs \
+             bounded n={bnn}"
+        );
     }
 }
