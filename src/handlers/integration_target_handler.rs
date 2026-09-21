@@ -3,7 +3,7 @@
 use crate::auth::models::Claims;
 use crate::error::{ApiResult, AppError};
 use crate::features;
-use crate::security::webhook_security;
+use crate::security::{provider_key_crypto as key_crypto, webhook_security};
 use crate::AppState;
 use axum::{
     extract::{Json, Path, Query, State},
@@ -115,7 +115,18 @@ pub async fn create_integration_target(
         .get("user_id")
         .and_then(|v| v.as_str())
         .and_then(|s| Uuid::parse_str(s).ok());
-    let api_key = req.get("api_key").and_then(|v| v.as_str());
+    // The credential is encrypted BEFORE it reaches the database, through the same choke point
+    // provider_keys uses: 'enc:v1:' + single-line base64 ciphertext, AES-256 via pgcrypto, master
+    // key in the process environment. Nothing is stored in the clear — a missing master key fails
+    // this request instead of silently persisting a plaintext key (see
+    // crate::security::provider_key_crypto). The one read-for-use site
+    // (instance_handler::advance_instance) decrypts before it puts the value on the wire.
+    // A missing `api_key` stays SQL NULL; an empty string stays '' (encrypt_for_storage returns ''
+    // for empty input), which is what "no credential stored" looks like on this table.
+    let api_key: Option<String> = match req.get("api_key").and_then(|v| v.as_str()) {
+        Some(v) => Some(key_crypto::encrypt_for_storage(&state.db, v).await?),
+        None => None,
+    };
     let allowed_domains: Vec<String> = req
         .get("allowed_domains")
         .and_then(|v| v.as_array())
@@ -142,7 +153,7 @@ pub async fn create_integration_target(
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"
     )
     .bind(id).bind(aid).bind(pc_id).bind(user_id)
-    .bind(&name).bind(&provider).bind(&webhook_url).bind(api_key)
+    .bind(&name).bind(&provider).bind(&webhook_url).bind(api_key.as_deref())
     .bind(&allowed_domains).bind(daily_limit)
     .execute(&state.db).await?;
 

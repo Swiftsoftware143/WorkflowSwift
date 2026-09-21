@@ -253,7 +253,29 @@ pub async fn advance_instance(
         let target_id: String = row.try_get("integration_target_id").unwrap_or_default();
         let provider_preset: Option<String> = row.try_get("provider_preset").unwrap_or(None);
         let webhook_url: Option<String> = row.try_get("webhook_url").unwrap_or(None);
-        let api_key: Option<String> = row.try_get("api_key").unwrap_or(None);
+        // The column holds ciphertext at rest ('enc:v1:' + base64: migrations/053,
+        // src/security/provider_key_crypto.rs). This is the ONE read-for-use site for it — the
+        // value goes on the wire as the target's bearer credential — so it MUST be decrypted here
+        // and never forwarded in its stored form. A value we cannot decrypt is treated as "no key"
+        // rather than sent on as garbage ciphertext (same rule get_provider_key follows).
+        let stored_key: Option<String> = row.try_get("api_key").unwrap_or(None);
+        let api_key: Option<String> = match stored_key {
+            Some(s) if !s.is_empty() => {
+                match crate::security::provider_key_crypto::decrypt_from_storage(&state.db, &s)
+                    .await
+                {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        tracing::error!(
+                            error = %e,
+                            "stored integration target key could not be decrypted — sending no credential"
+                        );
+                        None
+                    }
+                }
+            }
+            _ => None,
+        };
         let allowed_domains: Vec<String> = row.try_get("allowed_domains").unwrap_or_default();
         let daily_limit: i32 = row.try_get("daily_limit").unwrap_or(1000);
         let raw_target_id: uuid::Uuid = row.try_get("raw_id").unwrap_or(uuid::Uuid::nil());
