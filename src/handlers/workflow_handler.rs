@@ -362,6 +362,13 @@ async fn run_in_process(
 /// Called only when the plan enables `n8n_deploy`; the caller turns any Err
 /// into a warning. Never uses docker: this container has no docker binary and
 /// no docker socket.
+///
+/// IDEMPOTENT per WorkflowSwift workflow: n8n has no natural key for an import,
+/// so the app keys its copy there by name (`WFS <workflow_id>`) and a later
+/// mirror UPDATES that copy (PUT) instead of importing another one — a workflow
+/// that is run and started keeps exactly ONE n8n copy. The id n8n assigned is
+/// recorded in `workflows.lifecycle_summary.n8n_workflow_id`, so the common
+/// path needs no lookup at all.
 async fn mirror_to_n8n(
     state: &AppState,
     aid: Uuid,
@@ -398,55 +405,221 @@ async fn mirror_to_n8n(
         n8n_converter::convert_steps_to_n8n(&step_values, aid, workflow.id, &callback_base_url);
     let n8n_json = n8n_converter::to_n8n_json(&n8n_wf);
 
-    // n8n's public REST API (the one an API key works against).
-    let url = format!(
-        "{}/api/v1/workflows",
-        state.config.n8n_url.trim_end_matches('/')
-    );
+    // n8n's public REST API (the one an API key works against). The mirror is an
+    // UPSERT: n8n has no natural key here, so without this every call imported a
+    // NEW copy of the same workflow (kanban t_2cdf44c1).
+    let base = state.config.n8n_url.trim_end_matches('/').to_string();
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| format!("HTTP client: {}", e))?;
 
-    let resp = client
-        .post(&url)
-        .header("X-N8N-API-KEY", api_key)
-        .json(&n8n_json)
-        .send()
-        .await
-        .map_err(|e| format!("n8n request failed: {}", e))?;
+    // Which copy in n8n belongs to this WorkflowSwift workflow? An id recorded by
+    // a previous mirror costs no call; only a first mirror (or one n8n has since
+    // forgotten) pays for a lookup by name. A failed lookup never fails the
+    // mirror — it falls back to importing, which is what the old code always did.
+    let mut n8n_id = recorded_n8n_workflow_id(workflow.lifecycle_summary.as_deref());
+    let mut duplicates: Vec<String> = Vec::new();
+    let mut lookup_warning: Option<String> = None;
+    if n8n_id.is_none() {
+        match find_n8n_mirror(&client, &base, api_key, &n8n_wf.name).await {
+            Ok((found, older)) => {
+                n8n_id = found;
+                duplicates = older;
+            }
+            Err(e) => lookup_warning = Some(e),
+        }
+    }
 
-    let status = resp.status();
+    let (mut status, mut body) =
+        send_mirror(&client, &base, api_key, &n8n_json, n8n_id.as_deref()).await?;
+    if status == reqwest::StatusCode::NOT_FOUND && n8n_id.is_some() {
+        // The recorded id is stale — the copy was deleted in n8n. Import it again
+        // rather than reporting a mirror that was never written.
+        n8n_id = None;
+        duplicates.clear();
+        let retry = send_mirror(&client, &base, api_key, &n8n_json, None).await?;
+        status = retry.0;
+        body = retry.1;
+    }
     if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        let body = body.chars().take(200).collect::<String>();
+        let body: String = body.chars().take(200).collect();
         return Err(format!("n8n rejected the import ({}) {}", status, body));
     }
 
+    let created = n8n_id.is_none();
+    let returned: serde_json::Value = serde_json::from_str(&body).unwrap_or_else(|_| json!({}));
+    let mirror_id = returned
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| n8n_id.clone())
+        .ok_or_else(|| "n8n accepted the import but returned no workflow id".to_string())?;
+
+    // Collapse older copies of THIS workflow, left behind by mirrors from before
+    // the upsert. Exact-name matches only — no other workflow is ever touched.
+    let mut collapsed = 0usize;
+    for dupe in duplicates
+        .iter()
+        .filter(|d| d.as_str() != mirror_id.as_str())
+    {
+        if let Ok(r) = client
+            .delete(format!("{}/api/v1/workflows/{}", base, dupe))
+            .header("X-N8N-API-KEY", api_key)
+            .send()
+            .await
+        {
+            if r.status().is_success() {
+                collapsed += 1;
+            }
+        }
+    }
+
+    // Merge, never clobber: `lifecycle_summary` is also a user-writable column.
+    let mut summary = lifecycle_summary_object(workflow.lifecycle_summary.as_deref());
+    summary.insert("n8n_deployed".to_string(), json!(true));
+    summary.insert("n8n_webhook_path".to_string(), json!(n8n_wf.webhook_path));
+    summary.insert("n8n_workflow_id".to_string(), json!(mirror_id));
+    summary.insert(
+        "deployed_at".to_string(),
+        json!(chrono::Utc::now().to_rfc3339()),
+    );
     let _ = sqlx::query("UPDATE workflows SET lifecycle_summary = $1 WHERE id = $2")
-        .bind(
-            json!({
-                "n8n_deployed": true,
-                "n8n_webhook_path": n8n_wf.webhook_path,
-                "deployed_at": chrono::Utc::now().to_rfc3339(),
-            })
-            .to_string(),
-        )
+        .bind(serde_json::Value::Object(summary).to_string())
         .bind(workflow.id)
         .execute(&state.db)
         .await;
 
-    Ok(json!({
+    let mut n8n = json!({
         "requested": true,
         "deployed": true,
         // The steps already ran in-process, so re-triggering n8n here would
         // execute the same workflow twice (duplicate emails/API calls).
         "triggered": false,
         "trigger_note": "steps were executed in-process; the n8n copy is available for external triggers",
+        "n8n_workflow_id": mirror_id,
+        "action": if created { "created" } else { "updated" },
         "webhook_path": n8n_wf.webhook_path,
         "name": n8n_wf.name,
         "node_count": n8n_wf.nodes.len(),
-    }))
+    });
+    if let Some(o) = n8n.as_object_mut() {
+        if collapsed > 0 {
+            o.insert("duplicates_collapsed".to_string(), json!(collapsed));
+        }
+        if let Some(e) = lookup_warning {
+            o.insert("lookup_warning".to_string(), json!(e));
+        }
+    }
+    Ok(n8n)
+}
+
+/// The n8n workflow id recorded by a previous mirror, if the summary holds one.
+fn recorded_n8n_workflow_id(lifecycle_summary: Option<&str>) -> Option<String> {
+    let parsed: serde_json::Value = serde_json::from_str(lifecycle_summary?).ok()?;
+    parsed
+        .get("n8n_workflow_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Start from what the column already holds so the mirror only ADDS keys. A
+/// non-JSON summary used to be destroyed outright by the mirror; keep it.
+fn lifecycle_summary_object(existing: Option<&str>) -> serde_json::Map<String, serde_json::Value> {
+    let mut out = serde_json::Map::new();
+    match existing {
+        None => {}
+        Some(s) => match serde_json::from_str::<serde_json::Value>(s) {
+            Ok(serde_json::Value::Object(m)) => return m,
+            Ok(other) => {
+                out.insert("legacy_lifecycle_summary".to_string(), other);
+            }
+            Err(_) if s.trim().is_empty() => {}
+            Err(_) => {
+                out.insert("legacy_lifecycle_summary".to_string(), json!(s));
+            }
+        },
+    }
+    out
+}
+
+/// Send the converted workflow to n8n: PUT onto the copy the app owns, POST when
+/// there is nothing to update yet. Returns (status, raw body).
+async fn send_mirror(
+    client: &reqwest::Client,
+    base: &str,
+    api_key: &str,
+    payload: &serde_json::Value,
+    target: Option<&str>,
+) -> Result<(reqwest::StatusCode, String), String> {
+    let (method, url) = match target {
+        Some(id) => (
+            reqwest::Method::PUT,
+            format!("{}/api/v1/workflows/{}", base, id),
+        ),
+        None => (reqwest::Method::POST, format!("{}/api/v1/workflows", base)),
+    };
+    let resp = client
+        .request(method, &url)
+        .header("X-N8N-API-KEY", api_key)
+        .json(payload)
+        .send()
+        .await
+        .map_err(|e| format!("n8n request failed: {}", e))?;
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    Ok((status, body))
+}
+
+/// Every n8n workflow carrying `name` (the app's key there is `WFS <workflow_id>`).
+/// Returns the NEWEST copy plus any older duplicates, so the caller can update one
+/// copy and collapse the rest. Names are compared exactly: the filter is a
+/// convenience, not the decision.
+async fn find_n8n_mirror(
+    client: &reqwest::Client,
+    base: &str,
+    api_key: &str,
+    name: &str,
+) -> Result<(Option<String>, Vec<String>), String> {
+    let resp = client
+        .get(format!("{}/api/v1/workflows", base))
+        .query(&[("limit", "250"), ("name", name)])
+        .header("X-N8N-API-KEY", api_key)
+        .send()
+        .await
+        .map_err(|e| format!("n8n lookup failed: {}", e))?;
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("n8n lookup rejected ({})", status));
+    }
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("n8n lookup body: {}", e))?;
+    let mut rows: Vec<(String, String)> = body
+        .get("data")
+        .and_then(|d| d.as_array())
+        .map(|rows| {
+            rows.iter()
+                .filter(|r| r.get("name").and_then(|n| n.as_str()) == Some(name))
+                .filter_map(|r| {
+                    let id = r.get("id")?.as_str()?.to_string();
+                    let created = r
+                        .get("createdAt")
+                        .and_then(|c| c.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    Some((id, created))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    rows.sort_by(|a, b| b.1.cmp(&a.1)); // newest first
+    if rows.is_empty() {
+        return Ok((None, Vec::new()));
+    }
+    let (newest, _) = rows.remove(0);
+    Ok((Some(newest), rows.into_iter().map(|(id, _)| id).collect()))
 }
 
 /// POST /api/v1/workflows/{id}/start — start a workflow now (optional body).
@@ -804,6 +977,10 @@ pub async fn deploy_workflow_to_n8n(
             "webhook_path": v.get("webhook_path").cloned().unwrap_or(serde_json::Value::Null),
             "name": v.get("name").cloned().unwrap_or(serde_json::Value::Null),
             "node_count": v.get("node_count").cloned().unwrap_or(serde_json::Value::Null),
+            // Idempotence is visible here too: the id is stable, and a later
+            // mirror reports "updated" instead of importing another copy.
+            "n8n_workflow_id": v.get("n8n_workflow_id").cloned().unwrap_or(serde_json::Value::Null),
+            "action": v.get("action").cloned().unwrap_or(serde_json::Value::Null),
             "message": "Workflow deployed to n8n via its REST API."
         }))),
         Err(e) => Err(AppError::BadRequest(format!(
