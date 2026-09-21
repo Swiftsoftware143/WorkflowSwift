@@ -119,13 +119,41 @@ pub async fn list_transactions(
     let transactions: Vec<serde_json::Value> = rows
         .iter()
         .map(|row| {
+            // `credit_transactions.amount` is INT4, so it decodes as i32 — reading it as i64
+            // failed on EVERY row and `unwrap_or(0)` reported every transaction as 0
+            // (kanban t_3d0c5623). No field is defaulted silently any more: a decode failure
+            // is logged and only then reported as null/0/"".
+            let id = row.try_get::<Uuid, _>("id");
+            let amount = row.try_get::<i32, _>("amount");
+            let transaction_type = row.try_get::<&str, _>("transaction_type");
+            let description = row.try_get::<Option<&str>, _>("description");
+            let reference_id = row.try_get::<Option<&str>, _>("reference_id");
+            let created_at = row.try_get::<&str, _>("created_at");
+
+            for (field, err) in [
+                ("id", id.as_ref().err()),
+                ("amount", amount.as_ref().err()),
+                ("transaction_type", transaction_type.as_ref().err()),
+                ("description", description.as_ref().err()),
+                ("reference_id", reference_id.as_ref().err()),
+                ("created_at", created_at.as_ref().err()),
+            ] {
+                if let Some(e) = err {
+                    tracing::warn!(
+                        field = field,
+                        error = %e,
+                        "credit_transactions: field failed to decode"
+                    );
+                }
+            }
+
             json!({
-                "id": row.try_get::<Uuid, _>("id").map(|u| u.to_string()).unwrap_or_default(),
-                "amount": row.try_get::<i64, _>("amount").unwrap_or(0),
-                "transaction_type": row.try_get::<&str, _>("transaction_type").unwrap_or(""),
-                "description": row.try_get::<Option<&str>, _>("description").unwrap_or(None),
-                "reference_id": row.try_get::<Option<&str>, _>("reference_id").unwrap_or(None),
-                "created_at": row.try_get::<&str, _>("created_at").unwrap_or(""),
+                "id": id.map(|u| u.to_string()).unwrap_or_default(),
+                "amount": amount.unwrap_or(0),
+                "transaction_type": transaction_type.unwrap_or(""),
+                "description": description.unwrap_or(None),
+                "reference_id": reference_id.unwrap_or(None),
+                "created_at": created_at.unwrap_or(""),
             })
         })
         .collect();

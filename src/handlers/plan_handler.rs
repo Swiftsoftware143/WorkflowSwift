@@ -141,10 +141,14 @@ pub async fn create_plan(
         .and_then(|s| s.parse::<f64>().ok())
         .unwrap_or(0.0);
 
+    // NOTE: `plan_tiers.price_monthly/price_yearly` are NUMERIC(10,2) and sqlx has no
+    // String/f64 decode for numeric at all, so EVERY read of this struct must cast the
+    // column (`price_monthly::text`) — an INSERT/UPDATE ... RETURNING list must therefore
+    // name its columns instead of using `RETURNING *` (kanban t_3d0c5623).
     let plan = sqlx::query_as::<_, PlanTier>(
         r#"INSERT INTO plan_tiers (id, name, slug, description, price_monthly, price_yearly, features, payment_provider)
            VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7::jsonb, $8)
-           RETURNING *"#,
+           RETURNING id, name, slug, description, price_monthly::text as price_monthly, price_yearly::text as price_yearly, features, checkout_url, is_active, sort_order, payment_provider, created_at"#,
     )
     .bind(Uuid::new_v4())
     .bind(&name)
@@ -179,8 +183,13 @@ pub async fn update_plan(
         ));
     }
 
-    let existing = sqlx::query_as::<_, PlanTier>("SELECT * FROM plan_tiers WHERE id = $1")
-        .bind(id)
+    // Explicit column list with the numeric -> text casts (see the note on create_plan):
+    // `SELECT *` hands `price_monthly`/`price_yearly` to sqlx as NUMERIC, which cannot
+    // decode into the struct's String fields — this 500'd on every run (kanban t_3d0c5623).
+    let existing = sqlx::query_as::<_, PlanTier>(
+        "SELECT id, name, slug, description, price_monthly::text as price_monthly, price_yearly::text as price_yearly, features, checkout_url, is_active, sort_order, payment_provider, created_at FROM plan_tiers WHERE id = $1",
+    )
+    .bind(id)
         .fetch_optional(&state.db)
         .await?
         .ok_or_else(|| AppError::NotFound("Plan not found".to_string()))?;

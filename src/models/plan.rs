@@ -9,6 +9,10 @@ pub struct PlanTier {
     pub name: String,
     pub slug: String,
     pub description: Option<String>,
+    /// `plan_tiers.price_monthly` / `price_yearly` are NUMERIC(10,2) and sqlx has no
+    /// String or f64 decode for numeric, so every read casts the column to text
+    /// (`price_monthly::text as price_monthly`) and it lands here as a decimal string.
+    /// A query that returns these columns WITHOUT the cast 500s (kanban t_3d0c5623).
     pub price_monthly: Option<String>,
     pub price_yearly: Option<String>,
     pub features: Option<serde_json::Value>,
