@@ -10,7 +10,61 @@ use uuid::Uuid;
 
 use crate::auth::models::Claims;
 use crate::error::{ApiResult, AppError};
+use crate::features as plan_limits;
 use crate::AppState;
+
+/// Collect the canonical per-plan limit / flag values out of an admin plan payload.
+/// They may arrive at the top level (`{"max_workflows": 1}`) or inside `features`
+/// (`{"features": {"max_workflows": 1}}`); both are normalised into one map so the
+/// stored `features` JSONB is the single source of truth the API enforces.
+fn collect_plan_limits(req: &serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+    let mut out = serde_json::Map::new();
+    if let Some(obj) = req.as_object() {
+        for (k, v) in obj {
+            if k == "features" {
+                continue;
+            }
+            if plan_limits::NUMERIC_LIMIT_KEYS.contains(&k.as_str())
+                || plan_limits::BOOLEAN_FLAG_KEYS.contains(&k.as_str())
+                || matches!(
+                    k.as_str(),
+                    "can_export" | "can_deploy_n8n" | "has_api_access"
+                )
+            {
+                out.insert(k.clone(), v.clone());
+            }
+        }
+    }
+    if let Some(feats) = req.get("features").and_then(|v| v.as_object()) {
+        for (k, v) in feats {
+            out.insert(k.clone(), v.clone());
+        }
+    }
+    out
+}
+
+/// Top-level numeric limit from a normalised limit map.
+fn limit_i32(map: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<i32> {
+    map.get(key).and_then(|v| {
+        v.as_i64()
+            .map(|n| n as i32)
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse::<i32>().ok()))
+    })
+}
+
+/// Top-level boolean flag from a normalised limit map.
+fn flag_bool(map: &serde_json::Map<String, serde_json::Value>, key: &str) -> Option<bool> {
+    map.get(key).and_then(|v| {
+        v.as_bool().or_else(|| {
+            v.as_str().map(|s| {
+                matches!(
+                    s.trim().to_ascii_lowercase().as_str(),
+                    "true" | "yes" | "on" | "1" | "enabled"
+                )
+            })
+        })
+    })
+}
 
 /// Field-name hints that mark a stored value as a secret.
 const SECRET_HINTS: [&str; 8] = [
@@ -440,7 +494,6 @@ pub async fn admin_create_plan(
             .map(|s| s.to_string())
             .or_else(|| v.as_f64().map(|n| format!("{:.2}", n)))
     });
-    let features = req.get("features").cloned();
     let is_active = req
         .get("is_active")
         .and_then(|v| v.as_bool())
@@ -450,7 +503,18 @@ pub async fn admin_create_plan(
         .and_then(|v| v.as_i64())
         .map(|v| v as i32);
 
-    let features_json = features.unwrap_or(json!({}));
+    // Every canonical limit/flag the admin sent, in ONE place, so the stored
+    // features JSONB is exactly what the API enforcement reads back.
+    let limit_map = collect_plan_limits(&req);
+    let features_json = serde_json::Value::Object(limit_map.clone());
+    let max_workflows = limit_i32(&limit_map, "max_workflows");
+    let max_users = limit_i32(&limit_map, "max_users");
+    let retention_days = limit_i32(&limit_map, "retention_days");
+    let can_export = flag_bool(&limit_map, "csv_export").or(flag_bool(&limit_map, "can_export"));
+    let can_deploy_n8n =
+        flag_bool(&limit_map, "n8n_deploy").or(flag_bool(&limit_map, "can_deploy_n8n"));
+    let has_api_access =
+        flag_bool(&limit_map, "api_access").or(flag_bool(&limit_map, "has_api_access"));
 
     let payment_provider = req
         .get("payment_provider")
@@ -458,8 +522,9 @@ pub async fn admin_create_plan(
         .map(|s| s.to_string());
 
     let plan = sqlx::query(
-        r#"INSERT INTO plan_tiers (id, name, slug, description, price_monthly, price_yearly, features, is_active, sort_order, payment_provider)
-           VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7::jsonb, $8, $9, $10)
+        r#"INSERT INTO plan_tiers (id, name, slug, description, price_monthly, price_yearly, features, is_active, sort_order, payment_provider,
+                                  max_workflows, max_users, retention_days, can_export, can_deploy_n8n, has_api_access)
+           VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16)
            RETURNING id, name, slug"#,
     )
     .bind(Uuid::new_v4())
@@ -472,6 +537,12 @@ pub async fn admin_create_plan(
     .bind(is_active)
     .bind(sort_order)
     .bind(&payment_provider)
+    .bind(max_workflows)
+    .bind(max_users)
+    .bind(retention_days)
+    .bind(can_export)
+    .bind(can_deploy_n8n)
+    .bind(has_api_access)
     .fetch_one(&state.db)
     .await?;
 
@@ -516,7 +587,6 @@ pub async fn admin_update_plan_full(
             .map(|s| s.to_string())
             .or_else(|| v.as_f64().map(|n| format!("{:.2}", n)))
     });
-    let features = req.get("features").and_then(|v| v.as_object());
     let is_active = req.get("is_active").and_then(|v| v.as_bool());
     let sort_order = req
         .get("sort_order")
@@ -576,8 +646,9 @@ pub async fn admin_update_plan_full(
             retention_days = COALESCE($10, retention_days),
             can_export = COALESCE($11, can_export),
             can_deploy_n8n = COALESCE($12, can_deploy_n8n),
-            has_api_access = COALESCE($13, has_api_access)
-         WHERE id = $14"#,
+            has_api_access = COALESCE($13, has_api_access),
+            payment_provider = COALESCE($14, payment_provider)
+         WHERE id = $15"#,
     )
     .bind(if name.is_empty() {
         None
@@ -623,13 +694,40 @@ pub async fn admin_update_plan_full(
         }
     }
 
-    // Update features JSON if provided
-    if let Some(feats) = features {
-        sqlx::query("UPDATE plan_tiers SET features = $1::jsonb WHERE id = $2")
-            .bind(serde_json::Value::Object(feats.clone()).to_string())
-            .bind(id)
-            .execute(&state.db)
-            .await?;
+    // Persist every canonical limit/flag the admin sent into `features` JSONB.
+    // MERGE, never replace: the Plans UI saves one field at a time and a replace
+    // would silently wipe the limits it did not resend. The legacy dedicated
+    // columns are mirrored so both views of a plan agree.
+    let limit_map = collect_plan_limits(&req);
+    if !limit_map.is_empty() {
+        sqlx::query(
+            "UPDATE plan_tiers SET features = COALESCE(features, '{}'::jsonb) || $1::jsonb \
+             WHERE id = $2",
+        )
+        .bind(serde_json::Value::Object(limit_map.clone()).to_string())
+        .bind(id)
+        .execute(&state.db)
+        .await?;
+
+        sqlx::query(
+            r#"UPDATE plan_tiers SET
+                max_workflows  = COALESCE($1, max_workflows),
+                max_users      = COALESCE($2, max_users),
+                retention_days = COALESCE($3, retention_days),
+                can_export     = COALESCE($4, can_export),
+                can_deploy_n8n = COALESCE($5, can_deploy_n8n),
+                has_api_access = COALESCE($6, has_api_access)
+               WHERE id = $7"#,
+        )
+        .bind(limit_i32(&limit_map, "max_workflows"))
+        .bind(limit_i32(&limit_map, "max_users"))
+        .bind(limit_i32(&limit_map, "retention_days"))
+        .bind(flag_bool(&limit_map, "csv_export").or(flag_bool(&limit_map, "can_export")))
+        .bind(flag_bool(&limit_map, "n8n_deploy").or(flag_bool(&limit_map, "can_deploy_n8n")))
+        .bind(flag_bool(&limit_map, "api_access").or(flag_bool(&limit_map, "has_api_access")))
+        .bind(id)
+        .execute(&state.db)
+        .await?;
     }
 
     Ok(Json(

@@ -20,6 +20,7 @@ pub async fn create_api_key(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     features::enforce_feature_limit(&state.db, aid, "max_api_keys", "Api Keys").await?;
+    features::enforce_plan_flag(&state.db, aid, "api_access", "API access").await?;
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
     let name = req
         .get("name")

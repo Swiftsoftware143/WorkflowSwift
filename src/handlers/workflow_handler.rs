@@ -617,6 +617,7 @@ pub async fn deploy_workflow_to_n8n(
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    crate::features::enforce_plan_flag(&state.db, aid, "n8n_deploy", "n8n deployment").await?;
 
     let workflow =
         sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE id = $1 AND aid = $2")
