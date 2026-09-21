@@ -147,6 +147,18 @@ const API = (() => {
     enrichBusiness: (b) => fetch(base + '/prospecting/enrich', { method:'POST', headers: headers(), body: JSON.stringify(b) }).then(handle),
     getHexomaticKey: () => fetch(base + '/accounts/hexomatic-key', { headers: headers() }).then(handle),
     setHexomaticKey: (key) => fetch(base + '/accounts/hexomatic-key', { method:'PUT', headers: headers(), body: JSON.stringify({ key }) }).then(handle),
+    // --- Builder + Renditions (kanban t_ef3b13f4): the step-config and rendition APIs were
+    // served with NO caller — the Builder view was a stub. These are the only callers.
+    getSteps: (id) => fetch(base + '/workflows/' + encodeURIComponent(id) + '/steps', { headers: headers() }).then(handle),
+    addStep: (id, b) => fetch(base + '/workflows/' + encodeURIComponent(id) + '/steps', { method:'POST', headers: headers(), body: JSON.stringify(b) }).then(handle),
+    updateStep: (id, sid, b) => fetch(base + '/workflows/' + encodeURIComponent(id) + '/steps/' + encodeURIComponent(sid), { method:'PUT', headers: headers(), body: JSON.stringify(b) }).then(handle),
+    deleteStep: (id, sid) => fetch(base + '/workflows/' + encodeURIComponent(id) + '/steps/' + encodeURIComponent(sid), { method:'DELETE', headers: headers() }).then(handle),
+    reorderSteps: (id, step_ids) => fetch(base + '/workflows/' + encodeURIComponent(id) + '/steps/reorder', { method:'PUT', headers: headers(), body: JSON.stringify({ step_ids }) }).then(handle),
+    validateSteps: (steps) => fetch(base + '/workflows/validate-steps', { method:'POST', headers: headers(), body: JSON.stringify({ steps }) }).then(handle),
+    renditionSummary: () => fetch(base + '/renditions/summary', { headers: headers() }).then(handle),
+    listRenditions: (qs) => fetch(base + '/renditions' + (qs ? ('?' + qs) : ''), { headers: headers() }).then(handle),
+    workflowRenditions: (id) => fetch(base + '/renditions/workflow/' + encodeURIComponent(id), { headers: headers() }).then(handle),
+    stitchRenditions: (b) => fetch(base + '/renditions/stitch', { method:'POST', headers: headers(), body: JSON.stringify(b) }).then(handle),
     get token(){ return token; }, get user(){ return user; },
     get isLoggedIn(){ return !!sessionStorage.getItem('wf_token'); },
     setAuth(t, u){ token = t; user = u; sessionStorage.setItem('wf_token', t); sessionStorage.setItem('wf_user', JSON.stringify(u)); },
@@ -154,7 +166,7 @@ const API = (() => {
   };
 })();
 
-const S = { view:'login', loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, dataVer:0, apiKeys:null, extBuild:null, hexKey:null, hexKeyInput:'', enrich:null, enriching:null, newApiKey:null, modalErr:null };
+const S = { view:'login', loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, dataVer:0, apiKeys:null, extBuild:null, hexKey:null, hexKeyInput:'', enrich:null, enriching:null, newApiKey:null, builder:null, steps:null, stepsWf:null, stepValidation:null, stepDraft:null, widgetCat:null, rendSummary:null, renditions:null, rendWf:'', rendStatus:'active', rendSel:null, stitchName:'', modalErr:null };
 
 // Views call their loaders from inside render (the house pattern: `if(!S.x) loadX();`), and
 // every loader calls renderApp() again — a *re-entrant* preact render. The inner render
@@ -1151,14 +1163,303 @@ const CompetitorModal = () => { let name='', web='';
     <div class="mb-4"><label class="label">Website</label><input class="input" onInput=${e=>web=e.target.value} placeholder="https://competitor.com" /></div>
     <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Add Competitor'}</button>
   <//>`; };
-// ===== Builder =====
+// ===== Builder (kanban t_ef3b13f4) =====
+// GET/POST /workflows/{id}/steps, PUT/DELETE /workflows/{id}/steps/{step_id},
+// PUT /workflows/{id}/steps/reorder and POST /workflows/validate-steps were all served and
+// called by NOTHING: this view was the literal stub "Builder interface — step configuration
+// coming next." while the feature contract requires it (§E: steps can be added, edited,
+// reordered, deleted; §G: "Builder" is in the user nav). This is that surface. No server
+// change was needed — every call below hits an existing, live handler.
+const STEP_TYPES = [
+  { k:'data-card', label:'Data Card', hint:'Always step 1 — pulls the run\'s data from a named dashboard widget.' },
+  { k:'ai-action', label:'AI Action', hint:'Runs an LLM prompt; the output stays editable.' },
+  { k:'export', label:'Export', hint:'CSV / Resend / SendGrid / CoreSwift CRM.' },
+  { k:'notify', label:'Notify', hint:'Email or webhook notification.' },
+  { k:'delay', label:'Delay / Wait', hint:'Parks the instance until due; the execution worker advances it.' },
+  { k:'fork', label:'Fork', hint:'Splits the run into parallel branches.' },
+];
+const STEP_TYPES_EXTRA = [
+  { k:'http-request', label:'HTTP Request' }, { k:'action', label:'Action' },
+  { k:'render_video', label:'Render Video' }, { k:'render_image', label:'Render Image' },
+  { k:'render_audio', label:'Render Audio' }, { k:'research', label:'Research' },
+  { k:'condition', label:'Condition' }, { k:'webhook', label:'Webhook' }, { k:'manual', label:'Manual / Approval' },
+];
+const ALL_STEP_TYPES = STEP_TYPES.concat(STEP_TYPES_EXTRA);
+const stepTypeLabel = (k) => ((ALL_STEP_TYPES.filter(t => t.k === k)[0]) || {}).label || k;
+const stepTypeHint = (k) => ((ALL_STEP_TYPES.filter(t => t.k === k)[0]) || {}).hint || '';
+const cfgOf = (s) => (s && s.config && typeof s.config === 'object') ? s.config : {};
+const stepSummary = (s) => { const c = cfgOf(s);
+  return c.widget_name || c.prompt || c.url || c.query || c.recipient || c.destination || c.endpoint
+    || (c.duration_seconds ? (c.duration_seconds + 's') : '')
+    || (Array.isArray(c.branches) ? (c.branches.length + ' branch(es)') : '') || '—'; };
+
+const loadSteps = async (wfId) => { S.loading = true; renderApp();
+  try { const r = await API.getSteps(wfId); S.steps = r.steps || []; }
+  catch(e){ toast(e.message,'err'); S.steps = []; }
+  S.stepsWf = wfId; S.loading = false; renderApp(); };
+// The Data Card selector must offer real dashboard widgets BY NAME (contract §E), so it reads the
+// same endpoint the dashboard renders from, and keeps both halves of the config (name + metric_key).
+const loadWidgetCatalog = async () => { if (S.widgetCat) return;
+  try { const r = await API.getDashboardWidgets(currentIndustrySlug());
+    S.widgetCat = (r.widgets || []).map(w => ({ id: w.id, title: w.title || w.name || '', metric_key: ((w.config || {}).metric_key || '') })); }
+  catch(e){ S.widgetCat = []; } renderApp(); };
+const openStepModal = (wfId, step) => { loadWidgetCatalog(); S.stepValidation = null;
+  const c = cfgOf(step);
+  const base = { wfId, id: step ? step.id : null, type: step ? step.step_type : 'data-card', name: '', desc: '', widget_name: '', metric_key: '',
+    prompt: '', url: '', method: 'GET', destination: 'csv', channel: 'email', recipient: '', subject: '',
+    duration_seconds: 60, branches: '', query: '', provider: '', endpoint: '' };
+  S.stepDraft = step ? Object.assign(base, { name: step.name || '', desc: step.description || '',
+    widget_name: c.widget_name || '', metric_key: c.metric_key || '', prompt: c.prompt || '', url: c.url || '',
+    method: c.method || 'GET', destination: c.destination || 'csv', channel: c.channel || 'email',
+    recipient: c.recipient || '', subject: c.subject || '', duration_seconds: c.duration_seconds || (c.duration_ms ? Math.round(c.duration_ms / 1000) : 60),
+    branches: Array.isArray(c.branches) ? c.branches.map(b => typeof b === 'string' ? b : ((b && b.name) || '')).join('\n') : '',
+    query: c.query || '', provider: c.provider || '', endpoint: c.endpoint || '' }) : base;
+  S.modal = 'step'; renderApp(); };
+// The config keys below are the ones the execution engine actually reads (src/execution.rs):
+// data-card reads widget_name + metric_key, export reads format + targets, delay reads
+// duration_seconds, fork reads branches, notify reads channel + recipient.
+const draftConfig = (d) => { switch (d.type) {
+  case 'data-card': return { widget_name: d.widget_name, metric_key: d.metric_key };
+  case 'ai-action': return { prompt: d.prompt };
+  case 'export': return { destination: d.destination, format: 'csv', targets: [d.destination] };
+  case 'notify': return { channel: d.channel, recipient: d.recipient, subject: d.subject };
+  // duration_ms is the key BOTH the executor (delay_duration_ms) and validate-steps read — validate
+  // only looks at duration_ms, so writing duration_seconds alone made a correct delay step report
+  // "Delay duration is 0ms". Both keys are written so the edit form round-trips in seconds.
+  case 'delay': case 'wait': return { duration_ms: (Number(d.duration_seconds) || 0) * 1000, duration_seconds: Number(d.duration_seconds) || 0 };
+  case 'fork': return { branches: String(d.branches || '').split('\n').map(s => s.trim()).filter(Boolean).map(n => ({ name: n })) };
+  case 'http-request': case 'action': return { url: d.url, method: String(d.method || 'GET').toUpperCase() };
+  case 'webhook': return { url: d.url };
+  case 'research': return { query: d.query };
+  case 'render_video': case 'render_image': case 'render_audio': case 'render_media':
+    return { provider: d.provider, endpoint: d.endpoint };
+  default: return {};
+} };
+
+const StepModal = () => {
+  const d = S.stepDraft;
+  if (!d) return null;
+  const set = (k, v) => { d[k] = v; renderApp(); };
+  const editing = !!d.id;
+  const field = (label, key, placeholder) => html`<div class="mb-4"><label class="label">${label}</label>
+    <input class="input" value=${d[key]} placeholder=${placeholder || ''} onInput=${e=>set(key, e.target.value)} /></div>`;
+  const area = (label, key, placeholder) => html`<div class="mb-4"><label class="label">${label}</label>
+    <textarea class="input" rows="3" value=${d[key]} placeholder=${placeholder || ''} onInput=${e=>set(key, e.target.value)}></textarea></div>`;
+  const save = async () => {
+    if (!d.name) return toast('Step name is required', 'err');
+    const body = { step_type: d.type, name: d.name, description: d.desc || null, config: draftConfig(d) };
+    S.loading = true; renderApp();
+    try {
+      if (editing) await API.updateStep(d.wfId, d.id, body); else await API.addStep(d.wfId, body);
+      toast(editing ? 'Step saved' : 'Step added');
+      S.modal = null; S.stepsWf = null; loadSteps(d.wfId);
+    } catch(e){ toast(e.message, 'err'); } S.loading = false; renderApp();
+  };
+  const widgetField = html`<div class="mb-4"><label class="label">Data Card — dashboard widget (by name)</label>
+    <select class="input" value=${d.metric_key} onChange=${e => { const w = (S.widgetCat || []).filter(x => x.metric_key === e.target.value)[0];
+      d.metric_key = e.target.value; d.widget_name = w ? w.title : ''; renderApp(); }}>
+      <option value="">Select a widget…</option>
+      ${(S.widgetCat || []).map(w => html`<option key=${w.id} value=${w.metric_key}>${w.title}${w.metric_key ? ' — ' + w.metric_key : ' (no metric key)'}</option>`)}
+    </select>
+    ${(S.widgetCat || []).length === 0
+      ? html`<div class="text-xs text-gray-500 mt-1">No widgets on this dashboard yet — add one under Dashboard, then reopen this dialog.</div>`
+      : html`<div class="text-xs text-gray-500 mt-1">Picked: <strong>${d.widget_name || '—'}</strong> · metric_key: ${d.metric_key || '—'}</div>`}
+  </div>`;
+  const cfgFields = () => {
+    switch (d.type) {
+      case 'data-card': return widgetField;
+      case 'ai-action': return area('Prompt', 'prompt', 'Summarise the incoming lead and draft a reply');
+      case 'export': return html`<div class="mb-4"><label class="label">Destination</label>
+        <select class="input" value=${d.destination} onChange=${e=>set('destination', e.target.value)}>
+          <option value="csv">CSV download</option><option value="resend">Resend (email)</option>
+          <option value="sendgrid">SendGrid (email)</option><option value="coreswift">CoreSwift CRM</option>
+        </select></div>`;
+      case 'notify': return html`<div class="mb-4"><label class="label">Channel</label>
+        <select class="input" value=${d.channel} onChange=${e=>set('channel', e.target.value)}>
+          <option value="email">Email</option><option value="webhook">Webhook</option><option value="sms">SMS</option>
+        </select></div>
+        ${field('Recipient', 'recipient', 'ops@example.com')}${field('Subject', 'subject', 'Run finished')}`;
+      case 'delay': case 'wait': return html`<div class="mb-4"><label class="label">Wait (seconds)</label>
+        <input class="input" type="number" min="1" value=${d.duration_seconds} onInput=${e=>set('duration_seconds', e.target.value)} />
+        <div class="text-xs text-gray-500 mt-1">The instance parks here and the execution worker advances it when due.</div></div>`;
+      case 'fork': return area('Branches (one per line)', 'branches', 'branch-a\nbranch-b');
+      case 'http-request': case 'action': return html`<div class="mb-4"><label class="label">Method</label>
+        <select class="input" value=${d.method} onChange=${e=>set('method', e.target.value)}>
+          <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
+        </select></div>${field('URL', 'url', 'https://api.example.com/lead')}`;
+      case 'webhook': return field('Webhook URL', 'url', 'https://hooks.example.com/incoming');
+      case 'research': return field('Query', 'query', 'Orlando plumbers with no website');
+      case 'render_video': case 'render_image': case 'render_audio': case 'render_media':
+        return html`${field('Provider', 'provider', 'heygen')}${field('Endpoint', 'endpoint', 'https://api.provider.com/render')}
+          <div class="text-xs text-gray-500 mb-2">A render step's output is logged as a rendition and shows up under Renditions.</div>`;
+      default: return html`<div class="text-xs text-gray-500 mb-2">This step type takes no extra configuration here.</div>`;
+    }
+  };
+  return html`<${ModalShell} title=${editing ? 'Edit Step' : 'Add Step'} onClose=${()=>{S.modal=null;renderApp();}}>
+    <div class="mb-4"><label class="label">Step type${editing ? ' (locked after creation)' : ''}</label>
+      ${editing ? html`<div class="input" style="background:#f9fafb"><strong>${stepTypeLabel(d.type)}</strong> <span class="text-xs text-gray-500">${d.type}</span></div>`
+        : html`<select class="input" value=${d.type} onChange=${e=>set('type', e.target.value)}>
+            <optgroup label="Core step types">${STEP_TYPES.map(t => html`<option key=${t.k} value=${t.k}>${t.label}</option>`)}</optgroup>
+            <optgroup label="More">${STEP_TYPES_EXTRA.map(t => html`<option key=${t.k} value=${t.k}>${t.label}</option>`)}</optgroup>
+          </select>`}
+      ${stepTypeHint(d.type) ? html`<div class="text-xs text-gray-500 mt-1">${stepTypeHint(d.type)}</div>` : null}
+    </div>
+    ${field('Name', 'name', 'Fetch leads')}
+    ${field('Description', 'desc', 'What this step does')}
+    ${cfgFields()}
+    <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading ? spinner() : (editing ? 'Save Step' : 'Add Step')}</button>
+  <//>`;
+};
+
 const BuilderView = () => {
-  const wf = (S.workflows||[]).find(w => w.id === S.viewParams?.id);
-  if (!S.builder && !S.loading) { S.builder={}; renderApp(); }
+  const wfId = S.viewParams && S.viewParams.id;
+  if (!S.workflows && !S.loading) loadWorkflows();
+  if (!wfId) return html`
+    <div>
+      <header class="mb-5"><h1 class="text-xl font-extrabold text-gray-900">Workflow Builder</h1>
+        <p class="text-sm text-gray-500 mt-1">Pick a workflow to configure its steps.</p></header>
+      ${(S.workflows || []).length === 0
+        ? html`<div class="empty">No workflows yet. Create one under Workflows, then configure its steps here.</div>`
+        : html`<div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Status</th><th>Steps</th><th></th></tr></thead><tbody>
+            ${(S.workflows || []).map(w => html`<tr key=${w.id}><td class="font-semibold">${w.name}</td>
+              <td>${statusBadge(w.is_active ? 'active' : 'draft')}</td><td>${w.step_count != null ? w.step_count : '—'}</td>
+              <td class="text-right"><button class="btn text-xs" onClick=${()=>setView('builder', { id: w.id })}>Configure steps</button></td></tr>`)}
+          </tbody></table></div>`}
+    </div>`;
+  if (S.stepsWf !== wfId && !S.loading) loadSteps(wfId);
+  const steps = (S.stepsWf === wfId) ? (S.steps || []) : [];
+  const wf = (S.workflows || []).filter(w => w.id === wfId)[0];
+  const v = S.stepValidation;
+  const move = async (i, dir) => { const ids = steps.map(s => s.id); const j = i + dir;
+    if (j < 0 || j >= ids.length) return; const nx = ids.slice(); const t = nx[i]; nx[i] = nx[j]; nx[j] = t;
+    S.loading = true; renderApp();
+    try { await API.reorderSteps(wfId, nx); toast('Step order saved'); S.stepsWf = null; loadSteps(wfId); }
+    catch(e){ toast(e.message, 'err'); } S.loading = false; renderApp(); };
+  const validate = async () => { S.loading = true; renderApp();
+    try { S.stepValidation = await API.validateSteps(steps.map(s => ({ step_type: s.step_type, name: s.name, description: s.description, config: cfgOf(s) }))); }
+    catch(e){ S.stepValidation = { valid: false, errors: [e.message], warnings: [] }; }
+    S.loading = false; renderApp(); };
+  const del = async (sid, nm) => { if (!confirm('Delete step "' + nm + '"?')) return;
+    S.loading = true; renderApp();
+    try { await API.deleteStep(wfId, sid); toast('Step deleted'); S.stepsWf = null; loadSteps(wfId); }
+    catch(e){ toast(e.message, 'err'); } S.loading = false; renderApp(); };
   return html`
     <div>
-      <header class="flex items-start justify-between mb-5"><div><h1 class="text-xl font-extrabold text-gray-900">Workflow Builder</h1><p class="text-sm text-gray-500 mt-1">${wf ? wf.name : (S.viewParams?.id || 'Workflow')}</p></div><button class="btn-outline text-sm" onClick=${()=>setView('workflows')}>Back</button></header>
-      <div class="card"><div class="empty">Builder interface — step configuration coming next.</div></div>
+      <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
+        <div><h1 class="text-xl font-extrabold text-gray-900">Workflow Builder</h1>
+          <p class="text-sm text-gray-500 mt-1">${wf ? wf.name : (wfId || 'Workflow')} · ${steps.length} step(s)</p></div>
+        <div class="flex gap-2 items-center">
+          <button class="btn-outline text-sm" onClick=${()=>{S.stepsWf=null;loadSteps(wfId);}} disabled=${S.loading}>Refresh</button>
+          <button class="btn-outline text-sm" onClick=${validate} disabled=${S.loading || !steps.length}>Validate</button>
+          <button class="btn text-sm" onClick=${()=>openStepModal(wfId, null)}>+ Add Step</button>
+          <button class="btn-outline text-sm" onClick=${()=>setView('workflows')}>Back</button>
+        </div>
+      </header>
+      ${v ? html`<div class="card mb-4" style="border-left:4px solid ${v.valid ? '#10b981' : '#ef4444'}">
+        <div class="font-semibold mb-1">${v.valid ? '✓ Validation passed' : '✗ Validation failed'}</div>
+        ${(v.errors || []).map((e, i) => html`<div class="text-sm text-red-600" key=${'e' + i}>• ${e}</div>`)}
+        ${(v.warnings || []).map((w, i) => html`<div class="text-sm text-gray-600" key=${'w' + i}>⚠ ${w}</div>`)}
+        ${!(v.errors || []).length && !(v.warnings || []).length ? html`<div class="text-sm text-gray-500">No errors or warnings.</div>` : null}
+      </div>` : null}
+      ${steps.length === 0 ? html`<div class="empty">No steps yet. Step 1 must be a Data Card — it is what pulls the run's data.</div>` : html`
+      <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>#</th><th>Type</th><th>Name</th><th>Config</th><th></th></tr></thead><tbody>
+        ${steps.map((s, i) => html`<tr key=${s.id}>
+          <td class="font-semibold">${i + 1}</td>
+          <td><span class="text-xs">${stepTypeLabel(s.step_type)}</span></td>
+          <td class="font-semibold">${s.name}</td>
+          <td class="text-xs text-gray-600" style="max-width:320px;overflow:hidden;text-overflow:ellipsis">${stepSummary(s)}</td>
+          <td class="text-right whitespace-nowrap">
+            <button class="btn-outline text-xs" onClick=${()=>move(i, -1)} disabled=${i === 0} title="Move up">↑</button>
+            <button class="btn-outline text-xs" onClick=${()=>move(i, 1)} disabled=${i === steps.length - 1} title="Move down">↓</button>
+            <button class="btn-outline text-xs" onClick=${()=>openStepModal(wfId, s)}>Edit</button>
+            <button class="btn-red text-xs" onClick=${()=>del(s.id, s.name)}>Del</button>
+          </td></tr>`)}
+      </tbody></table></div>`}
+    </div>`;
+};
+
+// ===== Renditions (kanban t_ef3b13f4) =====
+// GET /renditions/summary, GET /renditions/workflow/{id} and POST /renditions/stitch were served
+// with no caller in any shipped surface. A render step's output is logged into account_renditions
+// (the app's own n8n converter emits that callback), so without this view a render step produced
+// something the product could never show.
+// GET /renditions has NO default status filter, so it returns soft-deleted rows too (DELETE sets
+// status='expired'). The summary counters only count status='active', so the gallery beside them
+// listed rows the counters denied — the endpoint's own `status` param is used instead.
+const rendQs = (extra) => (S.rendStatus && S.rendStatus !== 'all' ? 'status=' + S.rendStatus + '&' : '') + (extra || 'limit=60');
+const loadRenditions = async () => { S.loading = true; renderApp();
+  try { S.rendSummary = await API.renditionSummary();
+    const r = await API.listRenditions(rendQs()); S.renditions = r.renditions || []; S.rendWf = ''; }
+  catch(e){ toast(e.message, 'err'); S.rendSummary = {}; S.renditions = []; }
+  S.loading = false; renderApp(); };
+const loadWfRenditions = async (wfId) => { S.rendWf = wfId || ''; S.rendSel = []; S.renditions = null;
+  S.loading = true; renderApp();
+  try { const r = wfId ? await API.workflowRenditions(wfId) : await API.listRenditions(rendQs());
+    S.renditions = r.renditions || []; }
+  catch(e){ toast(e.message, 'err'); S.renditions = []; }
+  S.loading = false; renderApp(); };
+const toggleRend = (id) => { const sel = S.rendSel || []; const i = sel.indexOf(id);
+  if (i >= 0) sel.splice(i, 1); else sel.push(id); S.rendSel = sel; renderApp(); };
+const stitchSelected = async () => { const sel = S.rendSel || [];
+  if (sel.length < 2) return toast('Select at least 2 renditions to stitch', 'err');
+  S.loading = true; renderApp();
+  try { await API.stitchRenditions({ name: S.stitchName || 'Stitched rendition', child_ids: sel });
+    toast('Stitch group created'); S.stitchName = ''; S.rendSel = []; await loadRenditions(); }
+  catch(e){ toast(e.message, 'err'); } S.loading = false; renderApp(); };
+
+const RenditionsView = () => {
+  if (!S.renditions && !S.loading) loadRenditions();
+  if (!S.workflows && !S.loading) loadWorkflows();
+  const s = S.rendSummary || {};
+  const list = S.renditions || [];
+  const sel = S.rendSel || [];
+  const chip = (label, n) => html`<span class="text-xs" style="border:1px solid #e5e7eb;border-radius:999px;padding:2px 8px;margin-right:6px">${label} ${n}</span>`;
+  const card = (r) => { const thumb = r.thumbnail_url || r.preview_url || '';
+    const title = r.step_name || r.provider_asset_id || 'Rendition';
+    const picked = sel.indexOf(r.id) >= 0;
+    return html`<div class="card" key=${r.id} style="padding:12px;margin-bottom:0;border:1px solid ${picked ? '#10b981' : '#e5e7eb'}">
+      ${thumb ? html`<img src=${thumb} alt=${title} style="width:100%;height:120px;object-fit:cover;border-radius:6px;margin-bottom:8px" />`
+              : html`<div class="empty" style="height:120px;display:flex;align-items:center;justify-content:center;margin-bottom:8px">${(r.asset_type || 'media')}</div>`}
+      <div class="font-semibold text-sm" style="word-break:break-all">${title}</div>
+      <div class="text-xs text-gray-500 mt-1">${r.provider || 'unknown'} · ${r.asset_type || '—'} · ${r.status || '—'}${r.status && r.status !== 'active' ? html`<span style="color:#b45309">(expired — retained until purge)</span>` : null}</div>
+      <div class="text-xs text-gray-400 mt-0.5">${r.created_at ? fmtDate(r.created_at) : ''}</div>
+      <div class="mt-2 flex gap-2 items-center">
+        <input type="checkbox" checked=${picked} onChange=${()=>toggleRend(r.id)} title="Select for stitching" />
+        ${r.provider_asset_url ? html`<a class="text-xs" href=${r.provider_asset_url} target="_blank" rel="noopener">Open asset ↗</a>` : null}
+      </div>
+    </div>`; };
+  return html`
+    <div>
+      <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
+        <div><h1 class="text-xl font-extrabold text-gray-900">Renditions</h1>
+          <p class="text-sm text-gray-500 mt-1">Media produced by render steps — logged per workflow.</p></div>
+        <div class="flex gap-2 items-center">
+          <select class="input" style="width:auto" value=${S.rendWf || ''} onChange=${e=>loadWfRenditions(e.target.value)}>
+            <option value="">All renditions</option>
+            ${(S.workflows || []).map(w => html`<option key=${w.id} value=${w.id}>${w.name}</option>`)}
+          </select>
+          <select class="input" style="width:auto" value=${S.rendStatus} onChange=${e=>{S.rendStatus=e.target.value;S.renditions=null;loadRenditions();}}>
+            <option value="active">Active</option><option value="expired">Expired</option><option value="all">All statuses</option>
+          </select>
+          <button class="btn-outline text-sm" onClick=${()=>{S.renditions=null;S.rendSummary=null;loadRenditions();}} disabled=${S.loading}>${S.loading ? spinner() : 'Refresh'}</button>
+        </div>
+      </header>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        ${statCard('Active renditions', s.total_active || 0, '🎬')}
+        ${statCard('Expiring in 7 days', s.expiring_soon || 0, '⏳')}
+        ${statCard('Asset types', (s.by_type || []).length, '🗂️')}
+        ${statCard('Providers', (s.by_provider || []).length, '🔌')}
+      </div>
+      ${(s.by_type || []).length ? html`<div class="mb-4">${(s.by_type || []).map((b, i) => html`${chip(b.asset_type || '—', b.count)}`)}
+        ${(s.by_provider || []).map((b, i) => html`${chip(b.provider || '—', b.count)}`)}</div>` : null}
+      <div class="card mb-4 flex items-center gap-2 flex-wrap">
+        <input class="input" style="width:auto" placeholder="Stitch group name" value=${S.stitchName} onInput=${e=>{S.stitchName=e.target.value;renderApp();}} />
+        <button class="btn text-sm" onClick=${stitchSelected} disabled=${sel.length < 2 || S.loading}>Stitch selected (${sel.length})</button>
+        <span class="text-xs text-gray-500">Groups 2+ renditions into one parent rendition.</span>
+      </div>
+      ${list.length === 0
+        ? html`<div class="empty">No renditions yet. A Render step (Builder) or the n8n mirror's log node posts one here per generated asset.</div>`
+        : html`<div class="grid grid-cols-2 md:grid-cols-4 gap-3">${list.map(card)}</div>`}
     </div>`;
 };
 
@@ -1169,6 +1470,7 @@ const NAV = [
   { id:'workflows', label:'Workflows', icon:'⚙️' },
   { id:'builder', label:'Builder', icon:'🛠️' },
   { id:'templates', label:'Templates', icon:'🗂️' },
+  { id:'renditions', label:'Renditions', icon:'🎬' },
   { id:'instances', label:'Instances', icon:'▶️' },
   { id:'automations', label:'Automations', icon:'🔁' },
   { id:'leads', label:'Leads', icon:'👤' },
@@ -1184,6 +1486,7 @@ const NAV = [
 
 const VIEW_MAP = {
   dashboard: DashboardView, workflows: WorkflowsView, builder: BuilderView, templates: TemplatesView,
+  renditions: RenditionsView,
   instances: InstancesView, automations: AutomationsView, leads: LeadsView,
   prospecting: ProspectingView, 'prospecting-results': ProspectingResultsView, 'brand-monitor': BrandMonitorView,
   competitors: CompetitorsView, credits: CreditsView, tickets: TicketsView, profile: ProfileView,
@@ -1223,7 +1526,7 @@ const App = () => {
         <${Current} key=${S.current + "|" + S.dataVer} />
       </main>
     </div>
-    ${S.modal && (S.modal==='wf' ? html`<${WfModal} />` : S.modal==='brand' ? html`<${BrandModal} />` : S.modal==='comp' ? html`<${CompetitorModal} />` : S.modal==='apikey' ? html`<${ApiKeyModal} />` : S.modal==='invite' ? html`<${InviteModal} />` : S.modal==='perms' ? html`<${PermsModal} />` : S.modal==='industry' ? html`<${IndustryPickerView} asModal />` : S.modal==='logs' ? html`<${LogsModal} />` : null)}
+    ${S.modal && (S.modal==='wf' ? html`<${WfModal} />` : S.modal==='brand' ? html`<${BrandModal} />` : S.modal==='comp' ? html`<${CompetitorModal} />` : S.modal==='apikey' ? html`<${ApiKeyModal} />` : S.modal==='invite' ? html`<${InviteModal} />` : S.modal==='perms' ? html`<${PermsModal} />` : S.modal==='industry' ? html`<${IndustryPickerView} asModal />` : S.modal==='step' ? html`<${StepModal} />` : S.modal==='logs' ? html`<${LogsModal} />` : null)}
     ${S.toast && html`<div class="toast ${S.toast.type}">${S.toast.msg}</div>`}
     ${S.loading && html`<div style="position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:60"><span class="spinner"></span></div>`}
   `;
