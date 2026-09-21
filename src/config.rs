@@ -10,6 +10,11 @@ pub struct AppConfig {
     pub jwt_refresh_expiry: i64,
     pub db_min_connections: u32,
     pub db_max_connections: u32,
+    /// Ceiling on concurrent requests inside the unauthenticated password-auth routes
+    /// (`POST /auth/{login,register,forgot-password,reset-password}`). Requests over the
+    /// ceiling are shed with 429 instead of queueing, so the queue behind the Argon2 semaphore
+    /// cannot grow without bound. Raise it if real traffic ever approaches it.
+    pub auth_in_flight_cap: usize,
     pub internal_sync_key: String,
     pub n8n_url: String,
     pub n8n_webhook_url: String,
@@ -53,6 +58,15 @@ impl AppConfig {
             .parse::<u32>()
             .expect("Invalid DB_MAX_CONNECTIONS");
 
+        // Password-auth load-shedding ceiling. Unset or unparseable falls back to the default
+        // rather than refusing to boot: a typo in this value must not be an outage. The floor
+        // is 8 (one per core here), so a stale low value cannot shed ordinary traffic.
+        let auth_in_flight_cap = env::var("AUTH_IN_FLIGHT_CAP")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .unwrap_or(crate::rate_limit::DEFAULT_AUTH_IN_FLIGHT_CAP)
+            .max(8);
+
         let internal_sync_key = env::var("INTERNAL_SYNC_KEY").unwrap_or_default();
         let n8n_url = env::var("N8N_URL").unwrap_or_else(|_| "http://localhost:5681".to_string());
         let n8n_webhook_url =
@@ -73,6 +87,7 @@ impl AppConfig {
             jwt_refresh_expiry,
             db_min_connections,
             db_max_connections,
+            auth_in_flight_cap,
             internal_sync_key,
             n8n_url,
             n8n_webhook_url,

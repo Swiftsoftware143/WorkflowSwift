@@ -35,3 +35,8 @@ hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 base64 = "0.22"
+
+[dev-dependencies]
+# Tests only: `ServiceExt::oneshot` drives a real Router through the middleware stack. The
+# production graph does not enable tower's `util` feature, and tests must not widen it.
+tower = { version = "0.4", features = ["util"] }

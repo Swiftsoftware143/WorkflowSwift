@@ -70,6 +70,14 @@ async fn main() {
     // client always exhausts its own account budget first, and bounded at 10k buckets
     // because the key is a client-supplied header.
     let pre_auth_limiters = crate::rate_limit::RateLimiters::with_capacity(60, 60, 10_000);
+    // Load-shedding ceiling on the unauthenticated password-auth routes. The Argon2 semaphore
+    // bounds the hashing work a login flood can do; this bounds how many requests may be
+    // waiting for it, so the queue cannot grow without limit and the box keeps answering.
+    let auth_in_flight = crate::rate_limit::AuthInFlight::new(config.auth_in_flight_cap);
+    tracing::info!(
+        "Password-auth load shedding: {} concurrent requests on /auth/login|register|forgot-password|reset-password, 429 above that",
+        auth_in_flight.cap()
+    );
     let provider_key_cache = crate::rate_limit::ProviderKeyCache::new(300); // 5 min TTL
 
     let state = AppState {
@@ -77,6 +85,7 @@ async fn main() {
         config: config.clone(),
         rate_limiters,
         pre_auth_limiters,
+        auth_in_flight,
         provider_key_cache,
     };
 

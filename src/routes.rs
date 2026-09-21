@@ -14,7 +14,20 @@ pub fn create_router(state: AppState) -> Router {
         .route("/login", post(auth::login))
         .route("/register", post(auth::register))
         .route("/forgot-password", post(auth::forgot_password))
-        .route("/reset-password", post(auth::reset_password));
+        .route("/reset-password", post(auth::reset_password))
+        // Load shedding, not rate limiting: these four are the only routes a stranger can
+        // reach that do Argon2 work (a 19 MiB hash) or send mail, and the Argon2 semaphore
+        // bounds the *work* without bounding the *queue* — requests that miss a hashing permit
+        // wait, each holding a task, a connection and a body buffer, with no cap on how many
+        // (kanban t_92bafdf8). This admits at most AUTH_IN_FLIGHT_CAP concurrent requests into
+        // the four and answers 429 immediately to anything above, so the queue can no longer
+        // grow and legitimate traffic is never parked behind a flood. It is mounted here, on
+        // the public auth routes only: /health, the webhooks and every other public route are
+        // untouched.
+        .layer(axum::middleware::from_fn_with_state(
+            state.auth_in_flight.clone(),
+            crate::rate_limit::password_auth_shed_middleware,
+        ));
 
     // Protected auth route
     let auth_protected = Router::new()
