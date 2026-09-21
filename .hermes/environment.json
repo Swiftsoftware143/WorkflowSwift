@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "recipe": {
+    "name": "WorkflowSwift served-SPA shells (static, no bundler)",
+    "kind": "static",
+    "bootstrap": [],
+    "build": ["bash /opt/swift/scripts/verify-workflowswift-shells.sh --quick"],
+    "test": ["bash /opt/swift/scripts/verify-workflowswift-shells.sh"],
+    "start": null,
+    "port": null,
+    "readinessPath": null,
+    "evidence": [
+      "hand-written preact/htm shell served straight from /opt/swift/nginx/www-app/workflowswift — no bundler",
+      "declared because detection picks the Rust recipe for this repo (Cargo.toml) and `cargo run` would start a second API against the live port/DB",
+      "the recipe stays honest for Rust changes: the script runs the fmt/check/clippy compiler gate when a .rs file is among the changes (kanban t_ef3b13f4)"
+    ]
+  }
+}
