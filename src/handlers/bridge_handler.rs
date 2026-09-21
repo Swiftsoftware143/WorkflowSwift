@@ -51,8 +51,9 @@ pub async fn get_commands(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let commands = sqlx::query_as::<_, ExtensionCommand>(
-        r#"SELECT * FROM extension_commands
-           WHERE aid = $1 AND status = 'pending'
+        r#"SELECT id, tenant_id AS aid, command, payload, status, delivered_at, created_at
+           FROM extension_commands
+           WHERE tenant_id = $1 AND status = 'pending'
            ORDER BY created_at ASC"#,
     )
     .bind(aid)
@@ -165,4 +166,101 @@ pub async fn bridge_status(
         "user_id": claims.sub,
         "auth": if claims.role == "api_key" { "api_key" } else { "jwt" },
     })))
+}
+
+/// `POST /bridge/commands/ack` — the endpoint the shipped Chrome extension's
+/// `acknowledgeCommand()` posts to after it has executed a command it polled from
+/// `GET /bridge/commands`.
+///
+/// Shaped exactly like its siblings: the account comes from the authenticated claims
+/// (`aid`), never from the body, and the UPDATE carries `AND tenant_id = $4`, so a key
+/// belonging to tenant A cannot acknowledge — or even learn the existence of — a
+/// command owned by tenant B. An unknown / foreign command id is a 404 and leaves the
+/// other tenant's row untouched.
+///
+/// Body: `{"command_id": "<uuid>", "status": "completed"|"failed", "result": {...}}`.
+/// The shipped client always sends `status`; when it is omitted we default to
+/// `completed`, and anything other than the two known values is a 400 rather than a
+/// junk status silently stored in the table.
+pub async fn acknowledge_command(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<AckRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+
+    let requested = req
+        .status
+        .as_deref()
+        .unwrap_or("completed")
+        .trim()
+        .to_ascii_lowercase();
+    let status = match requested.as_str() {
+        "completed" => "completed",
+        "failed" => "failed",
+        other => {
+            return Err(AppError::BadRequest(format!(
+                "invalid status '{other}': expected 'completed' or 'failed'"
+            )))
+        }
+    };
+
+    let updated = sqlx::query_as::<_, AcknowledgedCommand>(
+        r#"UPDATE extension_commands
+              SET status = $1,
+                  result = COALESCE($2::jsonb, result),
+                  acknowledged_at = NOW()
+            WHERE id = $3 AND tenant_id = $4
+        RETURNING id, tenant_id AS aid, command, payload, status,
+                  delivered_at, acknowledged_at, result, created_at"#,
+    )
+    .bind(status)
+    .bind(req.result.clone())
+    .bind(req.command_id)
+    .bind(aid)
+    .fetch_optional(&state.db)
+    .await?;
+
+    // No row matched: either the id does not exist at all or it belongs to another
+    // tenant. Both are the same 404 — we never confirm a foreign id exists.
+    let Some(row) = updated else {
+        return Err(AppError::NotFound(format!(
+            "command {} is not known to this account",
+            req.command_id
+        )));
+    };
+
+    let mut body = serde_json::to_value(&row)
+        .map_err(|e| AppError::Internal(format!("serialize acknowledged command: {}", e)))?;
+    if let Some(map) = body.as_object_mut() {
+        map.insert("acknowledged".to_string(), json!(true));
+    }
+
+    Ok(Json(body))
+}
+
+/// Request body of `POST /bridge/commands/ack`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AckRequest {
+    pub command_id: Uuid,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub result: Option<serde_json::Value>,
+}
+
+/// The acknowledged row as this endpoint returns it. Deliberately a separate struct
+/// from `ExtensionCommand` so the poll path's `SELECT` list is untouched by this
+/// change.
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
+pub struct AcknowledgedCommand {
+    pub id: Uuid,
+    pub aid: Uuid,
+    pub command: String,
+    pub payload: serde_json::Value,
+    pub status: String,
+    pub delivered_at: Option<DateTime<Utc>>,
+    pub acknowledged_at: Option<DateTime<Utc>>,
+    pub result: Option<serde_json::Value>,
+    pub created_at: DateTime<Utc>,
 }
