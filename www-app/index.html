@@ -436,7 +436,7 @@ const WorkflowsView = () => {
 // show under every surface, so a filtered list is a superset by design.
 const loadWorkflows = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.workflows = (await API.get('/workflows' + (S.wfSurface ? '?surface=' + encodeURIComponent(S.wfSurface) : ''))).workflows || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
 const setWfSurface = (v) => { S.wfSurface = v; S.workflows = null; loadWorkflows(); };
-const runWf = async (id) => { try { await API.post('/workflows/'+id+'/run'); toast('Workflow run triggered'); } catch(e){ toast(e.message,'err'); } };
+const runWf = async (id) => { try { const r = await API.post('/workflows/'+id+'/run'); const n = (r.steps_total||0); const warn = (r.warnings||[])[0]; toast(`Workflow ran: ${n} step(s) executed${warn ? ' — ' + warn : ''}`, warn ? 'err' : undefined); S.instances=null; } catch(e){ toast(e.message,'err'); } };
 const delWf = async (id) => { if(!confirm('Delete this workflow?'))return; try { await API.del('/workflows/'+id); toast('Workflow deleted'); S.workflows=null; loadWorkflows(); } catch(e){ toast(e.message,'err'); } };
 
 // ===== Templates =====
