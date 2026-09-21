@@ -70,6 +70,55 @@ pub struct StepRow {
 pub struct ExecutionOutcome {
     pub steps: Vec<Value>,
     pub status: String,
+    /// Steps that finished the walk without executing: `manual`/`approval`
+    /// (a human must approve) and `delay`/`wait` (a timer must fire). This build
+    /// has no background worker, so these can never advance on their own — the
+    /// instance must therefore NOT be reported as completed (item 3).
+    pub pending_steps: i32,
+    pub failed_steps: i32,
+}
+
+/// The `status` a step result really has.
+///
+/// Three step arms (webhook, n8n, publish) store a raw HTTP status *code* in
+/// `status`. Reading that with `as_str()` fell through to the default
+/// "completed", so an upstream step that answered 500 was recorded — and
+/// displayed — as a success. Numbers are classified here instead.
+pub fn classify_step_status(result: &Value) -> String {
+    match result.get("status") {
+        Some(Value::Number(n)) => {
+            let code = n.as_u64().unwrap_or(0);
+            if (200..400).contains(&code) {
+                "completed".to_string()
+            } else {
+                "failed".to_string()
+            }
+        }
+        Some(Value::String(s)) => match s.as_str() {
+            "error" | "failed" => "failed".to_string(),
+            "pending" => "pending".to_string(),
+            "skipped" => "skipped".to_string(),
+            "warning" => "warning".to_string(),
+            "in_progress" => "in_progress".to_string(),
+            _ => "completed".to_string(),
+        },
+        _ => "completed".to_string(),
+    }
+}
+
+/// Human-readable reason for a step that did not succeed, for the log row.
+fn step_error_text(result: &Value) -> Option<String> {
+    for key in ["error", "reason", "message"] {
+        if let Some(s) = result.get(key).and_then(|v| v.as_str()) {
+            if !s.is_empty() {
+                return Some(s.to_string());
+            }
+        }
+    }
+    match result.get("status") {
+        Some(Value::Number(n)) => Some(format!("upstream returned HTTP {}", n)),
+        _ => None,
+    }
 }
 
 /// Find or create a system client for automated instances, so a run never
@@ -177,6 +226,7 @@ pub async fn execute_steps(
         let step_instance_id = Uuid::new_v4();
         let step_type = &step.step_type;
         let step_config = step.config.clone().unwrap_or(json!({}));
+        let step_started = std::time::Instant::now();
 
         // Create the instance step record
         sqlx::query(
@@ -188,6 +238,34 @@ pub async fn execute_steps(
             .bind(step_type)
             .bind(&step.name)
             .bind(i as i32)
+            .execute(&state.db)
+            .await
+            .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
+
+        // Execution trace: one log row per step attempt, opened here and closed
+        // after the arm runs. This is the run history the spec asks for
+        // (kanban t_a6a1b299 item 2).
+        let log_id = Uuid::new_v4();
+        sqlx::query(
+                r#"INSERT INTO workflow_execution_logs
+                   (id, instance_id, workflow_id, step_id, step_type, step_name, sort_order, status, input_data, started_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, 'running', $8, NOW())"#,
+            )
+            .bind(log_id)
+            .bind(instance_id)
+            .bind(workflow_id)
+            .bind(step.id)
+            .bind(step_type)
+            .bind(&step.name)
+            .bind(i as i32)
+            .bind(json!({
+                "config": step_config,
+                "source": source,
+                "campaign_slug": slug,
+                "contact": contact,
+                "data": data,
+                "source_entry_id": source_entry_id,
+            }))
             .execute(&state.db)
             .await
             .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
@@ -679,20 +757,18 @@ pub async fn execute_steps(
         };
 
         // Mark step instance as completed (or error)
-        let step_status = result
-            .get("status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("completed");
+        let step_status = classify_step_status(&result);
         let completed_at = if step_status == "completed" {
             Some(Utc::now())
         } else {
             None
         };
+        let duration_ms = step_started.elapsed().as_millis() as i32;
 
         sqlx::query(
                 r#"UPDATE workflow_instance_steps SET status = $1, completed_at = $2, notes = $3 WHERE id = $4"#,
             )
-            .bind(step_status)
+            .bind(&step_status)
             .bind(completed_at)
             .bind(result.to_string())
             .bind(step_instance_id)
@@ -700,22 +776,57 @@ pub async fn execute_steps(
             .await
             .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
 
+        // Close the log row: the trace now says what actually happened, with the
+        // upstream status code and the reason when it did not succeed.
+        sqlx::query(
+                r#"UPDATE workflow_execution_logs
+                   SET status = $1, output_data = $2, error_message = $3, duration_ms = $4, completed_at = NOW()
+                   WHERE id = $5"#,
+            )
+            .bind(&step_status)
+            .bind(&result)
+            .bind(step_error_text(&result))
+            .bind(duration_ms)
+            .bind(log_id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
+
         step_results.push(result);
     }
 
-    // Mark instance as completed if all steps succeeded
-    let all_ok = step_results.iter().all(|r| {
-        let status = r.get("status").and_then(|v| v.as_str()).unwrap_or("");
-        status == "completed" || status == "skipped" || status == "pending"
-    });
+    // Finalise the instance from what the steps actually did.
+    //
+    // `pending` (and `in_progress`) steps mean the walk finished without
+    // executing them: a manual/approval gate that needs a human, or a
+    // delay/wait that needs a timer. Nothing in this build advances them (no
+    // background worker exists), so a run that leaves one behind is NOT
+    // completed — reporting it as completed was the lie in item 3.
+    let mut pending_steps: i32 = 0;
+    let mut failed_steps: i32 = 0;
+    for r in &step_results {
+        match classify_step_status(r).as_str() {
+            "failed" => failed_steps += 1,
+            "pending" | "in_progress" => pending_steps += 1,
+            _ => {}
+        }
+    }
 
-    let instance_status = if all_ok { "completed" } else { "in_progress" };
+    let instance_status = if failed_steps > 0 {
+        "failed"
+    } else if pending_steps > 0 {
+        "pending"
+    } else {
+        "completed"
+    };
+
+    let terminal = instance_status == "completed" || instance_status == "failed";
 
     sqlx::query(
             "UPDATE workflow_instances SET status = $1, completed_at = $2, updated_at = NOW() WHERE id = $3"
         )
         .bind(instance_status)
-        .bind(if all_ok { Some(Utc::now()) } else { None })
+        .bind(if terminal { Some(Utc::now()) } else { None })
         .bind(instance_id)
         .execute(&state.db)
         .await
@@ -724,5 +835,36 @@ pub async fn execute_steps(
     Ok(ExecutionOutcome {
         steps: step_results,
         status: instance_status.to_string(),
+        pending_steps,
+        failed_steps,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn numeric_status_codes_are_classified_not_defaulted() {
+        // These three arms store an HTTP code in `status`; reading it with as_str()
+        // used to fall through to "completed".
+        assert_eq!(classify_step_status(&json!({"status": 200})), "completed");
+        assert_eq!(classify_step_status(&json!({"status": 302})), "completed");
+        assert_eq!(classify_step_status(&json!({"status": 404})), "failed");
+        assert_eq!(classify_step_status(&json!({"status": 503})), "failed");
+        // Named statuses keep their meaning.
+        assert_eq!(classify_step_status(&json!({"status": "pending"})), "pending");
+        assert_eq!(classify_step_status(&json!({"status": "error"})), "failed");
+        assert_eq!(classify_step_status(&json!({"status": "skipped"})), "skipped");
+        assert_eq!(classify_step_status(&json!({})), "completed");
+    }
+
+    #[test]
+    fn error_text_prefers_the_reason_and_falls_back_to_the_code() {
+        assert_eq!(step_error_text(&json!({"error": "boom"})).as_deref(), Some("boom"));
+        assert_eq!(step_error_text(&json!({"reason": "No URL configured"})).as_deref(), Some("No URL configured"));
+        assert_eq!(step_error_text(&json!({"status": 404})).as_deref(), Some("upstream returned HTTP 404"));
+        assert_eq!(step_error_text(&json!({"status": "completed"})), None);
+    }
 }

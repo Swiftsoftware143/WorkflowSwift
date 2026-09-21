@@ -131,8 +131,15 @@ pub async fn trigger_extension_workflow(
     .await
 }
 
-/// Shared n8n leg: charge one credit, POST the trigger body to the tenant's n8n
-/// webhook, refund the credit if n8n is unreachable.
+/// Shared n8n leg: POST the trigger body to the tenant's n8n webhook and charge
+/// one credit **only after n8n has accepted the trigger**.
+///
+/// Before this, the credit was deducted up front and refunded only when the HTTP
+/// call itself failed (a transport `Err`). An n8n 4xx/5xx — e.g. 404 "webhook is
+/// not registered" — therefore returned HTTP 200 *and* kept the money, i.e. the
+/// customer was billed for an execution that never happened (kanban
+/// t_a6a1b299 item 1). Now: n8n answers first, the charge follows a 2xx, and any
+/// other outcome comes back as a 502 carrying n8n's own words.
 async fn fire_n8n_webhook(
     state: &AppState,
     aid: Uuid,
@@ -141,7 +148,8 @@ async fn fire_n8n_webhook(
     payload: serde_json::Value,
     webhook_data: Option<serde_json::Value>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    // Check credit balance
+    // Balance is still read first: it decides whether the tenant may trigger at
+    // all. It is a check, not a charge — nothing is written until n8n says yes.
     let balance = sqlx::query_scalar::<_, i64>(
         "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
     )
@@ -155,17 +163,6 @@ async fn fire_n8n_webhook(
             "Insufficient credits. Please purchase more credits.".to_string(),
         ));
     }
-
-    // Deduct 1 credit
-    sqlx::query(
-        r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
-           VALUES ($1, $2, -1, 'n8n_execution', $3)"#,
-    )
-    .bind(Uuid::new_v4())
-    .bind(aid)
-    .bind(format!("n8n workflow execution: {}", workflow_id))
-    .execute(&state.db)
-    .await?;
 
     // Call n8n webhook on configured n8n instance
     let n8n_url = format!(
@@ -182,49 +179,70 @@ async fn fire_n8n_webhook(
         "webhook_data": webhook_data,
     });
 
-    let n8n_response = client.post(&n8n_url).json(&n8n_body).send().await;
-
-    match n8n_response {
-        Ok(resp) => {
-            let status_code = resp.status();
-            let body: serde_json::Value = resp
-                .json()
-                .await
-                .unwrap_or(json!({"note": "n8n responded without body"}));
-
-            let new_balance = sqlx::query_scalar::<_, i64>(
-                "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
-            )
-            .bind(aid)
-            .fetch_one(&state.db)
-            .await
-            .unwrap_or(0);
-
-            Ok(Json(json!({
-                "status": "triggered",
-                "n8n_status": status_code.as_u16(),
-                "n8n_response": body,
-                "remaining_balance": new_balance,
-            })))
-        }
-        Err(e) => {
-            // Refund credit on failure
-            sqlx::query(
-                r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
-                   VALUES ($1, $2, 1, 'refund', $3)"#,
-            )
-            .bind(Uuid::new_v4())
-            .bind(aid)
-            .bind(format!("Refund for failed n8n execution: {}", workflow_id))
-            .execute(&state.db)
-            .await?;
-
-            Err(AppError::Internal(format!(
-                "n8n webhook call failed: {}",
+    let resp = client
+        .post(&n8n_url)
+        .json(&n8n_body)
+        .send()
+        .await
+        .map_err(|e| {
+            AppError::Upstream(format!(
+                "n8n is unreachable ({}). Nothing ran, so no credit was charged.",
                 e
-            )))
-        }
+            ))
+        })?;
+
+    let status_code = resp.status();
+    let raw = resp.text().await.unwrap_or_default();
+    let body: serde_json::Value = serde_json::from_str(&raw).unwrap_or_else(|_| {
+        json!({
+            "note": "n8n responded without a JSON body",
+            "raw": raw.chars().take(300).collect::<String>(),
+        })
+    });
+
+    if !status_code.is_success() {
+        // n8n answered, and the answer was "no". Nothing executed -> nothing billed.
+        tracing::warn!(
+            aid = %aid,
+            workflow_id = %workflow_id,
+            n8n_status = status_code.as_u16(),
+            n8n_body = %body,
+            "n8n refused the trigger; no credit charged"
+        );
+        return Err(AppError::Upstream(format!(
+            "n8n refused the trigger (HTTP {}): {}. Nothing ran, so no credit was charged.",
+            status_code.as_u16(),
+            body.to_string().chars().take(300).collect::<String>()
+        )));
     }
+
+    // n8n accepted the trigger — charge exactly one credit, now.
+    sqlx::query(
+        r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
+           VALUES ($1, $2, -1, 'n8n_execution', $3)"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(aid)
+    .bind(format!("n8n workflow execution: {}", workflow_id))
+    .execute(&state.db)
+    .await?;
+
+    let new_balance = sqlx::query_scalar::<_, i64>(
+        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
+    )
+    .bind(aid)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0);
+
+    Ok(Json(json!({
+        "status": "triggered",
+        "charged": true,
+        "credits_charged": 1,
+        "n8n_status": status_code.as_u16(),
+        "n8n_response": body,
+        "remaining_balance": new_balance,
+    })))
 }
 
 pub async fn check_n8n_health(

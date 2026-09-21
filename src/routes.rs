@@ -110,10 +110,14 @@ pub fn create_router(state: AppState) -> Router {
             "/{id}/advance",
             post(handlers::instance_handler::advance_instance),
         )
+        // The run history of one instance (workflow_execution_logs), tenant-scoped.
         .route(
-            "/{id}/callback",
-            post(handlers::instance_handler::instance_callback),
+            "/{id}/logs",
+            get(handlers::instance_handler::list_instance_logs),
         );
+    // NOTE: `/{id}/callback` is NOT here. n8n calls it with X-Internal-Key and no
+    // JWT, so it lives on the public router and authenticates itself — see
+    // instance_handler::instance_callback (kanban t_a6a1b299 item 4).
 
     let tag_routes = Router::new()
         .route(
@@ -865,6 +869,12 @@ pub fn create_router(state: AppState) -> Router {
     let public_routes = Router::new()
         .nest("/auth", auth_public)
         .route("/health", get(health_check))
+        // n8n writes its execution result back here. Self-authenticating: either
+        // X-Internal-Key (n8n) or a user JWT scoped to the instance's account.
+        .route(
+            "/instances/{id}/callback",
+            post(handlers::instance_handler::instance_callback),
+        )
         .route(
             "/bridge-tasks",
             get(handlers::bridge_handler::list_inbound_tasks),

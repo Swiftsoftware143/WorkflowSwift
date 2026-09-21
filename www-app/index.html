@@ -436,7 +436,7 @@ const WorkflowsView = () => {
 // show under every surface, so a filtered list is a superset by design.
 const loadWorkflows = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.workflows = (await API.get('/workflows' + (S.wfSurface ? '?surface=' + encodeURIComponent(S.wfSurface) : ''))).workflows || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
 const setWfSurface = (v) => { S.wfSurface = v; S.workflows = null; loadWorkflows(); };
-const runWf = async (id) => { try { const r = await API.post('/workflows/'+id+'/run'); const n = (r.steps_total||0); const warn = (r.warnings||[])[0]; toast(`Workflow ran: ${n} step(s) executed${warn ? ' — ' + warn : ''}`, warn ? 'err' : undefined); S.instances=null; } catch(e){ toast(e.message,'err'); } };
+const runWf = async (id) => { try { const r = await API.post('/workflows/'+id+'/run'); const n = (r.steps_total||0); const warn = (r.warnings||[])[0]; const st = r.status || 'completed'; const pend = r.pending_steps || 0; toast(`Workflow ${st}: ${n} step(s)${pend ? `, ${pend} still pending` : ''}${warn ? ' — ' + warn : ''}`, (st !== 'completed' || warn) ? 'err' : undefined); S.instances=null; } catch(e){ toast(e.message,'err'); } };
 const delWf = async (id) => { if(!confirm('Delete this workflow?'))return; try { await API.del('/workflows/'+id); toast('Workflow deleted'); S.workflows=null; loadWorkflows(); } catch(e){ toast(e.message,'err'); } };
 
 // ===== Templates =====
@@ -514,12 +514,33 @@ const InstancesView = () => {
       </header>
       ${list.length === 0 ? html`<div class="empty">No instances yet.</div>` : html`
       <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Status</th><th>Step</th><th>Started</th><th>Completed</th><th></th></tr></thead><tbody>
-        ${list.map(i => html`<tr key=${i.id}><td class="font-semibold">${i.name}</td><td>${statusBadge(i.status)}</td><td>${i.current_step_order ?? '—'}</td><td>${fmtDate(i.started_at)}</td><td>${fmtDate(i.completed_at)}</td><td class="text-right"><button class="btn-outline text-xs" onClick=${()=>advanceInstance(i.id)}>Advance</button></td></tr>`)}
+        ${list.map(i => html`<tr key=${i.id}><td class="font-semibold">${i.name}</td><td>${statusBadge(i.status)}</td><td>${i.current_step_order ?? '—'}</td><td>${fmtDate(i.started_at)}</td><td>${fmtDate(i.completed_at)}</td><td class="text-right whitespace-nowrap"><button class="btn-outline text-xs" onClick=${()=>openLogs(i.id)}>Logs</button> <button class="btn-outline text-xs" onClick=${()=>advanceInstance(i.id)}>Advance</button></td></tr>`)}
       </tbody></table></div>`}
     </div>`;
 };
 const loadInstances = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.instances = (await API.get('/instances')).instances || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
 const advanceInstance = async (id) => { try { await API.post('/instances/'+id+'/advance'); toast('Instance advanced'); S.instances=null; loadInstances(); } catch(e){ toast(e.message,'err'); } };
+
+// Run history for one instance: GET /instances/{id}/logs (workflow_execution_logs).
+// One row per step attempt, written by the execution engine — this is the surface
+// that makes the log table readable instead of write-only.
+const LogsModal = () => {
+  const inst = (S.instances || []).find(x => x.id === S.logsInstanceId);
+  const logs = S.instanceLogs;
+  return html`<${ModalShell} title=${inst ? 'Run history — ' + inst.name : 'Run history'} onClose=${closeModal}>
+    ${inst ? html`<p class="text-sm text-gray-500 mb-3">Instance status: <b>${inst.status}</b>${inst.completed_at ? ' · finished ' + fmtDate(inst.completed_at) : ' · not finished'}</p>` : null}
+    ${logs === null ? html`<p class="text-sm text-gray-500">Loading…</p>`
+      : logs.length === 0 ? html`<p class="text-sm text-gray-500">No log rows for this instance. Runs before execution logging was added have none.</p>`
+      : html`<table class="table"><thead><tr><th>#</th><th>Step</th><th>Status</th><th>ms</th></tr></thead><tbody>
+        ${logs.map(l => html`<tr key=${l.id}><td>${(l.sort_order ?? 0) + 1}</td><td>${l.step_name}<div class="text-xs text-gray-400">${l.step_type}</div>${l.error_message ? html`<div class="text-xs text-red-600">${l.error_message}</div>` : null}</td><td>${statusBadge(l.status)}</td><td>${l.duration_ms ?? '—'}</td></tr>`)}
+      </tbody></table>`}
+  <//>`;
+};
+const openLogs = async (id) => {
+  S.logsInstanceId = id; S.instanceLogs = null; S.modal = 'logs'; renderApp();
+  try { const r = await API.get('/instances/' + id + '/logs'); S.instanceLogs = r.logs || []; } catch(e){ S.instanceLogs = []; toast(e.message,'err'); }
+  renderApp();
+};
 
 // ===== Automations =====
 const AutomationsView = () => {
@@ -1044,7 +1065,7 @@ const App = () => {
         <${Current} key=${S.current + "|" + S.dataVer} />
       </main>
     </div>
-    ${S.modal && (S.modal==='wf' ? html`<${WfModal} />` : S.modal==='brand' ? html`<${BrandModal} />` : S.modal==='comp' ? html`<${CompetitorModal} />` : S.modal==='apikey' ? html`<${ApiKeyModal} />` : S.modal==='invite' ? html`<${InviteModal} />` : S.modal==='perms' ? html`<${PermsModal} />` : S.modal==='industry' ? html`<${IndustryPickerView} asModal />` : null)}
+    ${S.modal && (S.modal==='wf' ? html`<${WfModal} />` : S.modal==='brand' ? html`<${BrandModal} />` : S.modal==='comp' ? html`<${CompetitorModal} />` : S.modal==='apikey' ? html`<${ApiKeyModal} />` : S.modal==='invite' ? html`<${InviteModal} />` : S.modal==='perms' ? html`<${PermsModal} />` : S.modal==='industry' ? html`<${IndustryPickerView} asModal />` : S.modal==='logs' ? html`<${LogsModal} />` : null)}
     ${S.toast && html`<div class="toast ${S.toast.type}">${S.toast.msg}</div>`}
     ${S.loading && html`<div style="position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:60"><span class="spinner"></span></div>`}
   `;

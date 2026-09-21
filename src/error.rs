@@ -39,6 +39,13 @@ pub enum AppError {
     #[error("Internal server error: {0}")]
     Internal(String),
 
+    /// An upstream dependency (n8n, an integration target) refused or could not
+    /// answer. The message is passed through to the caller on purpose: the whole
+    /// point of this variant is that "the thing you asked for did not happen"
+    /// must be visible, not hidden behind a generic 500 or a 200.
+    #[error("Upstream failure: {0}")]
+    Upstream(String),
+
     #[error("Too many requests: {0}")]
     TooManyRequests(String),
 
@@ -84,6 +91,10 @@ impl IntoResponse for AppError {
                 )
             }
             AppError::TooManyRequests(msg) => (StatusCode::TOO_MANY_REQUESTS, msg.clone()),
+            AppError::Upstream(msg) => {
+                tracing::warn!(upstream_error = %msg, "Upstream dependency failed");
+                (StatusCode::BAD_GATEWAY, msg.clone())
+            }
             AppError::Jwt(e) => {
                 tracing::warn!(error = %e, "JWT error");
                 (StatusCode::UNAUTHORIZED, "Invalid token".to_string())

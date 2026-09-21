@@ -90,13 +90,57 @@ pub async fn update_instance(
 /// Called by n8n after workflow execution completes.
 /// Updates instance status and stores n8n results.
 /// Accepts: { status: "completed"|"failed", result: {...}, error?: string }
+///
+/// AUTH: this handler sits on the public router and authenticates itself, because
+/// the caller it exists for — n8n — has no user JWT. Two credentials are accepted:
+///
+///   * `X-Internal-Key: <INTERNAL_SYNC_KEY>` — machine callers (n8n's HTTP node,
+///     the same header `POST /api/v1/incoming` uses);
+///   * `Authorization: Bearer <user JWT>` — the app itself, scoped to the caller's
+///     own account (the instance must belong to `claims.aid`).
+///
+/// Before this, the handler's own comment claimed "no auth required — this is
+/// called by n8n internally" while the route was mounted behind the JWT
+/// middleware: n8n got a 401 on every callback, so no execution result could ever
+/// be written back (kanban t_a6a1b299 item 4).
 pub async fn instance_callback(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Path(id): Path<Uuid>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    // No auth required — this is called by n8n internally
-    // The instance_id acts as bearer token
+    let internal_key = headers
+        .get("x-internal-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    let internal_ok = !state.config.internal_sync_key.is_empty()
+        && internal_key == state.config.internal_sync_key;
+
+    if !internal_ok {
+        // Not a machine caller — require a user token and tenant scope.
+        let token = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.strip_prefix("Bearer ").unwrap_or(v))
+            .unwrap_or("");
+        let claims = crate::auth::middleware::verify_token(token, &state.config.jwt_secret)
+            .map_err(|_| AppError::Unauthorized)?;
+        let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+
+        let owned: bool = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM workflow_instances WHERE id = $1 AND aid = $2)",
+        )
+        .bind(id)
+        .bind(aid)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(false);
+
+        if !owned {
+            return Err(AppError::NotFound("Instance not found".to_string()));
+        }
+    }
 
     let status = req
         .get("status")
@@ -352,5 +396,76 @@ pub async fn advance_instance(
     Ok(Json(json!({
         "message": "Instance advanced",
         "dispatch_results": dispatch_results
+    })))
+}
+
+/// GET /api/v1/instances/{id}/logs — the run history of one instance.
+///
+/// `workflow_execution_logs` existed since migration 039 and was never written
+/// nor read by anything: the spec asks for "execution logs / full run history"
+/// and there was none (kanban t_a6a1b299 item 2). The engine now writes one row
+/// per step attempt; this is the surface that reads them back, tenant-scoped.
+pub async fn list_instance_logs(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<impl IntoResponse> {
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+
+    let owned: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM workflow_instances WHERE id = $1 AND aid = $2")
+            .bind(id)
+            .bind(aid)
+            .fetch_optional(&state.db)
+            .await?;
+
+    if owned.is_none() {
+        return Err(AppError::NotFound("Instance not found".to_string()));
+    }
+
+    let rows = sqlx::query(
+        r#"SELECT id, step_id, step_type, step_name, sort_order, status, provider,
+                  input_data, output_data, error_message, duration_ms, started_at, completed_at
+           FROM workflow_execution_logs
+           WHERE instance_id = $1
+           ORDER BY sort_order ASC, started_at ASC"#,
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let logs: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            let step_id: Option<Uuid> = r.get("step_id");
+            let provider: Option<String> = r.get("provider");
+            let input_data: Option<serde_json::Value> = r.get("input_data");
+            let output_data: Option<serde_json::Value> = r.get("output_data");
+            let error_message: Option<String> = r.get("error_message");
+            let duration_ms: Option<i32> = r.get("duration_ms");
+            let started_at: Option<chrono::DateTime<chrono::Utc>> = r.get("started_at");
+            let completed_at: Option<chrono::DateTime<chrono::Utc>> = r.get("completed_at");
+            json!({
+                "id": r.get::<Uuid, _>("id"),
+                "step_id": step_id,
+                "step_type": r.get::<String, _>("step_type"),
+                "step_name": r.get::<String, _>("step_name"),
+                "sort_order": r.get::<i32, _>("sort_order"),
+                "status": r.get::<String, _>("status"),
+                "provider": provider,
+                "input_data": input_data,
+                "output_data": output_data,
+                "error_message": error_message,
+                "duration_ms": duration_ms,
+                "started_at": started_at,
+                "completed_at": completed_at,
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "instance_id": id.to_string(),
+        "count": logs.len(),
+        "logs": logs,
     })))
 }

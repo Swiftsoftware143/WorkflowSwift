@@ -207,6 +207,8 @@ struct RunOutcome {
     warnings: Vec<String>,
     n8n: serde_json::Value,
     remaining_balance: i64,
+    pending_steps: i32,
+    failed_steps: i32,
 }
 
 /// The ONE user-facing execution path. Creates the instance row, executes every
@@ -305,6 +307,21 @@ async fn run_in_process(
         }
     };
 
+    // Item 3: a run that leaves steps pending is not a success. Say so in the
+    // response as well as in the instance row.
+    if outcome.pending_steps > 0 {
+        warnings.push(format!(
+            "{} step(s) are still pending: manual/approval steps need a human and delay/wait steps need a timer, and this build runs no background worker to advance them. The instance is reported as 'pending', not completed.",
+            outcome.pending_steps
+        ));
+    }
+    if outcome.failed_steps > 0 {
+        warnings.push(format!(
+            "{} step(s) failed — the instance is reported as 'failed'. Per-step detail is in GET /api/v1/instances/{{id}}/logs.",
+            outcome.failed_steps
+        ));
+    }
+
     let remaining_balance: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
     )
@@ -317,7 +334,10 @@ async fn run_in_process(
         sqlx::query("UPDATE workflow_instances SET result = $1, updated_at = NOW() WHERE id = $2")
             .bind(json!({
                 "runner": "in_process",
+                "status": outcome.status,
                 "steps_total": outcome.steps.len(),
+                "pending_steps": outcome.pending_steps,
+                "failed_steps": outcome.failed_steps,
                 "warnings": warnings,
                 "n8n": n8n,
             }))
@@ -332,6 +352,8 @@ async fn run_in_process(
         warnings,
         n8n,
         remaining_balance,
+        pending_steps: outcome.pending_steps,
+        failed_steps: outcome.failed_steps,
     })
 }
 
@@ -482,6 +504,70 @@ pub async fn get_workflow_steps(
     Ok(Json(json!({"steps": steps})))
 }
 
+/// ── Data-Card-first guardrail (kanban t_a6a1b299 item 5) ─────────────────────
+///
+/// The spec says "6 step types ... `Data Card` (**step 1 is always this**)"
+/// (workflowswift-feature-spec.md §E). Until now the rule lived only in a
+/// comment: a `notify` step could be created as step 1 of an empty workflow, and
+/// no write path looked at what it left at position 0. It is enforced on every
+/// write that decides the order — create, update-with-move, reorder — and
+/// reported by validate-steps.
+fn is_data_card(step_type: &str) -> bool {
+    matches!(step_type, "data-card" | "data_card")
+}
+
+fn data_card_first_error() -> AppError {
+    AppError::BadRequest(
+        "Step 1 of a workflow must be a Data Card ('data-card') — it is what pulls the run's data. \
+         Add the Data Card first, then add this step after it."
+            .to_string(),
+    )
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct StepOrderRow {
+    id: Uuid,
+    step_type: String,
+    sort_order: i32,
+}
+
+/// Every step of a workflow, in the order the engine walks them.
+async fn load_ordered_steps(
+    db: &sqlx::PgPool,
+    workflow_id: Uuid,
+) -> Result<Vec<StepOrderRow>, AppError> {
+    let mut rows = sqlx::query_as::<_, StepOrderRow>(
+        "SELECT id, step_type, sort_order FROM workflow_steps WHERE workflow_id = $1",
+    )
+    .bind(workflow_id)
+    .fetch_all(db)
+    .await?;
+    rows.sort_by(|a, b| a.sort_order.cmp(&b.sort_order).then(a.id.cmp(&b.id)));
+    Ok(rows)
+}
+
+/// Refuse a write that would leave a non-Data-Card step first — unless the
+/// workflow already breaks the rule today, in which case it stays editable.
+/// The grandfather clause matters: the inbound-capture workflows legitimately
+/// start with an `integration` step, and refusing them would make live data
+/// impossible to edit.
+fn assert_data_card_first(
+    current: &[StepOrderRow],
+    projected: &[StepOrderRow],
+) -> Result<(), AppError> {
+    let already_ok = current
+        .first()
+        .map(|s| is_data_card(&s.step_type))
+        .unwrap_or(true);
+    if !already_ok {
+        return Ok(());
+    }
+    match projected.first() {
+        Some(first) if !is_data_card(&first.step_type) => Err(data_card_first_error()),
+        _ => Ok(()),
+    }
+}
+
 pub async fn create_workflow_step(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -507,6 +593,11 @@ pub async fn create_workflow_step(
             .await?;
 
     let sort_order = max_sort.and_then(|r| r.0).map(|m| m + 1).unwrap_or(0);
+
+    // Guardrail: step 1 of a workflow is always a Data Card.
+    if sort_order == 0 && !is_data_card(&req.step_type) {
+        return Err(data_card_first_error());
+    }
 
     let step = sqlx::query_as::<_, WorkflowStep>(
         r#"INSERT INTO workflow_steps (id, workflow_id, step_type, name, description, sort_order, config)
@@ -546,8 +637,8 @@ pub async fn update_workflow_step(
     // Guardrail: a step's TYPE is fixed at creation. Name/description/config/order
     // stay editable; the type must not change (otherwise the guardrails that were
     // validated for the original type — e.g. Data Card first, Fork last — are void).
-    let current_type: String = sqlx::query_scalar(
-        "SELECT step_type FROM workflow_steps WHERE id = $1 AND workflow_id = $2",
+    let (current_type, current_sort): (String, i32) = sqlx::query_as(
+        "SELECT step_type, sort_order FROM workflow_steps WHERE id = $1 AND workflow_id = $2",
     )
     .bind(step_id)
     .bind(workflow_id)
@@ -562,7 +653,22 @@ pub async fn update_workflow_step(
         )));
     }
 
-    let sort_order = req.sort_order.unwrap_or(0);
+    // An absent sort_order PRESERVES the stored position. It used to default to 0,
+    // which silently teleported any edited step to the front of the workflow — and
+    // could therefore park a non-Data-Card step at step 1.
+    let sort_order = req.sort_order.unwrap_or(current_sort);
+    if sort_order != current_sort {
+        let current = load_ordered_steps(&state.db, workflow_id).await?;
+        let mut projected = current.clone();
+        for s in projected.iter_mut() {
+            if s.id == step_id {
+                s.sort_order = sort_order;
+            }
+        }
+        projected.sort_by(|a, b| a.sort_order.cmp(&b.sort_order).then(a.id.cmp(&b.id)));
+        assert_data_card_first(&current, &projected)?;
+    }
+
     let step = sqlx::query_as::<_, WorkflowStep>(
         r#"UPDATE workflow_steps SET step_type=$1, name=$2, description=$3, sort_order=$4, config=$5
            WHERE id=$6 AND workflow_id=$7
@@ -627,6 +733,19 @@ pub async fn reorder_workflow_steps(
             .fetch_optional(&state.db)
             .await?
             .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
+
+    // Guardrail: a reorder must not leave a non-Data-Card step at step 1.
+    let current = load_ordered_steps(&state.db, id).await?;
+    let mut projected = current.clone();
+    for (i, step_id) in req.step_ids.iter().enumerate() {
+        for s in projected.iter_mut() {
+            if s.id == *step_id {
+                s.sort_order = i as i32;
+            }
+        }
+    }
+    projected.sort_by(|a, b| a.sort_order.cmp(&b.sort_order).then(a.id.cmp(&b.id)));
+    assert_data_card_first(&current, &projected)?;
 
     for (i, step_id) in req.step_ids.iter().enumerate() {
         sqlx::query("UPDATE workflow_steps SET sort_order = $1 WHERE id = $2 AND workflow_id = $3")
@@ -733,15 +852,26 @@ pub async fn run_workflow(
         "execution": "in_process",
         "workflow": workflow.name,
         "steps_total": run.steps.len(),
+        "pending_steps": run.pending_steps,
+        "failed_steps": run.failed_steps,
         "steps": run.steps,
         "n8n": run.n8n,
         "warnings": run.warnings,
         "remaining_balance": run.remaining_balance,
-        "message": format!(
-            "Workflow '{}' ran: {} step(s) executed in-process.",
-            workflow.name,
-            run.steps.len()
-        )
+        "message": if run.pending_steps > 0 {
+            format!(
+                "Workflow '{}' ran {} step(s) in-process; {} step(s) are still pending and cannot advance in this build.",
+                workflow.name,
+                run.steps.len(),
+                run.pending_steps
+            )
+        } else {
+            format!(
+                "Workflow '{}' ran: {} step(s) executed in-process.",
+                workflow.name,
+                run.steps.len()
+            )
+        }
     })))
 }
 
@@ -816,6 +946,14 @@ pub async fn validate_workflow_steps(
 
         step_types.push(step_type.to_string());
 
+        // Guardrail (§E): step 1 is always a Data Card.
+        if i == 0 && !is_data_card(step_type) {
+            errors.push(format!(
+                "Step 1 '{}': the first step must be a Data Card ('data-card') — it is what pulls the run's data.",
+                step_name
+            ));
+        }
+
         // Check step_type is valid
         let valid_types = [
             "http-request",
@@ -823,6 +961,7 @@ pub async fn validate_workflow_steps(
             "ai-action",
             "openclaw",
             "data-card",
+            "data_card",
             "notify",
             "export",
             "delay",
@@ -964,4 +1103,75 @@ pub async fn validate_workflow_steps(
         "warning_count": warnings.len(),
         "total_steps": steps.len()
     })))
+}
+
+#[cfg(test)]
+mod data_card_first_tests {
+    use super::*;
+
+    fn row(step_type: &str, sort_order: i32) -> StepOrderRow {
+        StepOrderRow {
+            id: Uuid::new_v4(),
+            step_type: step_type.to_string(),
+            sort_order,
+        }
+    }
+
+    fn ordered(mut v: Vec<StepOrderRow>) -> Vec<StepOrderRow> {
+        v.sort_by(|a, b| a.sort_order.cmp(&b.sort_order).then(a.id.cmp(&b.id)));
+        v
+    }
+
+    #[test]
+    fn both_data_card_spellings_count() {
+        assert!(is_data_card("data-card"));
+        assert!(is_data_card("data_card"));
+        assert!(!is_data_card("notify"));
+        assert!(!is_data_card("integration"));
+    }
+
+    #[test]
+    fn moving_a_data_card_off_step_one_is_refused() {
+        let current = ordered(vec![row("data-card", 0), row("notify", 1)]);
+        let mut projected = current.clone();
+        for s in projected.iter_mut() {
+            if s.step_type == "data-card" {
+                s.sort_order = 9;
+            }
+        }
+        let projected = ordered(projected);
+        assert!(
+            assert_data_card_first(&current, &projected).is_err(),
+            "a reorder that drops a non-Data-Card step to position 0 must be refused"
+        );
+        // The unchanged order is still fine.
+        assert!(assert_data_card_first(&current, &current).is_ok());
+    }
+
+    #[test]
+    fn data_card_still_first_is_allowed() {
+        let current = ordered(vec![row("notify", 1), row("data-card", 0)]);
+        let projected = ordered(vec![row("data-card", 0), row("notify", 1)]);
+        assert!(assert_data_card_first(&current, &projected).is_ok());
+    }
+
+    #[test]
+    fn legacy_non_data_card_first_stays_editable() {
+        // The inbound-capture workflows start with an `integration` step. Refusing
+        // those would make live data impossible to reorder — grandfather them.
+        let current = ordered(vec![row("integration", 0), row("notify", 1)]);
+        let mut projected = current.clone();
+        for s in projected.iter_mut() {
+            if s.step_type == "integration" {
+                s.sort_order = 1;
+            } else {
+                s.sort_order = 0;
+            }
+        }
+        let projected = ordered(projected);
+        assert!(
+            assert_data_card_first(&current, &projected).is_ok(),
+            "a workflow that already breaks the rule must not become uneditable"
+        );
+    }
 }
