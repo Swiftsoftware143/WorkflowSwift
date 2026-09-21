@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::auth::models::Claims;
 use crate::error::{ApiResult, AppError};
+use crate::handlers::industry_handler::canonical_metric_key;
 use crate::AppState;
 
 /// Cost for dashboard data push — this is data users paid a workflow credit
@@ -169,7 +170,10 @@ pub async fn push_dashboard_data(
             }
         };
 
-    // Store the data
+    // Store the data. The key is normalised to the canonical n8n_ form here as well: this write
+    // path used to prefix unconditionally, which is how a dashboard_type that already carried the
+    // prefix ended up stored as n8n_n8n_<x> (migration 056 collapses those legacy rows).
+    let metric_key = canonical_metric_key(dashboard_type);
     let data_id = Uuid::new_v4();
     sqlx::query(
         r#"INSERT INTO dashboard_data (id, dashboard_id, aid, metric_key, metric_value)
@@ -178,7 +182,7 @@ pub async fn push_dashboard_data(
     .bind(data_id)
     .bind(dashboard_id)
     .bind(aid)
-    .bind(format!("n8n_{}", dashboard_type))
+    .bind(&metric_key)
     .bind(serde_json::to_value(&data).unwrap_or_default())
     .execute(&state.db)
     .await?;
@@ -195,7 +199,7 @@ pub async fn push_dashboard_data(
            )"#,
     )
     .bind(aid)
-    .bind(format!("n8n_{}", dashboard_type))
+    .bind(&metric_key)
     .execute(&state.db)
     .await
     .ok();
@@ -204,7 +208,6 @@ pub async fn push_dashboard_data(
     // If any active workflow has trigger_type='dashboard_data' and
     // trigger_config->>'metric_key' matches this dashboard_type,
     // automatically start a new workflow instance.
-    let metric_key = format!("n8n_{}", dashboard_type);
     tracing::info!(
         "Checking dashboard triggers for aid={} metric_key={}",
         aid.to_string(),

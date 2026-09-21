@@ -89,7 +89,11 @@ pub async fn seed_dashboard_data(
             )
             .bind(Uuid::new_v4())
             .bind(aid)
-            .bind(format!("n8n_{}", metric_key))
+            // canonical key space: an already-prefixed widget config key must not be stored as
+            // n8n_n8n_<x> (that is what the old unconditional prefix here produced, see 056)
+            .bind(crate::handlers::industry_handler::canonical_metric_key(
+                metric_key,
+            ))
             .bind(&value)
             .bind(&industry_slug)
             .execute(&state.db)

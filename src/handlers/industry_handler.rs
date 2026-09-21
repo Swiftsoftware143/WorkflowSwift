@@ -632,6 +632,50 @@ fn pos(row: i32, col: i32, width: i32, height: i32) -> Value {
     json!({"row": row, "col": col, "width": width, "height": height})
 }
 
+/// The single key space dashboard series live in: exactly one `n8n_` prefix.
+///
+/// Every writer (push-widget-data, push-dashboard-data, the internal n8n seeder) must store under
+/// this key and every reader must look it up, otherwise a push is written under a key nobody
+/// reads. `trim_start_matches` drops every leading repetition, so the legacy `n8n_n8n_<x>` form
+/// (written by the old unconditional prefix; see migration 056) collapses to `n8n_<x>`.
+pub fn canonical_metric_key(metric_key: &str) -> String {
+    format!("n8n_{}", metric_key.trim_start_matches("n8n_"))
+}
+
+/// Keys a widget's series may live under, in descending preference. The first entry is the
+/// canonical key; the second is the legacy `n8n_` + raw-config-key form, which only differs when
+/// the widget's `config.metric_key` was already prefixed and is kept so rows stored before the
+/// migration (and by an old binary during a deploy window) still resolve. The read takes the
+/// newest row across the candidates, so a fresh canonical push always wins over a stale legacy row.
+pub fn metric_key_candidates(metric_key: &str) -> Vec<String> {
+    let canonical = canonical_metric_key(metric_key);
+    let legacy = format!("n8n_{}", metric_key);
+    if legacy == canonical {
+        vec![canonical]
+    } else {
+        vec![canonical, legacy]
+    }
+}
+
+/// Latest stored series for one widget, or `None` when it genuinely has never been pushed to.
+/// A failing query is returned as an error — never flattened into `None` — so a broken lookup can
+/// no longer masquerade as an empty widget.
+pub async fn latest_widget_metric(
+    db: &sqlx::PgPool,
+    aid: Uuid,
+    lookup_keys: &[String],
+) -> Result<Option<Value>, sqlx::Error> {
+    sqlx::query_scalar(
+        r#"SELECT metric_value FROM dashboard_data
+           WHERE aid = $1 AND metric_key = ANY($2::text[])
+           ORDER BY recorded_at DESC LIMIT 1"#,
+    )
+    .bind(aid)
+    .bind(lookup_keys)
+    .fetch_optional(db)
+    .await
+}
+
 /// GET /api/v1/dashboard/widgets — return widgets + current data for specified industry dashboard
 /// Now accepts optional ?industry query param for multi-industry support
 /// Defaults to the primary industry dashboard
@@ -744,18 +788,23 @@ pub async fn get_dashboard_widgets(
             .and_then(|c| c.as_str())
             .unwrap_or("");
 
-        // Fetch latest data for this widget's metric_key
-        let data: Option<serde_json::Value> = sqlx::query_scalar(
-            r#"SELECT metric_value FROM dashboard_data
-               WHERE aid = $1 AND metric_key = $2
-               ORDER BY recorded_at DESC LIMIT 1"#,
-        )
-        .bind(aid)
-        .bind(format!("n8n_{}", metric_key))
-        .fetch_optional(&state.db)
-        .await
-        .ok()
-        .flatten();
+        // Fetch latest data for this widget's metric_key. The key is normalised to the canonical
+        // n8n_ form (a config key that is ALREADY prefixed used to be looked up as n8n_n8n_<x>,
+        // which no push ever wrote), and a failing query is surfaced instead of being flattened
+        // into "this widget has no data".
+        let lookup_keys = metric_key_candidates(metric_key);
+        let data: Option<serde_json::Value> =
+            latest_widget_metric(&state.db, aid, &lookup_keys)
+                .await
+                .map_err(|e| {
+                    tracing::error!(
+                        error = %e,
+                        %aid,
+                        metric_keys = ?lookup_keys,
+                        "dashboard widget series lookup failed — returning an error instead of rendering the widget as empty"
+                    );
+                    AppError::Database(e)
+                })?;
 
         let position: serde_json::Value = if pos_text.is_empty() {
             json!({})
@@ -834,11 +883,11 @@ pub async fn push_widget_data(
         .get("metric_key")
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::Validation("metric_key required".to_string()))?;
-    let metric_key: String = if metric_key.starts_with("n8n_") {
-        metric_key.to_string()
-    } else {
-        format!("n8n_{}", metric_key)
-    };
+    // Store under the canonical key, whatever form the caller sent: the read path (and every
+    // reader) looks up exactly this key, so a caller that passes a widget's config.metric_key
+    // verbatim — n8n, or the SPA's own "populate sample data" button — updates that widget
+    // instead of writing a row nobody ever reads.
+    let metric_key: String = canonical_metric_key(metric_key);
     let metric_value = req
         .get("value")
         .ok_or_else(|| AppError::Validation("value required".to_string()))?;
@@ -911,4 +960,75 @@ pub async fn push_widget_data(
         "data_id": data_id.to_string(),
         "metric_key": metric_key
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_metric_key_is_idempotent_and_collapses_the_legacy_double_prefix() {
+        assert_eq!(
+            canonical_metric_key("site-flipping_trends"),
+            "n8n_site-flipping_trends"
+        );
+        assert_eq!(
+            canonical_metric_key("n8n_site-flipping_trends"),
+            "n8n_site-flipping_trends",
+            "an already-prefixed config key must survive unchanged, not become n8n_n8n_"
+        );
+        assert_eq!(
+            canonical_metric_key("n8n_n8n_site-flipping_trends"),
+            "n8n_site-flipping_trends"
+        );
+        assert_eq!(canonical_metric_key("n8n_n8n_n8n_x"), "n8n_x");
+    }
+
+    #[test]
+    fn lookup_candidates_cover_the_canonical_and_the_legacy_key_form() {
+        assert_eq!(
+            metric_key_candidates("site-flipping_trends"),
+            vec!["n8n_site-flipping_trends"],
+            "a bare config key has exactly one form"
+        );
+        assert_eq!(
+            metric_key_candidates("n8n_site-flipping_trends"),
+            vec!["n8n_site-flipping_trends", "n8n_n8n_site-flipping_trends"],
+            "a prefixed config key keeps the legacy double-prefixed form readable"
+        );
+    }
+
+    /// Executed, not asserted on paper: a lazy pool pointed at a closed port makes every query
+    /// fail, so the same call the handler makes is run both ways. The control leg is the exact
+    /// pre-fix shape (`.ok().flatten()`), which answered `None` — an empty widget — for a query
+    /// that never ran.
+    #[tokio::test]
+    async fn a_failing_series_lookup_is_an_error_not_an_empty_widget() {
+        let db = sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_millis(500))
+            .connect_lazy("postgres://probe:probe@127.0.0.1:1/none")
+            .expect("lazy pool");
+        let aid = Uuid::nil();
+        let keys = metric_key_candidates("site-flipping_trends");
+
+        let out = latest_widget_metric(&db, aid, &keys).await;
+        assert!(
+            out.is_err(),
+            "a query that cannot run must be an error, got {out:?}"
+        );
+
+        // control: the pre-fix read returns Ok(None) for the very same failing query
+        let swallowed: Option<Value> = sqlx::query_scalar(
+            r#"SELECT metric_value FROM dashboard_data
+               WHERE aid = $1 AND metric_key = $2
+               ORDER BY recorded_at DESC LIMIT 1"#,
+        )
+        .bind(aid)
+        .bind(format!("n8n_{}", "site-flipping_trends"))
+        .fetch_optional(&db)
+        .await
+        .ok()
+        .flatten();
+        assert_eq!(swallowed, None, "the pre-fix shape hid the failure");
+    }
 }
