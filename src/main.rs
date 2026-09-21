@@ -50,6 +50,17 @@ async fn main() {
     tracing::info!("Running database migrations...");
     db::run_migrations(&pool).await;
 
+    // At-rest encryption posture for BYOK provider credentials. This belongs in the boot log:
+    // without the master key, provider key writes fail closed, and that must be visible before
+    // a customer hits it (never silently fall back to plaintext).
+    if crate::security::provider_key_crypto::is_configured() {
+        tracing::info!("Provider key encryption: enabled (AES-256 at rest, enc:v1 format)");
+    } else {
+        tracing::warn!(
+            "Provider key encryption: DISABLED — PROVIDER_KEY_ENC_SECRET is missing; BYOK provider key writes will fail closed"
+        );
+    }
+
     let rate_limiters = crate::rate_limit::RateLimiters::new(30, 10);
     let provider_key_cache = crate::rate_limit::ProviderKeyCache::new(300); // 5 min TTL
 

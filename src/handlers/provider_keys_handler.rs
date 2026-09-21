@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use crate::auth::models::Claims;
 use crate::error::{ApiResult, AppError};
+use crate::security::provider_key_crypto as key_crypto;
 use crate::AppState;
 use chrono::{DateTime, Utc};
 
@@ -29,6 +30,10 @@ fn mask_key(key: &str) -> String {
 
 /// GET /api/v1/provider-keys
 /// List all provider keys for the authenticated account (masked).
+///
+/// The stored column holds ciphertext (`enc:v1:` + base64, see
+/// `crate::security::provider_key_crypto`). It is decrypted here only to build the
+/// `sk-...xyz` mask — ciphertext is never returned to a client, and neither is a full key.
 pub async fn list_provider_keys(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -45,37 +50,52 @@ pub async fn list_provider_keys(
     .fetch_all(&state.db)
     .await?;
 
-    let keys: Vec<serde_json::Value> = rows
-        .iter()
-        .map(|row| {
-            let raw_key: &str = row.try_get("api_key").unwrap_or("");
-            let base_url: Option<String> = row.try_get("base_url").unwrap_or(None);
-            let metadata: serde_json::Value = row.try_get("metadata").unwrap_or(json!({}));
-            let created_at: DateTime<Utc> =
-                row.try_get("created_at").unwrap_or_else(|_| Utc::now());
-            let updated_at: DateTime<Utc> =
-                row.try_get("updated_at").unwrap_or_else(|_| Utc::now());
+    let mut keys: Vec<serde_json::Value> = Vec::with_capacity(rows.len());
 
-            json!({
-                "id": row.try_get::<Uuid, _>("id").map(|u| u.to_string()).unwrap_or_default(),
-                "provider": row.try_get::<&str, _>("provider").unwrap_or(""),
-                "api_key": mask_key(raw_key),
-                "has_key": !raw_key.is_empty(),
-                "base_url": base_url,
-                "metadata": metadata,
-                "is_active": row.try_get::<bool, _>("is_active").unwrap_or(false),
-                "created_at": created_at.to_rfc3339(),
-                "updated_at": updated_at.to_rfc3339(),
-            })
-        })
-        .collect();
+    for row in rows.iter() {
+        let stored_key: &str = row.try_get("api_key").unwrap_or("");
+        let provider: &str = row.try_get("provider").unwrap_or("");
 
-    Ok(Json(json!({"provider_keys": keys})))
+        // Decrypt ONLY to build the mask. A value that cannot be decrypted still reports
+        // has_key = true (the slot holds a credential) but never reveals the ciphertext.
+        let raw_key = match key_crypto::decrypt_from_storage(&state.db, stored_key).await {
+            Ok(k) => k,
+            Err(e) => {
+                tracing::warn!(
+                    provider,
+                    error = %e,
+                    "provider key could not be decrypted for masking"
+                );
+                String::new()
+            }
+        };
+
+        let base_url: Option<String> = row.try_get("base_url").unwrap_or(None);
+        let metadata: serde_json::Value = row.try_get("metadata").unwrap_or(json!({}));
+        let created_at: DateTime<Utc> = row.try_get("created_at").unwrap_or_else(|_| Utc::now());
+        let updated_at: DateTime<Utc> = row.try_get("updated_at").unwrap_or_else(|_| Utc::now());
+
+        keys.push(json!({
+            "id": row.try_get::<Uuid, _>("id").map(|u| u.to_string()).unwrap_or_default(),
+            "provider": provider,
+            "api_key": mask_key(&raw_key),
+            "has_key": !stored_key.is_empty(),
+            "base_url": base_url,
+            "metadata": metadata,
+            "is_active": row.try_get::<bool, _>("is_active").unwrap_or(false),
+            "created_at": created_at.to_rfc3339(),
+            "updated_at": updated_at.to_rfc3339(),
+        }));
+    }
+
+    Ok(Json(json!({ "provider_keys": keys })))
 }
 
 /// POST /api/v1/provider-keys
 /// Create or update a provider key for the account.
 /// If the provider already exists for this account, it's upserted.
+/// The value is encrypted at rest (AES-256, master key from the environment) and is never
+/// stored or echoed back in the clear.
 pub async fn upsert_provider_key(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -109,9 +129,14 @@ pub async fn upsert_provider_key(
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
 
+    // Encrypt the credential BEFORE it reaches the database. Nothing is stored in the clear:
+    // a missing master key fails the request (see crate::security::provider_key_crypto).
+    let encrypted_key = key_crypto::encrypt_for_storage(&state.db, api_key).await?;
+
     // Upsert. `aid` is the account scope in this app; `tenant_id` is the legacy column from
     // before the tenant->account rename (migration 034) and is mirrored with the account id
     // so older readers still find a value.
+    // `api_key` holds `enc:v1:` + base64 ciphertext, never the plaintext value.
     let result = sqlx::query(
         r#"INSERT INTO provider_keys (id, aid, tenant_id, provider, api_key, base_url, metadata, is_active)
            VALUES ($1, $2, $2, $3, $4, $5, $6, $7)
@@ -126,7 +151,7 @@ pub async fn upsert_provider_key(
     .bind(Uuid::new_v4())
     .bind(aid)
     .bind(provider)
-    .bind(api_key)
+    .bind(&encrypted_key)
     .bind(base_url)
     .bind(&metadata)
     .bind(is_active)
@@ -242,12 +267,27 @@ pub async fn get_provider_key(
     .fetch_optional(db)
     .await?;
 
-    Ok(row.map(|r| {
-        let api_key: String = r.try_get("api_key").unwrap_or_default();
-        let base_url: Option<String> = r.try_get("base_url").unwrap_or(None);
-        let metadata: serde_json::Value = r.try_get("metadata").unwrap_or(json!({}));
-        (api_key, base_url, metadata)
-    }))
+    let Some(r) = row else {
+        return Ok(None);
+    };
+
+    let stored: String = r.try_get("api_key").unwrap_or_default();
+    let base_url: Option<String> = r.try_get("base_url").unwrap_or(None);
+    let metadata: serde_json::Value = r.try_get("metadata").unwrap_or(json!({}));
+
+    // Decrypt: the column holds ciphertext at rest, and this value is about to be used
+    // against the provider. A value we cannot decrypt is treated as "no key" rather than
+    // being passed on as garbage ciphertext.
+    match key_crypto::decrypt_from_storage(db, &stored).await {
+        Ok(api_key) => Ok(Some((api_key, base_url, metadata))),
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                "stored provider key could not be decrypted — treating as no key"
+            );
+            Ok(None)
+        }
+    }
 }
 
 /// Look up a stored provider key for an account, with AppState caching.
@@ -278,9 +318,22 @@ pub async fn get_provider_key_cached(
     .await?;
 
     if let Some(r) = row {
-        let api_key: String = r.try_get("api_key").unwrap_or_default();
+        let stored: String = r.try_get("api_key").unwrap_or_default();
         let base_url: Option<String> = r.try_get("base_url").unwrap_or(None);
         let metadata: serde_json::Value = r.try_get("metadata").unwrap_or(json!({}));
+
+        // Decrypt once, then cache the plaintext for the TTL (the cache is what readers use;
+        // the database never hands out the usable credential).
+        let api_key = match key_crypto::decrypt_from_storage(db, &stored).await {
+            Ok(k) => k,
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    "stored provider key could not be decrypted — treating as no key"
+                );
+                return Ok(None);
+            }
+        };
 
         // Populate cache
         state.provider_key_cache.set(

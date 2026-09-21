@@ -64,13 +64,18 @@ pub(crate) async fn get_provider_base_url(
     }
 }
 
-/// Fetch API key for a given provider from the account stored keys
+/// Fetch API key for a given provider from the account stored keys.
+///
+/// The column is ciphertext at rest (`enc:v1:` + base64, see
+/// `crate::security::provider_key_crypto`) and every caller here uses the value against the
+/// provider, so it is decrypted. A value that cannot be decrypted yields `None` — ciphertext
+/// is never handed to an outbound request.
 pub(crate) async fn get_provider_api_key(
     db: &sqlx::PgPool,
     aid: Uuid,
     provider: &str,
 ) -> Option<String> {
-    sqlx::query_scalar::<_, String>(
+    let stored: Option<String> = sqlx::query_scalar(
         "SELECT api_key FROM provider_keys WHERE aid = $1 AND provider = $2 AND is_active = true",
     )
     .bind(aid)
@@ -78,7 +83,14 @@ pub(crate) async fn get_provider_api_key(
     .fetch_optional(db)
     .await
     .ok()
-    .flatten()
+    .flatten();
+
+    match stored {
+        Some(s) => crate::security::provider_key_crypto::decrypt_from_storage(db, &s)
+            .await
+            .ok(),
+        None => None,
+    }
 }
 
 /// GET /api/v1/integration-destinations?provider=coreswift&action=create_contact

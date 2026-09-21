@@ -298,8 +298,12 @@ pub async fn upsert_provider_key(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let ws_id = req.workspace_id.and_then(|w| Uuid::parse_str(&w).ok());
 
-    // Delete and re-insert for clean upsert — encrypt api_key at rest
+    // Delete and re-insert for clean upsert. The credential is encrypted at rest with the
+    // shared helper: the previous pgp_sym_encrypt(..., accounts.encryption_key) reference was
+    // dead code — `accounts.encryption_key` does not exist, so this path always errored.
     let ws_uuid = ws_id;
+    let encrypted_key =
+        crate::security::provider_key_crypto::encrypt_for_storage(&s.db, &req.api_key).await?;
     sqlx::query(
         "DELETE FROM provider_keys WHERE aid = $1 AND provider = $2 AND (portfolio_company_id = $3 OR ($3 IS NULL AND portfolio_company_id IS NULL))"
     )
@@ -307,11 +311,15 @@ pub async fn upsert_provider_key(
     .execute(&s.db).await?;
     sqlx::query(
         r#"INSERT INTO provider_keys (id, aid, portfolio_company_id, provider, api_key, is_active)
-         VALUES ($1,$2,$3,$4,pgp_sym_encrypt($5, (SELECT COALESCE(encryption_key, 'change-me') FROM accounts WHERE id = $2)), true)"#
+         VALUES ($1,$2,$3,$4,$5,true)"#,
     )
-    .bind(Uuid::new_v4()).bind(aid).bind(ws_uuid)
-    .bind(&req.provider).bind(&req.api_key)
-    .execute(&s.db).await?;
+    .bind(Uuid::new_v4())
+    .bind(aid)
+    .bind(ws_uuid)
+    .bind(&req.provider)
+    .bind(&encrypted_key)
+    .execute(&s.db)
+    .await?;
 
     Ok(Json(
         json!({"status": "saved", "provider": req.provider, "configured": true}),
@@ -339,27 +347,42 @@ pub async fn delete_provider_key(
     Ok(Json(json!({"status": "deleted"})))
 }
 
-/// Decrypt a provider API key — uses account-level encryption key
+/// Fetch and decrypt a provider API key for an account (optionally scoped to a
+/// portfolio company).
+///
+/// The column stores ciphertext at rest; decryption goes through the shared at-rest helper
+/// so the app has exactly one stored format (`enc:v1:` + base64, AES-256).
 pub async fn get_decrypted_key(
     pool: &sqlx::PgPool,
     aid: Uuid,
     provider: &str,
     ws_id: Option<Uuid>,
 ) -> Result<Option<String>, AppError> {
-    let key: Option<String> = if let Some(ws) = ws_id {
+    let stored: Option<String> = if let Some(ws) = ws_id {
         sqlx::query_scalar(
-            "SELECT pgp_sym_decrypt(api_key, (SELECT COALESCE(encryption_key, 'default-key-please-rotate') FROM accounts WHERE id = $1))
-             FROM provider_keys WHERE aid = $1 AND provider = $2 AND portfolio_company_id = $3 AND is_active = true"
+            "SELECT api_key FROM provider_keys
+             WHERE aid = $1 AND provider = $2 AND portfolio_company_id = $3 AND is_active = true",
         )
-        .bind(aid).bind(provider).bind(ws)
-        .fetch_optional(pool).await?
+        .bind(aid)
+        .bind(provider)
+        .bind(ws)
+        .fetch_optional(pool)
+        .await?
     } else {
         sqlx::query_scalar(
-            "SELECT pgp_sym_decrypt(api_key, (SELECT COALESCE(encryption_key, 'default-key-please-rotate') FROM accounts WHERE id = $1))
-             FROM provider_keys WHERE aid = $1 AND provider = $2 AND portfolio_company_id IS NULL AND is_active = true"
+            "SELECT api_key FROM provider_keys
+             WHERE aid = $1 AND provider = $2 AND portfolio_company_id IS NULL AND is_active = true",
         )
-        .bind(aid).bind(provider)
-        .fetch_optional(pool).await?
+        .bind(aid)
+        .bind(provider)
+        .fetch_optional(pool)
+        .await?
     };
-    Ok(key)
+
+    match stored {
+        Some(s) => Ok(Some(
+            crate::security::provider_key_crypto::decrypt_from_storage(pool, &s).await?,
+        )),
+        None => Ok(None),
+    }
 }
