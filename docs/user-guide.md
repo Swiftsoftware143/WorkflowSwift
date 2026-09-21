@@ -74,10 +74,18 @@ chatbot, Alexa skill, kiosk): `GET/POST /surfaces` (name, slug, description).
   tenant level; it is never a global paste by an admin and never env-var-only.
 - Provider keys are returned **masked** (`sk-…161`) by every read endpoint — the raw value is
   never sent back.
-- **Current limitation, stated plainly:** API keys are created and stored (argon2-hashed), and
-  the raw value is shown exactly once — but they are **not yet accepted as an authentication
-  method** for the REST API. Use the login JWT (`Authorization: Bearer`) for programmatic calls
-  today.
+- **API keys authenticate.** Send the raw key exactly as it was shown once, as
+  `Authorization: Bearer workflowswift_...` (the same `Authorization` header the login JWT uses).
+  It is verified server-side (argon2) and resolved to the account and user that own it, so every
+  call is tenant-scoped — `GET /bridge/status` echoes the account the *key* belongs to. The login
+  JWT keeps working unchanged; a client may use either.
+- A key honours the row it was minted with: `is_active = false` or an `expires_at` in the past is
+  refused with `401`; `permissions` (`[]` = full account scope, `["read"]` = read-only, `"*"` =
+  everything) is enforced per request, so a read-only key gets `403` on a write; `last_used_at` is
+  stamped on every successful use. Minting is gated by your plan (`api_access`, `max_api_keys` ->
+  `402` without them).
+- **This is the credential the Chrome extension uses** (see *Chrome extension - Swift Market
+  Intel* below): extension Options -> *API token*.
 
 ## Plans and limits
 
@@ -112,6 +120,30 @@ Set logo, primary/accent colour, custom domain and footer text per tenant
   (`/step-integrations`) configure where a step dispatches to.
 - **Incoming webhook**: `POST /api/v1/incoming` is what other Swift tools push leads to. It is
   protected by an internal key.
+
+## Chrome extension — Swift Market Intel
+
+- **Download**: `https://workflowswift.com/swift-market-intel-extension-1.2.0.zip`
+  (rolling alias `/swift-market-intel-extension.zip`; pin the versioned file — the alias can lag
+  behind the CDN cache). Install guide: `/swift-market-intel-extension.html`.
+- **Install**: unpack the zip, then `chrome://extensions` → Developer mode → *Load unpacked* →
+  pick the folder containing `manifest.json`. Not on the Chrome Web Store, so updates are manual.
+- **Connect**: extension Options → paste your API token → leave **API Base URL** at
+  `https://workflowswift.com/api/v1` → *Test Connection* → Save.
+- **Collect**: open a supported listing → extension icon → *Scrape Current Page* →
+  *Send to WorkflowSwift*. Supported: Etsy, Amazon, eBay, Facebook Marketplace, Shopify,
+  Alibaba, AliExpress, Craigslist, Pinterest, TikTok, Instagram, Yelp, Google Maps.
+- **Sending costs 1 credit** per run (charged to the account the key belongs to). A trigger aimed at
+  a workflow that belongs to a *different* account is refused with `403`, an unknown one with `404`
+  — the target is resolved against your own workflows first, so one tenant cannot fire another's.
+- **Endpoints it uses** (all under `/api/v1`, `Authorization: Bearer <token>`):
+  `GET /bridge/commands`, `GET /bridge/status`, `POST /workflows/trigger`,
+  `POST /bridge/ingest`. Command acknowledgement (`POST /bridge/commands/ack`) is
+  **not implemented server-side yet**.
+- **History**: 1.1.0 shipped `API Base URL = https://workflowswift.com/api` (no `/v1`), so every
+  call returned 404 while *Test Connection* still reported success. Fixed in 1.2.0, which also
+  drops the `<all_urls>` host permission (it was listed next to the explicit marketplace
+  origins) and moves the base URL into one shared `config.js`.
 
 ## Support
 

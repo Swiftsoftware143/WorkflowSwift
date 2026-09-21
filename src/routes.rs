@@ -90,6 +90,13 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/validate-steps",
             post(handlers::workflow_handler::validate_workflow_steps),
+        )
+        // The shipped Swift Market Intel extension posts here (background.js /
+        // popup.js) with {workflow_id, input_data, source, timestamp} — without
+        // this route the request was swallowed by /{id} and answered 405.
+        .route(
+            "/trigger",
+            post(handlers::n8n_proxy_handler::trigger_extension_workflow),
         );
 
     let instance_routes = Router::new()
