@@ -164,7 +164,7 @@ function content(){
     if(s==='tickets')renderCRUD(c,'tickets','Ticket',['title','status','priority'],'/tickets');
   }else if(t==='profile'){
     if(s==='my-profile')renderProfile(c);
-    else if(s==='team')renderCRUD(c,'team','Team Member',['name','email','role'],'/users/team');
+    else if(s==='team')renderCRUD(c,'team','Team Member',['name','email','role'],'/users');
     else if(s==='plans-credits')renderPlansCredits(c);
     else if(s==='invoices')renderList(c,'invoices','Invoice','/invoices');
     else if(s==='payments')renderCRUD(c,'payments','Payment Provider',['provider_type','is_active'],'/payment-providers');
@@ -184,11 +184,31 @@ function content(){
   return c;
 }
 
+// --- Response envelope helpers ---
+// The API answers lists under a NAMED key — {users:[…]}, {providers:[…]}, {agents:[…]},
+// {sources:[…]}, {workflows:[…]}, {surfaces:[…]} — and only a few under {items:[…]}.
+// renderCRUD read data.items only, so every named-envelope section rendered
+// "No items yet." even when rows existed; with no rows rendered there was no Edit/Del
+// button, so every per-row PUT/DELETE route stayed uncalled. Unwrap the envelope.
+function unwrapList(d){
+  if(Array.isArray(d))return d;
+  if(!d||typeof d!=='object')return [];
+  if(Array.isArray(d.items))return d.items;
+  for(const k of Object.keys(d)){ if(Array.isArray(d[k]))return d[k]; }
+  return [];
+}
+// Row identifier for the generic Edit/Del actions: several resources key on something
+// other than `id` (payment providers on provider_type, sources on industry_slug, …).
+function rowId(it){
+  if(!it||typeof it!=='object')return '';
+  return it.id||it.provider_type||it.slug||it.uuid||it.api_key_id||it.industry_slug||it.name||'';
+}
+
 // --- Generic CRUD ---
 async function renderCRUD(container,key,label,fields,ep){
   container.innerHTML=`<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">${label}s</h2><button class="btn btn-primary btn-sm" id="addBtn">+ Add</button></div><div id="list"><p class="text-gray-400 text-sm">Loading...</p></div></div>`;
   const data=await api(ep);
-  const items=(data&&data.items)||(data&&Array.isArray(data)?data:[])||[];
+  const items=unwrapList(data);
   const list=container.querySelector('#list');
   if(!items.length){
     list.innerHTML='<p class="text-gray-400 text-sm">No items yet.</p>';
@@ -199,8 +219,8 @@ async function renderCRUD(container,key,label,fields,ep){
   if(!cols.length&&items[0])cols=Object.keys(items[0]).filter(k=>k!=='id'&&k!=='aid'&&k!=='updated_at'&&k!=='created_at').slice(0,5);
   const thead=cols.map(f=>`<th>${f.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase())}</th>`).join('');
   const tbody=items.map(it=>'<tr>'+cols.map(f=>`<td>${String(it[f]||'')}</td>`).join('')+
-    `<td class="text-right"><button class="btn btn-sm btn-ghost" onclick="event.preventDefault();editIt('${key}','${label}','${ep}','${it.id}')">Edit</button>`+
-    `<button class="btn btn-sm btn-danger" onclick="event.preventDefault();delIt('${key}','${label}','${ep}','${it.id}')">Del</button></td></tr>`).join('');
+    `<td class="text-right"><button class="btn btn-sm btn-ghost" onclick="event.preventDefault();editIt('${key}','${label}','${ep}','${rowId(it)}')">Edit</button>`+
+    `<button class="btn btn-sm btn-danger" onclick="event.preventDefault();delIt('${key}','${label}','${ep}','${rowId(it)}')">Del</button></td></tr>`).join('');
   list.innerHTML=`<table class="table"><thead><tr>${thead}<th style="width:140px"></th></tr></thead><tbody>${tbody}</tbody></table>`;
   container.querySelector('#addBtn').onclick=()=>showForm(key,label,cols,ep,null,()=>renderPage());
 }
@@ -427,8 +447,16 @@ function renderAdminPlans(c){
 }
 
 function renderIndustrySources(c){
-  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">Industry Sources</h2><div id="isdata"></div></div>';
-  renderCRUD(c.querySelector('#isdata'),'industry-sources','Industry Source',['industry_slug','source_name','is_active'],'/admin/industry-sources');
+  c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Industry Sources</h2><button class="btn btn-primary btn-sm" id="seedBtn">Seed defaults</button></div>'+
+    '<p class="text-xs text-gray-400 mb-4">One row per data source feeding the industry dashboards. <b>Seed defaults</b> inserts the built-in sources for every active industry (POST /admin/industry-sources/seed) — it was served but unreachable from this panel before.</p>'+
+    '<div id="isdata"></div></div>';
+  c.querySelector('#seedBtn').onclick=async()=>{
+    if(!confirm('Seed the default industry sources for every active industry?'))return;
+    const r=await api('/admin/industry-sources/seed',{method:'POST',body:JSON.stringify({})});
+    showMsg(r?('Seeded '+(r.created??r.count??r.seeded??'the')+' source(s)'):'Seed failed');
+    renderPage();
+  };
+  renderCRUD(c.querySelector('#isdata'),'industry-sources','Industry Source',['industry_slug','source_name','source_type','endpoint','refresh_cadence','credit_cost','is_active'],'/admin/industry-sources');
 }
 
 function renderSiteConfig(c){
@@ -500,6 +528,11 @@ function renderSiteConfig(c){
   }).catch(function(){c.querySelector("#scdata").innerHTML="<p class=\"text-red-400\">Not available.</p>"});
 }
 // Init
-if(TOKEN)renderApp();else renderLogin();
+// This script sits in <head>, so it runs BEFORE the parser has created <body> and
+// document.body is still null — renderApp()/renderLogin() both start with
+// document.body.innerHTML='' and threw "Cannot set properties of null", leaving
+// admin.workflowswift.com a blank page for every account. Wait for the DOM instead.
+function boot(){ if(TOKEN)renderApp();else renderLogin(); }
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
 </script>
 </head><body></body></html>

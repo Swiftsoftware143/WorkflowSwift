@@ -131,6 +131,17 @@ const API = (() => {
     listApiKeys: () => fetch(base + '/api-keys', { headers: headers() }).then(handle),
     createApiKey: (name) => fetch(base + '/api-keys', { method:'POST', headers: headers(), body: JSON.stringify({ name }) }).then(handle),
     revokeApiKey: (id) => fetch(base + '/api-keys/' + encodeURIComponent(id), { method:'DELETE', headers: headers() }).then(handle),
+    // --- Team management (see TeamView). NOTE: /users and /users/team are registered WITHOUT a
+    // trailing slash — a request to /api/v1/users/ answers 404 while /api/v1/users answers 200.
+    listUsers: () => fetch(base + '/users', { headers: headers() }).then(handle),
+    inviteUser: (b) => fetch(base + '/users/invite', { method:'POST', headers: headers(), body: JSON.stringify(b) }).then(handle),
+    setUserPermissions: (id, permissions) => fetch(base + '/users/' + encodeURIComponent(id) + '/permissions', { method:'PUT', headers: headers(), body: JSON.stringify({ permissions }) }).then(handle),
+    removeUser: (id) => fetch(base + '/users/' + encodeURIComponent(id), { method:'DELETE', headers: headers() }).then(handle),
+    // --- Panel wiring: endpoints that were served but reachable from no shipped surface ---
+    getTimeline: () => fetch(base + '/dashboard/timeline', { headers: headers() }).then(handle),
+    getPlanCapabilities: () => fetch(base + '/plans/capabilities', { headers: headers() }).then(handle),
+    rolloverCredits: () => fetch(base + '/credits/rollover', { method:'POST', headers: headers(), body: JSON.stringify({}) }).then(handle),
+    removeAccountIndustry: (slug) => fetch(base + '/accounts/industry/' + encodeURIComponent(slug), { method:'DELETE', headers: headers() }).then(handle),
     get token(){ return token; }, get user(){ return user; },
     get isLoggedIn(){ return !!sessionStorage.getItem('wf_token'); },
     setAuth(t, u){ token = t; user = u; sessionStorage.setItem('wf_token', t); sessionStorage.setItem('wf_user', JSON.stringify(u)); },
@@ -156,6 +167,9 @@ const renderApp = () => {
 const toast = (msg, type) => { S.toast = { msg, type: type==='err'?'t-err':'t-ok' }; renderApp(); setTimeout(() => { S.toast = null; renderApp(); }, 3000); };
 const setView = (v, params) => { S.current = v; S.viewParams = params || {}; renderApp(); };
 const closeModal = () => { S.modal = null; renderApp(); };
+// Team / plan / timeline state (kept out of the S literal above so the two lanes editing this
+// file do not collide on one very long line).
+Object.assign(S, { users:null, teamErr:null, invited:null, permsTarget:null, timeline:null, planCaps:null, rolloverMsg:null, timelineTried:false, planCapsTried:false });
 
 const statusBadge = (s) => {
   const m = { active:'b-green', pending:'b-amber', running:'b-blue', completed:'b-green', failed:'b-red', draft:'b-gray', paused:'b-gray', won:'b-green', lost:'b-red', open:'b-blue', closed:'b-gray' };
@@ -251,6 +265,8 @@ const spinner = () => html`<span class="spinner"></span>`;
 const loadWidgets = async (slug) => { if(S.loading)return; S.loading=true; renderApp(); try { const r = await API.getDashboardWidgets(slug || currentIndustrySlug()); const w = (Array.isArray(r)? r : (Array.isArray(r.widgets)? r.widgets : (Array.isArray(r.data)? r.data : (r && r.data && Array.isArray(r.data.widgets)? r.data.widgets : [])))); S.widgets = w; S.widgetMeta = { dashboard_id: r?.dashboard_id, industry_name: r?.industry_name }; } catch(e){ S.widgets=[]; } S.loading=false; renderApp(); setTimeout(applyCountUps, 80); };
 const applyCountUps = () => { (S.widgets||[]).forEach((w,i)=>{ const n=wnum(w); const id='wc_'+(w.id||i); const idc='wcur_'+(w.id||i); if(n!=null){ document.getElementById(id) && countUp(id,n); document.getElementById(idc) && countUp(idc,n); } }); };
 const loadDashTabs = async (slug) => { try { const r = await API.getDashboardTabs(slug || currentIndustrySlug()); S.dashboardTabs = r.tabs || r.items || r || []; } catch(e){ S.dashboardTabs=[]; } };
+// GET /dashboard/timeline was served but uncalled — the account's own activity feed.
+const loadTimeline = async () => { try { const r = await API.getTimeline(); S.timeline = r.timeline || r.items || []; } catch(e){ S.timeline=[]; } renderApp(); };
 
 // Sample-value generator so any account can populate its widgets without waiting on n8n.
 const sampleValueFor = (w, idx) => {
@@ -291,6 +307,9 @@ const DashboardView = () => {
   const slug = currentIndustrySlug();
   if (slug && !S.loading && S.widgetsSlug !== slug) { S.widgetsSlug = slug; loadDashTabs(slug); loadWidgets(slug); }
   else if (!slug && !S.loading && !S.widgetsSlug) { loadAccountIndustry(); }
+  // NOTE: a plain `&& !S.loading` guard here never fires — loadCredits()/loadWidgets() set
+  // S.loading = true synchronously before their first await. Use a tried-flag instead.
+  if (S.timeline === null && !S.timelineTried) { S.timelineTried = true; loadTimeline(); }
   const widgets = S.widgets || [];
   const metas = { bg:'#fff', fg:'#0f172a' };
   return html`
@@ -304,6 +323,10 @@ const DashboardView = () => {
           <button class="btn-outline text-sm" onClick=${()=>{S.widgets=null;loadWidgets(slug);}} disabled=${S.loading}>${S.loading?'Loading…':'Refresh'}</button>
         </div>
       </div>
+      ${(S.timeline||[]).length ? html`<div class="card" style="margin-bottom:16px">
+        <h3 class="font-semibold text-gray-800 mb-3">Recent activity</h3>
+        <ul class="mfeed">${(S.timeline||[]).slice(0,8).map((t,i)=>html`<li key=${i}><span>${t.title||t.description||t.action||t.event_type||'—'}</span><span class="text-xs text-gray-400">${fmtDate(t.created_at||t.at||t.timestamp||t.occurred_at)}</span></li>`)}</ul>
+      </div>` : ''}
       ${widgets.length === 0 ? html`
         <div class="card"><div class="empty">
           <div class="text-4xl mb-3">📈</div>
@@ -371,8 +394,12 @@ const renderSvgChart = (w) => {
   const points = Array.isArray(d) ? d : (d.points || d.series || d.values || []);
   const labels = Array.isArray(d) ? null : (d.labels||null);
   const vals = points.map(p => typeof p==='number' ? p : (p.value ?? p.y ?? 0));
-  const max = Math.max(1, ...vals); const W=320, H=130; const n=Math.max(1,vals.length);
-  const pts = vals.map((v,i)=>({x:(i/(n-1))*W, y:H-(v/max)*(H-16)-6}));
+  // A trend widget with no points used to emit an SVG path of "" + " L320 130 …", which the
+  // browser rejects ("Expected moveto path command") and nothing rendered. One point also
+  // divided by (n-1)=0 and produced NaN. Both are handled here.
+  if (!vals.length) return html`<div class="empty" style="height:130px;display:flex;align-items:center;justify-content:center">No data points yet</div>`;
+  const max = Math.max(1, ...vals); const W=320, H=130; const n=vals.length;
+  const pts = vals.map((v,i)=>({x:(n>1?(i/(n-1)):0.5)*W, y:H-(v/max)*(H-16)-6}));
   const path = pts.map((p,i)=>(i===0?'M':'L')+p.x.toFixed(1)+' '+p.y.toFixed(1)).join(' ');
   const area = path + ' L'+W+' '+H+' L0 '+H+' Z';
   const gLabels = labels || vals.map((_,i)=>'m'+(i+1));
@@ -637,6 +664,7 @@ const loadSurfaces = async () => { if(S.loading)return; S.loading=true; renderAp
 // ===== Credits =====
 const CreditsView = () => {
   if (!S.creditInfo && !S.loading) loadCredits();
+  if (!S.planCaps && !S.planCapsTried) { S.planCapsTried = true; loadPlanCaps(); }
   const bal = S.creditInfo?.balance ?? S.creditInfo?.credits ?? '—';
   const txs = S.creditInfo?.transactions || S.transactions || [];
   const pkgs = S.creditInfo?.packages || S.packages || [];
@@ -644,11 +672,30 @@ const CreditsView = () => {
     <div>
       <header class="flex items-start justify-between mb-5"><div><h1 class="text-xl font-extrabold text-gray-900">Credits</h1><p class="text-sm text-gray-500 mt-1">Your credit balance and usage</p></div><button class="btn-outline text-sm" onClick=${loadCredits} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button></header>
       <div class="card flex items-center gap-4" style="margin-bottom:16px"><div class="text-4xl">💰</div><div><div class="text-3xl font-bold text-gray-900">${fmtAmt(bal)}</div><div class="text-xs text-gray-500 mt-0.5">Available credits</div></div></div>
+      ${S.planCaps ? html`<div class="card" style="margin-bottom:16px">
+        <h3 class="font-semibold text-gray-800 mb-2">Your plan — ${S.planCaps.plan_name || S.planCaps.plan_slug || '—'}</h3>
+        <p class="text-sm text-gray-600">Industries: ${fmtAmt(S.planCaps.current_industries)} of ${fmtAmt(S.planCaps.max_industries)} used${S.planCaps.industries_remaining != null ? (' — ' + fmtAmt(S.planCaps.industries_remaining) + ' left') : ''}</p>
+        <div class="mt-3 flex items-center gap-3 flex-wrap">
+          <button class="btn-outline text-sm" onClick=${rolloverNow} disabled=${S.loading}>Roll over unused credits</button>
+          ${S.rolloverMsg ? html`<span class="text-sm text-gray-600">${S.rolloverMsg}</span>` : ''}
+        </div>
+      </div>` : ''}
       ${pkgs.length ? html`<div class="card"><h3 class="font-semibold text-gray-800 mb-3">Credit Packages</h3><div class="grid grid-cols-1 md:grid-cols-3 gap-3">${pkgs.map(p=>html`<div class="border rounded-lg p-3"><div class="font-bold">${p.name||p.title||'Package'}</div><div class="text-sm text-gray-500">${fmtAmt(p.credits||p.amount)} credits</div></div>`)}</div></div>` : ''}
       <div class="card"><h3 class="font-semibold text-gray-800 mb-3">Recent Transactions</h3>${txs.length===0?html`<div class="empty">No transactions.</div>`:html`<div class="overflow-auto"><table class="table"><thead><tr><th>Type</th><th>Amount</th><th>Date</th></tr></thead><tbody>${txs.map((t,i)=>html`<tr key=${i}><td>${t.type||t.description||'—'}</td><td>${fmtAmt(t.amount ?? t.credits)}</td><td>${fmtDate(t.created_at)}</td></tr>`)}</tbody></table></div>`}</div>
     </div>`;
 };
 const loadCredits = async () => { if(S.loading)return; S.loading=true; renderApp(); try { const [bal, tx, pk] = await Promise.allSettled([API.get('/credits/balance'), API.get('/credits/transactions'), API.get('/credits/packages')]); S.creditInfo = { balance: bal.status==='fulfilled'?(bal.value.balance ?? bal.value.credits ?? bal.value):null, transactions: tx.status==='fulfilled'?(tx.value.transactions||tx.value||[]):[], packages: pk.status==='fulfilled'?(pk.value.packages||pk.value||[]):[] }; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+
+// Plan capabilities (GET /plans/capabilities) + credit rollover (POST /credits/rollover):
+// both were served but no surface called either, so the plan's industry allowance and the
+// rollover action were invisible to the tenant.
+const loadPlanCaps = async () => { try { S.planCaps = await API.getPlanCapabilities(); } catch(e){ S.planCaps = null; } renderApp(); };
+const rolloverNow = async () => {
+  S.loading=true; S.rolloverMsg=null; renderApp();
+  try { const r = await API.rolloverCredits(); S.rolloverMsg = r.message || ('Rolled ' + (r.rolled ?? 0) + ' credits'); S.creditInfo=null; }
+  catch(e){ S.rolloverMsg = e.message; toast(e.message,'err'); }
+  S.loading=false; renderApp();
+};
 
 // ===== Tickets =====
 const TicketsView = () => {
@@ -703,6 +750,103 @@ const ApiKeysView = () => {
 const loadApiKeys = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.apiKeys = (await API.listApiKeys()).api_keys || []; } catch(e){ toast(e.message,'err'); S.apiKeys=[]; } S.loading=false; renderApp(); };
 const revokeApiKey = async (id) => { if(!confirm('Revoke this API key? Anything using it stops working immediately.'))return; try { await API.revokeApiKey(id); toast('API key revoked'); S.apiKeys=null; loadApiKeys(); } catch(e){ toast(e.message,'err'); } };
 const copyApiKey = async () => { const t = S.newApiKey || ''; try { await navigator.clipboard.writeText(t); toast('Copied to clipboard'); } catch(e){ const el=document.getElementById('fresh-api-key'); if(el){ const r=document.createRange(); r.selectNodeContents(el); const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(r); try{ document.execCommand('copy'); toast('Copied to clipboard'); }catch(_){ toast('Select the key manually to copy','err'); } } else { toast('Select the key manually to copy','err'); } } };
+
+// ===== Team (/users -> {users:[...]}) =====
+// The backend has always shipped POST /users/invite, PUT /users/{id}/permissions and
+// DELETE /users/{id}; no served surface called any of them, so a tenant could not add,
+// re-scope or remove a team member from the product at all.
+const TEAM_PERMS = ['dashboard','workflows','templates','instances','automations','leads','surfaces','prospecting','brand_monitor','competitors','credits','api_keys','tickets'];
+const teamRoleLabel = (r) => ({ user:'Owner', admin:'Admin', super_admin:'Super admin', agency_admin:'Agency admin', team_member:'Team member' })[r] || r || '—';
+const permChips = (p) => { const ks = Object.keys(p || {}).filter(k => p[k]); return ks.length ? ks.join(', ') : 'none'; };
+
+const TeamView = () => {
+  if (!S.users && !S.loading) loadUsers();
+  const list = S.users || [];
+  const fresh = S.invited;
+  return html`
+    <div>
+      <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
+        <div><h1 class="text-xl font-extrabold text-gray-900">Team</h1><p class="text-sm text-gray-500 mt-1">Invite people to this account, scope what they can reach, and remove them.</p></div>
+        <div class="flex gap-2">
+          <button class="btn-outline text-sm" onClick=${loadUsers} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button>
+          <button class="btn text-sm" onClick=${()=>{S.invited=null;S.teamErr=null;S.modal='invite';renderApp();}}>+ Invite Member</button>
+        </div>
+      </header>
+      ${fresh ? html`<div class="card" style="border:2px solid #16a34a">
+        <h3 class="font-semibold text-gray-800 mb-2">${fresh.name || fresh.email} was invited</h3>
+        ${fresh.email_sent
+          ? html`<p class="text-sm text-gray-500">An invite email was sent with a temporary password.</p>`
+          : html`<p class="text-sm text-gray-500 mb-3">No invite email was sent by the server — share this temporary password with them yourself. They can change it from Profile after signing in.</p>
+                 <code style="display:block;word-break:break-all;background:#0f172a;color:#7dd3fc;padding:12px 14px;border-radius:10px;font-size:13px">${fresh.temporary_password}</code>`}
+        <div class="mt-3"><button class="btn-outline text-sm" onClick=${()=>{S.invited=null;renderApp();}}>Done</button></div>
+      </div>` : ''}
+      ${list.length === 0 ? html`<div class="empty">No team members yet.</div>` : html`
+      <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Permissions</th><th></th></tr></thead><tbody>
+        ${list.map(u => html`<tr key=${u.id}>
+          <td class="font-semibold">${u.name || '—'}</td>
+          <td>${u.email || '—'}</td>
+          <td>${teamRoleLabel(u.role)}</td>
+          <td>${statusBadge(u.is_active === false ? 'paused' : 'active')}</td>
+          <td style="font-size:12px;color:#64748b">${permChips(u.permissions)}</td>
+          <td class="text-right whitespace-nowrap">
+            <button class="btn-outline text-xs" onClick=${()=>{S.permsTarget=u;S.modalErr=null;S.modal='perms';renderApp();}}>Permissions</button>
+            ${u.role === 'user' || u.role === 'super_admin' ? '' : html`<button class="btn-red text-xs" style="margin-left:6px" onClick=${()=>removeTeamMember(u)}>Remove</button>`}
+          </td></tr>`)}
+      </tbody></table></div>`}
+      <p class="text-xs text-gray-500 mt-2">Roles: Owner and Super admin cannot be invited or removed here. Team members lose access the moment they are removed.</p>
+    </div>`;
+};
+const loadUsers = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.users = (await API.listUsers()).users || []; } catch(e){ toast(e.message,'err'); S.users=[]; } S.loading=false; renderApp(); };
+const removeTeamMember = async (u) => {
+  if(!confirm('Remove ' + (u.name || u.email) + ' from this account? They lose access immediately.')) return;
+  try { await API.removeUser(u.id); toast('Team member removed'); S.users=null; loadUsers(); }
+  catch(e){ toast(e.message,'err'); }
+};
+
+const InviteModal = () => {
+  let name='', email='', role='team_member';
+  const perms = {};
+  const save = async () => {
+    if(!name || !email) return toast('Name and email are required','err');
+    S.loading=true; S.modalErr=null; renderApp();
+    try {
+      const permissions = {}; TEAM_PERMS.forEach(k => { if(perms[k]) permissions[k]=true; });
+      const r = await API.inviteUser({ name, email, role, permissions });
+      S.invited = r; S.users=null; closeModal(); toast('Team member invited');
+    } catch(e){ S.modalErr = e.message || 'Could not invite that person'; toast(S.modalErr,'err'); }
+    S.loading=false; renderApp();
+  };
+  return html`<${ModalShell} title="Invite Team Member" onClose=${closeModal}>
+    <div class="mb-4"><label class="label">Name</label><input class="input" onInput=${e=>name=e.target.value} placeholder="Jordan Smith" /></div>
+    <div class="mb-4"><label class="label">Email</label><input class="input" onInput=${e=>email=e.target.value} placeholder="jordan@company.com" /></div>
+    <div class="mb-4"><label class="label">Role</label>
+      <select class="input" onChange=${e=>role=e.target.value}>
+        <option value="team_member">Team member</option>
+        <option value="agency_admin">Agency admin</option>
+      </select></div>
+    <div class="mb-4"><label class="label">Permissions</label>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 14px">${TEAM_PERMS.map(k=>html`<label style="font-size:13px;display:flex;gap:8px;align-items:center"><input type="checkbox" onChange=${e=>{perms[k]=e.target.checked;}} />${k.replace(/_/g,' ')}</label>`)}</div></div>
+    ${S.modalErr && html`<div style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:12px;border-radius:10px;font-size:13px;margin-bottom:16px">${S.modalErr}</div>`}
+    <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Send Invite'}</button>
+  <//>`;
+};
+
+const PermsModal = () => {
+  const u = S.permsTarget || {};
+  const cur = u.permissions || {};
+  const perms = {}; TEAM_PERMS.forEach(k => { perms[k] = !!cur[k]; });
+  const save = async () => {
+    S.loading=true; S.modalErr=null; renderApp();
+    try { await API.setUserPermissions(u.id, perms); toast('Permissions updated'); S.users=null; S.permsTarget=null; closeModal(); loadUsers(); }
+    catch(e){ S.modalErr = e.message || 'Could not update permissions'; toast(S.modalErr,'err'); }
+    S.loading=false; renderApp();
+  };
+  return html`<${ModalShell} title=${'Permissions — ' + (u.name || u.email || '')} onClose=${closeModal}>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 14px" class="mb-4">${TEAM_PERMS.map(k=>html`<label style="font-size:13px;display:flex;gap:8px;align-items:center"><input type="checkbox" checked=${perms[k]} onChange=${e=>{perms[k]=e.target.checked;}} />${k.replace(/_/g,' ')}</label>`)}</div>
+    ${S.modalErr && html`<div style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:12px;border-radius:10px;font-size:13px;margin-bottom:16px">${S.modalErr}</div>`}
+    <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Save Permissions'}</button>
+  <//>`;
+};
 
 // ===== Profile =====
 const ProfileView = () => {
@@ -798,6 +942,7 @@ const NAV = [
   { id:'competitors', label:'Competitors', icon:'👁️' },
   { id:'credits', label:'Credits', icon:'💰' },
   { id:'api-keys', label:'API Keys', icon:'🔑' },
+  { id:'team', label:'Team', icon:'🧑🤝🧑' },
   { id:'tickets', label:'Tickets', icon:'🎫' },
   { id:'profile', label:'Profile', icon:'👤' },
 ];
@@ -808,6 +953,7 @@ const VIEW_MAP = {
   prospecting: ProspectingView, 'prospecting-results': ProspectingResultsView, 'brand-monitor': BrandMonitorView,
   competitors: CompetitorsView, credits: CreditsView, tickets: TicketsView, profile: ProfileView,
   'api-keys': ApiKeysView,
+  team: TeamView,
   pick: IndustryPickerView,
 };
 
@@ -842,7 +988,7 @@ const App = () => {
         <${Current} key=${S.current + "|" + S.dataVer} />
       </main>
     </div>
-    ${S.modal && (S.modal==='wf' ? html`<${WfModal} />` : S.modal==='brand' ? html`<${BrandModal} />` : S.modal==='comp' ? html`<${CompetitorModal} />` : S.modal==='surface' ? html`<${SurfaceModal} />` : S.modal==='apikey' ? html`<${ApiKeyModal} />` : S.modal==='industry' ? html`<${IndustryPickerView} asModal />` : null)}
+    ${S.modal && (S.modal==='wf' ? html`<${WfModal} />` : S.modal==='brand' ? html`<${BrandModal} />` : S.modal==='comp' ? html`<${CompetitorModal} />` : S.modal==='surface' ? html`<${SurfaceModal} />` : S.modal==='apikey' ? html`<${ApiKeyModal} />` : S.modal==='invite' ? html`<${InviteModal} />` : S.modal==='perms' ? html`<${PermsModal} />` : S.modal==='industry' ? html`<${IndustryPickerView} asModal />` : null)}
     ${S.toast && html`<div class="toast ${S.toast.type}">${S.toast.msg}</div>`}
     ${S.loading && html`<div style="position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:60"><span class="spinner"></span></div>`}
   `;
