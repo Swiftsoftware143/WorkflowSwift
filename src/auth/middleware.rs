@@ -65,8 +65,15 @@ pub async fn auth_middleware(
         .strip_prefix("Bearer ")
         .ok_or_else(|| AppError::Unauthorized)?;
 
-    let claims =
-        verify_token(token, &state.config.jwt_secret).map_err(|_| AppError::Unauthorized)?;
+    // Two credential types are accepted on the same header, exactly as the
+    // shipped Chrome extension presents them: a `workflowswift_` API key, or a
+    // JWT. Each path is verified independently; neither weakens the other.
+    let method = req.method().clone();
+    let claims = if super::api_key_auth::is_api_key(token) {
+        super::api_key_auth::authenticate(&state, token, &method).await?
+    } else {
+        verify_token(token, &state.config.jwt_secret).map_err(|_| AppError::Unauthorized)?
+    };
 
     let mut req = req;
     req.extensions_mut().insert(claims);

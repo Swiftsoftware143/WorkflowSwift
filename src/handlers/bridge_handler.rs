@@ -140,3 +140,29 @@ pub async fn list_outbound_results(
 pub async fn ping_bridge(State(_s): State<AppState>) -> Result<impl IntoResponse, AppError> {
     Ok(Json(json!({"status": "bridge-ok"})))
 }
+
+/// `GET /bridge/status` — the endpoint the shipped Chrome extension's
+/// "Test Connection" button calls (options.js). Requires a valid credential and
+/// echoes back which account the credential resolved to, so the caller can see
+/// the key was accepted *as* a specific tenant.
+pub async fn bridge_status(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let account: Option<String> =
+        sqlx::query_scalar("SELECT account_slug FROM accounts WHERE id = $1")
+            .bind(aid)
+            .fetch_optional(&state.db)
+            .await?
+            .flatten();
+
+    Ok(Json(json!({
+        "server": "WorkflowSwift",
+        "status": "ok",
+        "account_id": claims.aid,
+        "account_slug": account,
+        "user_id": claims.sub,
+        "auth": if claims.role == "api_key" { "api_key" } else { "jwt" },
+    })))
+}
