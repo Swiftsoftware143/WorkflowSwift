@@ -150,7 +150,7 @@ const API = (() => {
   };
 })();
 
-const S = { view:'login', loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, dataVer:0, apiKeys:null, newApiKey:null, modalErr:null };
+const S = { view:'login', loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, dataVer:0, apiKeys:null, extBuild:null, newApiKey:null, modalErr:null };
 
 // Views call their loaders from inside render (the house pattern: `if(!S.x) loadX();`), and
 // every loader calls renderApp() again — a *re-entrant* preact render. The inner render
@@ -781,6 +781,7 @@ const loadTickets = async () => { if(S.loading)return; S.loading=true; renderApp
 const maskKey = (k) => (k.prefix || 'workflowswift') + '_' + '\u2022'.repeat(12);
 const ApiKeysView = () => {
   if (!S.apiKeys && !S.loading) loadApiKeys();
+  if (S.extBuild === null) loadExtBuild();
   const list = S.apiKeys || [];
   const fresh = S.newApiKey;
   return html`
@@ -792,6 +793,20 @@ const ApiKeysView = () => {
           <button class="btn text-sm" onClick=${openApiKeyModal}>+ New API Key</button>
         </div>
       </header>
+      <div class="card" style="margin-bottom:18px">
+        <h3 class="font-semibold text-gray-800 mb-1">Install the Swift Market Intel Chrome extension</h3>
+        <p class="text-sm text-gray-500 mb-2">The extension captures listings, prices, reviews and profiles from 12+ marketplaces and sends them into this workspace. It is <b>sideload-only</b> — it is not on the Chrome Web Store, so Chrome will warn that it comes from outside the store, there is no one-click &ldquo;Add to Chrome&rdquo;, and updates are manual.</p>
+        <ol class="text-sm text-gray-600" style="margin:0 0 12px 18px;line-height:1.7">
+          <li>Download the zip and unpack it into a folder you will keep — Chrome loads the extension from that folder, so don't delete it.</li>
+          <li>Open <code>chrome://extensions</code>, switch on <b>Developer mode</b> (top right), click <b>Load unpacked</b> and pick that folder.</li>
+          <li>Create an API key below, then paste it into the extension's <b>Options</b> page and press <b>Test Connection</b>.</li>
+        </ol>
+        <div class="flex gap-2 flex-wrap items-center">
+          <a class="btn text-sm" href="/api/v1/extension.zip" download>Download the extension (.zip)</a>
+          <a class="btn-outline text-sm" href="https://workflowswift.com/swift-market-intel-extension.html" target="_blank" rel="noopener">Install guide</a>
+          <span class="text-xs text-gray-500">current build ${S.extBuild || '…'}</span>
+        </div>
+      </div>
       ${fresh ? html`<div class="card" style="border:2px solid #16a34a">
         <h3 class="font-semibold text-gray-800 mb-2">Your new API key</h3>
         <p class="text-sm text-gray-500 mb-3">Copy it now — for your security it is shown only once and cannot be shown again.</p>
@@ -810,6 +825,14 @@ const ApiKeysView = () => {
     </div>`;
 };
 const loadApiKeys = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.apiKeys = (await API.listApiKeys()).api_keys || []; } catch(e){ toast(e.message,'err'); S.apiKeys=[]; } S.loading=false; renderApp(); };
+// The extension build the API is currently serving. Read from the site's own metadata file
+// (/extension-latest.json, rewritten by /opt/swift/scripts/ws-publish-extension.sh on release)
+// so this screen can never name a build older than the one /api/v1/extension.zip hands the user.
+const loadExtBuild = async () => {
+  try { const d = await (await fetch('/extension-latest.json?t=' + Date.now())).json(); S.extBuild = (d && d.version) ? ('v' + d.version) : '—'; }
+  catch(e){ S.extBuild = '—'; }
+  renderApp();
+};
 const revokeApiKey = async (id) => { if(!confirm('Revoke this API key? Anything using it stops working immediately.'))return; try { await API.revokeApiKey(id); toast('API key revoked'); S.apiKeys=null; loadApiKeys(); } catch(e){ toast(e.message,'err'); } };
 const copyApiKey = async () => { const t = S.newApiKey || ''; try { await navigator.clipboard.writeText(t); toast('Copied to clipboard'); } catch(e){ const el=document.getElementById('fresh-api-key'); if(el){ const r=document.createRange(); r.selectNodeContents(el); const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(r); try{ document.execCommand('copy'); toast('Copied to clipboard'); }catch(_){ toast('Select the key manually to copy','err'); } } else { toast('Select the key manually to copy','err'); } } };
 
