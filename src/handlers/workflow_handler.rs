@@ -521,13 +521,32 @@ pub async fn update_workflow_step(
             .await?
             .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
+    // Guardrail: a step's TYPE is fixed at creation. Name/description/config/order
+    // stay editable; the type must not change (otherwise the guardrails that were
+    // validated for the original type — e.g. Data Card first, Fork last — are void).
+    let current_type: String = sqlx::query_scalar(
+        "SELECT step_type FROM workflow_steps WHERE id = $1 AND workflow_id = $2",
+    )
+    .bind(step_id)
+    .bind(workflow_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(AppError::NotFound("Step not found".to_string()))?;
+
+    if !req.step_type.trim().is_empty() && req.step_type != current_type {
+        return Err(AppError::BadRequest(format!(
+            "Step type cannot be changed after creation (this step is '{}'). Delete the step and add a new one of type '{}'.",
+            current_type, req.step_type
+        )));
+    }
+
     let sort_order = req.sort_order.unwrap_or(0);
     let step = sqlx::query_as::<_, WorkflowStep>(
         r#"UPDATE workflow_steps SET step_type=$1, name=$2, description=$3, sort_order=$4, config=$5
            WHERE id=$6 AND workflow_id=$7
            RETURNING *"#,
     )
-    .bind(&req.step_type)
+    .bind(&current_type)
     .bind(&req.name)
     .bind(&req.description)
     .bind(sort_order)

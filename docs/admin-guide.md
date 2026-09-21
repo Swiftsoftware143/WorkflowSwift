@@ -1,143 +1,188 @@
 # Admin Guide — WorkflowSwift
 
-## Admin Endpoints
+Audience: the **super admin** (the platform operator). Everything under `/api/v1/admin/*`
+requires a super-admin JWT — `perm_is_super_admin` is checked at the API, so a tenant admin or
+member gets `403`, not a hidden button.
 
-All admin endpoints require a super admin JWT token (David's account).
+Base: `https://workflowswift.com/api/v1` · Health: `GET /api/v1/health` (public).
+
+## Plan limits — settable AND enforced
+
+This is the part of the platform that controls revenue, so it is worth stating exactly how it
+works.
+
+**One source of truth.** A plan's limits live in `plan_tiers`, in the `features` JSONB under the
+**canonical key names**, mirrored into the legacy dedicated columns (`max_workflows`,
+`max_users`, `retention_days`, `can_export`, `can_deploy_n8n`, `has_api_access`) so both views of
+a plan agree.
+
+**The keys:**
+
+- Numeric: `max_workflows`, `max_templates`, `max_instances`, `max_users`, `max_automations`,
+  `max_integrations`, `max_api_keys`, `max_clients`, `max_portfolio`, `max_tags`,
+  `max_industries`, `retention_days`
+- On/off: `n8n_deploy`, `api_access`, `csv_export`, `webhook_export`, `custom_branding`,
+  `google_sheets`, `priority_support`, `dedicated_support`, `sla_guarantee`, `audit_logs`,
+  `custom_reports`
+
+**Semantics:** `-1` or the string `"unlimited"` means unlimited; `0` means "not included in this
+plan" (any attempt returns `402 Payment Required`); any other number is a hard cap and the
+boundary is refused with `402`. A key that is absent is treated as *not configured* and allowed.
+
+**Endpoints:**
+
+| Endpoint | Method | Notes |
+|---|---|---|
+| `/api/v1/admin/plans` | GET | List plan tiers with their limits |
+| `/api/v1/admin/plans` | POST | Create a plan — accepts the limit keys **either at the top level or inside `features`** |
+| `/api/v1/admin/plans/{id}` | PUT | Update a plan — limits are **merged**, so saving one field never wipes the others |
+| `/api/v1/admin/plans/{id}` | DELETE | Delete a plan |
+| `/api/v1/admin/feature-definitions` | GET | The 22 canonical feature keys, their value type, default and category |
+
+**Where enforcement happens:** `src/features.rs` resolves the account's plan
+(`account_plans` → `accounts.plan_id` → lowest-`sort_order` active tier, so an account with no
+plan falls back to the free tier rather than being unlimited) and applies
+`enforce_feature_limit` / `enforce_plan_flag` at the API. Wired gates include: workflow creation
+(`max_workflows`), templates (`max_templates`), instance creation (`max_instances`), team growth
+(`max_users`), automations, integration targets, API-key creation (`max_api_keys` + `api_access`),
+tags, portfolio companies, industries, plan creation, and **n8n deployment** (`n8n_deploy`).
+
+**Default tiers as seeded:**
+
+| Tier | Workflows | Users | Templates | Instances | API keys | Clients | Ret. days | n8n | API |
+|---|---|---|---|---|---|---|---|---|---|
+| Free | 3 | 2 | 3 | 10 | 1 | 5 | 30 | – | – |
+| Starter | 15 | 10 | 10 | 100 | 3 | 25 | 30 | ✓ | ✓ |
+| Professional | unlimited | 25 | 25 | 1000 | 10 | 100 | 90 | ✓ | ✓ |
+| Enterprise | unlimited | unlimited | unlimited | unlimited | unlimited | unlimited | 365 | ✓ | ✓ |
+
+## Accounts and tenants
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/v1/admin/usage` | GET | Usage dashboard — credits, workflow runs, n8n status per account |
-| `/api/v1/admin/accounts` | GET | List all accounts with retention + n8n_provisioned flag |
-| `/api/v1/admin/accounts/{id}` | DELETE | Permanently delete account + all data |
-| `/api/v1/admin/accounts/{id}/retention` | PUT | Override account retention policy |
-| `/api/v1/admin/accounts/create` | POST | Create new account |
-| `/api/v1/admin/plans` | GET/POST | List/create plan tiers |
-| `/api/v1/admin/settings` | GET | List all admin settings |
-| `/api/v1/admin/settings/{key}` | GET/PUT | Get/update specific setting |
-| `/api/v1/bridge/tasks` | GET | List AI bridge inbound files |
-| `/api/v1/bridge/results` | GET | List AI bridge outbound results |
+| `/api/v1/admin/accounts` | GET | List all accounts (tenant) |
+| `/api/v1/admin/accounts/create` | POST | Create an account |
+| `/api/v1/admin/accounts/{id}` | DELETE | Delete the account and its data (cascades) |
+| `/api/v1/admin/accounts/{id}/retention` | PUT | Per-account retention override |
+| `/api/v1/admin/usage` | GET | Usage dashboard — credits, executions, n8n status per account |
+| `/api/v1/admin/impersonate` / `stop-impersonation` | POST | Support impersonation |
 
-## Workspaces & Multi-Industry
+A tenant (`accounts`) carries the slug, branding (logo, primary/accent colour, custom domain,
+footer), industry, retention days and **its own Hexomatic key**. Users (`users.aid`) belong to
+one tenant; `users.role` is `admin` / `member` (`perm_is_super_admin` marks the platform
+operator).
 
-Users create **workspaces** (portfolio companies) from their dashboard. Each workspace can have its own **industry** which determines dashboard layout and workflow templates.
-
-**Registration:** New users choose an industry at signup. Their dashboard auto-seeds with industry-specific widgets.
-
-**Multi-industry:** Higher-tier accounts can add multiple industries via `POST /api/v1/accounts/add-industry`. Each gets its own dashboard with widgets.
-
-### Workspace Endpoints
+## Admin settings, retention and email
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/v1/workspaces` | GET | List user's workspaces |
-| `/api/v1/workspaces` | POST | Create workspace (accepts `industry_slug`) |
-| `/api/v1/workspaces/{id}` | DELETE | Delete workspace |
-| `/api/v1/workspaces/{id}/stats` | GET | Workspace-scoped counts |
+| `/api/v1/admin/settings` | GET | All settings |
+| `/api/v1/admin/settings/{key}` | GET/PUT | Read/update one setting (secret values come back **masked**) |
+| `/api/v1/admin/settings/email/test` | POST | Send a real test email |
+| `/api/v1/admin/retention` | GET/PUT | Platform retention policy |
+| `/api/v1/admin/email-templates` | GET/POST | Message templates |
+| `/api/v1/admin/email-templates/{id}` | PUT/DELETE | Edit/delete a template |
+| `/api/v1/admin/site` | GET/PUT | Public site copy |
+| `/api/v1/admin/industry-sources` | GET/POST | Industry data sources (+ `/seed`, `/{id}` DELETE) |
 
-### Paperclip Dashboard Endpoints
+Email credentials are read from the **database only** — there is no environment fallback — and
+the provider is an admin choice (`smtp`, `mailgun`, `sendgrid`, `sendiio`).
 
-| Endpoint | Method | Description |
-|---|---|---|
-| `/api/v1/dashboard/workspace` | GET | Active instances + automation stats (opt. `?workspace_id=`) |
-| `/api/v1/dashboard/timeline` | GET | Activity timeline (opt. `?workspace_id=&days=`) |
-| `/api/v1/dashboard/stats` | GET | Aggregate counts |
-| `/api/v1/dashboard/widgets` | GET | Industry-specific widgets (`?industry=`) |
-| `/api/v1/dashboard/push-widget-data` | POST | Push metric data to widget |
-| `/api/v1/dashboard/activity` | GET | Recent activity feed |
+## Workspaces, agents and tickets
 
-#
-## MultiDirectory Integration — Referral Workflows
-
-MultiDirectory's referral verification flow can send webhook notifications to WorkflowSwift for downstream automation (e.g., email the referrer when Zaarcash is awarded, notify admin of new pending referrals).
-
-Webhook payload: `{ "event": "referral_verified", "referrer_email": "...", "referee_email": "...", "zaarcash_earned": 100, "direction": "visitor_to_visitor" }`
-
-WorkflowSwift workflows can consume these events and trigger notifications, CRM updates, or analytics logging.
-
-## Industry Data Sources (Satellites)
-
-Admin-configurable data sources that power industry-specific dashboard widgets. Each source costs credits per API call.
-
-### Admin Endpoints
+Users create **workspaces** within their tenant; a workspace can carry its own industry and its
+own **provider keys**, and gives the dashboard a per-workspace view.
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/v1/admin/industry-sources` | GET | List all sources (opt. `?industry=`) |
-| `/api/v1/admin/industry-sources` | POST | Create/update a data source |
-| `/api/v1/admin/industry-sources/seed` | POST | Seed defaults (5 sources per industry) |
-| `/api/v1/admin/industry-sources/{id}` | DELETE | Remove a data source |
+| `/api/v1/workspaces` | GET/POST | List/create workspaces |
+| `/api/v1/workspaces/{id}` | DELETE | Delete a workspace |
+| `/api/v1/workspaces/{id}/agents` | GET | Agents in a workspace |
+| `/api/v1/workspaces/{id}/tickets` | GET | Tickets (= AI agent work items) |
+| `/api/v1/tickets` | GET/POST | Ticket list / create |
 
-### Tabbed Dashboard
+**Paperclip** is the agent-orchestration layer *above* WorkflowSwift (task assignment, budgets,
+execution history). It is not a WorkflowSwift user-facing feature and nothing in the user sidebar
+exposes it — WorkflowSwift only hands work off and receives results.
 
-The dashboard now supports industry-specific tabs. Each workspace shows a **General** tab plus one tab per industry the account has selected.
+## BYOK — provider keys
 
-| Endpoint | Method | Description |
-|---|---|---|
-| `/api/v1/dashboard/industry-tabs` | GET | Tab-navigated dashboard (opt. `?workspace_id=`) |
-
-### Source Types
-
-- **api** — External API integration (credit cost per call)
-- **webhook** — Push-based data ingestion
-- **rss** — Feed-based updates (hourly refresh)
-- **scraper** — Scheduled data scraping
-
-### Default Sources (Seeded per Industry)
-
-All 19 industries get 5 default sources: market_research (2 credits), news_feed (1), competitor_intel (3), lead_finder (5), trend_analytics (2).
-
-## Industry Endpoints
+Keys the **customer** brings (OpenAI, Resend/SendGrid, social, CoreSwift, …) are stored in
+`provider_keys` **per tenant** (`aid`) / per workspace, entered in the app UI.
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/v1/industries` | GET | List all industries (public) |
-| `/api/v1/accounts/industry` | GET | Get account's industries |
-| `/api/v1/accounts/add-industry` | POST | Add industry (creates dashboard) |
+| `/api/v1/provider-keys` | GET | List configured providers — **values masked** |
+| `/api/v1/provider-keys` | POST | Save/update a tenant or workspace provider key |
+| `/api/v1/provider-keys/{provider}` | DELETE | Remove a provider key |
+| `/api/v1/provider-keys/{provider}/test` | POST | Live connection probe |
+| `/api/v1/provider-presets`, `/available-providers` | GET | Preset catalogue (public) |
 
-## Agents & Kanban
+Every read endpoint returns the key masked (`sk-…161`); the raw value is never returned. There is
+no env-var-only provider and no single global admin paste — if a provider has no per-tenant key,
+the related feature is simply "not connected".
 
-Paperclip agents can be created per workspace. Each agent has a role, budget, and credit tracking. Tickets act as a kanban board for tracking work items.
+**Storage note (accurate as of this writing):** `provider_keys.api_key` is stored as plain text
+in the database; only `api_keys.key_hash` (the WorkflowSwift-issued keys) is argon2-hashed. Treat
+database access as secret access until at-rest encryption is added.
 
-| Endpoint | Method | Description |
-|---|---|---|
-| `/api/v1/agents` | POST | Create agent (accepts `name`, `role`, `workspace_id`) |
-| `/api/v1/agents` | GET | List agents (opt. `?workspace_id=`) |
-| `/api/v1/workspaces/{id}/tickets` | GET | List workspace tickets |
-| `/api/v1/workspaces/{id}/tickets/{tid}/status` | PATCH | Update ticket status |
-
-## BYOK Integrations (Provider Keys)
-
-Per-workspace API key management for external providers. Keys are scoped to the workspace — not shared globally. **All keys are encrypted at rest** using pgcrypto (PGP symmetric encryption) with a per-account encryption key.
+## Integration Center — CoreSwift
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/v1/workspaces/{id}/provider-keys` | GET | List configured providers |
-| `/api/v1/workspaces/{id}/provider-keys` | POST | Save/update provider key |
-| `/api/v1/workspaces/{id}/provider-keys/{provider}` | DELETE | Remove provider key |
+| `/api/v1/integrations/coreswift/status` | GET | Is a CoreSwift key connected, and its base URL |
+| `/api/v1/integrations/coreswift/lists` | GET | Proxy the CoreSwift lists catalogue |
+| `/api/v1/integrations/coreswift/push` | POST | Manual push of captured leads |
+| `/api/v1/user-keys` | GET/POST | Per-user integration keys (+ `/{id}` DELETE, `/health-check`) |
 
+Inbound: `POST /api/v1/incoming` (internal key) is the single endpoint every Swift tool pushes
+to — WorkflowSwift matches the payload to an active workflow, creates an instance and steps
+through it, dispatching to integration targets and n8n.
 
-## Affiliate Product Auto-Sync
+MultiDirectory referral events can also arrive this way, e.g.
+`{ "event": "referral_verified", "referrer_email": "...", "referee_email": "...", "zaarcash_earned": 100 }`,
+and a workflow can turn them into notifications or CRM updates.
 
-WorkflowSwift plan tiers are automatically synced to FunnelSwift's `affiliate_products` table.
+## Affiliate product auto-sync
 
-**How it works:**
+Plan changes sync to FunnelSwift's `affiliate_products`: create → `action: create`, update →
+`action: update`, delete → `action: deactivate`. The sync is asynchronous and needs
+`FUNNELSWIFT_URL` (default `http://localhost:8080`).
 
-| Action | What happens |
-|--------|-------------|
-| **Plan created** | `POST /api/v1/internal/sync-affiliate-plan` fires with `action: create`, `source_app: workflowswift` |
-| **Plan updated** | Same endpoint with `action: update` |
-| **Plan deleted** | Same endpoint with `action: deactivate` — marks the affiliate product inactive |
+## Industries and dashboards
 
-The sync fires asynchronously. FunnelSwift must be reachable at `FUNNELSWIFT_URL` (default `http://localhost:8080`).
+The platform ships **6 industries**: site-flipping, e-commerce, saas, government-contracting,
+real-estate, marketing-agency. Each account gets a dashboard tab per selected industry, seeded
+with Data Cards; industry data sources can be `api`, `webhook`, `rss` or `scraper` and cost
+credits per call.
 
-**Requires:** `FUNNELSWIFT_URL` environment variable.
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/v1/industries` | GET | List industries (public) |
+| `/api/v1/accounts/industry`, `/add-industry` | GET/POST | Account industries |
+| `/api/v1/dashboard/industry-tabs` | GET | Tab-navigated dashboard |
+| `/api/v1/dashboard/workspace`, `/stats`, `/timeline`, `/widgets`, `/activity` | GET | Dashboard data |
+| `/api/v1/dashboard/push-widget-data` | POST | Ingest custom metrics |
 
-## Rate Limiting
+## Credits, payments and affiliates
 
-All protected endpoints are rate-limited per account: **30 requests/second**, burst of 10. Returns HTTP 429 with `Retry-After` header when exceeded.
+- **1 credit per execution**; a run without credits is refused.
+- Checkout: `/api/v1/checkout/create`, `/checkout/sessions`; providers configured per plan via
+  `/api/v1/payment-providers`. Webhooks: `POST /api/v1/webhooks/stripe`,
+  `POST /api/v1/webhooks/paypal` (signature-verified in the handler).
+- Affiliate system: `/api/v1/affiliates`.
 
-## Throttles
+## Rate limiting
 
-- **n8n workers**: 2 workers, concurrency=10 each (20 concurrent max)
-- **Worker 3**: Available in compose scale profile — activate when approaching 500 users
-- **Credits**: Each workflow execution costs 1 credit. Users without credits cannot run workflows.
+Protected endpoints pass through `rate_limit` middleware keyed on the account. Exceeding it
+returns `429` with a `Retry-After` header.
+
+## Operational notes
+
+- The container runs with `network_mode: host` and publishes nothing — the API binds
+  `127.0.0.1:8085` on the host, behind nginx/Cloudflare.
+- The binary is **image-baked** (no bind mount): restarting the container re-runs the same
+  binary. Deploy with `/opt/swift/bin/deploy-workflowswift.sh`, which rebuilds the image,
+  force-recreates the container and verifies sha256 parity against the repo build.
+- `sqlx::migrate!` embeds migrations in the binary, so a new `migrations/*.sql` file only takes
+  effect at the next deploy — read it before it can run.

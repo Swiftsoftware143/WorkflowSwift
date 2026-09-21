@@ -19,10 +19,11 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 /// The canonical numeric limit keys the admin UI can set per plan.
-pub const NUMERIC_LIMIT_KEYS: [&str; 13] = [
+pub const NUMERIC_LIMIT_KEYS: [&str; 14] = [
     "max_workflows",
     "max_templates",
     "max_instances",
+    "max_users",
     "max_automations",
     "max_integrations",
     "max_api_keys",
