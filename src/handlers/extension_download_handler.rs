@@ -4,7 +4,11 @@ use axum::{
     response::Response,
 };
 
-static EXTENSION_ZIP_BYTES: &[u8] = include_bytes!("../../swift-market-intel-extension.zip");
+// The zip is a tracked build artifact; since 2026-09-21 it lives in exactly one place
+// (extensions/dist/, produced by extensions/build.sh). The repo-root copy this used to
+// point at was deleted, which broke the build here — keep the path pinned to dist/.
+static EXTENSION_ZIP_BYTES: &[u8] =
+    include_bytes!("../../extensions/dist/swift-market-intel-extension.zip");
 
 pub async fn download_extension() -> Response {
     Response::builder()
