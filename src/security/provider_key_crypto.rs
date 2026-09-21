@@ -13,7 +13,9 @@
 //!     enc:v1:<base64( pgp_sym_encrypt(plaintext, master_key) )>
 //!
 //! * AES-256 (pgcrypto PGP symmetric, `cipher-algo=aes256`), random salt per write, so the
-//!   same key value encrypts differently every time.
+//!   same key value encrypts differently every time. The base64 payload is single-line (the
+//!   encoder's 76-char line wrapping is stripped) so the column never holds a multi-line
+//!   secret.
 //! * The `enc:v1:` prefix is self-describing and is what the DB CHECK constraint
 //!   (migration 048) enforces, so a future writer that forgets to encrypt FAILS CLOSED
 //!   instead of silently storing a plaintext credential.
@@ -131,13 +133,17 @@ pub async fn encrypt_for_storage(db: &PgPool, plaintext: &str) -> Result<String,
         return Ok(String::new());
     }
 
-    let b64: String =
-        sqlx::query_scalar("SELECT encode(pgp_sym_encrypt($1::text, $2::text, $3), 'base64')")
-            .bind(plaintext)
-            .bind(key)
-            .bind(PGP_OPTIONS)
-            .fetch_one(db)
-            .await?;
+    // chr(10) is stripped because pgcrypto's base64 encoder line-wraps at 76 chars; the stored
+    // value must stay a single line. decode() tolerates whitespace, so a value written before
+    // this change still decrypts.
+    let b64: String = sqlx::query_scalar(
+        "SELECT replace(encode(pgp_sym_encrypt($1::text, $2::text, $3), 'base64'), chr(10), '')",
+    )
+    .bind(plaintext)
+    .bind(key)
+    .bind(PGP_OPTIONS)
+    .fetch_one(db)
+    .await?;
 
     Ok(format!("{}{}", ENC_PREFIX, b64))
 }
