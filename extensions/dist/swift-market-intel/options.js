@@ -29,7 +29,7 @@ async function loadSettings() {
   try {
     const result = await chrome.storage.local.get(['wsToken', 'wsBaseUrl', 'autoDetect', 'backgroundPolling']);
     document.getElementById('wsToken').value = result.wsToken || '';
-    document.getElementById('wsBaseUrl').value = result.wsBaseUrl || 'https://workflowswift.com/api';
+    document.getElementById('wsBaseUrl').value = result.wsBaseUrl || WORKFLOWSWIFT_API_BASE;
 
     document.getElementById('autoDetect').checked = result.autoDetect !== false; // default true
     document.getElementById('backgroundPolling').checked = result.backgroundPolling !== false; // default true
@@ -71,7 +71,7 @@ function setupListeners() {
 
 async function saveSettings() {
   const token = document.getElementById('wsToken').value.trim();
-  const baseUrl = document.getElementById('wsBaseUrl').value.trim() || 'https://workflowswift.com/api';
+  const baseUrl = document.getElementById('wsBaseUrl').value.trim() || WORKFLOWSWIFT_API_BASE;
   const autoDetect = document.getElementById('autoDetect').checked;
   const backgroundPolling = document.getElementById('backgroundPolling').checked;
 
@@ -118,7 +118,7 @@ async function testConnection() {
   const btn = document.getElementById('testConnectionBtn');
   const resultEl = document.getElementById('testResult');
   const token = document.getElementById('wsToken').value.trim();
-  const baseUrl = document.getElementById('wsBaseUrl').value.trim() || 'https://workflowswift.com/api';
+  const baseUrl = document.getElementById('wsBaseUrl').value.trim() || WORKFLOWSWIFT_API_BASE;
 
   if (!token) {
     resultEl.className = 'test-result error';
@@ -149,9 +149,10 @@ async function testConnection() {
       resultEl.className = 'test-result error';
       resultEl.textContent = '❌ Invalid API token. Check your token and try again.';
     } else if (response.status === 404) {
-      // The endpoint might not exist yet — assume it's working if no 401
-      resultEl.className = 'test-result success';
-      resultEl.textContent = '⚠️ Connected (endpoint responded) — server may use a different status path.';
+      // A 404 means the path is wrong, NOT that we are connected. 1.1.0 reported
+      // "Connected" here while every API call 404'd (base URL lacked /v1).
+      resultEl.className = 'test-result error';
+      resultEl.textContent = `❌ Not connected: ${baseUrl}/bridge/status returned 404 (wrong API base URL — it must end in /api/v1).`;
     } else {
       const errText = await response.text().catch(() => '');
       resultEl.className = 'test-result error';
@@ -162,8 +163,8 @@ async function testConnection() {
     // Network error — could be CORS or offline
     // The API might still work for POST requests, so don't fail hard
     if (err.message.includes('fetch') || err.message.includes('NetworkError')) {
-      resultEl.className = 'test-result success';
-      resultEl.textContent = '⚠️ Connection attempted — check your network. The API will work for POST requests.';
+      resultEl.className = 'test-result error';
+      resultEl.textContent = '❌ Could not reach WorkflowSwift (network/CORS). The token was not verified.';
     } else {
       resultEl.className = 'test-result error';
       resultEl.textContent = `❌ ${err.message}`;
@@ -184,7 +185,7 @@ async function clearData() {
     await chrome.storage.local.remove(['wsToken', 'wsBaseUrl', 'bridgeHistory']);
 
     document.getElementById('wsToken').value = '';
-    document.getElementById('wsBaseUrl').value = 'https://workflowswift.com/api';
+    document.getElementById('wsBaseUrl').value = WORKFLOWSWIFT_API_BASE;
     document.getElementById('testResult').className = 'test-result';
     document.getElementById('testResult').style.display = 'none';
 

@@ -284,7 +284,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 class SwiftMarketIntelPopup {
   constructor() {
-    this.apiUrl = 'https://workflowswift.com/api';
+    this.apiUrl = WORKFLOWSWIFT_API_BASE;
     this.token = null;
     this.currentTab = null;
     this.lastScrapedData = null;
@@ -292,6 +292,10 @@ class SwiftMarketIntelPopup {
   }
 
   async init() {
+    // Keep the version badge honest — it is derived from the manifest, not typed by hand.
+    const badge = document.getElementById('versionBadge');
+    if (badge) badge.textContent = 'v' + chrome.runtime.getManifest().version;
+
     // Load config from storage
     const result = await chrome.storage.local.get(['wsToken', 'wsBaseUrl']);
     this.token = result.wsToken || null;
@@ -329,7 +333,11 @@ class SwiftMarketIntelPopup {
       nameEl.textContent = this.capitalize(platform.name);
       iconEl.className = `platform-icon ${platform.slug}`;
       iconEl.textContent = platform.icon || '🌐';
-      urlEl.textContent = new URL(url).hostname;
+      // `new URL('')` throws — history rows and tabs can carry an empty url,
+      // which used to abort the whole popup render with "Invalid URL".
+      let host = '';
+      try { host = url ? new URL(url).hostname : ''; } catch (_e) { host = ''; }
+      urlEl.textContent = host;
       infoEl.textContent = `Ready to collect data from ${platform.name}.`;
       scrapeBtn.disabled = false;
 

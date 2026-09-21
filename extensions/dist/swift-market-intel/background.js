@@ -1,3 +1,5 @@
+importScripts('config.js'); // WORKFLOWSWIFT_API_BASE — the single source of truth
+
 // ─── workflowswift-client.js ───
 /**
  * workflowswift-client.js
@@ -12,7 +14,7 @@
 
 const WorkflowSwiftClient = {
   // Default API base URL — overridable via chrome.storage
-  DEFAULT_BASE_URL: 'https://workflowswift.com/api',
+  DEFAULT_BASE_URL: WORKFLOWSWIFT_API_BASE,
 
   // Max retries for network failures
   MAX_RETRIES: 3,
@@ -1961,7 +1963,7 @@ async function getAuthToken() {
 async function getBaseUrl() {
   if (_client) return _client.getBaseUrl();
   const result = await chrome.storage.local.get('wsBaseUrl');
-  return result.wsBaseUrl || 'https://workflowswift.com/api';
+  return result.wsBaseUrl || WORKFLOWSWIFT_API_BASE;
 }
 
 async function sendToWorkflow(data, payload = {}) {
