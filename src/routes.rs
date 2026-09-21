@@ -838,6 +838,16 @@ pub fn create_router(state: AppState) -> Router {
             delete(handlers::checkout_handler::delete_payment_provider),
         )
         .nest("/admin", admin_routes)
+        // Layer order: in axum the LAST `.layer()` is the OUTERMOST, so the request path is
+        // pre_auth_rate_limit -> auth -> per-account rate limit -> handler.
+        //
+        // The pre-auth limiter is first on purpose: `rate_limit_middleware` needs `Claims`,
+        // which `auth_middleware` only produces after it has verified the credential — and
+        // for an API key that verification is an Argon2 check over stored hashes. With auth
+        // outermost, an unauthenticated caller could drive that work at full request rate
+        // and only be throttled after the fact (measured: ~100 ms of CPU per request that
+        // merely looked like an API key). Throttling now happens before any credential is
+        // touched.
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::rate_limit::rate_limit_middleware,

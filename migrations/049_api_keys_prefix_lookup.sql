@@ -1,0 +1,17 @@
+-- 049: make api_keys.prefix usable as a lookup hint.
+--
+-- Until now every row carried the constant prefix 'workflo', so API-key verification
+-- could not look anything up: src/auth/api_key_auth.rs read ALL rows and argon2-verified
+-- the presented credential against each one, at N x ~25-50 ms per request, where N is the
+-- api_keys row count of the whole fleet (one tenant's request paid for every other
+-- tenant's keys).
+--
+-- prefix now holds the key's discriminator (first 8 hex digits of sha256(raw key), see
+-- api_key_auth::discriminator), which makes the verification query an equality lookup:
+--   SELECT ... FROM api_keys WHERE prefix = $1
+-- Existing rows keep 'workflo' and are still found by the legacy fallback scan, which
+-- backfills the discriminator of a legacy key the first time that key authenticates.
+--
+-- Both queries filter on prefix, so index it. No column or type change: prefix is already
+-- varchar(8) and already returned to the key's owner by GET /api-keys.
+CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys (prefix);

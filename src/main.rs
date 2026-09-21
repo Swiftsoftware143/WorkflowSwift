@@ -62,12 +62,19 @@ async fn main() {
     }
 
     let rate_limiters = crate::rate_limit::RateLimiters::new(30, 10);
+    // Pre-auth ceiling, per client identity, on API-key credentials: the per-account limit
+    // above is applied only AFTER auth, so it cannot protect the Argon2 verification that
+    // auth performs. Set deliberately above the per-account limit (30/s) so a legitimate
+    // client always exhausts its own account budget first, and bounded at 10k buckets
+    // because the key is a client-supplied header.
+    let pre_auth_limiters = crate::rate_limit::RateLimiters::with_capacity(60, 60, 10_000);
     let provider_key_cache = crate::rate_limit::ProviderKeyCache::new(300); // 5 min TTL
 
     let state = AppState {
         db: pool,
         config: config.clone(),
         rate_limiters,
+        pre_auth_limiters,
         provider_key_cache,
     };
 
