@@ -100,7 +100,18 @@ const API = (() => {
   const handle = async (r) => {
     const ct = r.headers.get('content-type') || '';
     const d = ct.includes('json') ? await r.json() : await r.text();
-    if (!r.ok) throw new Error(d && (d.error || d.message) ? (d.error || d.message) : (typeof d === 'string' ? d : 'Request failed'));
+    if (!r.ok) {
+      // Prefer a STRING error/message. The API returns {"code":402,"error":true,"message":"..."}
+      // for plan-gate refusals, so a truthy d.error would otherwise surface as the literal "true".
+      const body = typeof d === 'string' ? d : (d || {});
+      const msg = (typeof body.error === 'string' && body.error)
+        || (typeof body.message === 'string' && body.message)
+        || (typeof d === 'string' ? d : '')
+        || ('Request failed (HTTP ' + r.status + ')');
+      const err = new Error(msg);
+      err.status = r.status;
+      throw err;
+    }
     return d;
   };
   return {
@@ -117,6 +128,9 @@ const API = (() => {
     getDashboardTabs: (slug) => fetch(base + '/dashboard/tabs' + (slug ? ('?industry=' + encodeURIComponent(slug)) : ''), { headers: headers() }).then(handle),
     getDashboardMetric: (key) => fetch(base + '/dashboard/data/' + encodeURIComponent(key), { headers: headers() }).then(handle),
     pushDashboardData: (industry_slug, metric_key, value) => fetch(base + '/dashboard/push-widget-data', { method:'POST', headers: headers(), body: JSON.stringify({ industry_slug, metric_key, value }) }).then(handle),
+    listApiKeys: () => fetch(base + '/api-keys', { headers: headers() }).then(handle),
+    createApiKey: (name) => fetch(base + '/api-keys', { method:'POST', headers: headers(), body: JSON.stringify({ name }) }).then(handle),
+    revokeApiKey: (id) => fetch(base + '/api-keys/' + encodeURIComponent(id), { method:'DELETE', headers: headers() }).then(handle),
     get token(){ return token; }, get user(){ return user; },
     get isLoggedIn(){ return !!sessionStorage.getItem('wf_token'); },
     setAuth(t, u){ token = t; user = u; sessionStorage.setItem('wf_token', t); sessionStorage.setItem('wf_user', JSON.stringify(u)); },
@@ -124,9 +138,21 @@ const API = (() => {
   };
 })();
 
-const S = { view:'login', loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, dataVer:0 };
+const S = { view:'login', loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, dataVer:0, apiKeys:null, newApiKey:null, modalErr:null };
 
-const renderApp = () => render(html`<${App} />`, root);
+// Views call their loaders from inside render (the house pattern: `if(!S.x) loadX();`), and
+// every loader calls renderApp() again — a *re-entrant* preact render. The inner render
+// replaces preact's root vnode while the outer diff is still running; after that every later
+// render diffs against a stale tree and the DOM stops updating altogether (the app "freezes"
+// on whichever view is open when the first request lands). Defer re-entrant renders instead.
+let __rendering = false;
+let __pendingRender = false;
+const renderApp = () => {
+  if (__rendering) { __pendingRender = true; return; }
+  __rendering = true;
+  try { render(html`<${App} />`, root); } finally { __rendering = false; }
+  if (__pendingRender) { __pendingRender = false; renderApp(); }
+};
 const toast = (msg, type) => { S.toast = { msg, type: type==='err'?'t-err':'t-ok' }; renderApp(); setTimeout(() => { S.toast = null; renderApp(); }, 3000); };
 const setView = (v, params) => { S.current = v; S.viewParams = params || {}; renderApp(); };
 const closeModal = () => { S.modal = null; renderApp(); };
@@ -642,6 +668,42 @@ const TicketsView = () => {
 };
 const loadTickets = async () => { if(S.loading)return; S.loading=true; renderApp(); try { const r = await API.get('/tickets'); S.tickets = r.items || r.tickets || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
 
+// ===== API Keys (/api-keys -> {api_keys:[...]}, fields: name/prefix/is_active/created_at/last_used_at) =====
+const maskKey = (k) => (k.prefix || 'workflowswift') + '_' + '\u2022'.repeat(12);
+const ApiKeysView = () => {
+  if (!S.apiKeys && !S.loading) loadApiKeys();
+  const list = S.apiKeys || [];
+  const fresh = S.newApiKey;
+  return html`
+    <div>
+      <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
+        <div><h1 class="text-xl font-extrabold text-gray-900">API Keys</h1><p class="text-sm text-gray-500 mt-1">Programmatic access tokens for the Swift Market Intel Chrome extension and the WorkflowSwift API.</p></div>
+        <div class="flex gap-2">
+          <button class="btn-outline text-sm" onClick=${loadApiKeys} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button>
+          <button class="btn text-sm" onClick=${openApiKeyModal}>+ New API Key</button>
+        </div>
+      </header>
+      ${fresh ? html`<div class="card" style="border:2px solid #16a34a">
+        <h3 class="font-semibold text-gray-800 mb-2">Your new API key</h3>
+        <p class="text-sm text-gray-500 mb-3">Copy it now — for your security it is shown only once and cannot be shown again.</p>
+        <div class="flex gap-2 flex-wrap items-center">
+          <code id="fresh-api-key" style="flex:1;min-width:260px;word-break:break-all;background:#0f172a;color:#7dd3fc;padding:12px 14px;border-radius:10px;font-size:13px">${fresh}</code>
+          <button class="btn text-sm" onClick=${copyApiKey}>Copy</button>
+          <button class="btn-outline text-sm" onClick=${()=>{S.newApiKey=null;renderApp();}}>Done</button>
+        </div>
+        <p class="text-xs text-gray-500 mt-3">Paste this into the extension's <b>Options</b> page (Token / API key field) and press <b>Test Connection</b>.</p>
+      </div>` : ''}
+      ${list.length === 0 ? html`<div class="empty">No API keys yet. Create one to connect the Chrome extension or call the API.</div>` : html`
+      <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Key</th><th>Status</th><th>Created</th><th>Last used</th><th></th></tr></thead><tbody>
+        ${list.map(k => html`<tr key=${k.id}><td class="font-semibold">${k.name || '—'}</td><td style="font-family:ui-monospace,monospace;font-size:12px;color:#64748b">${maskKey(k)}</td><td>${statusBadge(k.is_active?'active':'paused')}</td><td>${fmtDate(k.created_at)}</td><td>${k.last_used_at ? fmtDate(k.last_used_at) : 'never'}</td><td class="text-right"><button class="btn-red text-xs" onClick=${()=>revokeApiKey(k.id)}>Revoke</button></td></tr>`)}
+      </tbody></table></div>`}
+      <p class="text-xs text-gray-500 mt-2">Full key values are never stored in readable form — only a hash — so they can't be shown again. Revoke and create a new one if you lose a key.</p>
+    </div>`;
+};
+const loadApiKeys = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.apiKeys = (await API.listApiKeys()).api_keys || []; } catch(e){ toast(e.message,'err'); S.apiKeys=[]; } S.loading=false; renderApp(); };
+const revokeApiKey = async (id) => { if(!confirm('Revoke this API key? Anything using it stops working immediately.'))return; try { await API.revokeApiKey(id); toast('API key revoked'); S.apiKeys=null; loadApiKeys(); } catch(e){ toast(e.message,'err'); } };
+const copyApiKey = async () => { const t = S.newApiKey || ''; try { await navigator.clipboard.writeText(t); toast('Copied to clipboard'); } catch(e){ const el=document.getElementById('fresh-api-key'); if(el){ const r=document.createRange(); r.selectNodeContents(el); const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(r); try{ document.execCommand('copy'); toast('Copied to clipboard'); }catch(_){ toast('Select the key manually to copy','err'); } } else { toast('Select the key manually to copy','err'); } } };
+
 // ===== Profile =====
 const ProfileView = () => {
   const u = API.user || {};
@@ -665,6 +727,19 @@ const openProspectModal = () => { S.modal='prospect'; renderApp(); };
 const openBrandModal = () => { S.modal='brand'; renderApp(); };
 const openCompetitorModal = () => { S.modal='comp'; renderApp(); };
 const openSurfaceModal = () => { S.modal='surface'; renderApp(); };
+const openApiKeyModal = () => { S.modal='apikey'; S.modalErr=null; renderApp(); };
+
+const ApiKeyModal = () => { let name='';
+  const save = async () => { if(!name) return toast('Give the key a name','err'); S.loading=true; S.modalErr=null; renderApp();
+    try { const r = await API.createApiKey(name); S.newApiKey = r.key; S.apiKeys=null; S.modalErr=null; toast('API key created'); closeModal(); }
+    catch(e){ S.modalErr = e.message || 'Could not create API key'; toast(S.modalErr,'err'); }
+    S.loading=false; renderApp(); };
+  return html`<${ModalShell} title="New API Key" onClose=${closeModal}>
+    <div class="mb-4"><label class="label">Name</label><input class="input" onInput=${e=>name=e.target.value} placeholder="e.g. Chrome extension" /></div>
+    <p class="text-xs text-gray-500 mb-4">A name is just for your reference — use it to say which tool uses this key. The key itself is generated for you and shown once.</p>
+    ${S.modalErr && html`<div style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:12px;border-radius:10px;font-size:13px;margin-bottom:16px">${S.modalErr}</div>`}
+    <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Create API Key'}</button>
+  <//>`; };
 
 const WfModal = () => { let name='', desc='', cat='';
   const save = async () => { if(!name) return toast('Name required','err'); S.loading=true; renderApp(); try { await API.post('/workflows', { name, description: desc, category: cat }); toast('Workflow created'); S.workflows=null; closeModal(); } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
@@ -722,6 +797,7 @@ const NAV = [
   { id:'brand-monitor', label:'Brand Monitor', icon:'📣' },
   { id:'competitors', label:'Competitors', icon:'👁️' },
   { id:'credits', label:'Credits', icon:'💰' },
+  { id:'api-keys', label:'API Keys', icon:'🔑' },
   { id:'tickets', label:'Tickets', icon:'🎫' },
   { id:'profile', label:'Profile', icon:'👤' },
 ];
@@ -731,6 +807,7 @@ const VIEW_MAP = {
   instances: InstancesView, automations: AutomationsView, leads: LeadsView, surfaces: SurfacesView,
   prospecting: ProspectingView, 'prospecting-results': ProspectingResultsView, 'brand-monitor': BrandMonitorView,
   competitors: CompetitorsView, credits: CreditsView, tickets: TicketsView, profile: ProfileView,
+  'api-keys': ApiKeysView,
   pick: IndustryPickerView,
 };
 
@@ -765,7 +842,7 @@ const App = () => {
         <${Current} key=${S.current + "|" + S.dataVer} />
       </main>
     </div>
-    ${S.modal && (S.modal==='wf' ? html`<${WfModal} />` : S.modal==='brand' ? html`<${BrandModal} />` : S.modal==='comp' ? html`<${CompetitorModal} />` : S.modal==='surface' ? html`<${SurfaceModal} />` : S.modal==='industry' ? html`<${IndustryPickerView} asModal />` : null)}
+    ${S.modal && (S.modal==='wf' ? html`<${WfModal} />` : S.modal==='brand' ? html`<${BrandModal} />` : S.modal==='comp' ? html`<${CompetitorModal} />` : S.modal==='surface' ? html`<${SurfaceModal} />` : S.modal==='apikey' ? html`<${ApiKeyModal} />` : S.modal==='industry' ? html`<${IndustryPickerView} asModal />` : null)}
     ${S.toast && html`<div class="toast ${S.toast.type}">${S.toast.msg}</div>`}
     ${S.loading && html`<div style="position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:60"><span class="spinner"></span></div>`}
   `;
@@ -775,8 +852,24 @@ renderApp();
 // Boot into the app view when a session token exists (avoids landing on login
 // even after a successful sign-in that navigated/reloaded to /app?token=...).
 (function () {
-  if (sessionStorage.getItem('wf_token') && S.view === 'login') {
-    S.view = 'app'; S.current = S.current || 'dashboard'; renderApp();
+  // Adopt the session handed over by /login (login.html stores localStorage 'ws_fs_token'
+  // and redirects to /app?token=<jwt>). The SPA's API client only reads sessionStorage
+  // 'wf_token', so without this a user who signed in at /login landed straight back on a
+  // login form and every subsequent API call went out with no Authorization header.
+  const qs = new URLSearchParams(window.location.search);
+  const incoming = qs.get('token')
+    || localStorage.getItem('ws_fs_token') || localStorage.getItem('token') || localStorage.getItem('access_token');
+  if (incoming && !sessionStorage.getItem('wf_token')) API.setAuth(incoming, null);
+  if (qs.get('token')) { try { history.replaceState(null, '', window.location.pathname + window.location.hash); } catch (e) { /* non-fatal */ } }
+
+  // Deep link support: app.workflowswift.com/#api-keys opens the API Keys panel
+  // (the extension's setup guide links straight to it).
+  const h = (window.location.hash || '').replace(/^#\/?/, '');
+  const deepId = VIEW_MAP[h] ? h : null;
+  if (API.isLoggedIn && S.view === 'login') {
+    S.view = 'app'; S.current = deepId || S.current || 'dashboard'; renderApp();
+  } else if (deepId && API.isLoggedIn) {
+    S.current = deepId; renderApp();
   }
 })();
 

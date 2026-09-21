@@ -32,7 +32,11 @@ pub async fn create_api_key(
         .map(|_| format!("{:x}", rand::thread_rng().gen_range(0..16)))
         .collect();
     let raw_key = format!("workflowswift_{}", random_part);
-    let prefix = "workflo".to_string();
+    // `prefix` is a real lookup hint from here on: 8 hex digits of sha256(raw key), so
+    // verification is an indexed equality lookup instead of a scan of every tenant's key
+    // rows (see auth::api_key_auth::authenticate). It is still what the owner sees as the
+    // key's identifier in GET /api-keys, and it reveals nothing about the key itself.
+    let prefix = crate::auth::api_key_auth::discriminator(&raw_key);
 
     let salt = argon2::password_hash::SaltString::generate(&mut rand::thread_rng());
     let hash = argon2::PasswordHasher::hash_password(
@@ -90,6 +94,10 @@ pub async fn list_api_keys(
                 "prefix": row.try_get::<&str, _>("prefix").unwrap_or(""),
                 "target_url": row.try_get::<Option<&str>, _>("target_url").unwrap_or(None),
                 "is_active": row.try_get::<bool, _>("is_active").unwrap_or(false),
+                // created_at / last_used_at are selected above; surface them so the app SPA can
+                // show "created" and "last used" without a second round trip.
+                "created_at": row.try_get::<Option<&str>, _>("created_at").unwrap_or(None),
+                "last_used_at": row.try_get::<Option<&str>, _>("last_used_at").unwrap_or(None),
             })
         })
         .collect();
