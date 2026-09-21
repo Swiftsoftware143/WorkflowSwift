@@ -1328,12 +1328,18 @@ pub async fn admin_delete_email_template(
 
 // ── Helper ──
 
-/// POST /api/v1/admin/impersonate — generate JWT for impersonating a tenant
+/// POST /api/v1/impersonate — generate JWT for impersonating a tenant.
+///
+/// Super-admin only: without the gate ANY authenticated caller could mint a token for ANY
+/// tenant (a cross-tenant takeover). The tenant registry is `accounts` — the table the rest of
+/// the app uses (the legacy `tenants` table has 0 rows, so the lookup could never match).
 pub async fn admin_impersonate(
-    Extension(_claims): Extension<Claims>,
+    Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
+    require_admin(&claims)?;
+
     let target_tenant_id = body
         .get("tenant_id")
         .and_then(|v| v.as_str())
@@ -1342,8 +1348,8 @@ pub async fn admin_impersonate(
     let tid = Uuid::parse_str(target_tenant_id)
         .map_err(|_| AppError::BadRequest("Invalid tenant_id".into()))?;
 
-    // Check tenant exists
-    let _tenant_name: String = sqlx::query_scalar("SELECT name FROM tenants WHERE id = $1")
+    // Check the account (tenant) exists
+    let _tenant_name: String = sqlx::query_scalar("SELECT name FROM accounts WHERE id = $1")
         .bind(tid)
         .fetch_optional(&state.db)
         .await?
@@ -1386,7 +1392,7 @@ pub async fn admin_impersonate(
     })))
 }
 
-/// POST /api/v1/admin/stop-impersonation
+/// POST /api/v1/stop-impersonation
 pub async fn admin_stop_impersonation() -> ApiResult<impl IntoResponse> {
     Ok(Json(serde_json::json!({
         "status": "impersonation_stopped",

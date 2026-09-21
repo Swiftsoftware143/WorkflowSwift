@@ -34,6 +34,10 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#f1f5f9;margin:0}
 <script>
 const API='/api/v1';
 let TOKEN=localStorage.getItem('ws_token')||'';
+// Active impersonation: {admin_token, tenant_id, user_name, expires_at}. While set, TOKEN is the
+// tenant-scoped 15-minute JWT POST /impersonate minted, so every panel call acts as that
+// tenant. Stop calls POST /stop-impersonation for real and restores the admin token.
+let IMPERSONATION=null;
 let app={tab:'dashboard',sub:'overview',data:{}};
 // Last failed request's server message. api() otherwise swallows the body (returns null),
 // so a refused write (e.g. the 403 on surface CRUD for non-admins, or the Duplicate slug
@@ -106,8 +110,47 @@ function renderLogin(){
 function renderApp(){
   document.body.innerHTML='';
   document.body.appendChild(h('div',{className:'sidebar'},sidebar()));
-  document.body.appendChild(h('div',{className:'main'},content()));
+  const main=h('div',{className:'main'},content());
+  if(IMPERSONATION)main.insertBefore(impersonationBanner(),main.firstChild);
+  document.body.appendChild(main);
 }
+
+function impersonationBanner(){
+  const b=h('div',{className:'card'});
+  b.style.borderLeft='4px solid #f59e0b';b.style.background='#fffbeb';b.style.marginBottom='16px';
+  const row=h('div',{className:'flex items-center justify-between gap-3'});
+  const left=h('div',{});
+  left.appendChild(h('strong',{},'Impersonating '+(IMPERSONATION.user_name||IMPERSONATION.tenant_id)));
+  left.appendChild(h('span',{className:'text-xs text-gray-500 ml-2'},
+    'tenant '+IMPERSONATION.tenant_id+' \u00b7 token expires '+(IMPERSONATION.expires_at?new Date(IMPERSONATION.expires_at*1000).toLocaleTimeString():'-')));
+  row.appendChild(left);
+  row.appendChild(h('button',{className:'btn btn-sm btn-danger',onclick:stopImpersonation},'Stop impersonation'));
+  b.appendChild(row);
+  return b;
+}
+
+async function startImpersonation(tenantId){
+  if(!tenantId)return showMsg('This row has no tenant id','error');
+  if(!confirm('Start impersonating tenant '+tenantId+'? The panel will act as that tenant.'))return;
+  const r=await api('/impersonate',{method:'POST',body:JSON.stringify({tenant_id:tenantId})});
+  if(!r||!r.impersonation_token){showMsg('Impersonate failed: '+(LAST_ERR||'no token returned'),'error');return}
+  IMPERSONATION={admin_token:TOKEN,tenant_id:r.tenant_id,user_name:r.user_name,
+    expires_at:Math.floor(Date.now()/1000)+(r.expires_in||900)};
+  TOKEN=r.impersonation_token;
+  showMsg('Impersonating '+(r.user_name||r.tenant_id));
+  renderPage();
+}
+async function stopImpersonation(){
+  const was=IMPERSONATION?(IMPERSONATION.user_name||IMPERSONATION.tenant_id):'tenant';
+  // Restore the admin token FIRST: the stop call must go out as the admin, not as the
+  // short-lived impersonation token the server just minted.
+  if(IMPERSONATION&&IMPERSONATION.admin_token)TOKEN=IMPERSONATION.admin_token;
+  const r=await api('/stop-impersonation',{method:'POST',body:JSON.stringify({})});
+  IMPERSONATION=null;
+  showMsg(r?('Stopped impersonating '+was):('Stop failed: '+(LAST_ERR||'request failed')),r?undefined:'error');
+  renderPage();
+}
+window.startImpersonation=startImpersonation;
 
 const tabs=[
   {id:'dashboard',label:'📊 Dashboard',subs:['Overview','Brand Monitor','Competitor Watch','Prospecting']},
@@ -115,9 +158,9 @@ const tabs=[
   {id:'automation',label:'🤖 Automation',subs:['Automations','Agents','Workspaces']},
   {id:'crm',label:'👥 CRM',subs:['Leads']},
   {id:'tags',label:'🏷️ Tags & Labels',subs:['Tags','Tag Groups']},
-  {id:'integrations',label:'🔌 Integrations',subs:['My Integrations','Integration Targets','Provider Keys','API Keys','n8n Proxy','Bridge']},
+  {id:'integrations',label:'🔌 Integrations',subs:['My Integrations','Integration Targets','Destination Values','Provider Keys','API Keys','n8n Proxy','Bridge']},
   {id:'support',label:'🎫 Support',subs:['Tickets']},
-  {id:'profile',label:'👤 Profile & Account',subs:['My Profile','Team','Plans & Credits','Invoices','Payments']},
+  {id:'profile',label:'👤 Profile & Account',subs:['My Profile','Team','Plans & Credits','Invoices','Payments','Checkout Sessions']},
   {id:'comms',label:'📧 Communications',subs:['Email Templates','Webhooks']},
   {id:'admin',label:'🛠️ Admin',subs:['Usage','Settings','Users','Portfolio Companies','Plans','Surfaces','Email Templates','Industry Sources','Site Config']},
 ];
@@ -161,11 +204,12 @@ function content(){
   }else if(t==='crm'){
     if(s==='leads')renderCRUD(c,'leads','Lead',['name','status','source'],'/leads');
   }else if(t==='tags'){
-    if(s==='tags')renderCRUD(c,'tags','Tag',['name','color'],'/tags');
+    if(s==='tags')renderCRUD(c,'tags','Tag',['name','color'],'/tags',null,{label:'Unassign',fn:'unassignTag'});
     else if(s==='tag-groups')renderCRUD(c,'tag-groups','Tag Group',['name','description'],'/tag-groups');
   }else if(t==='integrations'){
     if(s==='my-integrations')renderIntegrations(c);
     else if(s==='integration-targets')renderCRUD(c,'integration-targets','Integration Target',['name','provider','is_active'],'/integration-targets');
+    else if(s==='destination-values')renderDestinationValues(c);
     else if(s==='provider-keys')renderProviderKeys(c);
     else if(s==='api-keys')renderCRUD(c,'api-keys','API Key',['name','key_prefix','is_active'],'/api-keys');
     else if(s==='n8n-proxy')renderN8N(c);
@@ -178,6 +222,7 @@ function content(){
     else if(s==='plans-credits')renderPlansCredits(c);
     else if(s==='invoices')renderList(c,'invoices','Invoice','/invoices');
     else if(s==='payments')renderCRUD(c,'payments','Payment Provider',['provider_type','is_active'],'/payment-providers');
+    else if(s==='checkout-sessions')renderCheckoutSessions(c);
   }else if(t==='comms'){
     if(s==='email-templates')renderCRUD(c,'email-templates','Email Template',['name','subject','template_type'],'/email-templates');
     else if(s==='webhooks')renderCRUD(c,'webhooks','Webhook',['name','url','is_active'],'/webhooks');
@@ -230,7 +275,7 @@ function unwrapOne(d){
 // `editFields` (optional) = the fields the Edit form exposes; without it Edit stays on
 // ['name'] as before. Sections whose real shape is name/slug/description (surfaces) pass it
 // so an edit can actually change the slug/description, not just the name.
-async function renderCRUD(container,key,label,fields,ep,editFields){
+async function renderCRUD(container,key,label,fields,ep,editFields,extraAction){
   container.innerHTML=`<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">${label}s</h2><button class="btn btn-primary btn-sm" id="addBtn">+ Add</button></div><div id="list"><p class="text-gray-400 text-sm">Loading...</p></div></div>`;
   const data=await api(ep);
   const items=unwrapList(data);
@@ -245,7 +290,7 @@ async function renderCRUD(container,key,label,fields,ep,editFields){
   const ef=(editFields||['name']).join(',');
   const thead=cols.map(f=>`<th>${f.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase())}</th>`).join('');
   const tbody=items.map(it=>'<tr>'+cols.map(f=>`<td>${String(it[f]===undefined||it[f]===null?'':it[f])}</td>`).join('')+
-    `<td class="text-right"><button class="btn btn-sm btn-ghost" onclick="event.preventDefault();editIt('${key}','${label}','${ep}','${rowId(it)}','${ef}')">Edit</button>`+
+    `<td class="text-right">`+(extraAction?`<button class="btn btn-sm btn-ghost" onclick="event.preventDefault();${extraAction.fn}('${rowId(it)}')">${extraAction.label}</button>`:'')+`<button class="btn btn-sm btn-ghost" onclick="event.preventDefault();editIt('${key}','${label}','${ep}','${rowId(it)}','${ef}')">Edit</button>`+
     `<button class="btn btn-sm btn-danger" onclick="event.preventDefault();delIt('${key}','${label}','${ep}','${rowId(it)}')">Del</button></td></tr>`).join('');
   list.innerHTML=`<table class="table"><thead><tr>${thead}<th style="width:140px"></th></tr></thead><tbody>${tbody}</tbody></table>`;
   container.querySelector('#addBtn').onclick=()=>showForm(key,label,cols,ep,null,()=>renderPage());
@@ -458,7 +503,7 @@ function renderAdminUsers(c){
         <td>${i.plan_name||i.plan_slug||'-'}</td>
         <td><span class="badge ${i.is_active?'bg-green-100 text-green-700':'bg-red-100 text-red-700'}">${i.is_active?'Active':'Inactive'}</span></td>
         <td class="text-xs text-gray-400">${(i.created_at||'').slice(0,10)}</td>
-        <td class="text-right"><button class="btn btn-sm btn-ghost">View</button><button class="btn btn-sm btn-danger">Suspend</button></td>
+        <td class="text-right"><button class="btn btn-sm btn-ghost" onclick="event.preventDefault();startImpersonation('${i.id||i.account_id||''}')">Impersonate</button></td>
       </tr>`).join('')+'</tbody></table>';
   });
 }
@@ -495,6 +540,63 @@ function renderIndustrySources(c){
   };
   renderCRUD(c.querySelector('#isdata'),'industry-sources','Industry Source',['industry_slug','source_name','source_type','endpoint','refresh_cadence','credit_cost','is_active'],'/admin/industry-sources');
 }
+
+// --- Checkout Sessions (GET /checkout/sessions -> {sessions:[...]}) — read-only history ---
+function renderCheckoutSessions(c){
+  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-1">Checkout Sessions</h2>'
+   +'<p class="text-xs text-gray-400 mb-4">Read-only history of this account\'s checkout sessions (GET /checkout/sessions). Amounts are echoed exactly as the server formats them.</p>'
+   +'<div id="csdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
+  api('/checkout/sessions').then(d=>{
+    const el=c.querySelector('#csdata');if(!el)return;
+    const items=(d&&d.sessions)||[];
+    if(!items.length){el.innerHTML='<p class="text-gray-400 text-sm">No checkout sessions yet.</p>';return}
+    el.innerHTML='<table class="table"><thead><tr><th>Provider</th><th>Type</th><th>Amount</th><th>Status</th><th>Created</th><th>Session</th></tr></thead><tbody>'
+     +items.map(s=>'<tr><td>'+String(s.provider_type||'-')+'</td><td>'+String(s.purchasable_type||'-')+'</td>'
+       +'<td>'+String(s.amount==null?'-':s.amount)+' '+String(s.currency||'')+'</td>'
+       +'<td><span class="badge">'+String(s.status||'-')+'</span></td>'
+       +'<td class="text-xs text-gray-400">'+String(s.created_at||'').replace('T',' ').slice(0,19)+'</td>'
+       +'<td class="text-xs text-gray-400">'+String(s.id||'').slice(0,8)+'</td></tr>').join('')+'</tbody></table>';
+  });
+}
+
+// --- Integration destination values (GET /integration-destinations/values?provider=&destination_type=) ---
+// The route answers 400 unless BOTH params are present, so the form always sends both.
+function renderDestinationValues(c){
+  const PROV=[['coreswift','CoreSwift'],['funnelswift','FunnelSwift'],['incentiveswift','IncentiveSwift']];
+  const TYPES={coreswift:['list','tags','pipeline_stage'],funnelswift:['landing_page','tags'],incentiveswift:['campaign','milestone_level']};
+  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-1">Integration Destination Values</h2>'
+   +'<p class="text-xs text-gray-400 mb-4">The values a step can target for a provider + destination type (GET /integration-destinations/values). Falls back to built-in placeholders when the provider API is unreachable &mdash; the <b>source</b> line tells you which you are looking at.</p>'
+   +'<div class="flex gap-3 items-end mb-4">'
+   +'<div><label class="text-xs text-gray-500">Provider</label><select id="dvprov" class="input">'+PROV.map(p=>'<option value="'+p[0]+'">'+p[1]+'</option>').join('')+'</select></div>'
+   +'<div><label class="text-xs text-gray-500">Destination type</label><select id="dvtype" class="input"></select></div>'
+   +'<button class="btn btn-primary btn-sm" id="dvload">Load values</button></div>'
+   +'<div id="dvdata"><p class="text-gray-400 text-sm">Pick a provider and load.</p></div></div>';
+  const psel=c.querySelector('#dvprov'),tsel=c.querySelector('#dvtype');
+  const fill=()=>{tsel.innerHTML=(TYPES[psel.value]||[]).map(t=>'<option value="'+t+'">'+t+'</option>').join('')};
+  fill();psel.onchange=fill;
+  c.querySelector('#dvload').onclick=async()=>{
+    const el=c.querySelector('#dvdata');el.innerHTML='<p class="text-gray-400 text-sm">Loading...</p>';
+    const d=await api('/integration-destinations/values?provider='+encodeURIComponent(psel.value)+'&destination_type='+encodeURIComponent(tsel.value));
+    if(!d){el.innerHTML='<p class="text-red-500 text-sm">Request failed: '+LAST_ERR+'</p>';return}
+    const vals=(d&&d.values)||[];
+    el.innerHTML='<p class="text-xs text-gray-400 mb-2">source: '+String(d.source||'-')+' ('+vals.length+' value'+(vals.length===1?'':'s')+')</p>'
+     +(vals.length?'<table class="table"><thead><tr><th>Value id</th><th>Label</th></tr></thead><tbody>'
+       +vals.map(v=>'<tr><td>'+String(v.id==null?'-':v.id)+'</td><td>'+String(v.label==null?'-':v.label)+'</td></tr>').join('')+'</tbody></table>'
+      :'<p class="text-gray-400 text-sm">No values.</p>');
+  };
+}
+
+// --- Tags: unassign (POST /tags/unassign {tag_id, entity_type, entity_id}) ---
+// The route takes none of the tag_assignments id, so the panel asks for the tagged entity.
+window.unassignTag=async function(tagId){
+  const et=prompt('Unassign this tag from which entity TYPE? (e.g. lead, workflow, contact)');
+  if(!et)return;
+  const eid=prompt('Entity id (uuid) to unassign tag '+tagId+' from:');
+  if(!eid)return;
+  const r=await api('/tags/unassign',{method:'POST',body:JSON.stringify({tag_id:tagId,entity_type:et,entity_id:eid})});
+  showMsg(r?(r.message||'Tag unassigned'):('Unassign failed: '+(LAST_ERR||'request failed')),r?undefined:'error');
+  if(r)renderPage();
+};
 
 function renderSiteConfig(c){
   c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">Site Configuration</h2><p class="text-xs text-gray-400 mb-4">SEO, tracking, legal pages, and homepage content. Changes regenerate the live marketing page on save.</p><div id="scdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';

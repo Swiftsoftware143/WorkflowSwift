@@ -13,7 +13,6 @@ pub fn create_router(state: AppState) -> Router {
     let auth_public = Router::new()
         .route("/login", post(auth::login))
         .route("/register", post(auth::register))
-        .route("/lightweight-register", post(auth::lightweight_register))
         .route("/forgot-password", post(auth::forgot_password))
         .route("/reset-password", post(auth::reset_password));
 
@@ -187,10 +186,6 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/industry/{slug}",
             delete(handlers::industry_handler::remove_account_industry),
-        )
-        .route(
-            "/add-industry",
-            post(crate::auth::handlers::add_account_industry),
         );
 
     let user_routes = Router::new()
@@ -233,10 +228,6 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/{id}/provider-keys/{provider}",
             delete(handlers::agent_handler::delete_provider_key),
-        )
-        .route(
-            "/{id}/agents/{agent_id}",
-            delete(handlers::agent_handler::delete_agent),
         );
 
     let agent_routes = Router::new()
@@ -275,18 +266,6 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/push-widget-data",
             post(handlers::industry_handler::push_widget_data),
-        )
-        .route(
-            "/industry-tabs",
-            get(handlers::dashboard_handler::tabbed_dashboard),
-        )
-        .route(
-            "/industry-data",
-            get(handlers::dashboard_handler::industry_dashboard_data),
-        )
-        .route(
-            "/metric-keys",
-            get(handlers::dashboard_handler::get_widget_metric_keys),
         )
         // Dashboard Tabs (Brand Monitor, Competitor Watch, Prospecting)
         .route(

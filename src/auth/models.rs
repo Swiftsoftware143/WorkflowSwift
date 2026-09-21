@@ -115,18 +115,6 @@ pub struct RegisterRequest {
     pub plan_slug: Option<String>,
 }
 
-/// Lightweight registration — name is auto-generated from email prefix
-#[derive(Debug, Deserialize)]
-pub struct LightweightRegisterRequest {
-    pub email: String,
-    pub password: String,
-    pub name: Option<String>,
-    pub account_name: Option<String>,
-    pub account_slug: Option<String>,
-    pub industry_slug: Option<String>,
-    pub plan_slug: Option<String>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RegisterResponse {
     pub access_token: String,

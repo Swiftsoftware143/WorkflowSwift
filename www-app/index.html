@@ -143,6 +143,10 @@ const API = (() => {
     getPlanCapabilities: () => fetch(base + '/plans/capabilities', { headers: headers() }).then(handle),
     rolloverCredits: () => fetch(base + '/credits/rollover', { method:'POST', headers: headers(), body: JSON.stringify({}) }).then(handle),
     removeAccountIndustry: (slug) => fetch(base + '/accounts/industry/' + encodeURIComponent(slug), { method:'DELETE', headers: headers() }).then(handle),
+    // --- Prospecting surface: enrich (paid/mocked server-side) + the Hexomatic enrichment key ---
+    enrichBusiness: (b) => fetch(base + '/prospecting/enrich', { method:'POST', headers: headers(), body: JSON.stringify(b) }).then(handle),
+    getHexomaticKey: () => fetch(base + '/accounts/hexomatic-key', { headers: headers() }).then(handle),
+    setHexomaticKey: (key) => fetch(base + '/accounts/hexomatic-key', { method:'PUT', headers: headers(), body: JSON.stringify({ key }) }).then(handle),
     get token(){ return token; }, get user(){ return user; },
     get isLoggedIn(){ return !!sessionStorage.getItem('wf_token'); },
     setAuth(t, u){ token = t; user = u; sessionStorage.setItem('wf_token', t); sessionStorage.setItem('wf_user', JSON.stringify(u)); },
@@ -150,7 +154,7 @@ const API = (() => {
   };
 })();
 
-const S = { view:'login', loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, dataVer:0, apiKeys:null, extBuild:null, newApiKey:null, modalErr:null };
+const S = { view:'login', loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, dataVer:0, apiKeys:null, extBuild:null, hexKey:null, hexKeyInput:'', enrich:null, enriching:null, newApiKey:null, modalErr:null };
 
 // Views call their loaders from inside render (the house pattern: `if(!S.x) loadX();`), and
 // every loader calls renderApp() again — a *re-entrant* preact render. The inner render
@@ -224,7 +228,19 @@ const RegisterView = () => {
 // ---- Industry picker (signup step: industry = category) ----
 const IndustryPickerView = ({ asModal }) => {
   if (!S.industries && !S.loading) { loadIndustries(); }
+  if (!S.accIndustry && !S.loading) { loadAccountIndustry(); }
   const list = S.industries || [];
+  const mine = (S.accIndustry && S.accIndustry.industries) || [];
+  const removeIndustry = async (slug, nm) => {
+    if (!confirm('Remove the ' + (nm || slug) + ' dashboard from your account? Your stored data is kept.')) return;
+    try {
+      const r = await API.removeAccountIndustry(slug);
+      toast((r && r.message) || ("Industry '" + slug + "' dashboard removed"));
+      S.accIndustry = null; S.accLoaded = false; S.widgets = null; S.widgetsSlug = null; S.viewParams = {};
+      await loadAccountIndustry();
+    } catch(e) { toast(e.message, 'err'); }
+    renderApp();
+  };
   let sel = S.selectedIndustry || null;
   const pick = async (ic) => { try { sel = ic.slug || ic.industry_slug || ic.id; S.selectedIndustry = sel; renderApp(); } catch(e){} };
   const done = async () => { if(!sel) return toast('Pick an industry to continue','err'); S.loading=true; renderApp();
@@ -239,6 +255,9 @@ const IndustryPickerView = ({ asModal }) => {
   const inner = html`
     <div class="p-2"><h2 class="text-xl font-extrabold text-gray-900 mb-1">${asModal?'Switch industry':'Welcome! Pick your industry'}</h2>
     <p class="text-sm text-gray-500 mb-5">Your industry determines your dashboard. You can change it anytime.</p>
+    ${mine.length ? html`<div class="mb-5"><h3 class="text-sm font-semibold text-gray-800 mb-2">Your industry dashboards</h3>
+      <div class="flex flex-wrap gap-2">${mine.map(m => { const s = m.industry_slug || m.slug || m.id; const nm = m.industry_name || m.name || s;
+        return html`<span class="chip" key=${s}>${nm}${m.is_primary ? ' · primary' : ''}<button class="btn-red text-xs" style="margin-left:6px" onClick=${()=>removeIndustry(s, nm)}>Remove</button></span>`; })}</div></div>` : ''}
     ${list.length===0 ? html`<div class="empty">Loading industries…</div>` : html`<div class="ind-grid">${list.map(card)}</div>`}
     <div class="mt-6 flex items-center justify-between gap-3">
       <button class="btn-outline text-sm" onClick=${()=>{ if(S.pickingIndustry){API.logout();S.pickingIndustry=false;S.view='login';S.showRegister=false;} else closeModal(); renderApp(); }}>Not now</button>
@@ -249,7 +268,23 @@ const IndustryPickerView = ({ asModal }) => {
 };
 const loadIndustries = async () => { if(S.loading)return; S.loading=true; renderApp(); try { const r = await API.getIndustries(); S.industries = r.industries || r.categories || r.items || r || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
 const openIndustryPicker = () => { if(!S.industries && !S.loading) loadIndustries(); S.pickingIndustry=false; S.modal='industry'; renderApp(); };
-const loadAccountIndustry = async () => { if(S.accLoaded) return S.accIndustry; S.accLoaded=true; try { S.accIndustry = await API.getAccountIndustry(); } catch(e){ S.accIndustry=null; } if (S.accIndustry && !S.accIndustry.primary_industry && S.accIndustry.industries && S.accIndustry.industries[0]) S.accIndustry.primary_industry = S.accIndustry.industries[0].industry_slug || S.accIndustry.industries[0].slug; return S.accIndustry; };
+const loadAccountIndustry = async () => {
+  if(S.accLoaded) return S.accIndustry;
+  S.accLoaded=true;
+  try { S.accIndustry = await API.getAccountIndustry(); } catch(e){ S.accIndustry=null; }
+  // GET /accounts/industry answers EVERY linked row — a removed dashboard is soft-deactivated
+  // (is_active=false) rather than dropped, so it would otherwise stay selectable AND get picked
+  // as the current industry by the [0] fallback right after a Remove. Keep the active rows only,
+  // and re-point a primary that the removal left dangling.
+  if (S.accIndustry && Array.isArray(S.accIndustry.industries)) {
+    S.accIndustry.industries = S.accIndustry.industries.filter(x => x.is_active !== false);
+    const slugs = S.accIndustry.industries.map(x => x.industry_slug || x.slug);
+    if (S.accIndustry.primary_industry && slugs.indexOf(S.accIndustry.primary_industry) === -1)
+      S.accIndustry.primary_industry = slugs[0] || null;
+    if (!S.accIndustry.primary_industry && slugs[0]) S.accIndustry.primary_industry = slugs[0];
+  }
+  return S.accIndustry;
+};
 const currentIndustrySlug = () => { const a = S.accIndustry; const s = (a && (a.primary_industry || (a.industries&&a.industries[0]&&(a.industries[0].industry_slug||a.industries[0].slug)))); if (s) return s; if (S.viewParams?.industry) return S.viewParams.industry; return null; };
 const currentIndustryName = () => { const a=S.accIndustry; const slug=currentIndustrySlug(); if(a&&a.industries){ const it=a.industries.find(x=>x.industry_slug===slug||x.slug===slug||x.id===slug); if(it) return it.industry_name||it.name||slug; } return S.selectedIndustryName||slug; };
 
@@ -565,10 +600,21 @@ const runAuto = async (id) => { try { await API.post('/automations/'+id+'/run');
 
 // ===== Prospecting (search + results only; no list endpoint) =====
 const ProspectingView = () => {
+  if (S.hexKey === null && !S.loading) loadHexomaticKey();
+  const masked = S.hexKey || '';
   return html`
     <div>
       <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
         <div><h1 class="text-xl font-extrabold text-gray-900">Prospecting</h1><p class="text-sm text-gray-500 mt-1">Search and enrich target businesses</p></div>
+        <div class="card" style="margin-bottom:0;padding:12px;min-width:320px">
+          <h3 class="font-semibold text-gray-800 mb-2 text-sm">🧩 Hexomatic API key</h3>
+          <p class="text-xs text-gray-500 mb-2">Third-party enrichment credential. Stored per account; the server only ever returns it masked.</p>
+          <div class="flex gap-2 items-center">
+            <input class="input" style="font-family:ui-monospace,monospace;font-size:12px" placeholder=${masked ? masked : 'not set'} value=${S.hexKeyInput} onInput=${e=>{S.hexKeyInput=e.target.value;}} />
+            <button class="btn text-sm" onClick=${saveHexomaticKey} disabled=${S.loading}>Save</button>
+          </div>
+          <p class="text-xs text-gray-400 mt-1">Saved: ${masked ? masked : 'not set'}</p>
+        </div>
       </header>
       <div class="card">
         <h3 class="font-semibold text-gray-800 mb-3">🔍 Search Businesses</h3>
@@ -582,12 +628,45 @@ const ProspectingView = () => {
     </div>`;
 };
 const quickSearchField = (id, label, ph) => html`<div><label class="label">${label}</label><input class="input" id=${id} placeholder=${ph} /></div>`;
+// Defensive mask: the GET already answers masked, but never trust a client render with a raw key.
+const maskKeyStr = (v) => { v = v || ''; if (!v) return ''; if (v.indexOf('...') >= 0) return v;
+  return v.length > 8 ? (v.slice(0,3) + '...' + v.slice(-3)) : '\u2022'.repeat(8); };
+const loadHexomaticKey = async () => { try { const r = await API.getHexomaticKey(); S.hexKey = maskKeyStr(r && r.key); } catch(e){ S.hexKey = ''; } renderApp(); };
+const saveHexomaticKey = async () => {
+  const k = (S.hexKeyInput || '').trim();
+  if (!k) return toast('Enter the Hexomatic API key first', 'err');
+  S.loading = true; renderApp();
+  try { const r = await API.setHexomaticKey(k); toast((r && r.message) || 'Hexomatic API key stored');
+    S.hexKeyInput = ''; S.hexKey = null; await loadHexomaticKey(); }
+  catch(e){ toast(e.message, 'err'); }
+  S.loading = false; renderApp();
+};
 const runSearch = async () => {
   const industry=document.getElementById('industryInput').value; const city=document.getElementById('cityInput').value; const state=document.getElementById('stateInput').value;
   if(!industry || !city || !state){ toast('Industry, city and state are required','err'); return; }
   S.loading=true; renderApp();
-  try { const r = await API.post('/prospecting/search', { industry, city, state }); S.searchResults = r.results || r; toast('Search complete'); setView('prospecting-results'); }
+  // POST /prospecting/search requires `query` (a 422 "query is required" otherwise — the three
+  // form fields used to be sent as industry/city/state, so the search NEVER returned results and
+  // the results view — and therefore the Enrich action — was unreachable).
+  const query = [industry, city, state].filter(Boolean).join(' ');
+  try { const r = await API.post('/prospecting/search', { query, limit: 20, industry, city, state }); S.searchResults = r.results || r; toast('Search complete'); setView('prospecting-results'); }
   catch(e){ toast(e.message,'err'); } S.loading=false; renderApp();
+};
+
+// Enrich is a per-result action on POST /prospecting/enrich {business_name, website?}.
+// The server owns the price: if it reports a credit cost we show it, otherwise we show
+// nothing rather than inventing a number, and its refusal text is surfaced verbatim.
+const enrichBusiness = async (b, i) => {
+  const name = b.name || b.business_name || '';
+  if (!name) return toast('This result has no business name to enrich', 'err');
+  S.enriching = i; renderApp();
+  try {
+    const r = await API.enrichBusiness({ business_name: name, website: b.website || undefined });
+    S.enrich = Object.assign({}, S.enrich || {}); S.enrich[i] = (r && r.enriched_business) || {};
+    const cost = (r && (r.credits_cost != null ? r.credits_cost : (r.cost != null ? r.cost : (r.credit_cost != null ? r.credit_cost : null))));
+    toast('Enriched ' + name + (cost != null ? (' — ' + cost + ' credit' + (cost === 1 ? '' : 's')) : ''));
+  } catch(e) { toast(e.message, 'err'); }
+  S.enriching = null; renderApp();
 };
 
 const ProspectingResultsView = () => {
@@ -603,6 +682,17 @@ const ProspectingResultsView = () => {
           ${b.address ? html`<p class="text-sm text-gray-500 mt-1">${b.address}</p>` : ''}
           ${b.phone ? html`<p class="text-sm text-gray-500">${b.phone}</p>` : ''}
           ${b.social_links && Object.keys(b.social_links).length ? html`<div class="mt-2">${Object.entries(b.social_links).filter(([k,v])=>v).map(([k,v])=>html`<span class="chip">${k}</span>`)}</div>` : ''}
+          <div class="mt-3 flex items-center gap-2">
+            <button class="btn-outline text-xs" onClick=${()=>enrichBusiness(b, i)} disabled=${S.enriching === i}>${S.enriching === i ? spinner() : '\u2728 Enrich'}</button>
+          </div>
+          ${(S.enrich && S.enrich[i]) ? html`<div class="mt-3 text-xs text-gray-600" style="border-top:1px solid #e2e8f0;padding-top:8px">
+            <div><b>Industry:</b> ${S.enrich[i].industry || '\u2014'}</div>
+            <div><b>Location:</b> ${S.enrich[i].location || '\u2014'}</div>
+            <div><b>Size:</b> ${S.enrich[i].estimated_size || '\u2014'}</div>
+            ${S.enrich[i].contact_email ? html`<div><b>Email:</b> ${S.enrich[i].contact_email}</div>` : ''}
+            ${S.enrich[i].contact_phone ? html`<div><b>Phone:</b> ${S.enrich[i].contact_phone}</div>` : ''}
+            ${(S.enrich[i].insights || []).map(x => html`<div>\u2022 ${x}</div>`)}
+          </div>` : ''}
         </div>`)}
       </div>`}
     </div>`;
