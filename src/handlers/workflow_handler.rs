@@ -307,11 +307,12 @@ async fn run_in_process(
         }
     };
 
-    // Item 3: a run that leaves steps pending is not a success. Say so in the
-    // response as well as in the instance row.
+    // Item 3: a run that leaves steps waiting is not a success. Say so in the
+    // response as well as in the instance row — and say what will actually move
+    // it, now that something can (a due time for a wait, a decision for a gate).
     if outcome.pending_steps > 0 {
         warnings.push(format!(
-            "{} step(s) are still pending: manual/approval steps need a human and delay/wait steps need a timer, and this build runs no background worker to advance them. The instance is reported as 'pending', not completed.",
+            "{} step(s) are still waiting: a delay/wait step advances by itself once its due time passes (background worker), a manual/approval step advances when it is approved or rejected (POST /api/v1/instances/{{id}}/steps/{{step_id}}/decision). Until then the instance is reported as 'pending', not completed.",
             outcome.pending_steps
         ));
     }
@@ -860,7 +861,7 @@ pub async fn run_workflow(
         "remaining_balance": run.remaining_balance,
         "message": if run.pending_steps > 0 {
             format!(
-                "Workflow '{}' ran {} step(s) in-process; {} step(s) are still pending and cannot advance in this build.",
+                "Workflow '{}' ran {} step(s) in-process; {} step(s) are waiting (a delay advances on its due time, a manual step needs a decision).",
                 workflow.name,
                 run.steps.len(),
                 run.pending_steps

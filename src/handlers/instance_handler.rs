@@ -445,12 +445,24 @@ pub async fn list_instance_logs(
         return Err(AppError::NotFound("Instance not found".to_string()));
     }
 
+    // `instance_step_id` is what the decision endpoint takes (the log row's own
+    // `step_id` is the workflow_steps definition, not the instance step), and
+    // `due_date`/`instance_step_status` are what the UI needs to show a wait or a
+    // gate as actionable instead of a dead end (kanban t_1ff4b916).
     let rows = sqlx::query(
-        r#"SELECT id, step_id, step_type, step_name, sort_order, status, provider,
-                  input_data, output_data, error_message, duration_ms, started_at, completed_at
-           FROM workflow_execution_logs
-           WHERE instance_id = $1
-           ORDER BY sort_order ASC, started_at ASC"#,
+        r#"SELECT l.id, l.step_id, l.step_type, l.step_name, l.sort_order, l.status, l.provider,
+                  l.input_data, l.output_data, l.error_message, l.duration_ms, l.started_at, l.completed_at,
+                  s.id AS instance_step_id, s.status AS instance_step_status, s.due_date
+           FROM workflow_execution_logs l
+           LEFT JOIN LATERAL (
+               SELECT id, status, due_date
+               FROM workflow_instance_steps
+               WHERE instance_id = l.instance_id AND sort_order = l.sort_order
+               ORDER BY created_at DESC
+               LIMIT 1
+           ) s ON TRUE
+           WHERE l.instance_id = $1
+           ORDER BY l.sort_order ASC, l.started_at ASC"#,
     )
     .bind(id)
     .fetch_all(&state.db)
@@ -467,9 +479,15 @@ pub async fn list_instance_logs(
             let duration_ms: Option<i32> = r.get("duration_ms");
             let started_at: Option<chrono::DateTime<chrono::Utc>> = r.get("started_at");
             let completed_at: Option<chrono::DateTime<chrono::Utc>> = r.get("completed_at");
+            let instance_step_id: Option<Uuid> = r.get("instance_step_id");
+            let instance_step_status: Option<String> = r.get("instance_step_status");
+            let due_date: Option<chrono::DateTime<chrono::Utc>> = r.get("due_date");
             json!({
                 "id": r.get::<Uuid, _>("id"),
                 "step_id": step_id,
+                "instance_step_id": instance_step_id,
+                "instance_step_status": instance_step_status,
+                "due_date": due_date,
                 "step_type": r.get::<String, _>("step_type"),
                 "step_name": r.get::<String, _>("step_name"),
                 "sort_order": r.get::<i32, _>("sort_order"),
@@ -489,5 +507,151 @@ pub async fn list_instance_logs(
         "instance_id": id.to_string(),
         "count": logs.len(),
         "logs": logs,
+    })))
+}
+
+/// POST /api/v1/instances/{id}/steps/{step_id}/decision
+///
+/// The explicit advance path for the steps the engine cannot run by itself
+/// (kanban t_1ff4b916 item 2). Before this, a `manual`/`approval` gate was a dead
+/// end: the run stopped, said `pending`, and nothing could ever move it.
+///
+///   {"decision": "approve"}  -> the gate is settled as completed and the run
+///                               continues with the steps behind it
+///   {"decision": "reject"}   -> the gate is settled as failed and the run stops
+///
+/// Tenant-scoped: the step must belong to an instance of the caller's account;
+/// anything else answers 404 (never "exists but forbidden").
+///
+/// It does NOT bill. The run was charged once at trigger time — settling a step
+/// advances the existing instance and never creates a second billed run (item 3).
+pub async fn decide_instance_step(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path((id, step_id)): Path<(Uuid, Uuid)>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<impl IntoResponse> {
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+
+    let raw = req
+        .get("decision")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+
+    let decision = match raw.as_str() {
+        "approve" | "approved" => crate::execution::Decision::Approve,
+        "reject" | "rejected" | "deny" | "denied" => crate::execution::Decision::Reject,
+        _ => {
+            return Err(AppError::Validation(
+                "decision must be 'approve' or 'reject'".to_string(),
+            ))
+        }
+    };
+
+    let step = sqlx::query_as::<_, (Uuid, String, String)>(
+        r#"SELECT s.id, s.step_type, s.status
+           FROM workflow_instance_steps s
+           JOIN workflow_instances i ON i.id = s.instance_id
+           WHERE s.id = $1 AND s.instance_id = $2 AND i.aid = $3"#,
+    )
+    .bind(step_id)
+    .bind(id)
+    .bind(aid)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let (_, step_type, status) =
+        step.ok_or_else(|| AppError::NotFound("Instance step not found".to_string()))?;
+
+    if status != "pending" && status != "in_progress" {
+        return Err(AppError::Validation(format!(
+            "step is already '{}' — only a waiting step can be decided",
+            status
+        )));
+    }
+
+    match step_type.as_str() {
+        "manual" | "approval" | "delay" | "wait" => {}
+        other => {
+            return Err(AppError::Validation(format!(
+                "step type '{}' is not a human gate or a wait — it is settled by the engine",
+                other
+            )))
+        }
+    }
+
+    // A wait can be fast-forwarded (that is an approve) but "rejecting" a timer
+    // means nothing: refuse it rather than fail a run on a meaningless call.
+    if decision == crate::execution::Decision::Reject
+        && (step_type == "delay" || step_type == "wait")
+    {
+        return Err(AppError::Validation(
+            "a delay/wait step can only be approved (run now) — reject applies to manual/approval steps"
+                .to_string(),
+        ));
+    }
+
+    // Atomic claim: a concurrent worker or a second click cannot double-settle.
+    let claimed = sqlx::query(
+        "UPDATE workflow_instance_steps SET status = 'in_progress' WHERE id = $1 AND status IN ('pending', 'in_progress')",
+    )
+    .bind(step_id)
+    .execute(&state.db)
+    .await?
+    .rows_affected();
+
+    if claimed == 0 {
+        return Err(AppError::Validation(
+            "step was settled by another caller — reload the run history".to_string(),
+        ));
+    }
+
+    let actor = format!("user:{}", claims.sub);
+    let advance = crate::execution::AdvanceRequest {
+        step_instance_id: step_id,
+        decision,
+    };
+
+    let outcome = match crate::execution::resume_instance(&state, id, Some(advance), &actor).await {
+        Ok(o) => o,
+        Err(e) => {
+            // Hand the step back so the caller can retry; do not leave it stranded
+            // in 'in_progress' on a transient failure.
+            let _ = sqlx::query(
+                "UPDATE workflow_instance_steps SET status = 'pending' WHERE id = $1 AND status = 'in_progress'",
+            )
+            .bind(step_id)
+            .execute(&state.db)
+            .await;
+            return Err(e);
+        }
+    };
+
+    let warnings: Vec<String> = if outcome.pending_steps > 0 {
+        vec![format!(
+            "{} step(s) are still waiting: a delay runs when its due time passes, a manual step needs a decision.",
+            outcome.pending_steps
+        )]
+    } else {
+        Vec::new()
+    };
+
+    tracing::info!(
+        instance_id = %id, step_id = %step_id, decision = %raw,
+        instance_status = %outcome.status, actor = %actor,
+        "instance step decided"
+    );
+
+    Ok(Json(json!({
+        "instance_id": id.to_string(),
+        "step_id": step_id.to_string(),
+        "decision": raw,
+        "status": outcome.status,
+        "pending_steps": outcome.pending_steps,
+        "failed_steps": outcome.failed_steps,
+        "steps": outcome.steps,
+        "warnings": warnings,
     })))
 }

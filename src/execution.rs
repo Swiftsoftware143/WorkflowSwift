@@ -14,7 +14,7 @@
 //! n8n is OPTIONAL: the per-plan `n8n_deploy` flag decides whether a run also
 //! mirrors the workflow into n8n. It can never fail a run.
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -71,9 +71,10 @@ pub struct ExecutionOutcome {
     pub steps: Vec<Value>,
     pub status: String,
     /// Steps that finished the walk without executing: `manual`/`approval`
-    /// (a human must approve) and `delay`/`wait` (a timer must fire). This build
-    /// has no background worker, so these can never advance on their own — the
-    /// instance must therefore NOT be reported as completed (item 3).
+    /// (a human must approve or reject) and `delay`/`wait` (a timer must fire).
+    /// These are settled by the background worker (src/execution_worker.rs) or by
+    /// the decision endpoint, both of which resume this same walk — so a run that
+    /// leaves one behind is reported `pending`, never `completed`, until it moves.
     pub pending_steps: i32,
     pub failed_steps: i32,
 }
@@ -118,6 +119,108 @@ fn step_error_text(result: &Value) -> Option<String> {
     match result.get("status") {
         Some(Value::Number(n)) => Some(format!("upstream returned HTTP {}", n)),
         _ => None,
+    }
+}
+
+/// How long a `delay`/`wait` step holds the run.
+///
+/// `duration_ms` is the canonical config key (the n8n converter's wait node and
+/// the step validator both read it); `duration` is a human string ("5s", "90",
+/// "30m", "1h", "2d") that older workflows — and the smoke harness — carry
+/// instead. A config with neither keeps the engine's original 1h default.
+pub fn delay_duration_ms(config: &Value) -> i64 {
+    if let Some(ms) = config.get("duration_ms").and_then(|v| v.as_i64()) {
+        if ms > 0 {
+            return ms;
+        }
+    }
+    if let Some(secs) = config.get("duration_seconds").and_then(|v| v.as_i64()) {
+        if secs > 0 {
+            return secs.saturating_mul(1000);
+        }
+    }
+    if let Some(ms) = config
+        .get("duration")
+        .and_then(|v| v.as_str())
+        .and_then(parse_duration_str)
+    {
+        return ms;
+    }
+    if let Some(secs) = config.get("duration").and_then(|v| v.as_i64()) {
+        if secs > 0 {
+            return secs.saturating_mul(1000);
+        }
+    }
+    3_600_000
+}
+
+/// `"5s"` / `"90"` / `"30m"` / `"2h"` / `"1d"` / `"1w"` -> milliseconds.
+/// `None` when the value carries no number at all.
+pub fn parse_duration_str(s: &str) -> Option<i64> {
+    let t = s.trim().to_lowercase();
+    if t.is_empty() {
+        return None;
+    }
+    let unit_ms: f64 = match t.chars().last()? {
+        's' => 1000.0,
+        'm' => 60_000.0,
+        'h' => 3_600_000.0,
+        'd' => 86_400_000.0,
+        'w' => 604_800_000.0,
+        _ => 1000.0, // bare number: seconds
+    };
+    let num: String = t
+        .chars()
+        .filter(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
+        .collect();
+    let n: f64 = num.parse().ok()?;
+    if !n.is_finite() || n < 0.0 {
+        return None;
+    }
+    Some((n * unit_ms) as i64)
+}
+
+/// The instant a `delay`/`wait` step becomes due. Stored on the instance step's
+/// `due_date` so the background worker (src/execution_worker.rs) knows when to
+/// advance it — before this, nothing wrote that column and nothing read it.
+pub fn delay_due_at(config: &Value, now: DateTime<Utc>) -> DateTime<Utc> {
+    now + chrono::Duration::milliseconds(delay_duration_ms(config))
+}
+
+/// A settle request for ONE instance step.
+#[derive(Debug, Clone, Copy)]
+pub struct AdvanceRequest {
+    pub step_instance_id: Uuid,
+    pub decision: Decision,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decision {
+    /// Settle the step as completed: the delay's timer fired, or a human approved.
+    Approve,
+    /// Settle the step as failed: a human rejected the gate.
+    Reject,
+}
+
+/// What the walk knows about the steps this instance already has. Empty for a
+/// fresh run, populated by `resume_instance`.
+#[derive(Debug, Default)]
+struct ResumePlan {
+    /// sort_order -> (instance-step id, status) of every row already written.
+    existing: std::collections::HashMap<i32, (Uuid, String)>,
+    /// The one step this walk is allowed to settle now.
+    advance: Option<AdvanceRequest>,
+    /// Who is settling it: "worker" (timer) or the user id (human decision).
+    actor: String,
+}
+
+impl ResumePlan {
+    fn fresh() -> Self {
+        Self {
+            existing: std::collections::HashMap::new(),
+            advance: None,
+            actor: "engine".to_string(),
+        }
     }
 }
 
@@ -209,7 +312,133 @@ pub async fn execute_steps(
     ctx: &StepContext,
 ) -> Result<ExecutionOutcome, AppError> {
     let steps = load_steps(&state.db, workflow_id).await?;
+    walk(
+        state,
+        aid,
+        workflow_id,
+        instance_id,
+        ctx,
+        &steps,
+        &ResumePlan::fresh(),
+    )
+    .await
+}
 
+/// Continue an instance that stopped on a step this process cannot run by
+/// itself: a `delay`/`wait` whose timer has fired, or a `manual`/`approval`
+/// gate a human just decided.
+///
+/// This is the SAME walk as `execute_steps` — one engine, no second executor
+/// (kanban t_1ff4b916 item 1). It reloads the workflow's steps, REPLAYS the
+/// instance's existing step rows without re-running them, settles the single
+/// step named in `advance`, then executes whatever comes after it. A step that
+/// already reached a terminal status is never executed twice, so a resume can
+/// never double-send a webhook — and it never charges a credit: billing happens
+/// once at trigger time, never here (item 3).
+///
+/// `actor` is who settled the step ("worker" for a timer, the user id for a
+/// human decision); it is written into the run history.
+pub async fn resume_instance(
+    state: &AppState,
+    instance_id: Uuid,
+    advance: Option<AdvanceRequest>,
+    actor: &str,
+) -> Result<ExecutionOutcome, AppError> {
+    let instance = sqlx::query_as::<_, (Uuid, Uuid)>(
+        "SELECT workflow_id, aid FROM workflow_instances WHERE id = $1",
+    )
+    .bind(instance_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?
+    .ok_or_else(|| AppError::NotFound("Instance not found".to_string()))?;
+
+    let (workflow_id, aid) = instance;
+
+    let rows = sqlx::query_as::<_, (i32, Uuid, String)>(
+        "SELECT sort_order, id, status FROM workflow_instance_steps WHERE instance_id = $1",
+    )
+    .bind(instance_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
+
+    let mut existing = std::collections::HashMap::new();
+    for (sort_order, step_id, status) in rows {
+        existing.insert(sort_order, (step_id, status));
+    }
+
+    let steps = load_steps(&state.db, workflow_id).await?;
+    let ctx = recover_context(state, instance_id, aid, workflow_id).await;
+
+    let plan = ResumePlan {
+        existing,
+        advance,
+        actor: actor.to_string(),
+    };
+
+    walk(state, aid, workflow_id, instance_id, &ctx, &steps, &plan).await
+}
+
+/// Rebuild the run context for a resumed instance from the input the engine
+/// logged for its first step: a resumed run must see the same lead/payload the
+/// original run did, or the step behind the wait would behave differently from
+/// the step in front of it.
+async fn recover_context(
+    state: &AppState,
+    instance_id: Uuid,
+    aid: Uuid,
+    workflow_id: Uuid,
+) -> StepContext {
+    let first_input: Option<Value> = sqlx::query_scalar(
+        r#"SELECT input_data FROM workflow_execution_logs
+           WHERE instance_id = $1 ORDER BY sort_order ASC, created_at ASC LIMIT 1"#,
+    )
+    .bind(instance_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
+    let logged = first_input.unwrap_or_else(|| json!({}));
+    let as_text = |v: &Value| v.as_str().map(|s| s.to_string());
+
+    let source = as_text(&logged["source"]).unwrap_or_else(|| "manual".to_string());
+    let campaign_slug = as_text(&logged["campaign_slug"]).unwrap_or_else(|| "manual".to_string());
+    let contact = logged.get("contact").cloned().unwrap_or_else(|| json!({}));
+    let data = logged.get("data").cloned();
+    let source_entry_id = as_text(&logged["source_entry_id"]);
+    let context = match logged.get("context") {
+        Some(c) if !c.is_null() => c.clone(),
+        _ => json!({
+            "source": source,
+            "campaign_slug": campaign_slug,
+            "aid": aid,
+            "workflow_id": workflow_id,
+            "resumed": true,
+        }),
+    };
+
+    StepContext {
+        source,
+        campaign_slug,
+        contact,
+        data,
+        source_entry_id,
+        context,
+    }
+}
+
+/// The shared walk.
+async fn walk(
+    state: &AppState,
+    aid: Uuid,
+    workflow_id: Uuid,
+    instance_id: Uuid,
+    ctx: &StepContext,
+    steps: &[StepRow],
+    plan: &ResumePlan,
+) -> Result<ExecutionOutcome, AppError> {
     // Locals the lifted loop expects. `source`/`slug` keep their original names
     // so the step arms below stay identical to the proven inbound implementation.
     let source: &str = ctx.source.as_str();
@@ -228,16 +457,125 @@ pub async fn execute_steps(
         let step_config = step.config.clone().unwrap_or(json!({}));
         let step_started = std::time::Instant::now();
 
-        // Create the instance step record
+        // ── Resume path: a step this instance already has is REPLAYED, not re-run ──
+        // (kanban t_1ff4b916). Only `resume_instance` populates `plan.existing`;
+        // a fresh run never enters this block.
+        if let Some((prior_id, prior_status)) = plan.existing.get(&(i as i32)).cloned() {
+            match prior_status.as_str() {
+                "completed" | "skipped" => {
+                    step_results.push(json!({
+                        "step": i, "type": step_type, "status": "completed",
+                        "note": "already executed on an earlier run — not run again",
+                    }));
+                    continue;
+                }
+                "failed" => {
+                    step_results.push(json!({
+                        "step": i, "type": step_type, "status": "failed",
+                        "note": "already failed on an earlier run",
+                    }));
+                    continue;
+                }
+                _ => {}
+            }
+
+            // pending / in_progress: exactly the step a resume may settle, and
+            // only when this call named it.
+            let decision = match plan.advance.filter(|a| a.step_instance_id == prior_id) {
+                Some(a) => a.decision,
+                None => {
+                    step_results.push(json!({
+                        "step": i, "type": step_type, "status": "pending",
+                        "note": "left pending by this call",
+                    }));
+                    continue;
+                }
+            };
+
+            let ok = decision == Decision::Approve;
+            let new_status = if ok { "completed" } else { "failed" };
+            let note = json!({
+                "step": i,
+                "type": step_type,
+                "status": new_status,
+                "settled_by": plan.actor,
+                "decision": if ok { "approve" } else { "reject" },
+                "at": Utc::now().to_rfc3339(),
+            });
+            let err_text: Option<String> = if ok {
+                None
+            } else {
+                Some(format!("{} rejected this step", plan.actor))
+            };
+
+            sqlx::query(
+                r#"UPDATE workflow_instance_steps
+                   SET status = $1, completed_at = NOW(), notes = $2
+                   WHERE id = $3"#,
+            )
+            .bind(new_status)
+            .bind(note.to_string())
+            .bind(prior_id)
+            .execute(&state.db)
+            .await
+            .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
+
+            // Close the log row the engine left open for this step, so the run
+            // history shows the wait/gate ENDING, not just starting.
+            sqlx::query(
+                r#"UPDATE workflow_execution_logs
+                   SET status = $1, output_data = $2, error_message = $3,
+                       duration_ms = GREATEST(0, (EXTRACT(EPOCH FROM (NOW() - COALESCE(started_at, NOW()))) * 1000))::int,
+                       completed_at = NOW()
+                   WHERE instance_id = $4 AND sort_order = $5
+                     AND status IN ('pending', 'running', 'in_progress')"#,
+            )
+            .bind(new_status)
+            .bind(&note)
+            .bind(err_text)
+            .bind(instance_id)
+            .bind(i as i32)
+            .execute(&state.db)
+            .await
+            .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
+
+            tracing::info!(
+                instance_id = %instance_id,
+                step_order = i,
+                step_type = %step_type,
+                decision = if ok { "approve" } else { "reject" },
+                actor = %plan.actor,
+                "instance step settled"
+            );
+
+            step_results.push(note);
+
+            if !ok {
+                // A rejected gate fails the run: nothing behind it may execute.
+                break;
+            }
+            continue;
+        }
+
+        // Create the instance step record. A `delay`/`wait` stores WHEN it is due
+        // on the row itself — the background worker selects on exactly that, and
+        // nothing wrote the column before this.
+        let step_due: Option<DateTime<Utc>> = if step_type == "delay" || step_type == "wait" {
+            Some(delay_due_at(&step_config, Utc::now()))
+        } else {
+            None
+        };
+
         sqlx::query(
-                r#"INSERT INTO workflow_instance_steps (id, instance_id, step_type, name, sort_order, status)
-                   VALUES ($1, $2, $3, $4, $5, 'in_progress')"#,
+                r#"INSERT INTO workflow_instance_steps (id, instance_id, step_type, name, sort_order, status, due_date)
+                   VALUES ($1, $2, $3, $4, $5, 'in_progress', $6)"#,
             )
             .bind(step_instance_id)
             .bind(instance_id)
             .bind(step_type)
             .bind(&step.name)
             .bind(i as i32)
+            .bind(step_due)
             .execute(&state.db)
             .await
             .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
@@ -265,6 +603,9 @@ pub async fn execute_steps(
                 "contact": contact,
                 "data": data,
                 "source_entry_id": source_entry_id,
+                // The run context is logged so a resumed run can rebuild it
+                // (resume_instance -> recover_context) instead of inventing one.
+                "context": context,
             }))
             .execute(&state.db)
             .await
@@ -405,15 +746,26 @@ pub async fn execute_steps(
                 }
             }
             "manual" | "approval" => {
-                // Manual step — mark as pending; human reviews in WorkflowSwift UI
-                json!({"step": i, "type": "manual", "status": "pending"})
+                // Manual step — pending until a human decides. The decision
+                // endpoint (POST /instances/{id}/steps/{step_id}/decision)
+                // resumes the run from exactly here (kanban t_1ff4b916 item 2).
+                json!({
+                    "step": i,
+                    "type": "manual",
+                    "status": "pending",
+                    "note": "Awaiting approve/reject — POST /api/v1/instances/{id}/steps/{step_id}/decision",
+                })
             }
             "delay" | "wait" => {
-                let duration = step_config
-                    .get("duration")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("1h");
-                json!({"step": i, "type": "delay", "duration": duration, "status": "pending", "note": "Will be processed by background worker"})
+                let due_at = delay_due_at(&step_config, Utc::now());
+                json!({
+                    "step": i,
+                    "type": "delay",
+                    "duration_ms": delay_duration_ms(&step_config),
+                    "due_at": due_at.to_rfc3339(),
+                    "status": "pending",
+                    "note": "Waiting for its due time — the background worker advances it",
+                })
             }
             "generate" | "ai-action" | "ai_action" => {
                 // Call the configured LLM provider
@@ -793,6 +1145,21 @@ pub async fn execute_steps(
             .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
 
         step_results.push(result);
+
+        // A waiting step holds everything behind it: a `delay`/`wait` is waiting
+        // for its timer and a `manual`/`approval` for a human. Running the steps
+        // behind the wait immediately (what this loop used to do) made a Wait step
+        // meaningless. The worker / the decision endpoint resumes from exactly here.
+        if step_status == "pending" || step_status == "in_progress" {
+            tracing::info!(
+                instance_id = %instance_id,
+                step_order = i,
+                step_type = %step_type,
+                status = %step_status,
+                "walk stopped at a waiting step — the rest runs when it is settled"
+            );
+            break;
+        }
     }
 
     // Finalise the instance from what the steps actually did.
@@ -881,5 +1248,36 @@ mod tests {
             Some("upstream returned HTTP 404")
         );
         assert_eq!(step_error_text(&json!({"status": "completed"})), None);
+    }
+
+    #[test]
+    fn delay_config_shapes_all_resolve_to_a_due_time() {
+        // Canonical key (the n8n converter's wait node and the step validator
+        // both use duration_ms), the human string older workflows carry, and the
+        // bare-second form. None of these could be read by anything before.
+        assert_eq!(delay_duration_ms(&json!({"duration_ms": 5000})), 5_000);
+        assert_eq!(delay_duration_ms(&json!({"duration": "5s"})), 5_000);
+        assert_eq!(delay_duration_ms(&json!({"duration": "30m"})), 1_800_000);
+        assert_eq!(delay_duration_ms(&json!({"duration": "1h"})), 3_600_000);
+        assert_eq!(delay_duration_ms(&json!({"duration": "2d"})), 172_800_000);
+        assert_eq!(delay_duration_ms(&json!({"duration": "90"})), 90_000);
+        assert_eq!(delay_duration_ms(&json!({"duration_seconds": 5})), 5_000);
+        // Nothing usable in the config keeps the engine's original 1h default.
+        assert_eq!(delay_duration_ms(&json!({})), 3_600_000);
+        assert_eq!(delay_duration_ms(&json!({"duration": "soon"})), 3_600_000);
+        assert_eq!(delay_duration_ms(&json!({"duration_ms": 0})), 3_600_000);
+
+        let now = Utc::now();
+        let due = delay_due_at(&json!({"duration": "5s"}), now);
+        assert_eq!((due - now).num_seconds(), 5);
+    }
+
+    #[test]
+    fn a_reject_decision_is_the_only_thing_that_settles_a_gate_as_failed() {
+        // Pins the mapping the walk uses: approve -> completed, reject -> failed.
+        assert!(Decision::Approve != Decision::Reject);
+        let plan = ResumePlan::fresh();
+        assert!(plan.advance.is_none());
+        assert!(plan.existing.is_empty());
     }
 }

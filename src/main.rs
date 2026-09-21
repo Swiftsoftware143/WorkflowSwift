@@ -13,6 +13,7 @@ mod db;
 mod email;
 mod error;
 mod execution;
+mod execution_worker;
 mod features;
 mod handlers;
 mod models;
@@ -78,6 +79,12 @@ async fn main() {
         pre_auth_limiters,
         provider_key_cache,
     };
+
+    // The background execution worker. Nothing else can advance a `delay`/`wait`
+    // step, so without this a run that waits stays pending forever (kanban
+    // t_1ff4b916). It only wakes steps whose due time has passed and hands them
+    // to the same engine (src/execution.rs) — it is not a second executor.
+    execution_worker::spawn(state.clone());
 
     let app = routes::create_router(state.clone())
         .layer(TraceLayer::new_for_http())

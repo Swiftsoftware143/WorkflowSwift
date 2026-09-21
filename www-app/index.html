@@ -565,12 +565,32 @@ const LogsModal = () => {
   const logs = S.instanceLogs;
   return html`<${ModalShell} title=${inst ? 'Run history — ' + inst.name : 'Run history'} onClose=${closeModal}>
     ${inst ? html`<p class="text-sm text-gray-500 mb-3">Instance status: <b>${inst.status}</b>${inst.completed_at ? ' · finished ' + fmtDate(inst.completed_at) : ' · not finished'}</p>` : null}
+    ${inst && inst.status === 'pending' ? html`<p class="text-xs text-gray-500 mb-3">A <b>delay</b> step advances by itself once its due time passes (background worker). A <b>manual</b> step waits for a decision — Approve or Reject below.</p>` : null}
     ${logs === null ? html`<p class="text-sm text-gray-500">Loading…</p>`
       : logs.length === 0 ? html`<p class="text-sm text-gray-500">No log rows for this instance. Runs before execution logging was added have none.</p>`
-      : html`<table class="table"><thead><tr><th>#</th><th>Step</th><th>Status</th><th>ms</th></tr></thead><tbody>
-        ${logs.map(l => html`<tr key=${l.id}><td>${(l.sort_order ?? 0) + 1}</td><td>${l.step_name}<div class="text-xs text-gray-400">${l.step_type}</div>${l.error_message ? html`<div class="text-xs text-red-600">${l.error_message}</div>` : null}</td><td>${statusBadge(l.status)}</td><td>${l.duration_ms ?? '—'}</td></tr>`)}
+      : html`<table class="table"><thead><tr><th>#</th><th>Step</th><th>Status</th><th>ms</th><th></th></tr></thead><tbody>
+        ${logs.map(l => html`<tr key=${l.id}><td>${(l.sort_order ?? 0) + 1}</td><td>${l.step_name}<div class="text-xs text-gray-400">${l.step_type}</div>${l.error_message ? html`<div class="text-xs text-red-600">${l.error_message}</div>` : null}${l.due_date ? html`<div class="text-xs text-gray-400">due ${fmtDate(l.due_date)}</div>` : null}</td><td>${statusBadge(l.status)}</td><td>${l.duration_ms ?? '—'}</td><td class="text-right whitespace-nowrap">${canDecideStep(l) ? (isWaitStep(l.step_type) ? html`<button class="btn-green text-xs" onClick=${()=>decideStep(S.logsInstanceId, l.instance_step_id, 'approve')}>Run now</button>` : html`<button class="btn-green text-xs" onClick=${()=>decideStep(S.logsInstanceId, l.instance_step_id, 'approve')}>Approve</button> <button class="btn-outline text-xs" onClick=${()=>decideStep(S.logsInstanceId, l.instance_step_id, 'reject')}>Reject</button>`) : null}</td></tr>`)}
       </tbody></table>`}
   <//>`;
+};
+// A log row is actionable exactly when its step row is still waiting AND the step
+// is one the engine cannot settle alone: a manual/approval gate, or a delay that
+// can be fast-forwarded. UI half of POST /instances/{id}/steps/{step_id}/decision
+// (backend: instance_handler::decide_instance_step).
+const isWaitStep = (t) => t === 'delay' || t === 'wait';
+const canDecideStep = (l) => !!l.instance_step_id && ['manual', 'approval', 'delay', 'wait'].includes(l.step_type) && (l.instance_step_status === 'pending' || l.instance_step_status === 'in_progress');
+const decideStep = async (instanceId, stepId, decision) => {
+  if (!instanceId || !stepId) return;
+  try {
+    const r = await API.post('/instances/' + instanceId + '/steps/' + stepId + '/decision', { decision: decision });
+    const pend = r.pending_steps || 0;
+    const failed = r.failed_steps || 0;
+    toast(`Step ${decision}d — run ${r.status}${pend ? `, ${pend} still waiting` : ''}${failed ? `, ${failed} failed` : ''}`, (r.status !== 'completed') ? 'err' : undefined);
+    S.instances = null;
+    await loadInstances();
+    try { const lg = await API.get('/instances/' + instanceId + '/logs'); S.instanceLogs = lg.logs || []; } catch(e) { S.instanceLogs = []; }
+    renderApp();
+  } catch(e) { toast(e.message, 'err'); }
 };
 const openLogs = async (id) => {
   S.logsInstanceId = id; S.instanceLogs = null; S.modal = 'logs'; renderApp();

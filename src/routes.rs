@@ -113,6 +113,13 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/{id}/logs",
             get(handlers::instance_handler::list_instance_logs),
+        )
+        // Approve/reject a waiting step (manual/approval gate, or fast-forward a
+        // delay). Without this a gate was a dead end: the run stopped and nothing
+        // could move it (kanban t_1ff4b916 item 2).
+        .route(
+            "/{id}/steps/{step_id}/decision",
+            post(handlers::instance_handler::decide_instance_step),
         );
     // NOTE: `/{id}/callback` is NOT here. n8n calls it with X-Internal-Key and no
     // JWT, so it lives on the public router and authenticates itself — see
