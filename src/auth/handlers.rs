@@ -11,9 +11,11 @@ use uuid::Uuid;
 
 use super::middleware::create_token;
 use super::models::*;
+use crate::auth::api_key_auth::{argon2_hash, argon2_verify_result};
 use crate::error::{ApiResult, AppError};
 use crate::handlers::industry_handler;
 use crate::AppState;
+use std::sync::Arc;
 
 pub async fn register(
     State(state): State<AppState>,
@@ -44,17 +46,11 @@ pub async fn register(
         ));
     }
 
-    // Hash password
-    use argon2::password_hash::SaltString;
-    use argon2::{Argon2, PasswordHasher};
-    use rand::rngs::OsRng;
-
-    let salt = SaltString::generate(&mut OsRng);
-    let argon2 = Argon2::default();
-    let password_hash = argon2
-        .hash_password(req.password.as_bytes(), &salt)
-        .map_err(|e| AppError::Hash(e.to_string()))?
-        .to_string();
+    // Hash password — off the reactor, bounded by the process-wide Argon2 semaphore
+    // (argon2_hash). Hashing is 19 MiB of CPU that never awaits, so done inline here it
+    // would park a tokio worker for the whole hash and `register` needs no credential
+    // to reach.
+    let password_hash = argon2_hash(req.password.clone()).await?;
 
     // Create account
     let account_name = req
@@ -287,8 +283,6 @@ pub async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    use argon2::{Argon2, PasswordHash, PasswordVerifier};
-
     let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE email = $1")
         .bind(&req.email)
         .fetch_optional(&state.db)
@@ -299,13 +293,13 @@ pub async fn login(
         return Err(AppError::Forbidden("Account is deactivated".to_string()));
     }
 
-    // Verify password
-    let parsed_hash =
-        PasswordHash::new(&user.password_hash).map_err(|e| AppError::Hash(e.to_string()))?;
-    let argon2 = Argon2::default();
-    argon2
-        .verify_password(req.password.as_bytes(), &parsed_hash)
-        .map_err(|_| AppError::InvalidCredentials)?;
+    // Verify password — off the reactor, bounded by the same process-wide semaphore the
+    // API-key path uses (argon2_verify_result). Reached without any credential, so inline
+    // this is a free way for an unauthenticated caller to park every worker thread.
+    // Error mapping is unchanged: bad password -> 401, unusable stored hash -> 500.
+    if !argon2_verify_result(user.password_hash.clone(), Arc::from(req.password.as_str())).await? {
+        return Err(AppError::InvalidCredentials);
+    }
 
     // Update last_login
     sqlx::query("UPDATE users SET last_login_at = NOW() WHERE id = $1")
@@ -364,10 +358,6 @@ pub async fn change_password(
     Extension(claims): Extension<Claims>,
     Json(req): Json<ChangePasswordRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    use argon2::password_hash::SaltString;
-    use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
-    use rand::rngs::OsRng;
-
     if req.new_password.len() < 6 {
         return Err(AppError::Validation(
             "New password must be at least 6 characters".to_string(),
@@ -382,21 +372,20 @@ pub async fn change_password(
         .await?
         .ok_or(AppError::Unauthorized)?;
 
-    // Verify current password
-    let parsed_hash =
-        PasswordHash::new(&user.password_hash).map_err(|e| AppError::Hash(e.to_string()))?;
-    let argon2 = Argon2::default();
-    argon2
-        .verify_password(req.current_password.as_bytes(), &parsed_hash)
-        .map_err(|_| AppError::InvalidCredentials)?;
+    // Verify current password, then hash the new one — both off the reactor behind the
+    // process-wide Argon2 semaphore, error mapping unchanged (bad current password -> 401,
+    // unusable stored hash -> 500).
+    if !argon2_verify_result(
+        user.password_hash.clone(),
+        Arc::from(req.current_password.as_str()),
+    )
+    .await?
+    {
+        return Err(AppError::InvalidCredentials);
+    }
 
     // Hash new password
-    let salt = SaltString::generate(&mut OsRng);
-    let argon2 = Argon2::default();
-    let new_hash = argon2
-        .hash_password(req.new_password.as_bytes(), &salt)
-        .map_err(|e| AppError::Hash(e.to_string()))?
-        .to_string();
+    let new_hash = argon2_hash(req.new_password.clone()).await?;
 
     sqlx::query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2")
         .bind(&new_hash)
@@ -484,10 +473,6 @@ pub async fn reset_password(
     State(state): State<AppState>,
     Json(req): Json<ResetPasswordRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    use argon2::password_hash::SaltString;
-    use argon2::{Argon2, PasswordHasher};
-    use rand::rngs::OsRng;
-
     if req.new_password.len() < 6 {
         return Err(AppError::Validation(
             "New password must be at least 6 characters".to_string(),
@@ -502,12 +487,8 @@ pub async fn reset_password(
     .await?
     .ok_or_else(|| AppError::BadRequest("Invalid or expired reset token".to_string()))?;
 
-    let salt = SaltString::generate(&mut OsRng);
-    let argon2 = Argon2::default();
-    let new_hash = argon2
-        .hash_password(req.new_password.as_bytes(), &salt)
-        .map_err(|e| AppError::Hash(e.to_string()))?
-        .to_string();
+    // Off the reactor, bounded by the same Argon2 semaphore (see auth::api_key_auth).
+    let new_hash = argon2_hash(req.new_password.clone()).await?;
 
     sqlx::query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2")
         .bind(&new_hash)
