@@ -133,6 +133,13 @@ const API = (() => {
     listApiKeys: () => fetch(base + '/api-keys', { headers: headers() }).then(handle),
     createApiKey: (name) => fetch(base + '/api-keys', { method:'POST', headers: headers(), body: JSON.stringify({ name }) }).then(handle),
     revokeApiKey: (id) => fetch(base + '/api-keys/' + encodeURIComponent(id), { method:'DELETE', headers: headers() }).then(handle),
+    // --- Provider keys (the platform's third-party credentials, per account). The API
+    // masks on read (`api_key` comes back as `sk-...xyz`) and encrypts at rest; the value
+    // is only ever sent on write. NOTE: the routes are `/provider-keys` and
+    // `/provider-keys/{provider}` (DELETE by provider, not by id).
+    listProviderKeys: () => fetch(base + '/provider-keys', { headers: headers() }).then(handle),
+    saveProviderKey: (provider, api_key) => fetch(base + '/provider-keys', { method:'POST', headers: headers(), body: JSON.stringify({ provider, api_key }) }).then(handle),
+    deleteProviderKey: (provider) => fetch(base + '/provider-keys/' + encodeURIComponent(provider), { method:'DELETE', headers: headers() }).then(handle),
     // --- Team management (see TeamView). NOTE: /users and /users/team are registered WITHOUT a
     // trailing slash — a request to /api/v1/users/ answers 404 while /api/v1/users answers 200.
     listUsers: () => fetch(base + '/users', { headers: headers() }).then(handle),
@@ -901,6 +908,76 @@ const TicketsView = () => {
 };
 const loadTickets = async () => { if(S.loading)return; S.loading=true; renderApp(); try { const r = await API.get('/tickets'); S.tickets = r.items || r.tickets || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
 
+// ===== Provider Keys (/provider-keys -> {provider_keys:[{provider, api_key:<masked>, has_key, is_active}]}) =====
+// The tenant half of the key-entry surface. The API was always reachable from a tenant
+// token but the SPA shipped no view for it, so a user had nowhere to enter the keys their
+// own workflows consume (the admin SPA has its own Provider Keys panel). Reads are masked
+// by the server; the raw value is only ever sent on write, from a password-type input.
+const PROVIDER_SLOTS = [
+  ['openai','OpenAI'], ['anthropic','Anthropic'], ['deepseek','DeepSeek'], ['gemini','Google Gemini'],
+  ['mailgun','Mailgun'], ['sendgrid','SendGrid'], ['sendiio','Sendiio'], ['mailchimp','Mailchimp'],
+  ['n8n','n8n'], ['coreswift_crm','CoreSwift CRM'], ['webhook','Custom Webhook'], ['smtp','SMTP'],
+];
+const ProviderKeysView = () => {
+  if (!S.providerKeys && !S.loading) loadProviderKeys();
+  const list = S.providerKeys || [];
+  const sel = S.pkDraft && S.pkDraft.provider || PROVIDER_SLOTS[0][0];
+  return html`
+    <div>
+      <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
+        <div><h1 class="text-xl font-extrabold text-gray-900">Provider Keys</h1>
+        <p class="text-sm text-gray-500 mt-1">Your API keys for the providers this platform uses. Stored encrypted — lists show a mask only.</p></div>
+        <button class="btn-outline text-sm" onClick=${loadProviderKeys} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button>
+      </header>
+      <div class="card" style="margin-bottom:18px">
+        <div style="margin-bottom:12px">
+          <label class="label">Provider</label>
+          <select value=${sel} onChange=${e => { S.pkDraft = Object.assign({}, S.pkDraft, { provider: e.target.value }); renderApp(); }}>
+            ${PROVIDER_SLOTS.map(p => html`<option key=${p[0]} value=${p[0]}>${p[1]} (${p[0]})</option>`)}
+          </select>
+        </div>
+        <div>
+          <label class="label">API key</label>
+          <input type="password" class="input" autocomplete="new-password" placeholder="paste the provider key" value=${(S.pkDraft && S.pkDraft.api_key) || ''}
+            onInput=${e => { S.pkDraft = Object.assign({}, S.pkDraft, { api_key: e.target.value }); }} />
+        </div>
+        <div class="flex gap-2 mt-3">
+          <button class="btn text-sm" disabled=${S.pkSaving} onClick=${saveProviderKeyNow}>${S.pkSaving?'Saving…':'Save key'}</button>
+        </div>
+        <p class="text-xs text-gray-400 mt-2">Saving an existing provider replaces its value. An empty slot is fine — it is filled when the key arrives.</p>
+      </div>
+      ${list.length === 0
+        ? html`<div class="empty">No provider keys stored yet.</div>`
+        : html`<div class="card" style="padding:0;overflow:auto"><table class="table">
+            <thead><tr><th>Provider</th><th>Key</th><th>Stored</th><th>Active</th><th></th></tr></thead>
+            <tbody>
+              ${list.map(k => html`<tr key=${k.provider}>
+                <td class="font-semibold">${k.provider}</td>
+                <td>${k.api_key || '(empty)'}</td>
+                <td class="text-xs text-gray-500">${fmtDate(k.updated_at || k.created_at)}</td>
+                <td>${k.is_active ? 'Yes' : 'No'}</td>
+                <td class="text-right"><button class="btn-outline text-xs" onClick=${() => removeProviderKey(k.provider)}>Delete</button></td>
+              </tr>`)}
+            </tbody></table></div>`}
+    </div>`;
+};
+const loadProviderKeys = async () => { if(S.loading)return; S.loading=true; renderApp();
+  try { const r = await API.listProviderKeys(); S.providerKeys = r.provider_keys || []; }
+  catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+const saveProviderKeyNow = async () => {
+  const d = S.pkDraft || {}; const provider = d.provider || PROVIDER_SLOTS[0][0]; const val = (d.api_key || '').trim();
+  if (!val) { toast('Paste the key value first','err'); return; }
+  S.pkSaving = true; renderApp();
+  try { await API.saveProviderKey(provider, val); toast('Stored key for ' + provider); S.pkDraft = { provider }; await loadProviderKeys(); }
+  catch(e){ toast(e.message,'err'); }
+  S.pkSaving = false; renderApp();
+};
+const removeProviderKey = async (provider) => {
+  if (!window.confirm('Delete the stored key for ' + provider + '?')) return;
+  try { await API.deleteProviderKey(provider); toast('Deleted ' + provider); await loadProviderKeys(); }
+  catch(e){ toast(e.message,'err'); }
+};
+
 // ===== API Keys (/api-keys -> {api_keys:[...]}, fields: name/prefix/is_active/created_at/last_used_at) =====
 const maskKey = (k) => (k.prefix || 'workflowswift') + '_' + '\u2022'.repeat(12);
 const ApiKeysView = () => {
@@ -1481,6 +1558,7 @@ const NAV = [
   { id:'competitors', label:'Competitors', icon:'👁️' },
   { id:'credits', label:'Credits', icon:'💰' },
   { id:'api-keys', label:'API Keys', icon:'🔑' },
+  { id:'provider-keys', label:'Provider Keys', icon:'🔌' },
   { id:'team', label:'Team', icon:'🧑🤝🧑' },
   { id:'tickets', label:'Tickets', icon:'🎫' },
   { id:'profile', label:'Profile', icon:'👤' },
@@ -1493,6 +1571,7 @@ const VIEW_MAP = {
   prospecting: ProspectingView, 'prospecting-results': ProspectingResultsView, 'brand-monitor': BrandMonitorView,
   competitors: CompetitorsView, credits: CreditsView, tickets: TicketsView, profile: ProfileView,
   'api-keys': ApiKeysView,
+  'provider-keys': ProviderKeysView,
   team: TeamView,
   pick: IndustryPickerView,
 };

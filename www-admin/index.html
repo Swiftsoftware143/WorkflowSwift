@@ -205,7 +205,7 @@ function content(){
     if(s==='leads')renderCRUD(c,'leads','Lead',['name','status','source'],'/leads');
   }else if(t==='tags'){
     if(s==='tags')renderCRUD(c,'tags','Tag',['name','color'],'/tags',null,{label:'Unassign',fn:'unassignTag'});
-    else if(s==='tag-groups')renderCRUD(c,'tag-groups','Tag Group',['name','description'],'/tag-groups');
+    else if(s==='tag-groups')renderCRUD(c,'tag-groups','Tag Group',['name','description'],'/tag-groups',['name','description']);
   }else if(t==='integrations'){
     if(s==='my-integrations')renderIntegrations(c);
     else if(s==='integration-targets')renderCRUD(c,'integration-targets','Integration Target',['name','provider','is_active'],'/integration-targets');
@@ -225,7 +225,7 @@ function content(){
     else if(s==='checkout-sessions')renderCheckoutSessions(c);
   }else if(t==='comms'){
     if(s==='email-templates')renderCRUD(c,'email-templates','Email Template',['name','subject','template_type'],'/email-templates');
-    else if(s==='webhooks')renderCRUD(c,'webhooks','Webhook',['name','url','is_active'],'/webhooks');
+    else if(s==='webhooks')renderCRUD(c,'webhooks','Webhook',['name','url','is_active'],'/webhooks',['name','url','is_active']);
   }else if(t==='admin'){
     if(s==='usage')renderAdminUsage(c);
     else if(s==='settings')renderAdminSettings(c);
@@ -349,9 +349,74 @@ function renderIntegrations(c){
   });
 }
 
+// The providers this platform actually uses, enumerated from the code:
+/// integration_provider_presets (migration 045 + the preset seed), the AI providers in
+/// src/handlers/user_integration_handler.rs, and the email providers in the admin email
+/// settings. Keep this list and that union in step.
+const PROVIDER_SLOTS = [
+  ['openai','OpenAI'], ['anthropic','Anthropic'], ['deepseek','DeepSeek'], ['gemini','Google Gemini'],
+  ['mailgun','Mailgun'], ['sendgrid','SendGrid'], ['sendiio','Sendiio'], ['mailchimp','Mailchimp'],
+  ['n8n','n8n'], ['coreswift_crm','CoreSwift CRM'], ['webhook','Custom Webhook'], ['smtp','SMTP'],
+];
+
+// Written out by hand because the generic renderCRUD form CANNOT work for a credential:
+// it renders one plain-text input per field name, and this panel was declared as
+// ['provider','key_prefix','is_active'] — so there was no input for the secret at all.
+// Every save posted {provider,key_prefix,is_active}, and the API correctly answered
+// 400 "api_key is required": the admin side had NO SLOT to enter a key. `key_prefix`
+// is not even a property of the response, so that list column was always blank too.
 function renderProviderKeys(c){
-  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">Provider Keys</h2><p class="text-xs text-gray-400 mb-4">Per-user API keys for third-party providers.</p><div id="pkdata"></div></div>';
-  renderCRUD(c.querySelector('#pkdata'),'provider-keys','Provider Key',['provider','key_prefix','is_active'],'/provider-keys');
+  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-2">Provider Keys</h2>'
+    +'<p class="text-xs text-gray-400 mb-4">Per-account API keys for the providers this platform uses. '
+    +'Values are encrypted at rest and reads only ever return a mask.</p>'
+    +'<div class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end mb-5">'
+    +'<div><label class="block text-xs font-medium text-gray-500 mb-1">Provider</label>'
+    +'<select id="pk_provider" class="input">'
+    +PROVIDER_SLOTS.map(function(s){return '<option value="'+s[0]+'">'+s[1]+' ('+s[0]+')</option>'}).join('')
+    +'</select></div>'
+    +'<div class="md:col-span-2"><label class="block text-xs font-medium text-gray-500 mb-1">API key</label>'
+    +'<input id="pk_key" class="input" type="password" autocomplete="new-password" '
+    +'placeholder="paste the provider key (stored encrypted)"></div>'
+    +'<div><button class="btn btn-primary" id="pk_save">Save key</button></div>'
+    +'</div><div id="pkdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
+
+  const list=c.querySelector('#pkdata');
+  const short=(p)=>{const i=PROVIDER_SLOTS.findIndex(s=>s[0]===p);return i>=0?PROVIDER_SLOTS[i][1]:p};
+
+  const load=async()=>{
+    const d=await api('/provider-keys');
+    const items=(d&&d.provider_keys)||[];
+    if(!items.length){
+      list.innerHTML='<p class="text-gray-400 text-sm">No provider keys stored yet. Pick a provider above, paste its key and press Save — an empty slot is fine, it is filled when the key arrives.</p>';
+      return;
+    }
+    list.innerHTML='<table class="table"><thead><tr><th>Provider</th><th>Key</th><th>Stored</th><th>Active</th><th></th></tr></thead><tbody>'
+      +items.map(k=>'<tr><td><strong>'+short(k.provider)+'</strong>'
+        +'<span class="text-xs text-gray-400 ml-2">'+k.provider+'</span></td>'
+        +'<td>'+(k.api_key||'(empty)')+'</td>'
+        +'<td class="text-xs text-gray-500">'+String(k.updated_at||k.created_at||'').slice(0,10)+'</td>'
+        +'<td>'+(k.is_active?'Yes':'No')+'</td>'
+        +'<td class="text-right"><button class="btn btn-sm btn-danger" data-del="'+k.provider+'">Delete</button></td></tr>').join('')
+      +'</tbody></table>';
+    list.querySelectorAll('button[data-del]').forEach(b=>b.onclick=async()=>{
+      const p=b.getAttribute('data-del');
+      if(!confirm('Delete the stored key for '+p+'?'))return;
+      const r=await api('/provider-keys/'+encodeURIComponent(p),{method:'DELETE'});
+      showMsg(r?'Deleted '+p:('Delete failed: '+LAST_ERR),r?undefined:'error');
+      load();
+    });
+  };
+
+  c.querySelector('#pk_save').onclick=async()=>{
+    const provider=c.querySelector('#pk_provider').value;
+    const api_key=c.querySelector('#pk_key').value.trim();
+    if(!api_key){showMsg('Paste the key value first — an empty value is rejected by the API.','error');return}
+    const r=await api('/provider-keys',{method:'POST',body:JSON.stringify({provider,api_key})});
+    if(r){showMsg('Stored key for '+provider);c.querySelector('#pk_key').value='';load();}
+    else showMsg('Save failed: '+LAST_ERR,'error');
+  };
+
+  load();
 }
 
 function renderN8N(c){
