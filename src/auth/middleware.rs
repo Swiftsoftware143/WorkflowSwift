@@ -75,10 +75,44 @@ pub async fn auth_middleware(
         verify_token(token, &state.config.jwt_secret).map_err(|_| AppError::Unauthorized)?
     };
 
+    // A signature only proves the token was minted by us — not that the account it
+    // names still exists. Signatures also outlive their account for the token's whole
+    // 24 h lifetime, so a token minted before a tenant was deleted stays cryptographically
+    // valid afterwards. Every handler below binds `claims.aid` straight into SQL as the
+    // tenant: with the account gone that insert trips `workflows_tenant_id_fkey` and the
+    // caller gets a 500 for what is really an authentication failure ("this credential
+    // belongs to nobody"). Resolve the account here, once, so a dead tenant is refused
+    // with 401 before any handler runs — and so no handler can forget the check.
+    if !account_is_live(&state.db, &claims.aid).await? {
+        return Err(AppError::Unauthorized);
+    }
+
     let mut req = req;
     req.extensions_mut().insert(claims);
 
     Ok(next.run(req).await)
+}
+
+/// Is `aid` a live account?
+///
+/// `false` means the credential names a tenant that no longer exists, which is an
+/// authentication failure, not a missing resource: callers must be refused 401, never
+/// allowed to reach a handler that would bind the id into SQL and surface a 500.
+///
+/// `aid` arrives as a string from the token. An unparseable value is treated the same
+/// as a deleted account — either way there is no tenant behind it.
+async fn account_is_live(db: &sqlx::PgPool, aid: &str) -> Result<bool, AppError> {
+    let Ok(aid) = uuid::Uuid::parse_str(aid) else {
+        return Ok(false);
+    };
+
+    let exists =
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM accounts WHERE id = $1)")
+            .bind(aid)
+            .fetch_one(db)
+            .await?;
+
+    Ok(exists)
 }
 
 pub fn verify_token(token: &str, secret: &str) -> Result<Claims, AppError> {
