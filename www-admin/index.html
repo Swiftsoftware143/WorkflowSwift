@@ -499,6 +499,7 @@ function renderAdminSettings(c){
   c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">Platform Settings</h2><div id="sdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>'
    +'<div class="card mt-4"><h2 class="text-xl font-bold mb-1">Email Provider</h2>'
    +'<p class="text-xs text-gray-500 mb-4">Pick the transport WorkflowSwift sends with. These credentials live in the database and are read at send time &mdash; no server environment variables are consulted. Save, then send a test to prove it works.</p>'
+   +'<div id="estatus"></div>'
    +'<div id="emailform" class="grid grid-cols-2 gap-3"></div>'
    +'<div class="flex gap-2 mt-4"><button class="btn btn-primary btn-sm" id="esave">Save email provider</button>'
    +'<button class="btn btn-sm btn-ghost" id="etest">Send test email</button></div>'
@@ -520,6 +521,17 @@ function renderAdminSettings(c){
     const form=c.querySelector('#emailform');
     if(!form)return;
     const v=(d&&d.value)||{};
+    const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+    const st=c.querySelector('#estatus');
+    if(st){
+      if(v.last_send_ok===false&&v.last_send_error){
+        st.innerHTML='<div class="mb-4 rounded border p-3 text-sm" style="border-color:#dc2626;background:#fef2f2;color:#991b1b"><strong>Last email send FAILED</strong> &mdash; no user is receiving mail until this is fixed.<br><span class="font-mono text-xs">'+esc(v.last_send_template)+' @ '+esc(v.last_send_at)+'</span><br>'+esc(v.last_send_error)+'</div>';
+      }else if(v.last_send_ok===true){
+        st.innerHTML='<div class="mb-4 rounded border p-3 text-sm" style="border-color:#16a34a;background:#f0fdf4;color:#166534">Last email send succeeded (template '+esc(v.last_send_template)+' at '+esc(v.last_send_at)+').</div>';
+      }else{
+        st.innerHTML='<div class="mb-4 rounded border p-3 text-sm" style="border-color:#d1d5db;background:#f9fafb;color:#374151">No email has been sent from this install yet &mdash; press <em>Send test email</em> to prove the transport works.</div>';
+      }
+    }
     const f=(id,label,ph,val)=>'<div><label class="text-xs text-gray-500">'+label+'</label><input id="'+id+'" class="input" placeholder="'+(ph||'')+'" value="'+String(val==null?'':val).replace(/"/g,'&quot;')+'"></div>';
     form.innerHTML='<div><label class="text-xs text-gray-500">Provider</label><select id="e_provider" class="input">'
       +['smtp','mailgun','sendgrid','sendiio'].map(p=>'<option value="'+p+'"'+((v.provider||'smtp')===p?' selected':'')+'>'+p+'</option>').join('')
