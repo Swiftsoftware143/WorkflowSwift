@@ -307,15 +307,13 @@ async fn run_in_process(
         }
     };
 
-    // Item 3: a run that leaves steps waiting is not a success. Say so in the
-    // response as well as in the instance row — and say what will actually move
-    // it, now that something can (a due time for a wait, a decision for a gate).
-    if outcome.pending_steps > 0 {
-        warnings.push(format!(
-            "{} step(s) are still waiting: a delay/wait step advances by itself once its due time passes (background worker), a manual/approval step advances when it is approved or rejected (POST /api/v1/instances/{{id}}/steps/{{step_id}}/decision). Until then the instance is reported as 'pending', not completed.",
-            outcome.pending_steps
-        ));
-    }
+    // A waiting step is normal progress, not a warning. The response already
+    // carries `status: "in_progress"` plus `pending_steps`, and each waiting
+    // step carries its own `due_date` / `status`, so a yellow "1 step(s) are
+    // still waiting" banner on every workflow that contains a Wait step is
+    // pure noise — it fires on the healthy path and trains the user to ignore
+    // the warnings array, which is where the REAL problems (n8n unreachable,
+    // failed steps) have to be visible.
     if outcome.failed_steps > 0 {
         warnings.push(format!(
             "{} step(s) failed — the instance is reported as 'failed'. Per-step detail is in GET /api/v1/instances/{{id}}/logs.",

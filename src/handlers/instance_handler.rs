@@ -629,14 +629,10 @@ pub async fn decide_instance_step(
         }
     };
 
-    let warnings: Vec<String> = if outcome.pending_steps > 0 {
-        vec![format!(
-            "{} step(s) are still waiting: a delay runs when its due time passes, a manual step needs a decision.",
-            outcome.pending_steps
-        )]
-    } else {
-        Vec::new()
-    };
+    // The decision settled this step; any OTHER step still waiting is normal
+    // progress (its own timer or its own decision) and is reported through
+    // `status: "in_progress"` + `pending_steps`, not as a warning.
+    let warnings: Vec<String> = Vec::new();
 
     tracing::info!(
         instance_id = %id, step_id = %step_id, decision = %raw,

@@ -1218,11 +1218,15 @@ async fn walk(
 
     // Finalise the instance from what the steps actually did.
     //
-    // `pending` (and `in_progress`) steps mean the walk finished without
-    // executing them: a manual/approval gate that needs a human, or a
-    // delay/wait that needs a timer. Nothing in this build advances them (no
-    // background worker exists), so a run that leaves one behind is NOT
-    // completed — reporting it as completed was the lie in item 3.
+    // A `pending`/`in_progress` STEP means the walk stopped at a step that is
+    // settled by something else: a `delay`/`wait` by its due time (the
+    // execution worker in `src/execution_worker.rs`) and a `manual`/`approval`
+    // by a human calling the decision endpoint. That is a run that is still
+    // GOING, so the instance is `in_progress` — not `completed` (which was the
+    // old lie) and not `pending` either, because `pending` reads as "nothing
+    // happened" when in fact every runnable step has already executed and a
+    // timer/decision is now in flight. `completed_at` stays NULL either way:
+    // only a terminal state stamps it.
     let mut pending_steps: i32 = 0;
     let mut failed_steps: i32 = 0;
     for r in &step_results {
@@ -1236,7 +1240,7 @@ async fn walk(
     let instance_status = if failed_steps > 0 {
         "failed"
     } else if pending_steps > 0 {
-        "pending"
+        "in_progress"
     } else {
         "completed"
     };

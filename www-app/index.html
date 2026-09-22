@@ -1536,17 +1536,25 @@ const App = () => {
 
 renderApp();
 // Boot into the app view when a session token exists (avoids landing on login
-// even after a successful sign-in that navigated/reloaded to /app?token=...).
+// even after a successful sign-in at /login).
 (function () {
-  // Adopt the session handed over by /login (login.html stores localStorage 'ws_fs_token'
-  // and redirects to /app?token=<jwt>). The SPA's API client only reads sessionStorage
-  // 'wf_token', so without this a user who signed in at /login landed straight back on a
-  // login form and every subsequent API call went out with no Authorization header.
-  const qs = new URLSearchParams(window.location.search);
-  const incoming = qs.get('token')
+  // Adopt the session handed over by /login. login.html writes BOTH the same-origin
+  // localStorage 'ws_fs_token' and sessionStorage 'wf_token' and then navigates to a
+  // bare /app - deliberately NOT to /app?token=<jwt>, because the query string is
+  // recorded by the nginx/Cloudflare access log, the browser history and every
+  // outbound Referer header. The SPA's API client only reads sessionStorage
+  // 'wf_token', so adoption still happens here when only localStorage was populated
+  // (a second tab, or a reload that dropped sessionStorage):
+  const incoming = sessionStorage.getItem('wf_token')
     || localStorage.getItem('ws_fs_token') || localStorage.getItem('token') || localStorage.getItem('access_token');
   if (incoming && !sessionStorage.getItem('wf_token')) API.setAuth(incoming, null);
-  if (qs.get('token')) { try { history.replaceState(null, '', window.location.pathname + window.location.hash); } catch (e) { /* non-fatal */ } }
+
+  // A token supplied in the URL is IGNORED on purpose (session-fixation guard: a link
+  // carrying someone else's token must never log you into their account). Strip it from
+  // the address bar so a legacy ?token= bookmark cannot linger in history.
+  if (new URLSearchParams(window.location.search).get('token')) {
+    try { history.replaceState(null, '', window.location.pathname + window.location.hash); } catch (e) { /* non-fatal */ }
+  }
 
   // Deep link support: app.workflowswift.com/#api-keys opens the API Keys panel
   // (the extension's setup guide links straight to it).

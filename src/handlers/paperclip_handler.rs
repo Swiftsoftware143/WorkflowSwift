@@ -58,7 +58,7 @@ pub async fn workspace_dashboard(
                FROM workflow_instances wi
                JOIN workflows w ON w.id = wi.workflow_id
                WHERE wi.aid = $1 AND wi.portfolio_company_id = $2
-                 AND wi.status IN ('running', 'pending') AND wi.started_at > NOW() - make_interval(days => $3)
+                 AND wi.status IN ('running', 'in_progress', 'pending') AND wi.started_at > NOW() - make_interval(days => $3)
                ORDER BY wi.started_at DESC LIMIT $4"#
         )
         .bind(aid).bind(ws_id).bind(days).bind(limit)
@@ -73,7 +73,7 @@ pub async fn workspace_dashboard(
                FROM workflow_instances wi
                JOIN workflows w ON w.id = wi.workflow_id
                WHERE wi.aid = $1
-                 AND wi.status IN ('running', 'pending') AND wi.started_at > NOW() - make_interval(days => $2)
+                 AND wi.status IN ('running', 'in_progress', 'pending') AND wi.started_at > NOW() - make_interval(days => $2)
                ORDER BY wi.started_at DESC LIMIT $3"#
         )
         .bind(aid).bind(days).bind(limit)
