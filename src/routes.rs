@@ -716,6 +716,13 @@ pub fn create_router(state: AppState) -> Router {
             "/accounts/{id}/retention",
             put(handlers::admin_settings_handler::admin_set_account_retention),
         )
+        // Entitlement: moving an account onto a plan. The only supported path — there is no
+        // self-serve checkout (`billing.enabled = false`), and without this an account stuck on
+        // a tier that denies `api_access` could never be moved off it.
+        .route(
+            "/accounts/{id}/plan",
+            put(handlers::admin_settings_handler::admin_assign_plan),
+        )
         // Email templates (admin-only CRUD)
         .route(
             "/email-templates",

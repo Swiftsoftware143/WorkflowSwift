@@ -646,20 +646,41 @@ function renderAdminSettings(c){
 }
 
 function renderAdminUsers(c){
-  c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Users (Tenants)</h2><button class="btn btn-primary btn-sm">+ Add Tenants</button></div><p class="text-xs text-gray-400 mb-4">All registered tenants. Tenants manage their own workflows, automations, and integrations. Their portfolio companies are managed here under Admin → Portfolio Companies.</p><div id="audata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
-  api('/admin/accounts').then(d=>{
+  c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Users (Tenants)</h2><button class="btn btn-primary btn-sm">+ Add Tenants</button></div><p class="text-xs text-gray-400 mb-4">All registered tenants. Tenants manage their own workflows, automations, and integrations. Their portfolio companies are managed here under Admin → Portfolio Companies.</p><p class="text-xs text-gray-400 mb-4">Plan changing is the only supported way to move an account between tiers — there is no self-serve checkout, and a tier that denies API access keeps <code>POST /api-keys</code> at 402 for that account.</p><div id="audata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
+  Promise.all([api('/admin/accounts'),api('/admin/plans')]).then(res=>{
+    const d=res[0],pd=res[1];
     const items=(d&&d.accounts)||(d&&d.items)||[];
+    const plans=(((pd&&(pd.plans||pd.items))||[])).filter(p=>p&&p.is_active!==false&&p.slug).map(p=>p.slug);
     const el=c.querySelector('#audata');
     if(!items.length){el.innerHTML='<p class="text-gray-400 text-sm">No tenants yet.</p>';return}
-    el.innerHTML=`<table class="table"><thead><tr><th>Name</th><th>Slug</th><th>Plan</th><th>Active</th><th>Created</th><th></th></tr></thead><tbody>`+
-      items.map(i=>`<tr>
+    el.innerHTML=`<table class="table"><thead><tr><th>Name</th><th>Slug</th><th>Plan</th><th>Change plan</th><th>Active</th><th>Created</th><th></th></tr></thead><tbody>`+
+      items.map(i=>{
+        // The API returns the tier nested as plan:{name,slug}; the flat plan_name/plan_slug
+        // spellings are kept as a fallback so this cell cannot silently render '-' again.
+        const cur=(i.plan&&(i.plan.slug||i.plan.name))||i.plan_slug||i.plan_name||'';
+        const choices=plans.length?plans:(cur?[cur]:['free']);
+        const opts=choices.map(s=>`<option value="${s}"${s===cur?' selected':''}>${s}</option>`).join('');
+        const aid=i.id||i.account_id||'';
+        return `<tr>
         <td><strong>${i.name||'-'}</strong>${i.email?`<div class="text-xs text-gray-400">${i.email}</div>`:''}</td>
         <td>${i.account_slug||i.slug||'-'}</td>
-        <td>${i.plan_name||i.plan_slug||'-'}</td>
+        <td>${cur||'-'}</td>
+        <td><select data-plan-for="${aid}" style="min-width:110px">${opts}</select>
+            <button class="btn btn-sm btn-primary" data-set-plan="${aid}">Set</button></td>
         <td><span class="badge ${i.is_active?'bg-green-100 text-green-700':'bg-red-100 text-red-700'}">${i.is_active?'Active':'Inactive'}</span></td>
         <td class="text-xs text-gray-400">${(i.created_at||'').slice(0,10)}</td>
-        <td class="text-right"><button class="btn btn-sm btn-ghost" onclick="event.preventDefault();startImpersonation('${i.id||i.account_id||''}')">Impersonate</button></td>
-      </tr>`).join('')+'</tbody></table>';
+        <td class="text-right"><button class="btn btn-sm btn-ghost" onclick="event.preventDefault();startImpersonation('${aid}')">Impersonate</button></td>
+      </tr>`}).join('')+'</tbody></table>';
+    el.querySelectorAll('button[data-set-plan]').forEach(b=>b.onclick=async()=>{
+      const id=b.getAttribute('data-set-plan');
+      const sel=el.querySelector('select[data-plan-for="'+id+'"]');
+      if(!sel)return;
+      const slug=sel.value;
+      if(!confirm('Move this account to the "'+slug+'" plan?'))return;
+      const r=await api('/admin/accounts/'+id+'/plan',{method:'PUT',body:JSON.stringify({plan_slug:slug})});
+      if(r){showMsg('Account moved to the '+slug+' plan');setTimeout(()=>renderPage(),400);}
+      else showMsg('Plan change failed: '+LAST_ERR,'error');
+    });
   });
 }
 

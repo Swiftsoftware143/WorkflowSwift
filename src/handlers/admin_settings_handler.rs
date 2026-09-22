@@ -884,6 +884,88 @@ pub async fn admin_set_account_retention(
     })))
 }
 
+/// PUT /api/v1/admin/accounts/:id/plan — put an account on a plan (platform admin only).
+///
+/// This is the only supported way to change which tier an account is entitled to. Before it
+/// existed there was none at all: `billing.enabled` is false (no self-serve checkout), the
+/// admin console only CRUDs the tier *definitions*, and the resolver in `features.rs` reads the
+/// newest active `account_plans` row first. So a signup that landed on `free` — and `free`
+/// denies `api_access` — could only be moved by hand-written SQL, which made
+/// `POST /api/v1/api-keys` a permanent 402 for that account.
+///
+/// Deliberately does NOT write `accounts.plan_id`: that column is the signup default and the
+/// resolver consults it only when the account has NO active plan row, so writing both would
+/// create a second, silently-diverging source of truth. It also does not touch any tier's
+/// contents — what a plan grants is a product/pricing decision, not this route's business.
+pub async fn admin_assign_plan(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<impl IntoResponse> {
+    require_admin(&claims)?;
+
+    let slug = req
+        .get("plan_slug")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AppError::Validation("plan_slug is required".to_string()))?;
+
+    let exists =
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM accounts WHERE id = $1)")
+            .bind(id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(false);
+    if !exists {
+        return Err(AppError::NotFound("Account not found".to_string()));
+    }
+
+    let plan: Option<(Uuid, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, slug, name FROM plan_tiers WHERE slug = $1 AND is_active = true",
+    )
+    .bind(&slug)
+    .fetch_optional(&state.db)
+    .await?;
+    let (plan_id, plan_slug, plan_name) =
+        plan.ok_or_else(|| AppError::Validation(format!("No active plan with slug '{slug}'")))?;
+
+    let mut tx = state.db.begin().await?;
+
+    // Supersede whatever the account is on now, so the resolver (newest active row first) can
+    // never be ambiguous about which tier applies. `status` is a plain varchar with no enum
+    // constraint; 'superseded' is the only non-'active' value this code writes.
+    sqlx::query(
+        "UPDATE account_plans SET status = 'superseded', expires_at = NOW() \
+         WHERE aid = $1 AND status = 'active'",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    // Plain INSERT, never `ON CONFLICT (aid, plan_id)`: account_plans carries only its PK and a
+    // non-unique index on aid, so that conflict target is a guaranteed 500.
+    sqlx::query(
+        "INSERT INTO account_plans (aid, plan_id, status, started_at) \
+         VALUES ($1, $2, 'active', NOW())",
+    )
+    .bind(id)
+    .bind(plan_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    tracing::info!(account = %id, plan = %plan_slug, "Platform admin moved an account onto a plan");
+
+    Ok(Json(json!({
+        "message": "Plan updated",
+        "account_id": id.to_string(),
+        "plan": { "slug": plan_slug, "name": plan_name },
+    })))
+}
+
 /// GET /api/v1/admin/usage — aggregated usage stats per account
 /// Shows credit balance, workflow runs, n8n provisioned status
 pub async fn admin_usage_dashboard(
