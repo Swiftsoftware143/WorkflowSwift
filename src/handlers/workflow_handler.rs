@@ -28,17 +28,19 @@ pub async fn list_workflows(
 
     let workflows = if let Some(surface_id) = query.surface {
         sqlx::query_as::<_, Workflow>(
-            "SELECT * FROM workflows WHERE aid = $1 AND (surface_id = $2 OR surface_id IS NULL) ORDER BY name ASC",
+            "SELECT * FROM workflows WHERE aid = $1 AND is_active = true AND (surface_id = $2 OR surface_id IS NULL) ORDER BY name ASC",
         )
         .bind(aid)
         .bind(surface_id)
         .fetch_all(&state.db)
         .await?
     } else {
-        sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE aid = $1 ORDER BY name ASC")
-            .bind(aid)
-            .fetch_all(&state.db)
-            .await?
+        sqlx::query_as::<_, Workflow>(
+            "SELECT * FROM workflows WHERE aid = $1 AND is_active = true ORDER BY name ASC",
+        )
+        .bind(aid)
+        .fetch_all(&state.db)
+        .await?
     };
 
     Ok(Json(json!({"workflows": workflows})))
@@ -84,13 +86,14 @@ pub async fn get_workflow(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let workflow =
-        sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE id = $1 AND aid = $2")
-            .bind(id)
-            .bind(aid)
-            .fetch_optional(&state.db)
-            .await?
-            .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
+    let workflow = sqlx::query_as::<_, Workflow>(
+        "SELECT * FROM workflows WHERE id = $1 AND aid = $2 AND is_active = true",
+    )
+    .bind(id)
+    .bind(aid)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
     let steps = sqlx::query_as::<_, WorkflowStep>(
         "SELECT * FROM workflow_steps WHERE workflow_id = $1 ORDER BY sort_order ASC",
@@ -110,13 +113,14 @@ pub async fn update_workflow(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let existing =
-        sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE id = $1 AND aid = $2")
-            .bind(id)
-            .bind(aid)
-            .fetch_optional(&state.db)
-            .await?
-            .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
+    let existing = sqlx::query_as::<_, Workflow>(
+        "SELECT * FROM workflows WHERE id = $1 AND aid = $2 AND is_active = true",
+    )
+    .bind(id)
+    .bind(aid)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
     // Surface is reassignable here. `Option` semantics: an absent (or null) field in the body
     // preserves the stored surface instead of clearing it. Read this before the field moves below.
@@ -632,13 +636,14 @@ pub async fn start_workflow(
 
     let req = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
 
-    let workflow =
-        sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE id = $1 AND aid = $2")
-            .bind(id)
-            .bind(aid)
-            .fetch_optional(&state.db)
-            .await?
-            .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
+    let workflow = sqlx::query_as::<_, Workflow>(
+        "SELECT * FROM workflows WHERE id = $1 AND aid = $2 AND is_active = true",
+    )
+    .bind(id)
+    .bind(aid)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
     let client_id = resolve_client_id(&state, aid, &req).await?;
     let run = run_in_process(&state, aid, &workflow, client_id, &req, &claims.sub).await?;
@@ -749,13 +754,14 @@ pub async fn create_workflow_step(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Verify workflow exists and belongs to account
-    let _workflow =
-        sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE id = $1 AND aid = $2")
-            .bind(id)
-            .bind(aid)
-            .fetch_optional(&state.db)
-            .await?
-            .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
+    let _workflow = sqlx::query_as::<_, Workflow>(
+        "SELECT * FROM workflows WHERE id = $1 AND aid = $2 AND is_active = true",
+    )
+    .bind(id)
+    .bind(aid)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
     // Auto-assign sort_order: max + 1
     let max_sort: Option<(Option<i32>,)> =
@@ -798,13 +804,14 @@ pub async fn update_workflow_step(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Verify workflow exists and belongs to account
-    let _workflow =
-        sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE id = $1 AND aid = $2")
-            .bind(workflow_id)
-            .bind(aid)
-            .fetch_optional(&state.db)
-            .await?
-            .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
+    let _workflow = sqlx::query_as::<_, Workflow>(
+        "SELECT * FROM workflows WHERE id = $1 AND aid = $2 AND is_active = true",
+    )
+    .bind(workflow_id)
+    .bind(aid)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
     // Guardrail: a step's TYPE is fixed at creation. Name/description/config/order
     // stay editable; the type must not change (otherwise the guardrails that were
@@ -868,13 +875,14 @@ pub async fn delete_workflow_step(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Verify workflow exists and belongs to account
-    let _workflow =
-        sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE id = $1 AND aid = $2")
-            .bind(workflow_id)
-            .bind(aid)
-            .fetch_optional(&state.db)
-            .await?
-            .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
+    let _workflow = sqlx::query_as::<_, Workflow>(
+        "SELECT * FROM workflows WHERE id = $1 AND aid = $2 AND is_active = true",
+    )
+    .bind(workflow_id)
+    .bind(aid)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
     let result = sqlx::query("DELETE FROM workflow_steps WHERE id = $1 AND workflow_id = $2")
         .bind(step_id)
@@ -898,13 +906,14 @@ pub async fn reorder_workflow_steps(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     // Verify workflow exists and belongs to account
-    let _workflow =
-        sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE id = $1 AND aid = $2")
-            .bind(id)
-            .bind(aid)
-            .fetch_optional(&state.db)
-            .await?
-            .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
+    let _workflow = sqlx::query_as::<_, Workflow>(
+        "SELECT * FROM workflows WHERE id = $1 AND aid = $2 AND is_active = true",
+    )
+    .bind(id)
+    .bind(aid)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
     // Guardrail: a reorder must not leave a non-Data-Card step at step 1.
     let current = load_ordered_steps(&state.db, id).await?;
@@ -954,13 +963,14 @@ pub async fn deploy_workflow_to_n8n(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     crate::features::enforce_plan_flag(&state.db, aid, "n8n_deploy", "n8n deployment").await?;
 
-    let workflow =
-        sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE id = $1 AND aid = $2")
-            .bind(id)
-            .bind(aid)
-            .fetch_optional(&state.db)
-            .await?
-            .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
+    let workflow = sqlx::query_as::<_, Workflow>(
+        "SELECT * FROM workflows WHERE id = $1 AND aid = $2 AND is_active = true",
+    )
+    .bind(id)
+    .bind(aid)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
     let steps = crate::execution::load_steps(&state.db, workflow.id).await?;
     if steps.is_empty() {
@@ -1011,13 +1021,14 @@ pub async fn run_workflow(
     // rather than rejecting the request.
     let req = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
 
-    let workflow =
-        sqlx::query_as::<_, Workflow>("SELECT * FROM workflows WHERE id = $1 AND aid = $2")
-            .bind(id)
-            .bind(aid)
-            .fetch_optional(&state.db)
-            .await?
-            .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
+    let workflow = sqlx::query_as::<_, Workflow>(
+        "SELECT * FROM workflows WHERE id = $1 AND aid = $2 AND is_active = true",
+    )
+    .bind(id)
+    .bind(aid)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
     let client_id = resolve_client_id(&state, aid, &req).await?;
     let run = run_in_process(&state, aid, &workflow, client_id, &req, &claims.sub).await?;

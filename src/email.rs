@@ -35,7 +35,7 @@ fn render_template(template: &str, vars: &serde_json::Value) -> String {
 /// Send a templated email using database-stored templates.
 /// Falls back to hardcoded inline templates if DB lookup fails.
 /// This is the preferred method — pass `AppState` to get access to DB and config.
-pub async fn send_email(
+async fn send_email_inner(
     state: &AppState,
     to: &str,
     template_type: &str,
@@ -104,6 +104,75 @@ pub async fn send_email(
             send_email_fallback(&cfg, to, template_type, vars).await
         }
     }
+}
+
+/// Send a templated email, recording the outcome in the transport's own
+/// `admin_settings` row.
+///
+/// Why the wrapper exists: a broken transport used to be **log-only**. Every caller
+/// (`register`, `forgot-password`, `invite_user`, `deliver_credentials`) logged the
+/// error and returned success, so a locked-out user was told to check an inbox that
+/// would never receive anything, and a buyer whose password exists *only* in the
+/// credential email could pay and get nothing while the API said "completed".
+/// `record_send_outcome` puts the failure where an admin actually looks.
+pub async fn send_email(
+    state: &AppState,
+    to: &str,
+    template_type: &str,
+    vars: &serde_json::Value,
+) -> Result<(), String> {
+    let result = send_email_inner(state, to, template_type, vars).await;
+    record_send_outcome(state, template_type, &result).await;
+    result
+}
+
+/// Persist the result of the latest send attempt into the `email` config row
+/// (`last_send_ok` / `last_send_error` / `last_send_at` / `last_send_template`).
+///
+/// Storing it beside the provider config is deliberate: the admin SPA already GETs
+/// `/admin/settings/email` to render the Email Provider panel, so the failure
+/// surfaces without a new endpoint or a new table. The recipient is NOT stored.
+///
+/// Best-effort by design — a bookkeeping failure must never fail a send that
+/// actually succeeded, so every error path here is swallowed.
+async fn record_send_outcome(state: &AppState, template_type: &str, result: &Result<(), String>) {
+    let row = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT value FROM admin_settings WHERE key = 'email'",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
+    let Some(mut cfg) = row else { return };
+    let Some(obj) = cfg.as_object_mut() else {
+        return;
+    };
+
+    match result {
+        Ok(()) => {
+            obj.insert("last_send_ok".to_string(), json!(true));
+            obj.insert("last_send_error".to_string(), json!(null));
+        }
+        Err(e) => {
+            obj.insert("last_send_ok".to_string(), json!(false));
+            obj.insert("last_send_error".to_string(), json!(e.clone()));
+        }
+    }
+    obj.insert(
+        "last_send_at".to_string(),
+        json!(chrono::Utc::now().to_rfc3339()),
+    );
+    obj.insert(
+        "last_send_template".to_string(),
+        json!(template_type.to_string()),
+    );
+
+    let _ =
+        sqlx::query("UPDATE admin_settings SET value = $1, updated_at = NOW() WHERE key = 'email'")
+            .bind(&cfg)
+            .execute(&state.db)
+            .await;
 }
 
 /// Email provider configuration, read from the `admin_settings` row keyed
