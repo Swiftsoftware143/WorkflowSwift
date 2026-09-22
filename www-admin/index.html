@@ -211,7 +211,7 @@ function content(){
     else if(s==='integration-targets')renderCRUD(c,'integration-targets','Integration Target',['name','provider','is_active'],'/integration-targets');
     else if(s==='destination-values')renderDestinationValues(c);
     else if(s==='provider-keys')renderProviderKeys(c);
-    else if(s==='api-keys')renderCRUD(c,'api-keys','API Key',['name','key_prefix','is_active'],'/api-keys');
+    else if(s==='api-keys')renderApiKeys(c);
     else if(s==='n8n-proxy')renderN8N(c);
     else if(s==='bridge')renderBridge(c);
   }else if(t==='support'){
@@ -418,6 +418,84 @@ function renderProviderKeys(c){
 
   load();
 }
+
+// --- API Keys (tenant-scoped: POST /api-keys -> {key, prefix, message}) ---
+// Stripped out of the generic renderCRUD for exactly the reason an API key is not a CRUD
+// row: the value exists in the clear exactly once. POST /api-keys answers
+// {key, prefix, message:"Save this key — it will not be shown again"} and GET /api-keys
+// only ever returns `prefix`. The panel was declared with a `key_prefix` column, which is
+// not a property of the response at all (so that column rendered blank), and its form only
+// posted `name` — a key created from this console was therefore never displayed and could
+// never be used by anything. This panel shows the value once, with the API's own warning,
+// and keeps the prefix in the list as the only identifier that survives.
+function renderApiKeys(c){
+  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-2">API Keys</h2>'
+    +'<p class="text-xs text-gray-400 mb-4">Bearer credentials for the WorkflowSwift API and the Swift Market Intel Chrome extension. '
+    +'The key value is returned once, at creation — afterwards only its prefix is readable.</p>'
+    +'<div class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end mb-5">'
+    +'<div class="md:col-span-3"><label class="block text-xs font-medium text-gray-500 mb-1">Name</label>'
+    +'<input id="ak_name" class="input" placeholder="what this key is for (e.g. market-intel-extension)"></div>'
+    +'<div><button class="btn btn-primary" id="ak_create">Create key</button></div></div>'
+    +'<div id="aknew"></div><div id="akdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
+
+  const list=c.querySelector('#akdata');
+
+  const showOnce=function(k){
+    c.querySelector('#aknew').innerHTML='<div class="p-3 mb-4 rounded-lg bg-amber-50 border border-amber-300">'
+      +'<p class="text-sm font-semibold text-amber-800 mb-1">Copy this key now — it will not be shown again.</p>'
+      +'<div class="flex items-center gap-2"><code class="text-xs break-all bg-white border rounded px-2 py-1 flex-1">'+escHtml(k.key)+'</code>'
+      +'<button class="btn btn-sm" id="ak_copy">Copy</button></div></div>';
+    const b=c.querySelector('#ak_copy');
+    if(b)b.onclick=function(){
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        navigator.clipboard.writeText(k.key).then(function(){showMsg('API key copied')},function(){showMsg('Copy blocked — select the value above','error')});
+      }else showMsg('Copy blocked — select the value above','error');
+    };
+  };
+
+  const load=async()=>{
+    const d=await api('/api-keys');
+    if(d===null){list.innerHTML='<p class="text-red-400 text-sm">'+escHtml(LAST_ERR||'Could not load API keys')+'</p>';return}
+    const items=unwrapList(d);
+    if(!items.length){list.innerHTML='<p class="text-gray-400 text-sm">No API keys yet. Name one above and press Create — the value is shown once, right after it is minted.</p>';return}
+    list.innerHTML='<table class="table"><thead><tr><th>Name</th><th>Key prefix</th><th>Created</th><th>Last used</th><th>Active</th><th style="width:100px"></th></tr></thead><tbody>'
+      +items.map(k=>'<tr><td><strong>'+escHtml(k.name||'-')+'</strong></td>'
+        +'<td class="text-xs text-gray-500">'+escHtml(k.prefix||'-')+'…</td>'
+        +'<td class="text-xs text-gray-500">'+String(k.created_at||'').slice(0,10)+'</td>'
+        +'<td class="text-xs text-gray-500">'+(k.last_used_at?String(k.last_used_at).slice(0,16).replace('T',' '):'never')+'</td>'
+        +'<td>'+(k.is_active?'Yes':'No')+'</td>'
+        +'<td class="text-right"><button class="btn btn-sm btn-danger" data-del="'+escHtml(k.id)+'">Delete</button></td></tr>').join('')
+      +'</tbody></table>';
+    list.querySelectorAll('button[data-del]').forEach(b=>b.onclick=async()=>{
+      const id=b.getAttribute('data-del');
+      if(!confirm('Delete this API key? Anything using it stops working immediately.'))return;
+      const r=await api('/api-keys/'+encodeURIComponent(id),{method:'DELETE'});
+      showMsg(r?'API key deleted':('Delete failed: '+(LAST_ERR||'request failed')),r?undefined:'error');
+      load();
+    });
+  };
+
+  c.querySelector('#ak_create').onclick=async()=>{
+    const name=(c.querySelector('#ak_name').value||'').trim()||'default';
+    const r=await api('/api-keys',{method:'POST',body:JSON.stringify({name})});
+    if(!r||!r.key){
+      // No `key` in the answer means the mint never ran: the plan gate answers 402
+      // ("API access is not included in your current plan…"). LAST_ERR holds the API's own
+      // sentence, so show that verbatim instead of a generic failure.
+      showMsg('Create failed: '+(LAST_ERR||'no key returned'),'error');return;
+    }
+    c.querySelector('#ak_name').value='';
+    showMsg('API key created');
+    showOnce(r);
+    load();
+  };
+
+  load();
+}
+
+// Escape anything that came out of the API or an operator's typing before it is
+// concatenated into innerHTML — a key *name* is free text.
+function escHtml(s){return String(s==null?'':s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))}
 
 function renderN8N(c){
   c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">n8n Proxy</h2><div id="n8ndata"></div></div>';
