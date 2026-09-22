@@ -190,6 +190,17 @@ pub async fn pre_auth_rate_limit_middleware(
 /// queue that exists only to be shed. Override with `AUTH_IN_FLIGHT_CAP`.
 pub const DEFAULT_AUTH_IN_FLIGHT_CAP: usize = 64;
 
+/// How long one unauthenticated password-auth request may HOLD an in-flight slot.
+///
+/// The ceiling is a count of concurrent requests, and a slot is held for the whole request —
+/// including the handler's body read. Without a bound, a client that sends headers and then
+/// stalls its body owns its slot for ever, so 64 such sockets pin the ceiling permanently and
+/// every real login is shed with 429 (kanban t_5ad88ced, reproduced live 2026-09-22). A
+/// genuine login finishes its Argon2 work in well under a second even under load, so this
+/// budget is orders of magnitude above any legitimate request and only ever fires on a
+/// request that is not going to complete anyway.
+pub const AUTH_IN_FLIGHT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// Load-shedding bound on the unauthenticated password-auth routes (kanban t_92bafdf8).
 ///
 /// The Argon2 semaphore bounds the *work* a password flood can do (8 concurrent 19 MiB hash
@@ -279,8 +290,26 @@ pub async fn password_auth_shed_middleware(
 ) -> axum::response::Response {
     match in_flight.try_enter() {
         // The permit is held for the whole request, which is what makes the ceiling a count
-        // of concurrent requests rather than a rate.
-        Some(_permit) => next.run(request).await,
+        // of concurrent requests rather than a rate. But "the whole request" includes the
+        // handler's body read, so a client that sends headers and then STALLS the body used to
+        // hold its slot for as long as it liked: 64 such sockets reached the ceiling and kept
+        // it reached indefinitely, and every legitimate login got 429 for ever (reproduced
+        // live 2026-09-22: a real login answered 429 at t+3s and still 429 at t+20s while 64
+        // stalled sockets were open, and 401 normally the moment they closed). A slot is
+        // therefore bounded: a request that cannot finish inside the budget is shed like any
+        // other over-capacity request, so the ceiling always clears on its own.
+        Some(_permit) => {
+            match tokio::time::timeout(AUTH_IN_FLIGHT_TIMEOUT, next.run(request)).await {
+                Ok(response) => response,
+                Err(_) => {
+                    warn!(
+                    "password-auth request held a slot for over {:?} (stalled body?) — shed with 429",
+                    AUTH_IN_FLIGHT_TIMEOUT
+                );
+                    auth_shed_response(in_flight.cap())
+                }
+            }
+        }
         None => {
             let path = request.uri().path().to_string();
             warn!(
