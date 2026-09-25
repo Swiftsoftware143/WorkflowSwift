@@ -1,4 +1,6 @@
-//! Agent Handler — Paperclip agent profiles, and the per-workspace dashboard counts.
+//! Agent Handler — Paperclip agent profiles (`list_agents` / `create_agent` / `delete_agent`).
+//! The dashboard pages are served by `paperclip_handler` — see the note at the end of this
+//! file for the two uncalled iterations that lived here and were deleted (kanban t_82bb3fc2).
 
 use axum::{
     extract::{Path, Query, State},
@@ -111,85 +113,19 @@ pub async fn delete_agent(
     Ok(Json(json!({"status": "deleted"})))
 }
 
-// ── Updated Paperclip Dashboard — fix timeline SQL ────────────────
-
-/// Updated workspace dashboard with agent + ticket counts
-pub async fn workspace_dashboard(
-    State(s): State<AppState>,
-    Extension(claims): Extension<Claims>,
-    Query(q): Query<AgentQuery>,
-) -> Result<impl IntoResponse, AppError> {
-    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-
-    let (ws_clause, ws_bind): (String, Option<Uuid>) = if let Some(ref ws) = q.workspace_id {
-        let ws_id =
-            Uuid::parse_str(ws).map_err(|_| AppError::BadRequest("Invalid workspace_id".into()))?;
-        ("AND portfolio_company_id = $2".into(), Some(ws_id))
-    } else {
-        (String::new(), None)
-    };
-
-    let active_instances: Vec<serde_json::Value> = if let Some(ref ws_id) = ws_bind {
-        // `wi.started_at` is NULLABLE with no DEFAULT and NULL means "not started", so the
-        // element is `Option<String>`: a NULL renders as JSON `null` instead of failing the
-        // whole-row decode (`decoding column 3: unexpected null`, kanban t_4a499b90).
-        sqlx::query_as::<_, (Uuid, String, String, Option<String>)>(
-            &format!("SELECT wi.id, COALESCE(w.name,'unnamed') as name, wi.status, wi.started_at::text FROM workflow_instances wi LEFT JOIN workflows w ON w.id = wi.workflow_id WHERE wi.aid = $1 {} AND wi.status IN ('running','in_progress','pending') ORDER BY wi.started_at DESC LIMIT 20", ws_clause)
-        ).bind(aid).bind(ws_id).fetch_all(&s.db).await.map_err(|e| {
-            eprintln!("SQL error in active_instances: {}", e);
-            AppError::Internal("Query error".into())
-        }).unwrap_or_default().into_iter().map(|r| json!({"id": r.0, "name": r.1, "status": r.2, "started_at": r.3})).collect()
-    } else {
-        // `wi.started_at` is NULLABLE with no DEFAULT and NULL means "not started", so the
-        // element is `Option<String>`: a NULL renders as JSON `null` instead of failing the
-        // whole-row decode (`decoding column 3: unexpected null`, kanban t_4a499b90).
-        sqlx::query_as::<_, (Uuid, String, String, Option<String>)>(
-            "SELECT wi.id, COALESCE(w.name,'unnamed') as name, wi.status, wi.started_at::text FROM workflow_instances wi LEFT JOIN workflows w ON w.id = wi.workflow_id WHERE wi.aid = $1 AND wi.status IN ('running','in_progress','pending') ORDER BY wi.started_at DESC LIMIT 20"
-        ).bind(aid).fetch_all(&s.db).await.map_err(|e| {
-            eprintln!("SQL error in active_instances: {}", e);
-            AppError::Internal("Query error".into())
-        }).unwrap_or_default().into_iter().map(|r| json!({"id": r.0, "name": r.1, "status": r.2, "started_at": r.3})).collect()
-    };
-
-    Ok(Json(json!({
-        "dashboard": {
-            "active_instances": active_instances,
-            "active_count": active_instances.len(),
-        }
-    })))
-}
-
-/// Fixed timeline — no SQL bug
-pub async fn activity_timeline(
-    State(s): State<AppState>,
-    Extension(claims): Extension<Claims>,
-    Query(q): Query<AgentQuery>,
-) -> Result<impl IntoResponse, AppError> {
-    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-
-    let (ws_clause, ws_bind): (String, Option<Uuid>) = if let Some(ref ws) = q.workspace_id {
-        let ws_id =
-            Uuid::parse_str(ws).map_err(|_| AppError::BadRequest("Invalid workspace_id".into()))?;
-        ("AND wi.portfolio_company_id = $2".into(), Some(ws_id))
-    } else {
-        (String::new(), None)
-    };
-
-    let events: Vec<serde_json::Value> = if let Some(ref ws_id) = ws_bind {
-        // `wi.started_at` is NULLABLE with no DEFAULT and NULL means "not started", so the
-        // element is `Option<String>`: a NULL renders as JSON `null` instead of failing the
-        // whole-row decode (`decoding column 3: unexpected null`, kanban t_4a499b90).
-        sqlx::query_as::<_, (Uuid, String, String, Option<String>)>(
-            &format!("SELECT wi.id, COALESCE(w.name,'workflow') as title, wi.status as description, wi.started_at::text as ts FROM workflow_instances wi LEFT JOIN workflows w ON w.id = wi.workflow_id WHERE wi.aid = $1 {} ORDER BY wi.started_at DESC LIMIT 30", ws_clause)
-        ).bind(aid).bind(ws_id).fetch_all(&s.db).await.unwrap_or_default().into_iter().map(|r| json!({"id": r.0, "title": r.1, "description": r.2, "timestamp": r.3, "type": "instance"})).collect()
-    } else {
-        // `wi.started_at` is NULLABLE with no DEFAULT and NULL means "not started", so the
-        // element is `Option<String>`: a NULL renders as JSON `null` instead of failing the
-        // whole-row decode (`decoding column 3: unexpected null`, kanban t_4a499b90).
-        sqlx::query_as::<_, (Uuid, String, String, Option<String>)>(
-            "SELECT wi.id, COALESCE(w.name,'workflow') as title, wi.status as description, wi.started_at::text as ts FROM workflow_instances wi LEFT JOIN workflows w ON w.id = wi.workflow_id WHERE wi.aid = $1 ORDER BY wi.started_at DESC LIMIT 30"
-        ).bind(aid).fetch_all(&s.db).await.unwrap_or_default().into_iter().map(|r| json!({"id": r.0, "title": r.1, "description": r.2, "timestamp": r.3, "type": "instance"})).collect()
-    };
-
-    Ok(Json(json!({"timeline": events})))
-}
+// NOTE (kanban t_82bb3fc2): two earlier iterations of the dashboard pages used to live here —
+// `workspace_dashboard` and `activity_timeline` (the section header in this file called them
+// "Updated Paperclip Dashboard — fix timeline SQL"). They are DELETED, not wired:
+//   * NO route ever mounted them. `grep -rn 'agent_handler::' src/routes.rs` mounts only
+//     list_agents / create_agent / delete_agent, and this file was the only place the two names
+//     appeared anywhere under src/.
+//   * No served surface called them: the two paths they would need, GET /api/v1/dashboard/workspace
+//     and GET /api/v1/dashboard/timeline, are owned by the `paperclip_handler` twins that routes.rs
+//     mounts, and the served SPA's own timeline panel calls /dashboard/timeline (paperclip).
+//   * Those twins are a strict superset: they verify workspace ownership (404 for a workspace the
+//     account does not own, instead of silently ignoring the filter), take `days`/`limit`, return
+//     `total_automations`, and propagate query errors with `?` instead of swallowing them through
+//     `unwrap_or_default()` into an empty 200.
+// Wiring the pair would therefore have put a second, strictly worse implementation behind one page,
+// which is why the disposition is DELETE (same class as t_fee9dc11 / get_decrypted_key). The live
+// pages are paperclip_handler::{workspace_dashboard, activity_timeline}.
