@@ -118,11 +118,20 @@ pub async fn internal_create_portfolio_company(
         return Err(AppError::Unauthorized);
     }
 
-    let aid = body
-        .get("aid")
-        .and_then(|v| v.as_str())
-        .and_then(|s| Uuid::parse_str(s).ok())
-        .ok_or_else(|| AppError::BadRequest("aid required".into()))?;
+    // The account key is named `tenant_id` by the fleet's tenant-sync contract: FunnelSwift builds
+    // ONE body and posts it to all five receivers, and ADASwift, MissedCall, CoreSwift-CRM and
+    // IncentiveSwift all read `tenant_id` from it. This receiver used to require `aid` only, so the
+    // WorkflowSwift leg of every tenant sync was answered 400 before any SQL ran and no
+    // portfolio_companies row was ever created (kanban t_8b887f91). `aid` stays accepted as an
+    // alias for callers that already speak it.
+    let aid = ["tenant_id", "aid"]
+        .iter()
+        .find_map(|field| {
+            body.get(*field)
+                .and_then(|v| v.as_str())
+                .and_then(|s| Uuid::parse_str(s).ok())
+        })
+        .ok_or_else(|| AppError::BadRequest("tenant_id (or aid) required".into()))?;
 
     let name = body
         .get("name")
