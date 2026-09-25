@@ -74,18 +74,35 @@ pub async fn credit_balance(
     // Non-rollover available credits (can be negative if overspent)
     let available = balance; // total balance is the real available amount
 
-    // Next reset date (if plan has monthly cycle)
+    // Next reset date: the next monthly anniversary of the ACTIVE plan row's start. Two defects
+    // lived in this one query (t_3914ee20): it named `tp.billing_cycle_start`, a column
+    // `account_plans` has never had (the live table is id/aid/plan_id/status/started_at/expires_at/
+    // created_at/sort_order/is_active), and it filtered on the legacy `is_active` boolean while
+    // every other plan reader in the crate filters `status = 'active'`. Postgres rejected the
+    // statement on every call and `.ok()` swallowed it, so `next_reset` was permanently null with
+    // nothing in the response or the log to show for it — a silent-data-loss bug, not defensive
+    // coding. Now: the same row predicate as `features::resolve_plan_id`, the real column, and `?`
+    // so any future drift is a visible 500 instead of a silently empty field.
+    //
+    // Deliberately NOT `started_at + interval '1 month'`: that reports a date in the PAST for a
+    // plan that started more than a month ago (measured: 1 of the 11 live rows, started
+    // 2026-08-11, would have answered 2026-09-11 on 2026-09-25). Walking the monthly boundaries
+    // forward from the plan start to the first one after `now()` is exact calendar arithmetic and
+    // keeps the field's promise: a "next reset" is always in the future.
     let next_reset: Option<String> = sqlx::query_scalar::<_, String>(
-        r#"SELECT to_char(COALESCE(tp.billing_cycle_start, NOW() + interval '1 month'), 'YYYY-MM-DD')
+        r#"SELECT to_char(boundary, 'YYYY-MM-DD')
            FROM account_plans tp
-           WHERE tp.aid = $1 AND tp.is_active = true
+           CROSS JOIN LATERAL generate_series(
+                 tp.started_at + interval '1 month',
+                 NOW() + interval '24 months',
+                 interval '1 month') AS boundary
+           WHERE tp.aid = $1 AND tp.status = 'active' AND boundary > NOW()
+           ORDER BY boundary
            LIMIT 1"#,
     )
     .bind(aid)
     .fetch_optional(&state.db)
-    .await
-    .ok()
-    .flatten();
+    .await?;
 
     Ok(Json(json!({
         "balance": balance,

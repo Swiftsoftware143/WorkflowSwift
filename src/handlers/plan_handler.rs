@@ -463,43 +463,25 @@ pub async fn get_plan_capabilities(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    // Find user's active plan
-    let plan_info = sqlx::query(
-        r#"SELECT p.id, p.slug, p.name, p.features::text
-           FROM account_plans tp
-           JOIN plan_tiers p ON p.id = tp.plan_id
-           WHERE tp.aid = $1 AND tp.status = 'active'
-           ORDER BY tp.created_at DESC LIMIT 1"#,
-    )
-    .bind(aid)
-    .fetch_optional(&state.db)
-    .await?;
+    // Resolve the account's plan through the app's ONE resolver, so this display surface and the
+    // entitlement path (`features::enforce_plan_flag`) can never disagree about which tier an
+    // account is on. They did disagree: this function used to hand-roll the active-row lookup and,
+    // when an account had NO `account_plans` row, it hard-coded the `free` tier — while
+    // `features::resolve_plan_id` consults `accounts.plan_id` first and only then falls back to
+    // the first active tier. Measured live on a probe account (t_3914ee20): no row,
+    // `accounts.plan_id = professional`, this endpoint answered `free` while the api_access gate
+    // answered `professional`.
+    let resolved = features::resolve_plan_id(&state.db, aid).await?;
+    let plan_id: Uuid = resolved.unwrap_or(Uuid::nil());
 
-    let (plan_id, plan_slug, plan_name, _plan_features) = match plan_info {
-        Some(row) => {
-            let pid: Uuid = row.try_get("id").unwrap_or_default();
-            let slug: String = row.try_get("slug").unwrap_or_else(|_| "free".to_string());
-            let name: String = row.try_get("name").unwrap_or_else(|_| "Free".to_string());
-            let feats: String = row.try_get("features").unwrap_or_else(|_| "{}".to_string());
-            (pid, slug, name, feats)
-        }
-        None => {
-            // Default to Free plan capabilities
-            let pid: Uuid = sqlx::query_scalar(
-                "SELECT id FROM plan_tiers WHERE slug = 'free' AND is_active = true LIMIT 1",
-            )
+    let plan_info: Option<(String, String, String)> =
+        sqlx::query_as("SELECT slug, name, features::text FROM plan_tiers WHERE id = $1")
+            .bind(plan_id)
             .fetch_optional(&state.db)
-            .await?
-            .flatten()
-            .unwrap_or(Uuid::nil());
-            (
-                pid,
-                "free".to_string(),
-                "Free".to_string(),
-                "{}".to_string(),
-            )
-        }
-    };
+            .await?;
+
+    let (plan_slug, plan_name, _plan_features) =
+        plan_info.unwrap_or_else(|| ("free".to_string(), "Free".to_string(), "{}".to_string()));
 
     // Get max industries from feature_limits
     let max_industries: i32 = sqlx::query_scalar(

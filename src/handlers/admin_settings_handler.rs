@@ -935,17 +935,26 @@ pub async fn admin_assign_plan(
 
     // Supersede whatever the account is on now, so the resolver (newest active row first) can
     // never be ambiguous about which tier applies. `status` is a plain varchar with no enum
-    // constraint; 'superseded' is the only non-'active' value this code writes.
+    // constraint; 'superseded' is the only non-'active' value this code writes. `is_active` is
+    // the legacy boolean the table carries alongside `status` and is cleared here too: nothing
+    // used to write it at all, so a superseded row stayed `is_active = true` forever and any
+    // reader filtering on the flag (there was one, credit_handler's next_reset) saw two live
+    // rows. Migration 057 aligns the two columns for existing history and puts a partial unique
+    // index on (aid) WHERE status = 'active' so the invariant is enforced by the database, not
+    // by convention.
     sqlx::query(
-        "UPDATE account_plans SET status = 'superseded', expires_at = NOW() \
+        "UPDATE account_plans SET status = 'superseded', is_active = false, expires_at = NOW() \
          WHERE aid = $1 AND status = 'active'",
     )
     .bind(id)
     .execute(&mut *tx)
     .await?;
 
-    // Plain INSERT, never `ON CONFLICT (aid, plan_id)`: account_plans carries only its PK and a
-    // non-unique index on aid, so that conflict target is a guaranteed 500.
+    // Plain INSERT, never `ON CONFLICT (aid, plan_id)`: account_plans carries only its PK plus a
+    // non-unique index on aid, so that conflict target is a guaranteed 500. (Migration 057 adds a
+    // PARTIAL unique index on (aid) WHERE status = 'active' - targeting that from an upsert would
+    // need the predicate repeated in the conflict target, which is why this stays a plain INSERT
+    // inside a superseding transaction.)
     sqlx::query(
         "INSERT INTO account_plans (aid, plan_id, status, started_at) \
          VALUES ($1, $2, 'active', NOW())",
