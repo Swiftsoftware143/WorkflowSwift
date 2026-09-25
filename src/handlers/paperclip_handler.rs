@@ -56,13 +56,16 @@ pub async fn workspace_dashboard(
         // `wi.started_at` is NULLABLE with no DEFAULT and NULL means "not started", so the
         // element is `Option<String>`: a NULL renders as JSON `null` instead of failing the
         // whole-row decode (`decoding column 3: unexpected null`, kanban t_4a499b90).
+        // The recency gate above falls back to `created_at` (NOT NULL DEFAULT now()) so a row
+        // whose `started_at` was never set is not silently excluded (`NULL > x` is NULL, which
+        // hid every such row for the whole window; kanban t_da64fe12).
         sqlx::query_as::<_, (Uuid, String, String, Option<String>, String)>(
             r#"SELECT wi.id, w.name, wi.status, wi.started_at::text, COALESCE(wi.updated_at, wi.started_at)::text
                FROM workflow_instances wi
                JOIN workflows w ON w.id = wi.workflow_id
                WHERE wi.aid = $1 AND wi.portfolio_company_id = $2
-                 AND wi.status IN ('running', 'in_progress', 'pending') AND wi.started_at > NOW() - make_interval(days => $3)
-               ORDER BY wi.started_at DESC LIMIT $4"#
+                 AND wi.status IN ('running', 'in_progress', 'pending') AND COALESCE(wi.started_at, wi.created_at) > NOW() - make_interval(days => $3)
+               ORDER BY COALESCE(wi.started_at, wi.created_at) DESC LIMIT $4"#
         )
         .bind(aid).bind(ws_id).bind(days).bind(limit)
         .fetch_all(&s.db).await?
@@ -74,13 +77,16 @@ pub async fn workspace_dashboard(
         // `wi.started_at` is NULLABLE with no DEFAULT and NULL means "not started", so the
         // element is `Option<String>`: a NULL renders as JSON `null` instead of failing the
         // whole-row decode (`decoding column 3: unexpected null`, kanban t_4a499b90).
+        // The recency gate above falls back to `created_at` (NOT NULL DEFAULT now()) so a row
+        // whose `started_at` was never set is not silently excluded (`NULL > x` is NULL, which
+        // hid every such row for the whole window; kanban t_da64fe12).
         sqlx::query_as::<_, (Uuid, String, String, Option<String>, String)>(
             r#"SELECT wi.id, w.name, wi.status, wi.started_at::text, COALESCE(wi.updated_at, wi.started_at)::text
                FROM workflow_instances wi
                JOIN workflows w ON w.id = wi.workflow_id
                WHERE wi.aid = $1
-                 AND wi.status IN ('running', 'in_progress', 'pending') AND wi.started_at > NOW() - make_interval(days => $2)
-               ORDER BY wi.started_at DESC LIMIT $3"#
+                 AND wi.status IN ('running', 'in_progress', 'pending') AND COALESCE(wi.started_at, wi.created_at) > NOW() - make_interval(days => $2)
+               ORDER BY COALESCE(wi.started_at, wi.created_at) DESC LIMIT $3"#
         )
         .bind(aid).bind(days).bind(limit)
         .fetch_all(&s.db).await?
@@ -134,14 +140,17 @@ pub async fn activity_timeline(
         // `wi.started_at` is NULLABLE with no DEFAULT and NULL means "not started", so the
         // element is `Option<String>`: a NULL renders as JSON `null` instead of failing the
         // whole-row decode (`decoding column 3: unexpected null`, kanban t_4a499b90).
+        // The recency gate above falls back to `created_at` (NOT NULL DEFAULT now()) so a row
+        // whose `started_at` was never set is not silently excluded (`NULL > x` is NULL, which
+        // hid every such row for the whole window; kanban t_da64fe12).
         sqlx::query_as::<_, (Uuid, String, String, Option<String>, String)>(
             r#"SELECT wi.id, 'instance'::text as event_type, w.name as title,
                       wi.started_at::text, wi.status as description
                FROM workflow_instances wi
                JOIN workflows w ON w.id = wi.workflow_id
                WHERE wi.aid = $1 AND wi.portfolio_company_id = $2
-                 AND wi.started_at > NOW() - make_interval(days => $3)
-               ORDER BY wi.started_at DESC LIMIT $4"#,
+                 AND COALESCE(wi.started_at, wi.created_at) > NOW() - make_interval(days => $3)
+               ORDER BY COALESCE(wi.started_at, wi.created_at) DESC LIMIT $4"#,
         )
         .bind(aid)
         .bind(ws_id)
@@ -153,14 +162,17 @@ pub async fn activity_timeline(
         // `wi.started_at` is NULLABLE with no DEFAULT and NULL means "not started", so the
         // element is `Option<String>`: a NULL renders as JSON `null` instead of failing the
         // whole-row decode (`decoding column 3: unexpected null`, kanban t_4a499b90).
+        // The recency gate above falls back to `created_at` (NOT NULL DEFAULT now()) so a row
+        // whose `started_at` was never set is not silently excluded (`NULL > x` is NULL, which
+        // hid every such row for the whole window; kanban t_da64fe12).
         sqlx::query_as::<_, (Uuid, String, String, Option<String>, String)>(
             r#"SELECT wi.id, 'instance'::text as event_type, w.name as title,
                       wi.started_at::text, wi.status as description
                FROM workflow_instances wi
                JOIN workflows w ON w.id = wi.workflow_id
                WHERE wi.aid = $1
-                 AND wi.started_at > NOW() - make_interval(days => $2)
-               ORDER BY wi.started_at DESC LIMIT $3"#,
+                 AND COALESCE(wi.started_at, wi.created_at) > NOW() - make_interval(days => $2)
+               ORDER BY COALESCE(wi.started_at, wi.created_at) DESC LIMIT $3"#,
         )
         .bind(aid)
         .bind(days)

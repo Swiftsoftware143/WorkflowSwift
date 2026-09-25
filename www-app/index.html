@@ -67,6 +67,13 @@
   .svgchart{width:100%;height:140px}
   .mfeed li{display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px dashed rgba(255,255,255,.12);font-size:.85rem}
   .mfeed li:last-child{border-bottom:none}
+  /* The timeline feed is a LIGHT `.card`, unlike the dark dashboard tiles whose list skeleton it
+     borrows from `.mfeed`. Without this override the row title inherits `.mfeed`'s `color:#fff`
+     and renders white-on-white — unreadable — and the dashed separators are invisible too.
+     Latent until kanban t_da64fe12: the feed had NEVER held a row on any account, because the
+     query that fills it dropped every `started_at IS NULL` instance (see the same card). */
+  .tfeed{color:#111827}
+  .tfeed li{border-bottom-color:rgba(17,24,39,.10)}
   .milestone{font-weight:700;color:#fcd34d}
   .widget-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px}
   .ind-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:14px}
@@ -382,7 +389,7 @@ const DashboardView = () => {
       </div>
       ${(S.timeline||[]).length ? html`<div class="card" style="margin-bottom:16px">
         <h3 class="font-semibold text-gray-800 mb-3">Recent activity</h3>
-        <ul class="mfeed">${(S.timeline||[]).slice(0,8).map((t,i)=>html`<li key=${i}><span>${t.title||t.description||t.action||t.event_type||'—'}</span><span class="text-xs text-gray-400">${fmtDate(t.created_at||t.at||t.timestamp||t.occurred_at)}</span></li>`)}</ul>
+        <ul class="mfeed tfeed">${(S.timeline||[]).slice(0,8).map((t,i)=>html`<li key=${i}><span>${t.title||t.description||t.action||t.event_type||'—'}</span><span class="text-xs text-gray-400">${fmtDate(t.created_at||t.at||t.timestamp||t.occurred_at)}</span></li>`)}</ul>
       </div>` : ''}
       ${widgets.length === 0 ? html`
         <div class="card"><div class="empty">
