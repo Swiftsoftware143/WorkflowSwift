@@ -1,8 +1,9 @@
 use axum::{
-    extract::{Request, State},
+    body::{Body, Bytes},
+    extract::{FromRequest, Request, State},
     http::StatusCode,
     middleware::Next,
-    response::Response,
+    response::{IntoResponse, Response},
     Extension,
 };
 use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
@@ -323,6 +324,130 @@ pub async fn password_auth_shed_middleware(
     }
 }
 
+/// Default body-read deadline: how long the body of a request that carries one may take to
+/// arrive before the request is answered `408` and its task, connection and partially-read body
+/// buffer are released (kanban t_e7cba83e). See [`body_read_deadline_middleware`] for why the
+/// bound is on the body and not on the handler.
+///
+/// 30 s is orders of magnitude above the time a real body on these routes takes (a Stripe/PayPal
+/// event, an n8n run result, a lead POST: kilobytes over a same-region link, tens of
+/// milliseconds) and still generous to a slow sender: a full 2 MiB body may arrive as slowly as
+/// ~70 KiB/s and complete inside it. Override with `BODY_READ_DEADLINE_SECS` (clamped to
+/// `5..=300` in `config.rs`, so neither a typo nor a fat finger can shed real traffic).
+pub const DEFAULT_BODY_READ_DEADLINE_SECS: u64 = 30;
+
+/// How long a request body may take to arrive, as configured.
+///
+/// Its own type, like [`AuthInFlight`], so the middleware can be mounted (and unit-tested)
+/// without an `AppState` — and so the number the middleware enforces is the number the boot log
+/// printed, never re-derived per request.
+#[derive(Clone, Copy, Debug)]
+pub struct BodyReadDeadline(std::time::Duration);
+
+impl BodyReadDeadline {
+    /// From the configured seconds. Clamping lives in `config.rs`; this is a plain carrier.
+    pub fn from_secs(seconds: u64) -> Self {
+        Self(std::time::Duration::from_secs(seconds))
+    }
+
+    /// The deadline as a duration.
+    pub fn duration(self) -> std::time::Duration {
+        self.0
+    }
+}
+
+/// The `408` a request whose body never finished arriving is answered with.
+///
+/// Carries the deadline so a client log says which bound was hit, and `Connection: close`
+/// because the declared body was never consumed: this connection cannot be reused for another
+/// request, and a client that keeps waiting for a drain that will not come learns nothing from
+/// silence.
+fn body_deadline_response(deadline: std::time::Duration) -> Response {
+    Response::builder()
+        .status(StatusCode::REQUEST_TIMEOUT)
+        .header("Connection", "close")
+        .body(Body::from(format!(
+            "{{\"error\":\"Request body was not received in time. Retry.\",\"status\":408,\
+             \"body_deadline_seconds\":{}}}",
+            deadline.as_secs()
+        )))
+        .unwrap_or_else(|_| {
+            Response::builder()
+                .status(StatusCode::REQUEST_TIMEOUT)
+                .header("Connection", "close")
+                .body(Body::empty())
+                .unwrap_or_else(|_| Response::new(Body::empty()))
+        })
+}
+
+/// Middleware: bound how long a request BODY may take to arrive, and answer `408` if it has not
+/// finished within [`BodyReadDeadline`] of the headers.
+///
+/// **Why a body deadline and not a handler budget** (kanban t_e7cba83e). The routes this is
+/// mounted on all do their own credential or signature work *after* the body has to be read:
+/// `webhooks/stripe` and `webhooks/paypal` verify a signature over the raw bytes,
+/// `instances/{id}/callback` and the `internal/*` routes check `X-Internal-Key` inside the
+/// handler, `/incoming` is a public receiver. An in-route wall-clock budget over those routes
+/// would have to be sized for signature verification plus whatever the handler dispatches (an
+/// n8n proxy call), and elapsing it drops work that was legitimately in progress — for a payment
+/// webhook that is a LOST PAYMENT EVENT, not a retried login. This middleware bounds only the
+/// thing that is actually unbounded: a client that sends a request head and then stops. A handler
+/// that legitimately takes seconds is untouched, because the deadline is over by the time it
+/// runs.
+///
+/// **The deadline is total, measured from the headers** — not a per-chunk idle timeout that
+/// resets on every frame (`tower_http::timeout::RequestBodyTimeoutLayer` works that way). A
+/// resetting timeout is not a bound here at all: a client that dribbles one byte every N-1
+/// seconds holds the task, the connection and the buffer for ever. On elapse the inner future is
+/// dropped, so the partially-read body goes with it, the request is answered `408` and the
+/// server logs the event — the hold ends, visibly.
+///
+/// **What a legitimately slow sender gets.** A body that *is* arriving is read at full speed; the
+/// deadline only fires on one that has stopped. A mobile client uploading a few KiB over a bad
+/// link needs well under a second; a 2 MiB body has 30 s, i.e. ~70 KiB/s. A webhook burst is
+/// unaffected (the bound is per request, not a rate). If a body really does exceed the deadline,
+/// the request is answered `408` and closed; Stripe and PayPal retry failed deliveries for days,
+/// and the event was already undeliverable at that point — the sender had stopped mid-body.
+///
+/// On success the bytes read here are handed to the inner service as an already-complete body, so
+/// the handler's own extractor (`Json`, `Bytes`) sees exactly the bytes the client sent — same
+/// bytes, same headers, same limit, because the read below *is* the same extractor: a body over
+/// axum's `DefaultBodyLimit` is rejected through the identical code path, with the identical
+/// `413`.
+pub async fn body_read_deadline_middleware(
+    State(deadline): State<BodyReadDeadline>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let deadline = deadline.duration();
+
+    // The head is cloned rather than rebuilt so the inner request keeps the method, uri, version,
+    // headers and every extension an outer layer inserted. Cloning `Parts` copies the extensions
+    // map (shared handles), so nothing inserted by a layer above is lost.
+    let (parts, body) = request.into_parts();
+    let probe = Request::from_parts(parts.clone(), body);
+
+    // `()` is the extractor state: `Bytes::from_request` takes its limit from the request's own
+    // extensions (axum's `DefaultBodyLimit`), not from the state, so the limit the handler would
+    // have applied is the limit applied here.
+    match tokio::time::timeout(deadline, Bytes::from_request(probe, &())).await {
+        Ok(Ok(bytes)) => {
+            next.run(Request::from_parts(parts, Body::from(bytes)))
+                .await
+        }
+        // Over the body limit, or a read error on the way in: exactly the rejection the handler's
+        // own extractor would have produced, produced by the same extractor.
+        Ok(Err(rejection)) => rejection.into_response(),
+        Err(_elapsed) => {
+            warn!(
+                "request body not received within {:?} (stalled body) — answered 408 for {} {}",
+                deadline, parts.method, parts.uri
+            );
+            body_deadline_response(deadline)
+        }
+    }
+}
+
 /// Middleware: rate limit by account ID
 pub async fn rate_limit_middleware(
     State(state): State<AppState>,
@@ -564,5 +689,129 @@ mod tests {
             .await
             .expect("router");
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    // ── body-read deadline (kanban t_e7cba83e) ──────────────────────────────────────────────
+    //
+    // Three properties, and they are the ones a later refactor must not break: the deadline fires
+    // on a body that never arrives; a body that does arrive reaches the handler byte for byte
+    // (Stripe/PayPal sign the raw bytes, so anything else silently breaks payments); and the
+    // middleware does not widen the limit on how much a single request may buffer.
+
+    /// A request body that produces no frame and never ends: the client-side shape of the hold
+    /// this middleware bounds (head sent, body never arrives).
+    struct StalledBody;
+
+    impl futures_core::Stream for StalledBody {
+        type Item = Result<Bytes, std::io::Error>;
+
+        fn poll_next(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            std::task::Poll::Pending
+        }
+    }
+
+    /// The production mount shape: one route whose handler reads the body, wrapped by the layer.
+    fn body_deadline_app(deadline: std::time::Duration) -> Router {
+        Router::new()
+            .route("/webhook", post(|body: Bytes| async move { body }))
+            .layer(axum::middleware::from_fn_with_state(
+                BodyReadDeadline(deadline),
+                body_read_deadline_middleware,
+            ))
+    }
+
+    /// A stalled body must end the hold: 408, `Connection: close`, promptly. Before this
+    /// middleware the same request held a task, a connection and a partially-read body buffer
+    /// for ever (measured live at 45 s and still parked).
+    #[tokio::test]
+    async fn stalled_body_is_answered_408_within_the_deadline() {
+        // 150 ms, not the configured 30 s: the assertion is about WHICH requests the deadline
+        // fires on, not how long the operator set it to.
+        let app = body_deadline_app(std::time::Duration::from_millis(150));
+        let started = std::time::Instant::now();
+        let resp = app
+            .oneshot(
+                HttpRequest::post("/webhook")
+                    .header("content-length", "100000")
+                    .body(Body::from_stream(StalledBody))
+                    .expect("request"),
+            )
+            .await
+            .expect("router");
+        let elapsed = started.elapsed();
+
+        assert_eq!(
+            resp.status(),
+            StatusCode::REQUEST_TIMEOUT,
+            "a body that never arrives must be answered, not parked"
+        );
+        assert_eq!(
+            resp.headers()
+                .get("connection")
+                .and_then(|v| v.to_str().ok()),
+            Some("close"),
+            "the declared body was never consumed, so the connection must not be reused"
+        );
+        let body = axum::body::to_bytes(resp.into_body(), 4096)
+            .await
+            .expect("body");
+        assert!(
+            String::from_utf8_lossy(&body).contains("\"status\":408"),
+            "body was {}",
+            String::from_utf8_lossy(&body)
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "the deadline must fire promptly, took {elapsed:?}"
+        );
+    }
+
+    /// The bytes the client sends are the bytes the handler sees. This is why the deadline reads
+    /// the body instead of replacing it: the webhook routes verify an HMAC over exactly these
+    /// bytes.
+    #[tokio::test]
+    async fn complete_body_reaches_the_handler_unchanged() {
+        let app = body_deadline_app(std::time::Duration::from_secs(30));
+        let payload = br#"{"type":"checkout.session.completed","sig":"t=1,v1=deadbeef"}"#;
+        let resp = app
+            .oneshot(
+                HttpRequest::post("/webhook")
+                    .header("content-type", "application/json")
+                    .header("stripe-signature", "t=1,v1=deadbeef")
+                    .body(Body::from(payload.to_vec()))
+                    .expect("request"),
+            )
+            .await
+            .expect("router");
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 4096)
+            .await
+            .expect("body");
+        assert_eq!(
+            &body[..],
+            &payload[..],
+            "the handler must see the raw request bytes, unmodified"
+        );
+    }
+
+    /// A body over axum's own 2 MiB limit gets the extractor's own rejection: the deadline must
+    /// not become a wider hole for a single unauthenticated request to pin memory.
+    #[tokio::test]
+    async fn body_over_the_default_limit_is_rejected_413() {
+        let app = body_deadline_app(std::time::Duration::from_secs(30));
+        let oversized = vec![b'x'; 2 * 1024 * 1024 + 1];
+        let resp = app
+            .oneshot(
+                HttpRequest::post("/webhook")
+                    .body(Body::from(oversized))
+                    .expect("request"),
+            )
+            .await
+            .expect("router");
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 }

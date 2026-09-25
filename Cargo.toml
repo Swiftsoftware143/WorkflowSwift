@@ -40,3 +40,8 @@ base64 = "0.22"
 # Tests only: `ServiceExt::oneshot` drives a real Router through the middleware stack. The
 # production graph does not enable tower's `util` feature, and tests must not widen it.
 tower = { version = "0.4", features = ["util"] }
+# Tests only: a request body that never arrives is built from a `futures_core::Stream` via
+# `Body::from_stream`, which is how the body-read deadline is proven to fire. futures-core is
+# already in the production graph (axum-core depends on it), so this makes the trait nameable in
+# tests without adding a package.
+futures-core = "0.3"

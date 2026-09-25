@@ -9,6 +9,12 @@ use crate::handlers;
 use crate::AppState;
 
 pub fn create_router(state: AppState) -> Router {
+    // Body-read deadline (kanban t_e7cba83e): one value, read once, mounted on the routes that
+    // read a request body. See `crate::rate_limit::body_read_deadline_middleware` for why the
+    // bound is on the body's arrival and not on the handler.
+    let body_read_deadline =
+        crate::rate_limit::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs);
+
     // Public auth routes (no auth needed)
     let auth_public = Router::new()
         .route("/login", post(auth::login))
@@ -829,6 +835,17 @@ pub fn create_router(state: AppState) -> Router {
         // and only be throttled after the fact (measured: ~100 ms of CPU per request that
         // merely looked like an API key). Throttling now happens before any credential is
         // touched.
+        // Body-read deadline (kanban t_e7cba83e), INNERMOST on purpose. This `.layer()` is the
+        // first of the four, and in axum the first is the innermost, so every credential guard
+        // below sits OUTSIDE it: an unauthenticated caller is still answered 401 by the pre-auth
+        // limiter / auth layer without the body being read, exactly as before. The deadline
+        // starts only once a request has passed those checks and its handler is about to read the
+        // body it declared — which is the unbounded hold this closes for authenticated callers
+        // too.
+        .layer(axum::middleware::from_fn_with_state(
+            body_read_deadline,
+            crate::rate_limit::body_read_deadline_middleware,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::rate_limit::rate_limit_middleware,
@@ -842,16 +859,69 @@ pub fn create_router(state: AppState) -> Router {
             crate::rate_limit::pre_auth_rate_limit_middleware,
         ));
 
-    // Public routes (no auth)
-    let public_routes = Router::new()
-        .nest("/auth", auth_public)
-        .route("/health", get(health_check))
+    // Public routes that READ a request body, and therefore carry the body-read deadline
+    // (kanban t_e7cba83e).
+    //
+    // These eight are exactly the public routes whose handler cannot answer before the body has
+    // been read: `Json` / `Bytes` extractors run before the handler body, so the `X-Internal-Key`
+    // / signature check inside `instance_callback`, the `internal/*` handlers, `/incoming`,
+    // `stripe_webhook` and `paypal_webhook` all happen *after* the body arrives. A client that
+    // sends a request head and then stops used to park a task, a connection and a partially-read
+    // body buffer for ever on each of them. **A new public route that reads a body belongs in
+    // this sub-router** — that is the maintenance rule, because the layer is mounted here rather
+    // than on the whole public router for two measured reasons:
+    //
+    //   * `/health`, `/internal/dashboard-data-seed` (which reads no body and so answers its key
+    //     check immediately) and the GET listing routes answer without any body read at all;
+    //     mounting the deadline over them would make them wait for a body they never wanted —
+    //     turning a fast 200/401 into a 30 s 408.
+    //   * the four password-auth routes are nested separately and keep their own, stricter bound
+    //     (the in-flight ceiling's 15 s 429, `b1b93a4`), which the deadline must not pre-empt.
+    let public_body_routes = Router::new()
         // n8n writes its execution result back here. Self-authenticating: either
         // X-Internal-Key (n8n) or a user JWT scoped to the instance's account.
         .route(
             "/instances/{id}/callback",
             post(handlers::instance_handler::instance_callback),
         )
+        .route(
+            "/internal/portfolio-companies",
+            post(handlers::portfolio_handler::internal_create_portfolio_company),
+        )
+        .route(
+            "/internal/portfolio-sync",
+            post(handlers::portfolio_sync_handler::portfolio_sync_internal),
+        )
+        .route(
+            "/internal/tags/assign",
+            post(handlers::internal_handler::internal_assign_tag),
+        )
+        .route(
+            "/internal/tags/delete",
+            post(handlers::internal_handler::internal_remove_tag),
+        )
+        .route(
+            "/incoming",
+            post(handlers::incoming_handler::receive_incoming),
+        )
+        // Public webhooks (no auth — signature verification is done in the handler)
+        .route(
+            "/webhooks/stripe",
+            post(handlers::checkout_handler::stripe_webhook),
+        )
+        .route(
+            "/webhooks/paypal",
+            post(handlers::checkout_handler::paypal_webhook),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            body_read_deadline,
+            crate::rate_limit::body_read_deadline_middleware,
+        ));
+
+    // Public routes (no auth) that do not read a body, plus the bounded password-auth routes.
+    let public_routes = Router::new()
+        .nest("/auth", auth_public)
+        .route("/health", get(health_check))
         .route(
             "/bridge-tasks",
             get(handlers::bridge_handler::list_inbound_tasks),
@@ -866,24 +936,8 @@ pub fn create_router(state: AppState) -> Router {
             get(handlers::extension_download_handler::download_extension),
         )
         .route(
-            "/internal/portfolio-companies",
-            post(handlers::portfolio_handler::internal_create_portfolio_company),
-        )
-        .route(
-            "/internal/portfolio-sync",
-            post(handlers::portfolio_sync_handler::portfolio_sync_internal),
-        )
-        .route(
             "/internal/dashboard-data-seed",
             post(handlers::internal_handler::seed_dashboard_data),
-        )
-        .route(
-            "/internal/tags/assign",
-            post(handlers::internal_handler::internal_assign_tag),
-        )
-        .route(
-            "/internal/tags/delete",
-            post(handlers::internal_handler::internal_remove_tag),
         )
         .route(
             "/provider-presets",
@@ -894,22 +948,10 @@ pub fn create_router(state: AppState) -> Router {
             get(handlers::provider_keys_handler::list_available_providers),
         )
         .route(
-            "/incoming",
-            post(handlers::incoming_handler::receive_incoming),
-        )
-        .route(
             "/industries",
             get(handlers::industry_handler::list_industries),
         )
-        // Public webhooks (no auth — signature verification is done in the handler)
-        .route(
-            "/webhooks/stripe",
-            post(handlers::checkout_handler::stripe_webhook),
-        )
-        .route(
-            "/webhooks/paypal",
-            post(handlers::checkout_handler::paypal_webhook),
-        );
+        .merge(public_body_routes);
 
     // Combine: public + protected merged
     let api_v1 = Router::new().merge(public_routes).merge(protected_routes);

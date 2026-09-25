@@ -15,6 +15,11 @@ pub struct AppConfig {
     /// ceiling are shed with 429 instead of queueing, so the queue behind the Argon2 semaphore
     /// cannot grow without bound. Raise it if real traffic ever approaches it.
     pub auth_in_flight_cap: usize,
+    /// How long a request BODY may take to arrive on the routes that read one, measured from the
+    /// headers. A body that has not finished arriving within this many seconds is answered `408`
+    /// and its task, connection and partially-read body buffer are released (kanban t_e7cba83e);
+    /// the handler's own work is not bounded by it. `BODY_READ_DEADLINE_SECS`.
+    pub body_read_deadline_secs: u64,
     pub internal_sync_key: String,
     pub n8n_url: String,
     pub n8n_webhook_url: String,
@@ -81,6 +86,17 @@ impl AppConfig {
             .unwrap_or(crate::rate_limit::DEFAULT_AUTH_IN_FLIGHT_CAP)
             .max(8);
 
+        // Body-read deadline (kanban t_e7cba83e). Same posture as the ceiling above: unset or
+        // unparseable falls back to the default rather than refusing to boot, and the value is
+        // clamped so a mistyped one cannot become an outage — 0 would answer 408 to every request
+        // that carries a body, and a very large value would restore the unbounded hold this
+        // closes.
+        let body_read_deadline_secs = env::var("BODY_READ_DEADLINE_SECS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(crate::rate_limit::DEFAULT_BODY_READ_DEADLINE_SECS)
+            .clamp(5, 300);
+
         let internal_sync_key = env::var("INTERNAL_SYNC_KEY").unwrap_or_default();
         let n8n_url = env::var("N8N_URL").unwrap_or_else(|_| "http://localhost:5681".to_string());
         let n8n_webhook_url =
@@ -105,6 +121,7 @@ impl AppConfig {
             db_min_connections,
             db_max_connections,
             auth_in_flight_cap,
+            body_read_deadline_secs,
             internal_sync_key,
             n8n_url,
             n8n_webhook_url,

@@ -78,6 +78,16 @@ async fn main() {
         "Password-auth load shedding: {} concurrent requests on /auth/login|register|forgot-password|reset-password, 429 above that",
         auth_in_flight.cap()
     );
+    // Body-read deadline (kanban t_e7cba83e): how long a request body may take to ARRIVE before
+    // the request is answered 408 and its task, connection and partial body buffer are released.
+    // In the boot log for the same reason as the ceiling above — the bound an operator relies on
+    // has to be visible without reading the source.
+    let body_read_deadline =
+        crate::rate_limit::BodyReadDeadline::from_secs(config.body_read_deadline_secs);
+    tracing::info!(
+        "Request body-read deadline: {:?} on every route that reads a body, 408 above that (BODY_READ_DEADLINE_SECS)",
+        body_read_deadline.duration()
+    );
     let provider_key_cache = crate::rate_limit::ProviderKeyCache::new(300); // 5 min TTL
 
     let state = AppState {
