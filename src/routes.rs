@@ -892,6 +892,14 @@ pub fn create_router(state: AppState) -> Router {
             "/internal/portfolio-sync",
             post(handlers::portfolio_sync_handler::portfolio_sync_internal),
         )
+        // NOTE (card t_79d7d1d2): /internal/tag-provision is deliberately NOT a route here.
+        // Its handler file (handlers/tag_provision_handler.rs, which wrote into `clients`/`accounts`
+        // keyed off "the oldest account in the DB") was never declared in handlers/mod.rs, so the
+        // route answered 404 for every caller since the module declaration was lost, and nothing
+        // called it: 0 n8n workflows, 0 fleet apps, 0 served shells, 0 shell scripts. Deleted
+        // 2026-09-25 rather than wired — a webhook would have injected leads into an arbitrary
+        // tenant, and cross-app tag/lead provisioning belongs to the CRM hub (CoreSwift-CRM),
+        // which owns a real /api/v1/internal/tag-provision. Do not re-add one here without a caller.
         .route(
             "/internal/tags/assign",
             post(handlers::internal_handler::internal_assign_tag),

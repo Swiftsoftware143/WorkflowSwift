@@ -187,7 +187,7 @@ pub async fn internal_assign_tag(
     // `tags` (per-account, column `aid`) + `tag_assignments` (tag_id, entity_type, entity_id) —
     // the same pair the JWT route tag_handler::assign_tag writes. The EXISTS keeps the tenant
     // scoping the old statement carried: a tag_id owned by another tenant is not attachable.
-    sqlx::query(
+    let assigned = sqlx::query(
         r#"INSERT INTO tag_assignments (id, tag_id, entity_type, entity_id)
            SELECT gen_random_uuid(), $4, $3, $2
            WHERE EXISTS (SELECT 1 FROM tags t WHERE t.id = $4 AND t.aid = $1)
@@ -199,9 +199,13 @@ pub async fn internal_assign_tag(
     .bind(req.tag_id)
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Tag assign DB error: {e}")))?;
+    .map_err(|e| AppError::Internal(format!("Tag assign DB error: {e}")))?
+    .rows_affected();
 
-    Ok(Json(json!({"status": "ok"})))
+    // Report what the statement actually did (card t_79d7d1d2). The statement is a no-op when the
+    // tag is not this tenant's (the EXISTS guard) or when the assignment already exists
+    // (ON CONFLICT DO NOTHING) — a bare {"status":"ok"} told the caller neither.
+    Ok(Json(json!({"status": "ok", "assigned": assigned})))
 }
 
 /// POST /api/v1/internal/tags/delete — internal tag removal, no JWT
@@ -220,7 +224,7 @@ pub async fn internal_remove_tag(
         return Err(AppError::Unauthorized);
     }
 
-    sqlx::query(
+    let deleted = sqlx::query(
         r#"DELETE FROM tag_assignments ta
            USING tags t
            WHERE ta.tag_id = $4 AND t.id = ta.tag_id AND t.aid = $1
@@ -232,7 +236,10 @@ pub async fn internal_remove_tag(
     .bind(req.tag_id)
     .execute(&state.db)
     .await
-    .map_err(|e| AppError::Internal(format!("Tag remove DB error: {e}")))?;
+    .map_err(|e| AppError::Internal(format!("Tag remove DB error: {e}")))?
+    .rows_affected();
 
-    Ok(Json(json!({"status": "ok"})))
+    // Same honesty fix as internal_assign_tag (card t_79d7d1d2): 0 means the assignment was not
+    // this tenant's (or was already gone), which {"status":"ok"} alone could not express.
+    Ok(Json(json!({"status": "ok", "deleted": deleted})))
 }
