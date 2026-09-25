@@ -22,6 +22,20 @@ pub struct AppConfig {
     pub callback_base_url: String,
     pub funnelswift_url: String,
     pub coreswift_url: String,
+    /// PayPal's public webhook identifier (PayPal dashboard → app → Webhooks).
+    ///
+    /// NOT a secret and NOT the shared internal sync key: it names WHICH webhook
+    /// configuration PayPal must verify an inbound signature against, so it must be
+    /// independent of INTERNAL_SYNC_KEY and rotating that credential cannot invalidate
+    /// webhook verification (the shape ADASwift t_2be56050/t_9a1da415 shipped).
+    ///
+    /// Optional on purpose: an unset value is *not* an outage, it is an unconfigured
+    /// receiver — `POST /api/v1/webhooks/paypal` then answers
+    /// `503 paypal_not_configured` and processes nothing (kanban t_5cf44e1b). Resolution
+    /// order is this value, then the active `paypal` provider row's `webhook_secret`
+    /// (the field the admin console's Payment providers panel writes), so PayPal can be
+    /// enabled from the console without a redeploy.
+    pub paypal_webhook_id: String,
 }
 
 impl AppConfig {
@@ -77,6 +91,9 @@ impl AppConfig {
         let funnelswift_url =
             env::var("FUNNELSWIFT_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
         let coreswift_url = env::var("CORESWIFT_URL").unwrap_or_default();
+        // Optional, empty when unset: see the field's doc comment. Read once here so the
+        // webhook receiver never has to touch the environment per request.
+        let paypal_webhook_id = env::var("PAYPAL_WEBHOOK_ID").unwrap_or_default();
 
         Self {
             host,
@@ -95,6 +112,7 @@ impl AppConfig {
             callback_base_url,
             funnelswift_url,
             coreswift_url,
+            paypal_webhook_id,
         }
     }
 }

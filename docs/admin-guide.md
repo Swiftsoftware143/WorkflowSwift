@@ -170,7 +170,17 @@ credits per call.
 - **1 credit per execution**; a run without credits is refused.
 - Checkout: `/api/v1/checkout/create`, `/checkout/sessions`; providers configured per plan via
   `/api/v1/payment-providers`. Webhooks: `POST /api/v1/webhooks/stripe`,
-  `POST /api/v1/webhooks/paypal` (signature-verified in the handler).
+  `POST /api/v1/webhooks/paypal`.
+- `POST /api/v1/webhooks/paypal` is **signature-verified before anything is written or dispatched**
+  (kanban t_5cf44e1b). The four `paypal-transmission-*` headers are required and the signature is
+  checked against PayPal's `verify-webhook-signature` API, authenticated with the REST
+  `client_id:client_secret` and verified against `PAYPAL_WEBHOOK_ID` (or the `webhook_secret` of the
+  active `paypal` provider row — admin console -> Payment providers, no redeploy). Fail-closed
+  replies, in order: `401 missing_paypal_signature_headers`, `503 paypal_not_configured` (no webhook
+  id or no credential: PayPal is **not** called and nothing is written),
+  `401 paypal_verification_api_error` / `401 paypal_verification_unreachable` (the verdict itself
+  could not be obtained), `401 signature_verification_failed` (a real FAILURE verdict). Only a
+  verified event reaches `payment_webhook_events` and fulfilment.
 - Affiliate attribution is owned by FunnelSwift, not by this app: WorkflowSwift stores no affiliate
   records and exposes **no** `/api/v1/affiliates` endpoint (the auto-generated stub that answered
   500 was deleted — kanban t_01fa9bbc). Checkout reports a conversion

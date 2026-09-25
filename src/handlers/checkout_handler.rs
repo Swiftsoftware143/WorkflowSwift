@@ -246,6 +246,99 @@ async fn get_active_provider(
     }))
 }
 
+/// Read a request header as a `&str`, `""` when it is absent or not valid UTF-8. Header names
+/// are matched case-insensitively by `HeaderMap`.
+fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> &'a str {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+}
+
+/// Clip an upstream response body for a single log line. Bodies come from a third party and can
+/// be arbitrarily long (or echo our own request), so they never reach the log whole and newlines
+/// never break the one-line-per-event format.
+fn clip_for_log(raw: &str, max: usize) -> String {
+    let flat = raw.replace(['\n', '\r'], " ");
+    if flat.chars().count() <= max {
+        flat
+    } else {
+        let head: String = flat.chars().take(max).collect();
+        format!("{}…(truncated)", head)
+    }
+}
+
+/// What PayPal's `verify-webhook-signature` call needs: the REST app credentials for Basic auth,
+/// the webhook id the signature must verify against, and a log-only label for where the
+/// credentials came from. No value in here is ever logged.
+struct PaypalVerifyConfig {
+    client_id: String,
+    client_secret: String,
+    webhook_id: String,
+    source: &'static str,
+}
+
+/// Resolve the receiver's verification configuration, or `None` when PayPal is genuinely not
+/// configured. Order:
+///
+/// 1. webhook id: `PAYPAL_WEBHOOK_ID` (config), then the `webhook_secret` of an ACTIVE `paypal`
+///    row in `payment_providers` — the field the shipped admin console's *Payment providers*
+///    panel writes, so enabling PayPal needs no redeploy;
+/// 2. credentials: that same row's `api_key_encrypted` as `client_id:client_secret` (exactly the
+///    value the checkout leg hands to PayPal as Basic auth), then the optional
+///    `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` env pair.
+///
+/// A database error propagates — it is never collapsed into "not configured", because that would
+/// turn a transient DB failure into a permanent 503 that looks like a config problem.
+async fn paypal_verify_config(state: &AppState) -> Result<Option<PaypalVerifyConfig>, AppError> {
+    let provider = get_active_provider(&state.db, "paypal").await?;
+    let row_api_key = provider
+        .as_ref()
+        .map(|p| p["api_key"].as_str().unwrap_or("").to_string())
+        .unwrap_or_default();
+    let row_webhook_id = provider
+        .as_ref()
+        .map(|p| {
+            p["webhook_secret"]
+                .as_str()
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        })
+        .unwrap_or_default();
+
+    let (client_id, client_secret, source) = match row_api_key.split_once(':') {
+        Some((id, secret)) if !id.is_empty() && !secret.is_empty() => {
+            (id.to_string(), secret.to_string(), "payment_providers")
+        }
+        _ => {
+            let env_id = std::env::var("PAYPAL_CLIENT_ID").unwrap_or_default();
+            let env_secret = std::env::var("PAYPAL_CLIENT_SECRET").unwrap_or_default();
+            if env_id.is_empty() || env_secret.is_empty() {
+                return Ok(None);
+            }
+            (env_id, env_secret, "env")
+        }
+    };
+
+    let env_webhook_id = state.config.paypal_webhook_id.trim().to_string();
+    let webhook_id = if env_webhook_id.is_empty() {
+        row_webhook_id
+    } else {
+        env_webhook_id
+    };
+    if webhook_id.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(PaypalVerifyConfig {
+        client_id,
+        client_secret,
+        webhook_id,
+        source,
+    }))
+}
+
 /// POST /api/v1/checkout/create
 /// Create a Stripe/PayPal checkout session
 pub async fn create_checkout_session(
@@ -679,7 +772,22 @@ pub async fn stripe_webhook(
 }
 
 /// POST /api/v1/webhooks/paypal
-/// Handle incoming PayPal webhook events
+/// Handle incoming PayPal webhook events.
+///
+/// Fail closed, in this order, BEFORE anything is written or dispatched:
+///   * any of the four `paypal-*` transmission headers missing -> 401
+///     `missing_paypal_signature_headers`
+///   * no webhook id, or no REST credentials to verify with -> 503
+///     `paypal_not_configured` (PayPal is not called; no row is written)
+///   * PayPal answered our verification call non-2xx -> 401 `paypal_verification_api_error`
+///   * the verification call could not complete -> 401 `paypal_verification_unreachable`
+///   * `verification_status != "SUCCESS"` -> 401 `signature_verification_failed`
+/// Only a verified event reaches `payment_webhook_events` and `handle_checkout_completed`.
+///
+/// Why this arm exists at all (kanban t_5cf44e1b): the receiver used to read one header
+/// for a log line and then INSERT the caller-supplied JSON and dispatch fulfilment on it,
+/// so an anonymous `POST {"event_type":"PAYMENT.CAPTURE.COMPLETED","resource":{"id":…}}`
+/// completed a checkout session and reached fulfilment with no signature whatsoever.
 pub async fn paypal_webhook(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -688,6 +796,114 @@ pub async fn paypal_webhook(
     let event_body: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|e| AppError::BadRequest(format!("Invalid JSON: {}", e)))?;
 
+    // ── PayPal signature verification (fail closed) ──
+    let trans_id = header_str(&headers, "paypal-transmission-id");
+    let trans_time = header_str(&headers, "paypal-transmission-time");
+    let trans_sig = header_str(&headers, "paypal-transmission-sig");
+    let cert_url = header_str(&headers, "paypal-cert-url");
+
+    if trans_id.is_empty() || trans_time.is_empty() || trans_sig.is_empty() || cert_url.is_empty() {
+        tracing::error!("PayPal webhook rejected — missing signature headers");
+        return Ok((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"status": "rejected", "reason": "missing_paypal_signature_headers"})),
+        ));
+    }
+
+    // Resolve what the signature must be verified against. With no webhook id or no
+    // credentials there is nothing to verify with, so the receiver says so (503) instead of
+    // answering 200 as if it had processed the event.
+    let verify_cfg = match paypal_verify_config(&state).await? {
+        Some(cfg) => cfg,
+        None => {
+            tracing::error!(
+                "PayPal webhook receiver is NOT CONFIGURED — no PAYPAL_WEBHOOK_ID and no \
+                 webhook id on an active 'paypal' row in payment_providers, or no \
+                 PAYPAL_CLIENT_ID/PAYPAL_CLIENT_SECRET and no usable api_key on that row. \
+                 Rejecting without calling PayPal (fail closed)."
+            );
+            return Ok((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"status": "rejected", "reason": "paypal_not_configured"})),
+            ));
+        }
+    };
+
+    // PayPal verifies against the webhook id it was configured with, so which id is sent is
+    // the difference between a real verdict and a blanket 401. PAYPAL_API_BASE is read per
+    // request so the leg is sandbox- and test-addressable.
+    let paypal_api_base =
+        std::env::var("PAYPAL_API_BASE").unwrap_or_else(|_| "https://api-m.paypal.com".to_string());
+
+    let verify_payload = json!({
+        "auth_algo": header_str(&headers, "paypal-auth-algo"),
+        "cert_url": cert_url,
+        "transmission_id": trans_id,
+        "transmission_sig": trans_sig,
+        "transmission_time": trans_time,
+        "webhook_id": verify_cfg.webhook_id,
+        "webhook_event": &event_body,
+    });
+
+    // Bounded: a webhook task must not hang on a stalled third party. A timeout lands in the
+    // transport arm below, which is a rejection, so the failure direction stays closed.
+    let verify_resp = reqwest::Client::new()
+        .post(format!(
+            "{}/v1/notifications/verify-webhook-signature",
+            paypal_api_base
+        ))
+        .header("Content-Type", "application/json")
+        .timeout(std::time::Duration::from_secs(10))
+        .basic_auth(&verify_cfg.client_id, Some(&verify_cfg.client_secret))
+        .json(&verify_payload)
+        .send()
+        .await;
+
+    match verify_resp {
+        Ok(resp) => {
+            let status = resp.status();
+            let raw = resp.text().await.unwrap_or_default();
+            if !status.is_success() {
+                // PayPal answered our own call. That is NOT a signature verdict, so it gets
+                // its own reason and its own log line (status + PayPal's own error body).
+                tracing::error!(
+                    "PayPal verify-webhook-signature answered non-2xx (status={}, body={}) — \
+                     rejecting. Credentials source: {}",
+                    status,
+                    clip_for_log(&raw, 300),
+                    verify_cfg.source
+                );
+                return Ok((
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({"status": "rejected", "reason": "paypal_verification_api_error"})),
+                ));
+            }
+            let body: serde_json::Value = serde_json::from_str(&raw).unwrap_or_default();
+            if body["verification_status"] != "SUCCESS" {
+                tracing::error!("PayPal webhook signature verification failed: {:?}", body);
+                return Ok((
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({"status": "rejected", "reason": "signature_verification_failed"})),
+                ));
+            }
+        }
+        Err(e) => {
+            // Transport leg — distinguishable from the non-2xx arm above, in BOTH the log and
+            // the response reason.
+            tracing::error!(
+                "PayPal verify-webhook-signature call could not complete (transport error: {}) \
+                 — rejecting. Credentials source: {}",
+                e,
+                verify_cfg.source
+            );
+            return Ok((
+                StatusCode::UNAUTHORIZED,
+                Json(json!({"status": "rejected", "reason": "paypal_verification_unreachable"})),
+            ));
+        }
+    }
+
+    // ── Verified: log the event and dispatch ──
     let event_type = event_body["event_type"].as_str().unwrap_or("unknown");
     let event_id = event_body["id"].as_str().unwrap_or("");
 
