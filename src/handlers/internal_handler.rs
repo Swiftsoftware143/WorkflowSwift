@@ -38,8 +38,10 @@ pub async fn seed_dashboard_data(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    if key != state.config.internal_sync_key {
-        return Err(AppError::Forbidden("Invalid internal key".into()));
+    // config.rs defaults INTERNAL_SYNC_KEY to "", and an unset key would then authenticate an
+    // empty/absent x-internal-key header. Refuse when this server has no key configured.
+    if state.config.internal_sync_key.is_empty() || key != state.config.internal_sync_key {
+        return Err(AppError::Unauthorized);
     }
 
     // Get all active accounts with their primary industry
@@ -175,8 +177,10 @@ pub async fn internal_assign_tag(
         .get("x-internal-key")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if key != state.config.internal_sync_key {
-        return Err(AppError::Forbidden("Invalid internal key".into()));
+    // config.rs defaults INTERNAL_SYNC_KEY to "", and an unset key would then authenticate an
+    // empty/absent x-internal-key header. Refuse when this server has no key configured.
+    if state.config.internal_sync_key.is_empty() || key != state.config.internal_sync_key {
+        return Err(AppError::Unauthorized);
     }
 
     sqlx::query(
@@ -205,8 +209,10 @@ pub async fn internal_remove_tag(
         .get("x-internal-key")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if key != state.config.internal_sync_key {
-        return Err(AppError::Forbidden("Invalid internal key".into()));
+    // config.rs defaults INTERNAL_SYNC_KEY to "", and an unset key would then authenticate an
+    // empty/absent x-internal-key header. Refuse when this server has no key configured.
+    if state.config.internal_sync_key.is_empty() || key != state.config.internal_sync_key {
+        return Err(AppError::Unauthorized);
     }
 
     sqlx::query(

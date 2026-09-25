@@ -54,12 +54,16 @@ pub async fn handle_tag_provision(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     let expected = state.config.internal_sync_key.as_str();
-    if key != expected {
+    // config.rs defaults INTERNAL_SYNC_KEY to "", and an unset key would then authenticate an
+    // empty/absent x-internal-key header. Refuse when this server has no key configured.
+    if expected.is_empty() || key != expected {
+        // Never log the shared credential by value: lengths only.
         tracing::warn!(
-            "tag_provision: invalid internal key (got {}, expected {})",
-            key, expected
+            "tag_provision: invalid internal key (presented_len={}, configured_len={})",
+            key.len(),
+            expected.len()
         );
-        return Err(AppError::Forbidden("Invalid internal key".into()));
+        return Err(AppError::Unauthorized);
     }
 
     let email = req.contact.email.as_deref().unwrap_or("").trim().to_lowercase();
