@@ -1,5 +1,4 @@
 use axum::{
-    routing::patch,
     routing::{delete, get, post, put},
     Router,
 };
@@ -239,22 +238,19 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/{id}/stats",
             get(handlers::workspace_handler::get_workspace_stats),
-        )
-        .route("/{id}/agents", get(handlers::agent_handler::list_agents))
-        .route("/{id}/tickets", get(handlers::agent_handler::list_tickets))
-        .route(
-            "/{id}/tickets/{ticket_id}/status",
-            patch(handlers::agent_handler::update_ticket_status),
-        )
-        .route(
-            "/{id}/provider-keys",
-            get(handlers::agent_handler::list_provider_keys)
-                .post(handlers::agent_handler::upsert_provider_key),
-        )
-        .route(
-            "/{id}/provider-keys/{provider}",
-            delete(handlers::agent_handler::delete_provider_key),
         );
+    // NOTE (kanban t_f42d6527): five `/{id}/…` registrations used to sit here — GET `/{id}/agents`,
+    // GET `/{id}/tickets`, PATCH `/{id}/tickets/{ticket_id}/status`, GET+POST `/{id}/provider-keys`
+    // and DELETE `/{id}/provider-keys/{provider}`. They are DELETED, per route:
+    //   * no served surface called any of them (`grep -rn` over www-app/, www-admin/ and the
+    //     marketing www/ root = 0 hits, and each repo copy is byte-identical to the served one),
+    //   * their `{id}` path segment was never read by any handler (all of them take
+    //     `?workspace_id=`), so they never did what their path claimed,
+    //   * each duplicated a live route: GET /api/v1/agents is the SAME handler (agent_routes below),
+    //     GET/POST/DELETE /api/v1/provider-keys is the richer implementation all three served
+    //     surfaces use, and GET /api/v1/tickets serves support tickets from `tickets` — the deleted
+    //     one read `agent_tickets`, which no code in this app ever INSERTs.
+    // The correct way to ask for one workspace's agents is GET /api/v1/agents?workspace_id={id}.
 
     let agent_routes = Router::new()
         .route(

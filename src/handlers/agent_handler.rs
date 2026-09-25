@@ -1,4 +1,4 @@
-//! Agent Handler — Paperclip agent profiles, tickets, kanban, budgets, and BYOK integrations
+//! Agent Handler — Paperclip agent profiles, and the per-workspace dashboard counts.
 
 use axum::{
     extract::{Path, Query, State},
@@ -97,72 +97,18 @@ pub async fn create_agent(
     ))
 }
 
-// ── Agent Tickets (Kanban) ─────────────────────────────────────────
-
-#[derive(Deserialize)]
-pub struct CreateTicketRequest {
-    pub agent_id: Option<String>,
-    pub title: String,
-    pub description: Option<String>,
-    pub priority: Option<String>,
-    pub workspace_id: Option<String>,
-}
-
-pub async fn list_tickets(
-    State(s): State<AppState>,
-    Extension(claims): Extension<Claims>,
-    Query(q): Query<AgentQuery>,
-) -> Result<impl IntoResponse, AppError> {
-    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-
-    let tickets = if let Some(ref ws) = q.workspace_id {
-        let ws_id =
-            Uuid::parse_str(ws).map_err(|_| AppError::BadRequest("Invalid workspace_id".into()))?;
-        sqlx::query_as::<_, (Uuid, Option<Uuid>, String, Option<String>, String, String, Option<String>, Option<i32>, chrono::DateTime<chrono::Utc>)>(
-            "SELECT id, agent_id, title, description, status, priority, assigned_to, budget_credits, created_at FROM agent_tickets WHERE aid = $1 AND portfolio_company_id = $2 ORDER BY created_at DESC"
-        ).bind(aid).bind(ws_id).fetch_all(&s.db).await?
-    } else {
-        sqlx::query_as::<_, (Uuid, Option<Uuid>, String, Option<String>, String, String, Option<String>, Option<i32>, chrono::DateTime<chrono::Utc>)>(
-            "SELECT id, agent_id, title, description, status, priority, assigned_to, budget_credits, created_at FROM agent_tickets WHERE aid = $1 ORDER BY created_at DESC"
-        ).bind(aid).fetch_all(&s.db).await?
-    };
-
-    let result: Vec<serde_json::Value> = tickets
-        .into_iter()
-        .map(|t| {
-            json!({
-                "id": t.0, "agent_id": t.1, "title": t.2, "description": t.3,
-                "status": t.4, "priority": t.5, "assigned_to": t.6,
-                "budget": t.7, "created_at": t.8
-            })
-        })
-        .collect();
-
-    Ok(Json(json!({"tickets": result})))
-}
-
-pub async fn update_ticket_status(
+pub async fn delete_agent(
     State(s): State<AppState>,
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
-    Json(body): Json<serde_json::Value>,
 ) -> Result<impl IntoResponse, AppError> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let new_status = body
-        .get("status")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::BadRequest("status required".into()))?;
-
-    sqlx::query(
-        "UPDATE agent_tickets SET status = $1, updated_at = NOW() WHERE id = $2 AND aid = $3",
-    )
-    .bind(new_status)
-    .bind(id)
-    .bind(aid)
-    .execute(&s.db)
-    .await?;
-
-    Ok(Json(json!({"status": "updated"})))
+    sqlx::query("DELETE FROM agent_profiles WHERE id = $1 AND aid = $2")
+        .bind(id)
+        .bind(aid)
+        .execute(&s.db)
+        .await?;
+    Ok(Json(json!({"status": "deleted"})))
 }
 
 // ── Updated Paperclip Dashboard — fix timeline SQL ────────────────
@@ -234,125 +180,6 @@ pub async fn activity_timeline(
     };
 
     Ok(Json(json!({"timeline": events})))
-}
-
-// ── BYOK Integrations (Provider Keys per Workspace) ───────────────
-
-#[derive(Deserialize)]
-pub struct UpsertProviderKeyRequest {
-    pub provider: String,
-    pub api_key: String, // stored in metadata
-    pub workspace_id: Option<String>,
-}
-
-pub async fn list_provider_keys(
-    State(s): State<AppState>,
-    Extension(claims): Extension<Claims>,
-    Query(q): Query<AgentQuery>,
-) -> Result<impl IntoResponse, AppError> {
-    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-
-    let keys = if let Some(ref ws) = q.workspace_id {
-        let ws_id =
-            Uuid::parse_str(ws).map_err(|_| AppError::BadRequest("Invalid workspace_id".into()))?;
-        // `provider_keys` has no `label` column (verified against every migration and
-        // information_schema): `COALESCE(label, provider)` made this statement fail 42703 for
-        // EVERY caller, NULL rows or not, so the NULL decode below was never even reached.
-        // The second item keeps the response's "label" key and is the provider name, which is
-        // what the old COALESCE fell back to.
-        sqlx::query_as::<_, (String, String, Option<bool>)>(
-            "SELECT provider, provider, is_active FROM provider_keys WHERE aid = $1 AND portfolio_company_id = $2 ORDER BY provider"
-        ).bind(aid).bind(ws_id).fetch_all(&s.db).await?
-    } else {
-        // The `aid` bind was missing here too — it was masked by the 42703 above, and surfaced as
-        // "bind message supplies 0 parameters, but prepared statement requires 1" the moment the
-        // statement compiled (kanban t_227bae2f).
-        sqlx::query_as::<_, (String, String, Option<bool>)>(
-            "SELECT provider, provider, is_active FROM provider_keys WHERE aid = $1 ORDER BY provider"
-        ).bind(aid).fetch_all(&s.db).await?
-    };
-
-    let result: Vec<serde_json::Value> = keys
-        .into_iter()
-        .map(|k| {
-            json!({
-                "provider": k.0, "label": k.1, "configured": true, "active": k.2
-            })
-        })
-        .collect();
-
-    Ok(Json(json!({"provider_keys": result})))
-}
-
-pub async fn delete_agent(
-    State(s): State<AppState>,
-    Extension(claims): Extension<Claims>,
-    Path(id): Path<Uuid>,
-) -> Result<impl IntoResponse, AppError> {
-    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    sqlx::query("DELETE FROM agent_profiles WHERE id = $1 AND aid = $2")
-        .bind(id)
-        .bind(aid)
-        .execute(&s.db)
-        .await?;
-    Ok(Json(json!({"status": "deleted"})))
-}
-
-pub async fn upsert_provider_key(
-    State(s): State<AppState>,
-    Extension(claims): Extension<Claims>,
-    Json(req): Json<UpsertProviderKeyRequest>,
-) -> Result<impl IntoResponse, AppError> {
-    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let ws_id = req.workspace_id.and_then(|w| Uuid::parse_str(&w).ok());
-
-    // Delete and re-insert for clean upsert. The credential is encrypted at rest with the
-    // shared helper: the previous pgp_sym_encrypt(..., accounts.encryption_key) reference was
-    // dead code — `accounts.encryption_key` does not exist, so this path always errored.
-    let ws_uuid = ws_id;
-    let encrypted_key =
-        crate::security::provider_key_crypto::encrypt_for_storage(&s.db, &req.api_key).await?;
-    sqlx::query(
-        "DELETE FROM provider_keys WHERE aid = $1 AND provider = $2 AND (portfolio_company_id = $3 OR ($3 IS NULL AND portfolio_company_id IS NULL))"
-    )
-    .bind(aid).bind(&req.provider).bind(ws_uuid)
-    .execute(&s.db).await?;
-    sqlx::query(
-        r#"INSERT INTO provider_keys (id, aid, portfolio_company_id, provider, api_key, is_active)
-         VALUES ($1,$2,$3,$4,$5,true)"#,
-    )
-    .bind(Uuid::new_v4())
-    .bind(aid)
-    .bind(ws_uuid)
-    .bind(&req.provider)
-    .bind(&encrypted_key)
-    .execute(&s.db)
-    .await?;
-
-    Ok(Json(
-        json!({"status": "saved", "provider": req.provider, "configured": true}),
-    ))
-}
-
-pub async fn delete_provider_key(
-    State(s): State<AppState>,
-    Extension(claims): Extension<Claims>,
-    Path(provider): Path<String>,
-    Query(q): Query<AgentQuery>,
-) -> Result<impl IntoResponse, AppError> {
-    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-
-    if let Some(ref ws) = q.workspace_id {
-        let ws_id =
-            Uuid::parse_str(ws).map_err(|_| AppError::BadRequest("Invalid workspace_id".into()))?;
-        sqlx::query("DELETE FROM provider_keys WHERE aid = $1 AND provider = $2 AND portfolio_company_id = $3")
-            .bind(aid).bind(&provider).bind(ws_id).execute(&s.db).await?;
-    } else {
-        sqlx::query("DELETE FROM provider_keys WHERE aid = $1 AND provider = $2 AND portfolio_company_id IS NULL")
-            .bind(aid).bind(&provider).execute(&s.db).await?;
-    }
-
-    Ok(Json(json!({"status": "deleted"})))
 }
 
 /// Fetch and decrypt a provider API key for an account (optionally scoped to a

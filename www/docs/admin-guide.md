@@ -97,8 +97,7 @@ own **provider keys**, and gives the dashboard a per-workspace view.
 |---|---|---|
 | `/api/v1/workspaces` | GET/POST | List/create workspaces |
 | `/api/v1/workspaces/{id}` | DELETE | Delete a workspace |
-| `/api/v1/workspaces/{id}/agents` | GET | Agents in a workspace |
-| `/api/v1/workspaces/{id}/tickets` | GET | Tickets (= AI agent work items) |
+| `/api/v1/agents?workspace_id={id}` | GET | Agents in a workspace |
 | `/api/v1/tickets` | GET/POST | Ticket list / create |
 
 **Paperclip** is the agent-orchestration layer *above* WorkflowSwift (task assignment, budgets,
