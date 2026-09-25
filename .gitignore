@@ -7,9 +7,28 @@ workflowswift-api
 *.bak
 *.bak2
 *.bak.*
-# Secrets never enter the tree (kanban t_5ed88f7b): the real values live in
-# /etc/swift/env/workflowswift.env; .env.example is the publishable template.
-.env
-.env.local
-*.pem
-*.key
+# Secrets never enter the tree (kanban t_5ed88f7b untracked .env; t_fde65ebf made the rule
+# cover the CLASS, not the one file). Real values live in /etc/swift/env/workflowswift.env.
+# Matching is written as character classes because fleet/tracked-secret-check.sh lowercases
+# every basename and git does not, so `SERVER.PEM` is refused by the gate while a plain
+# `*.pem` rule would still let it be `git add`-ed first (the blocker this card closes).
+# The three negations at the bottom are exactly the TEMPLATE allowlist that gate honours
+# (any basename ending .example / .sample / .template), so the documented fix stays committable.
+.[eE][nN][vV]
+.[eE][nN][vV].*
+*.[pP][eE][mM]
+*.[kK][eE][yY]
+*.[pP]12
+*.[pP][fF][xX]
+*.[kK][eE][yY][sS][tT][oO][rR][eE]
+*.[jJ][kK][sS]
+id_rsa
+id_ed25519
+id_ecdsa
+.npmrc
+.netrc
+.pgpass
+credentials.json
+!*.example
+!*.sample
+!*.template
