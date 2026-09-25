@@ -553,8 +553,19 @@ async fn create_stripe_session(
     // If it's a subscription-based purchase, set mode to subscription
     // (For now we use one-time payment mode — subscription support can be added later)
 
+    // Endpoint override for acceptance runs, mirroring PAYPAL_API_BASE — the knob the PayPal arm
+    // already reads (see /etc/swift/env/workflowswift.env), and the only way the plan arm can be
+    // driven end-to-end with no third-party credential: Stripe refuses an invented key *before*
+    // this handler reaches its `checkout_sessions` INSERT, so without a locally stubbed endpoint
+    // the arm's own contract cannot be exercised at all. Unset in normal operation, i.e. the real
+    // endpoint — this changes nothing until someone sets it.
+    let api_base = std::env::var("STRIPE_API_BASE")
+        .unwrap_or_else(|_| "https://api.stripe.com".to_string())
+        .trim_end_matches('/')
+        .to_string();
+
     let resp = client
-        .post("https://api.stripe.com/v1/checkout/sessions")
+        .post(format!("{}/v1/checkout/sessions", api_base))
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Content-Type", "application/x-www-form-urlencoded")
         .form(&to_stripe_form_data(&body))
