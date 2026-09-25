@@ -1,0 +1,20 @@
+{
+  "version": "1.2.3",
+  "size": 40950,
+  "sha256": "b8e383c52c84b8259b6ba0adf56777f6fe72d5f4f4d52ab49d720cdee21b8139",
+  "download": "/api/v1/extension.zip",
+  "versioned_download": "/swift-market-intel-extension-1.2.3.zip",
+  "alias_download": "/swift-market-intel-extension.zip",
+  "manifest_version": 3,
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "notifications",
+    "alarms"
+  ],
+  "host_permissions": 15,
+  "grants_all_urls": false,
+  "sideload_only": true,
+  "chrome_web_store": null
+}

@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Swift Market Intel — Chrome extension install guide | WorkflowSwift</title>
+<meta name="description" content="Install the Swift Market Intel Chrome extension and connect it to WorkflowSwift to collect market intelligence from Etsy, Amazon, eBay, Shopify and 8 more platforms.">
+<link rel="canonical" href="https://workflowswift.com/swift-market-intel-extension.html">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="alternate icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Inter',system-ui,-apple-system,sans-serif;background:#0A0A0A;color:#FAFAFA;line-height:1.7;-webkit-font-smoothing:antialiased}
+a{color:#EF4444;text-decoration:none}
+a:hover{text-decoration:underline}
+.container{max-width:860px;margin:0 auto;padding:0 24px}
+nav{padding:20px 0;border-bottom:1px solid rgba(255,255,255,0.06);background:rgba(10,10,10,0.85);backdrop-filter:blur(12px)}
+nav .container{display:flex;align-items:center;justify-content:space-between;max-width:1200px}
+.logo{font-weight:800;font-size:1.4rem;letter-spacing:-0.03em;display:flex;align-items:center;gap:10px;color:#FAFAFA}
+.logo-icon{width:32px;height:32px;background:#DC2626;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:1.1rem;color:#fff}
+.nav-links a{font-size:0.875rem;font-weight:500;color:rgba(255,255,255,0.65);margin-left:24px}
+h1{font-size:clamp(1.9rem,5vw,2.6rem);font-weight:900;letter-spacing:-0.03em;line-height:1.15;margin:56px 0 14px}
+h2{font-size:1.3rem;font-weight:800;margin:44px 0 12px}
+h3{font-size:1rem;font-weight:700;margin:22px 0 6px}
+p,li{color:rgba(255,255,255,0.68)}
+.lede{font-size:1.05rem;color:rgba(255,255,255,0.6);margin-bottom:26px}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:12px 26px;border-radius:8px;font-size:0.9rem;font-weight:600;background:#DC2626;color:#fff;margin:6px 10px 6px 0}
+.btn:hover{background:#EF4444;text-decoration:none}
+.btn-outline{background:transparent;border:1px solid rgba(255,255,255,0.15);color:rgba(255,255,255,0.8)}
+.btn-outline:hover{border-color:#DC2626;color:#fff;background:transparent}
+ol,ul{margin:10px 0 10px 22px}
+li{margin:6px 0}
+code{background:rgba(255,255,255,0.07);padding:2px 7px;border-radius:5px;font-size:0.85em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+pre{background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:16px;overflow-x:auto;margin:12px 0}
+pre code{background:none;padding:0}
+.card{background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:14px;padding:24px;margin:22px 0}
+table{width:100%;border-collapse:collapse;margin:14px 0;font-size:0.9rem}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid rgba(255,255,255,0.07)}
+th{color:rgba(255,255,255,0.5);font-weight:600;font-size:0.78rem;text-transform:uppercase;letter-spacing:0.04em}
+.warn{border-color:rgba(234,179,8,0.35);background:rgba(234,179,8,0.07)}
+footer{border-top:1px solid rgba(255,255,255,0.06);margin-top:64px;padding:28px 0;font-size:0.85rem;color:rgba(255,255,255,0.4)}
+.small{font-size:0.85rem;color:rgba(255,255,255,0.45)}
+</style>
+</head>
+<body>
+<nav><div class="container">
+  <a href="/" class="logo"><div class="logo-icon">WS</div>WorkflowSwift</a>
+  <div class="nav-links"><a href="/#features">Features</a><a href="https://app.workflowswift.com/login">Log In</a></div>
+</div></nav>
+
+<div class="container">
+  <h1>Swift Market Intel — Chrome extension</h1>
+  <p class="lede">Capture listings, prices, reviews and profiles from 12+ marketplaces in your browser and push them straight into your WorkflowSwift workspace.</p>
+
+  <a class="btn" href="/api/v1/extension.zip" download>Download the extension (.zip)</a>
+  <a class="btn btn-outline" href="/docs/user-guide.md">Read the user guide</a>
+  <p class="small">Current build<span id="ext-version"> — see below</span> · Manifest V3 · Chrome / Chromium (any version that supports Manifest V3)</p>
+  <div class="card warn">
+    <h3>This is a sideload-only extension</h3>
+    <p>Swift Market Intel is <strong>not published on the Chrome Web Store</strong>. There is no &ldquo;Add to Chrome&rdquo; button, Chrome will warn you that it came from outside the store, and it will not auto-update. Installing means unpacking the zip and loading it as an unpacked extension (step 1 below) — that is the only supported install path today. A one-click store listing is on the roadmap and will be announced on this page when it exists.</p>
+  </div>
+
+  <h2>1. Install the extension (unpacked — the only supported path today)</h2>
+  <p>Because the extension is sideload-only, installing it means Chrome's own developer path. This takes about a minute and is expected for the current build; it is not a workaround and it is not a sign that something is broken.</p>
+  <ol>
+    <li>Download the zip above and unpack it into a folder you will keep (e.g. <code>~/swift-market-intel</code>). Do not delete the folder afterwards — Chrome loads the extension from it.</li>
+    <li>Open <code>chrome://extensions</code> in Chrome (or any Chromium browser).</li>
+    <li>Turn on <strong>Developer mode</strong> (top-right).</li>
+    <li>Click <strong>Load unpacked</strong> and select the folder you unpacked (the one containing <code>manifest.json</code>).</li>
+    <li>Pin <strong>Swift Market Intel</strong> to the toolbar. The popup header shows the version you are running — it must match the <em>Current build</em> shown at the top of this page.</li>
+  </ol>
+
+  <h2>2. Connect it to your WorkflowSwift account</h2>
+  <ol>
+    <li>Right-click the extension icon &rarr; <strong>Options</strong> (or the <em>Settings</em> button in the popup).</li>
+    <li>Create the token it asks for: open your WorkflowSwift app, click <strong>API Keys</strong> in the sidebar (or go straight to <code>https://app.workflowswift.com/#api-keys</code>), click <strong>+ New API Key</strong>, give it a name such as <em>Chrome extension</em>, and copy the key — it is shown once and cannot be retrieved later.</li>
+    <li>Paste that token into <strong>API Token</strong>.</li>
+    <li>Leave <strong>API Base URL</strong> at its default (<code>https://workflowswift.com/api/v1</code>) unless you self-host.</li>
+    <li>Click <strong>Test Connection</strong>. You should see <em>Connected successfully!</em> If you see <em>Invalid API token</em>, the token is wrong or was revoked; a 404 message means the base URL is missing its <code>/v1</code> segment.</li>
+    <li>Click <strong>Save</strong>. The token is stored in your browser only and is sent to WorkflowSwift, nowhere else.</li>
+  </ol>
+
+  <h2>3. Collect data</h2>
+  <ol>
+    <li>Open a listing or profile on a supported platform.</li>
+    <li>Click the extension icon, then <strong>Scrape Current Page</strong>. The extracted fields appear in the popup.</li>
+    <li>Click <strong>Send to WorkflowSwift</strong> to push it into your account, where workflows and dashboard widgets can use it.</li>
+  </ol>
+
+  <h2>Supported platforms</h2>
+  <table>
+    <tr><th>Platform</th><th>Captured</th></tr>
+    <tr><td>Etsy</td><td>Listings, prices, reviews, shop profiles</td></tr>
+    <tr><td>Amazon</td><td>Products, prices, ratings</td></tr>
+    <tr><td>eBay</td><td>Listings, prices, seller info</td></tr>
+    <tr><td>Facebook Marketplace</td><td>Listings, prices, locations</td></tr>
+    <tr><td>Shopify / myshopify</td><td>Storefront products and pricing</td></tr>
+    <tr><td>Alibaba / AliExpress</td><td>Products, MOQ, supplier info</td></tr>
+    <tr><td>Craigslist</td><td>Listings, prices, locations</td></tr>
+    <tr><td>Pinterest</td><td>Pins, boards, engagement</td></tr>
+    <tr><td>TikTok</td><td>Profiles, videos, engagement</td></tr>
+    <tr><td>Instagram</td><td>Profiles, posts, followers</td></tr>
+    <tr><td>Yelp</td><td>Businesses, ratings, reviews</td></tr>
+    <tr><td>Google Maps</td><td>Businesses, ratings, addresses</td></tr>
+  </table>
+  <p class="small">Any other page can still be captured manually: open it, click the icon, then <strong>Scrape Current Page</strong>. Chrome only auto-injects the helper script on the domains listed above.</p>
+
+  <h2>Permissions, plainly</h2>
+  <p>This version requests <strong>no blanket access to every website</strong>. It asks for the supported marketplace domains above plus <code>workflowswift.com</code>, and for <code>activeTab</code>, which grants one-off access to the page in front of you only when you click the extension. You can check it yourself after installing: <code>chrome://extensions</code> &rarr; <em>Details</em> &rarr; <em>Site access</em> lists the individual domains, not &ldquo;On all sites&rdquo;. If you see a build asking for <em>Read and change all your data on all websites</em>, it is an older release — download the current build again and reload it.</p>
+
+  <div class="card warn">
+    <h3>Known limitations (current build)</h3>
+    <ul>
+      <li>Command acknowledgement is not yet available server-side, so commands sent from WorkflowSwift to a browser are delivered but never marked done.</li>
+      <li>Manual install means manual updates: re-download and replace the folder, then click <em>Reload</em> on <code>chrome://extensions</code>.</li>
+    </ul>
+  </div>
+
+  <h2>Troubleshooting</h2>
+  <h3>The popup says "Disconnected"</h3>
+  <p>No token saved yet. Open Options and save one.</p>
+  <h3>"Invalid API token" on Test Connection</h3>
+  <p>The token was rejected (401). Re-copy it — tokens are shown only once when created.</p>
+  <h3>Test Connection reports 404</h3>
+  <p>The API Base URL lost its <code>/v1</code>. Reset it to <code>https://workflowswift.com/api/v1</code>. (Fixed in 1.2.0 — 1.1.0 shipped the wrong path and every call 404'd.)</p>
+  <h3>Scraping returns nothing</h3>
+  <p>Make sure the page is fully loaded and is one of the supported domains, then use <em>Scrape Current Page</em> from the popup.</p>
+
+  <h2>Verify what you downloaded</h2>
+  <p>The download button serves the current build from the WorkflowSwift app at <code>/api/v1/extension.zip</code>. To confirm the bytes you saved match what the server serves:</p>
+  <pre><code>curl -s https://workflowswift.com/api/v1/extension.zip | sha256sum
+<span id="ext-version-sha"></span></code></pre>
+  <p class="small">The expected value is printed above and is also the one the <em>Current build</em> line at the top of this page shows. It is not written into this page by hand — it is read live from <a href="/extension-latest.json">/extension-latest.json</a> when the page loads, so it cannot go stale after a release.</p>
+</div>
+
+<script>
+// Single source of truth for version + checksum: extension-latest.json, rewritten by
+// /opt/swift/scripts/ws-publish-extension.sh on every release. Never hardcode a version here — a
+// hardcoded one is exactly how this page once advertised a superseded build while serving a newer
+// one, and nothing in the release flow rewrote it.
+(function(){
+  fetch('/extension-latest.json?t=' + Date.now()).then(function(r){return r.json()}).then(function(d){
+    if (!d || !d.version) return;
+    var v = document.getElementById('ext-version');
+    if (v) v.textContent = ' — v' + d.version + ', ' + Math.round(d.size/1024) + ' KB, sha256 ' + String(d.sha256).slice(0,12) + '\u2026';
+    var s = document.getElementById('ext-version-sha');
+    if (s) s.textContent = '# expected: ' + d.sha256 + '  (v' + d.version + ')';
+  }).catch(function(){});
+})();
+</script>
+
+<footer><div class="container">
+  <p>© 2026 WorkflowSwift — <a href="https://swiftsoftware.net">A SwiftSoftware Company</a></p>
+</div></footer>
+</body>
+</html>
