@@ -246,8 +246,11 @@ pub async fn get_workspace_stats(
         return Err(AppError::NotFound("Workspace not found".into()));
     }
 
+    // Same soft-delete rule as the client count below it: `DELETE /workflows/{id}` only flips
+    // `is_active`, so an unfiltered count would report a deleted workflow as still living in
+    // this workspace (kanban t_217d0e5f).
     let workflow_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM workflows WHERE aid = $1 AND portfolio_company_id = $2",
+        "SELECT COUNT(*) FROM workflows WHERE aid = $1 AND portfolio_company_id = $2 AND is_active = true",
     )
     .bind(aid)
     .bind(id)

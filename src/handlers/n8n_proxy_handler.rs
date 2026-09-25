@@ -79,10 +79,15 @@ pub async fn trigger_extension_workflow(
     }
 
     if let Ok(wid) = Uuid::parse_str(&workflow_id) {
-        let owner: Option<Uuid> = sqlx::query_scalar("SELECT aid FROM workflows WHERE id = $1")
-            .bind(wid)
-            .fetch_optional(&state.db)
-            .await?;
+        // A soft-deleted workflow must not stay triggerable: `DELETE /workflows/{id}` only flips
+        // `is_active`, so an unfiltered lookup let the extension keep firing a deleted workflow's
+        // n8n copy. The id branch therefore 404s for it, exactly like `/workflows/{id}/run`
+        // (kanban t_217d0e5f).
+        let owner: Option<Uuid> =
+            sqlx::query_scalar("SELECT aid FROM workflows WHERE id = $1 AND is_active = true")
+                .bind(wid)
+                .fetch_optional(&state.db)
+                .await?;
         match owner {
             Some(other) if other != aid => {
                 return Err(AppError::Forbidden(

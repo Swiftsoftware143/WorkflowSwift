@@ -198,7 +198,7 @@ const closeModal = () => { S.modal = null; renderApp(); };
 Object.assign(S, { users:null, teamErr:null, invited:null, permsTarget:null, timeline:null, planCaps:null, rolloverMsg:null, timelineTried:false, planCapsTried:false });
 
 const statusBadge = (s) => {
-  const m = { active:'b-green', pending:'b-amber', running:'b-blue', completed:'b-green', failed:'b-red', draft:'b-gray', paused:'b-gray', won:'b-green', lost:'b-red', open:'b-blue', closed:'b-gray' };
+  const m = { active:'b-green', pending:'b-amber', running:'b-blue', completed:'b-green', failed:'b-red', draft:'b-gray', deleted:'b-red', paused:'b-gray', won:'b-green', lost:'b-red', open:'b-blue', closed:'b-gray' };
   return html`<span class="badge ${m[String(s).toLowerCase()] || 'b-gray'}">${s || '—'}</span>`;
 };
 const fmtDate = (d) => d ? new Date(d).toLocaleString() : '—';
@@ -484,7 +484,7 @@ const WorkflowsView = () => {
       </header>
       ${list.length === 0 ? html`<div class="empty">No workflows yet. Create your first one.</div>` : html`
       <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Category</th><th>Surface</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>
-        ${list.map(w => html`<tr key=${w.id}><td class="font-semibold">${w.name}</td><td>${w.category || '—'}</td><td>${surName(w.surface_id) || '—'}</td><td>${statusBadge(w.is_active?'active':'draft')}</td><td>${fmtDate(w.created_at)}</td>
+        ${list.map(w => html`<tr key=${w.id}><td class="font-semibold">${w.name}</td><td>${w.category || '—'}</td><td>${surName(w.surface_id) || '—'}</td><td>${statusBadge(w.is_active===false?'deleted':'active')}</td><td>${fmtDate(w.created_at)}</td>
           <td class="text-right whitespace-nowrap"><button class="btn-outline text-xs" onClick=${()=>setView('builder',{id:w.id})}>Builder</button> <button class="btn-outline text-xs" onClick=${()=>openWfModal(w)}>Edit</button> <button class="btn-green text-xs" onClick=${()=>runWf(w.id)}>Run</button> <button class="btn-red text-xs" onClick=${()=>delWf(w.id)}>Del</button></td></tr>`)}
       </tbody></table></div>`}
     </div>`;
@@ -1401,7 +1401,7 @@ const BuilderView = () => {
         ? html`<div class="empty">No workflows yet. Create one under Workflows, then configure its steps here.</div>`
         : html`<div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Status</th><th>Steps</th><th></th></tr></thead><tbody>
             ${(S.workflows || []).map(w => html`<tr key=${w.id}><td class="font-semibold">${w.name}</td>
-              <td>${statusBadge(w.is_active ? 'active' : 'draft')}</td><td>${w.step_count != null ? w.step_count : '—'}</td>
+              <td>${statusBadge(w.is_active ? 'active' : 'deleted')}</td><td>${w.step_count != null ? w.step_count : '—'}</td>
               <td class="text-right"><button class="btn text-xs" onClick=${()=>setView('builder', { id: w.id })}>Configure steps</button></td></tr>`)}
           </tbody></table></div>`}
     </div>`;
