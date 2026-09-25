@@ -35,7 +35,12 @@ INSERT INTO available_providers (key, name, description, requires_base_url, icon
     ('smtp', 'SMTP (Custom)', 'Custom SMTP server for transactional email', true, 'mail')
 ON CONFLICT (key) DO NOTHING;
 
--- Add send_template action for SendGrid
-INSERT INTO integration_destinations (provider, action_key, action_label, destination_type, destination_label, sort_order) VALUES
+-- Add send_template action for SendGrid — only if SendGrid is a known provider (card t_4ebd6f98):
+-- the FK on integration_destinations.provider would otherwise abort the whole file, and 029 runs
+-- before 028 (the file that would introduce a third-party catalogue). Same repair as 028.
+INSERT INTO integration_destinations (provider, action_key, action_label, destination_type, destination_label, sort_order)
+SELECT * FROM (VALUES
     ('sendgrid', 'send_template_email', 'Send Template Email', 'email_template', 'Email Template', 3)
+) AS v(provider, action_key, action_label, destination_type, destination_label, sort_order)
+WHERE EXISTS (SELECT 1 FROM available_providers ap WHERE ap.key = v.provider)
 ON CONFLICT (provider, action_key, destination_type) DO NOTHING;

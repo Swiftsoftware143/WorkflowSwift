@@ -1,3 +1,19 @@
+-- 029a: workspace (portfolio_company) scoping — RENAMED from `011_add_workspace_id.sql`
+-- (card t_4ebd6f98).
+--
+-- WHY THE RENAME
+--   The file ALTERs three tables it does not create: `portfolio_companies` (created by
+--   015_portfolio_integrations.sql), `provider_keys` (created by 027a_provider_keys.sql) and
+--   `user_integrations` (created by 029_user_integrations.sql). As `011_*` it ran before all three
+--   and a from-zero build died with `ERROR: relation "portfolio_companies" does not exist`.
+--   `029a` runs after the last of them (029) and before 030, so every referenced relation exists.
+--
+-- GUARDS ADDED
+--   `ADD COLUMN IF NOT EXISTS` on all six ALTERs and `CREATE INDEX IF NOT EXISTS` on all six
+--   indexes: this file is now applied once on the production database too (the ledger keeps the
+--   old name), where every column and index already exists, so each statement must be a no-op
+--   instead of raising `column ... already exists`.
+--
 -- Migration 011: Add workspace (portfolio_company_id) support
 -- This scopes user data by workspace without creating new accounts.
 

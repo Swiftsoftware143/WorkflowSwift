@@ -13,8 +13,33 @@ CREATE TABLE IF NOT EXISTS integration_destinations (
     UNIQUE(provider, action_key, destination_type)
 );
 
+-- ORDER MATTERS (card t_4ebd6f98)
+--   `integration_destinations.provider` REFERENCES `available_providers(key)`, and the three
+--   providers the destinations below name were seeded at the END of this file — so the destinations
+--   insert used to run before the rows it depends on. Every from-zero build died with
+--   `violates foreign key constraint "integration_destinations_provider_fkey"`, and this app's own
+--   2026-08-09 install silently lost the whole catalogue the same way (the old runner downgraded
+--   the error and recorded the file anyway): measured in production today,
+--   `integration_destinations` is EMPTY (0 rows) while `available_providers` has 20.
+--   The provider seeds therefore come FIRST. Production is unaffected — the file is recorded in
+--   `_migrations` and skipped — so this repair reaches fresh installs only.
+
+-- Add coreswift to available_providers
+INSERT INTO available_providers (key, name, description, requires_base_url, icon) VALUES
+    ('coreswift', 'CoreSwift (CRM)', 'Full CRM — contacts, leads, deals, notes, activity tracking', false, 'users'),
+    ('funnelswift', 'FunnelSwift', 'Landing pages, form submissions, lead routing', false, 'layers'),
+    ('incentiveswift', 'IncentiveSwift', 'Rewards, loyalty, referrals, commission campaigns', false, 'award')
+ON CONFLICT (key) DO NOTHING;
+
 -- Seed native SwiftSoftware + common third-party destinations
-INSERT INTO integration_destinations (provider, action_key, action_label, destination_type, destination_label, sort_order) VALUES
+-- Provider-tolerance (card t_4ebd6f98): a destination may only be inserted for a provider that
+-- exists in `available_providers` — the FK would otherwise abort the whole file. Only the three
+-- SwiftSoftware providers seeded above (plus anything 027a seeds) qualify; the third-party providers
+-- this list names (hubspot, slack, ...) are in NO app database and are skipped, exactly as they are
+-- in production today (measured: integration_destinations = 0 rows).
+INSERT INTO integration_destinations (provider, action_key, action_label, destination_type, destination_label, sort_order)
+SELECT v.provider, v.action_key, v.action_label, v.destination_type, v.destination_label, v.sort_order
+FROM (VALUES
 
     -- CoreSwift
     ('coreswift', 'create_contact', 'Create Contact', 'list', 'List', 1),
@@ -85,12 +110,6 @@ INSERT INTO integration_destinations (provider, action_key, action_label, destin
     ('stripe', 'create_customer', 'Create Customer', 'defaults', 'Default', 1),
     ('stripe', 'create_invoice', 'Create Invoice', 'product', 'Product', 1),
     ('stripe', 'create_invoice', 'Create Invoice', 'price_id', 'Price ID', 2)
-
+) AS v(provider, action_key, action_label, destination_type, destination_label, sort_order)
+WHERE EXISTS (SELECT 1 FROM available_providers ap WHERE ap.key = v.provider)
 ON CONFLICT (provider, action_key, destination_type) DO NOTHING;
-
--- Add coreswift to available_providers
-INSERT INTO available_providers (key, name, description, requires_base_url, icon) VALUES
-    ('coreswift', 'CoreSwift (CRM)', 'Full CRM — contacts, leads, deals, notes, activity tracking', false, 'users'),
-    ('funnelswift', 'FunnelSwift', 'Landing pages, form submissions, lead routing', false, 'layers'),
-    ('incentiveswift', 'IncentiveSwift', 'Rewards, loyalty, referrals, commission campaigns', false, 'award')
-ON CONFLICT (key) DO NOTHING;

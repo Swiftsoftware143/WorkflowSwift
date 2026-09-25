@@ -5,7 +5,20 @@ CREATE TABLE IF NOT EXISTS workflow_templates (
     category VARCHAR(100) NOT NULL,
     tags JSONB DEFAULT '[]'::jsonb,
     is_public BOOLEAN NOT NULL DEFAULT true,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- Pre-034 column set (card t_4ebd6f98). `tenant_id` is renamed to `aid` by
+    -- 034_rename_tenant_to_account.sql (measured: no other file ever adds it, so without it that
+    -- file dies with `column "tenant_id" does not exist` and the whole cascade behind it, including
+    -- every `accounts`-referencing file, never runs). The remaining columns exist in production
+    -- (read from its catalog) and are created by NO migration at all: `category_id` is the second
+    -- half of the industry/template drift 061 repoints, `icon`/`sort_order`/`plan_id`/`is_active`
+    -- are written by the admin template UI.
+    tenant_id UUID,
+    category_id UUID,
+    icon TEXT,
+    is_active BOOLEAN DEFAULT true,
+    sort_order INTEGER DEFAULT 0,
+    plan_id UUID
 );
 
 CREATE INDEX idx_workflow_templates_category ON workflow_templates(category);

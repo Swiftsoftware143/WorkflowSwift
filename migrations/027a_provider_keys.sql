@@ -1,3 +1,23 @@
+-- 027a: provider_keys + available_providers — RENAMED from `provider_keys.sql` (card t_4ebd6f98).
+--
+-- WHY THE RENAME
+--   The name had no numeric prefix, so it sorted LAST of all 69 files ('p' 0x70 > any digit) while
+--   four earlier files already needed what it creates: 028/029 read `available_providers`, 036
+--   reads it too, and 046/048 ALTER `provider_keys`. On a from-zero build every one of them died
+--   with `ERROR: relation "available_providers"/"provider_keys" does not exist`, and the cascade
+--   from there is what made 034_rename_tenant_to_account.sql fail — which in turn is why
+--   `accounts` never existed and 8 further files failed.
+--
+--   `027a` sorts after `027_add_surface_id.sql` (now `042a`) and before `028_*`, so both tables
+--   exist before the first reader. 034 runs later and renames `provider_keys.tenant_id` -> `aid`
+--   plus its UNIQUE/index names, so the pre-034 shape (tenant_id, REFERENCES tenants(id)) is
+--   exactly what this file must create.
+--
+-- PRODUCTION SAFETY (this file is applied once on the next boot, because the ledger has the old
+-- name): every statement is idempotent — `CREATE TABLE IF NOT EXISTS` twice and
+-- `INSERT ... ON CONFLICT (key) DO NOTHING`, and all 14 seeded keys already exist there (measured:
+-- available_providers holds 20 rows, the 14 below plus 6 added out of band), so it writes ZERO rows.
+--
 -- Migration: provider_keys
 -- Creates tables for dynamic API key management and seeds available providers
 
@@ -16,13 +36,23 @@ CREATE TABLE IF NOT EXISTS provider_keys (
 );
 
 -- Table: available_providers (dropdown reference data)
+-- Shape read from the production catalog (card t_4ebd6f98): `category`, `sort_order`, `plan_id` and
+-- `is_active` exist there and are created by NO migration, and 045_integration_center_coreswift.sql
+-- INSERTs/UPDATEs `is_active` on this table — without the column a from-zero build died with
+-- `column "is_active" of relation "available_providers" does not exist`. This file keeps the
+-- pre-034 `provider_keys` shape above (tenant_id + REFERENCES tenants) because
+-- 034_rename_tenant_to_account.sql renames it; `available_providers` is not touched by 034.
 CREATE TABLE IF NOT EXISTS available_providers (
     key VARCHAR(64) PRIMARY KEY,
     name VARCHAR(128) NOT NULL,
     description TEXT,
     requires_base_url BOOLEAN DEFAULT false,
     requires_metadata JSONB DEFAULT '[]',
-    icon VARCHAR(32)
+    icon VARCHAR(32),
+    category VARCHAR(64),
+    sort_order INTEGER DEFAULT 0,
+    plan_id UUID,
+    is_active BOOLEAN DEFAULT true
 );
 
 -- Seed available_providers

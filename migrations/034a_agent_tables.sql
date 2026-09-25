@@ -1,3 +1,16 @@
+-- 034a: Agent tables — RENAMED from `012_agent_tables.sql` (card t_4ebd6f98).
+--
+-- WHY THE RENAME
+--   Both FKs here point at `accounts(id)`, and `accounts` is created by
+--   034_rename_tenant_to_account.sql (it is the rename target of `tenants`), so as `012_*` this file
+--   ran 22 files too early and a from-zero build died with `ERROR: relation "accounts" does not
+--   exist`. It also FKs `portfolio_companies` (015). `034a` runs immediately after 034, where both
+--   relations exist.
+--
+-- PRODUCTION SAFETY (applied once on the next boot; the ledger keeps the old name): every statement
+-- is `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS`, and production has had all six
+-- tables and indexes since 2026-08-09, so the file is a no-op there.
+--
 -- Agent profiles (one per workspace)
 CREATE TABLE IF NOT EXISTS agent_profiles (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

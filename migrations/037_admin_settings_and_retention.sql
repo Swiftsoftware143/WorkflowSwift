@@ -59,7 +59,12 @@ VALUES
     ('branding', '{"app_name": "WorkflowSwift", "support_email": "support@workflowswift.com"}', 'Application branding and contact settings'),
     ('billing', '{"enabled": false, "currency": "USD", "tax_rate": 0, "grace_period_days": 7}', 'Billing and subscription settings'),
     ('security', '{"max_login_attempts": 5, "lockout_minutes": 15, "require_2fa": false, "password_min_length": 8}', 'Security policy settings'),
-    ('limits', '{"max_accounts": 0, "max_tenants_per_account": 1, "api_rate_limit": 100}', 'Global system limits')
+    ('limits', '{"max_accounts": 0, "max_tenants_per_account": 1, "api_rate_limit": 100}', 'Global system limits'),
+    -- Moved here from 011_role_cleanup.sql (card t_4ebd6f98): 011 runs 26 files BEFORE this table
+    -- exists, and this is the file that owns admin_settings. Same row, same JSON; the panel's
+    -- Settings > Email Provider reads it. Production is unaffected — this file is recorded in its
+    -- ledger and skipped (and it already holds this key, which is why ON CONFLICT is a no-op there).
+    ('email', '{"api_url": "", "api_key": "", "from_address": "swiftsoftware143@yahoo.com", "from_name": "WorkflowSwift", "provider": "smtp", "smtp_host": "", "smtp_port": 587, "smtp_username": "", "smtp_password": "", "smtp_use_tls": true}', 'Email/SMTP configuration for sending transactional emails')
 ON CONFLICT (key) DO NOTHING;
 
 -- Add retention_expires_at to accounts table for per-account retention tracking

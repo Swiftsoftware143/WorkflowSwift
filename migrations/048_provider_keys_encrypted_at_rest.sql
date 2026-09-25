@@ -23,3 +23,11 @@
 ALTER TABLE provider_keys DROP CONSTRAINT IF EXISTS provider_keys_api_key_encrypted;
 
 ALTER TABLE provider_keys ADD CONSTRAINT provider_keys_api_key_encrypted CHECK (api_key = '' OR api_key LIKE 'enc:v1:%') NOT VALID;
+
+-- The documented second half, now IN this file (card t_4ebd6f98). Production carries this constraint
+-- as VALIDATED (`convalidated = true` — the one-off backfill ran there), while a from-zero build left
+-- it NOT VALID and therefore differed from production on the one property the constraint is about.
+-- Validating an empty table is instant, and on a database that already validates it this statement is
+-- a no-op, so it is safe in both directions. `NOT VALID` remains the state *this file creates* for
+-- pre-existing rows; validation happens immediately after, which is what production has.
+ALTER TABLE provider_keys VALIDATE CONSTRAINT provider_keys_api_key_encrypted;

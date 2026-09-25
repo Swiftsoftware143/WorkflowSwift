@@ -83,8 +83,13 @@ ALTER INDEX idx_user_integrations_tenant RENAME TO idx_user_integrations_aid;
 
 -- Provider keys
 ALTER TABLE provider_keys RENAME COLUMN tenant_id TO aid;
-ALTER INDEX provider_keys_tenant_id_key RENAME TO provider_keys_aid_key;
-ALTER INDEX idx_provider_keys_tenant_provider RENAME TO idx_provider_keys_aid_provider;
+-- GUARDED (card t_4ebd6f98): neither index below is created by ANY migration in this repo
+-- (`grep -rn idx_provider_keys *.sql` finds only these two renames), so both statements aborted
+-- the file on a from-zero build and — because src/db.rs runs the file as one batch — took every
+-- rename after them with it, which is what kept `accounts` from existing. The UNIQUE on
+-- (aid, provider) that production carries is added by the ADD CONSTRAINT below.
+ALTER INDEX IF EXISTS provider_keys_tenant_id_key RENAME TO provider_keys_aid_key;
+ALTER INDEX IF EXISTS idx_provider_keys_tenant_provider RENAME TO idx_provider_keys_aid_provider;
 
 -- Dashboard data sources (from dashboard tabs migration)
 ALTER TABLE dashboard_data_sources RENAME COLUMN tenant_id TO aid;
