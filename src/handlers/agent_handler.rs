@@ -39,11 +39,11 @@ pub async fn list_agents(
     let agents = if let Some(ref ws) = q.workspace_id {
         let ws_id =
             Uuid::parse_str(ws).map_err(|_| AppError::BadRequest("Invalid workspace_id".into()))?;
-        sqlx::query_as::<_, (Uuid, String, String, Option<String>, i32, i32, String)>(
+        sqlx::query_as::<_, (Uuid, String, String, Option<String>, Option<i32>, Option<i32>, String)>(
             "SELECT id, name, role, model, budget_credits, credits_spent, status FROM agent_profiles WHERE aid = $1 AND portfolio_company_id = $2 ORDER BY created_at"
         ).bind(aid).bind(ws_id).fetch_all(&s.db).await?
     } else {
-        sqlx::query_as::<_, (Uuid, String, String, Option<String>, i32, i32, String)>(
+        sqlx::query_as::<_, (Uuid, String, String, Option<String>, Option<i32>, Option<i32>, String)>(
             "SELECT id, name, role, model, budget_credits, credits_spent, status FROM agent_profiles WHERE aid = $1 ORDER BY created_at"
         ).bind(aid).fetch_all(&s.db).await?
     };
@@ -118,11 +118,11 @@ pub async fn list_tickets(
     let tickets = if let Some(ref ws) = q.workspace_id {
         let ws_id =
             Uuid::parse_str(ws).map_err(|_| AppError::BadRequest("Invalid workspace_id".into()))?;
-        sqlx::query_as::<_, (Uuid, Option<Uuid>, String, Option<String>, String, String, Option<String>, i32, chrono::DateTime<chrono::Utc>)>(
+        sqlx::query_as::<_, (Uuid, Option<Uuid>, String, Option<String>, String, String, Option<String>, Option<i32>, chrono::DateTime<chrono::Utc>)>(
             "SELECT id, agent_id, title, description, status, priority, assigned_to, budget_credits, created_at FROM agent_tickets WHERE aid = $1 AND portfolio_company_id = $2 ORDER BY created_at DESC"
         ).bind(aid).bind(ws_id).fetch_all(&s.db).await?
     } else {
-        sqlx::query_as::<_, (Uuid, Option<Uuid>, String, Option<String>, String, String, Option<String>, i32, chrono::DateTime<chrono::Utc>)>(
+        sqlx::query_as::<_, (Uuid, Option<Uuid>, String, Option<String>, String, String, Option<String>, Option<i32>, chrono::DateTime<chrono::Utc>)>(
             "SELECT id, agent_id, title, description, status, priority, assigned_to, budget_credits, created_at FROM agent_tickets WHERE aid = $1 ORDER BY created_at DESC"
         ).bind(aid).fetch_all(&s.db).await?
     };
@@ -255,12 +255,20 @@ pub async fn list_provider_keys(
     let keys = if let Some(ref ws) = q.workspace_id {
         let ws_id =
             Uuid::parse_str(ws).map_err(|_| AppError::BadRequest("Invalid workspace_id".into()))?;
-        sqlx::query_as::<_, (String, String, bool)>(
-            "SELECT provider, COALESCE(label, provider), is_active FROM provider_keys WHERE aid = $1 AND portfolio_company_id = $2 ORDER BY provider"
+        // `provider_keys` has no `label` column (verified against every migration and
+        // information_schema): `COALESCE(label, provider)` made this statement fail 42703 for
+        // EVERY caller, NULL rows or not, so the NULL decode below was never even reached.
+        // The second item keeps the response's "label" key and is the provider name, which is
+        // what the old COALESCE fell back to.
+        sqlx::query_as::<_, (String, String, Option<bool>)>(
+            "SELECT provider, provider, is_active FROM provider_keys WHERE aid = $1 AND portfolio_company_id = $2 ORDER BY provider"
         ).bind(aid).bind(ws_id).fetch_all(&s.db).await?
     } else {
-        sqlx::query_as::<_, (String, String, bool)>(
-            "SELECT provider, COALESCE(label, provider), is_active FROM provider_keys WHERE aid = $1 ORDER BY provider"
+        // The `aid` bind was missing here too — it was masked by the 42703 above, and surfaced as
+        // "bind message supplies 0 parameters, but prepared statement requires 1" the moment the
+        // statement compiled (kanban t_227bae2f).
+        sqlx::query_as::<_, (String, String, Option<bool>)>(
+            "SELECT provider, provider, is_active FROM provider_keys WHERE aid = $1 ORDER BY provider"
         ).bind(aid).fetch_all(&s.db).await?
     };
 

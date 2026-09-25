@@ -360,7 +360,11 @@ async fn run_health_check(
             String,
             Option<String>,
             Option<String>,
-            serde_json::Value,
+            // `user_integrations.config` is NULLABLE with a '{}'::jsonb default and no app writer
+            // can produce a NULL, but the schema allows one: decode it as Option so a NULL is data
+            // (a route that still answers) instead of a decode error that reports the integration
+            // as "not found or inactive".
+            Option<serde_json::Value>,
         ),
     >(
         r#"SELECT id, provider, integration_type, api_key_encrypted, base_url, config
@@ -374,7 +378,7 @@ async fn run_health_check(
 
     let (integration_id, prov, int_type, api_key, base_url, _config) = match integration {
         Ok(Some(row)) => row,
-        _ => {
+        Ok(None) => {
             let _ = sqlx::query(
                 "UPDATE user_integrations SET last_health_status = 'error', last_health_check_at = NOW() WHERE user_id = $1 AND provider = $2"
             )
@@ -384,6 +388,21 @@ async fn run_health_check(
             return (
                 "error".to_string(),
                 "Integration not found or inactive".to_string(),
+            );
+        }
+        // A read that FAILED is not a missing integration: the old `_ =>` arm reported a
+        // database error as "not found or inactive", which is how a decode/statement failure on
+        // this path stayed invisible (kanban t_227bae2f). Report it as its own outcome and log it.
+        Err(e) => {
+            tracing::error!(
+                user_id = %user_id,
+                provider = provider,
+                error = %e,
+                "integration health check could not read the integration row"
+            );
+            return (
+                "error".to_string(),
+                "Integration could not be read".to_string(),
             );
         }
     };

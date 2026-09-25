@@ -41,12 +41,12 @@ pub async fn list_industry_sources(
     let industry = q.get("industry").and_then(|v| v.as_str());
 
     let sources = if let Some(ind) = industry {
-        sqlx::query_as::<_, (Uuid, String, String, String, Option<String>, String, i32, bool)>(
+        sqlx::query_as::<_, (Uuid, String, String, String, Option<String>, Option<String>, Option<i32>, Option<bool>)>(
             "SELECT id, industry_slug, source_name, source_type, endpoint, refresh_cadence, credit_cost, is_active
              FROM industry_data_sources WHERE industry_slug = $1 ORDER BY source_name"
         ).bind(ind).fetch_all(&s.db).await?
     } else {
-        sqlx::query_as::<_, (Uuid, String, String, String, Option<String>, String, i32, bool)>(
+        sqlx::query_as::<_, (Uuid, String, String, String, Option<String>, Option<String>, Option<i32>, Option<bool>)>(
             "SELECT id, industry_slug, source_name, source_type, endpoint, refresh_cadence, credit_cost, is_active
              FROM industry_data_sources ORDER BY industry_slug, source_name"
         ).fetch_all(&s.db).await?
