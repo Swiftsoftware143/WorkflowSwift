@@ -53,7 +53,10 @@ pub async fn workspace_dashboard(
 
     // Collect stats
     let active_instances: Vec<serde_json::Value> = if let Some(ws_id) = ws_filter {
-        sqlx::query_as::<_, (Uuid, String, String, String, String)>(
+        // `wi.started_at` is NULLABLE with no DEFAULT and NULL means "not started", so the
+        // element is `Option<String>`: a NULL renders as JSON `null` instead of failing the
+        // whole-row decode (`decoding column 3: unexpected null`, kanban t_4a499b90).
+        sqlx::query_as::<_, (Uuid, String, String, Option<String>, String)>(
             r#"SELECT wi.id, w.name, wi.status, wi.started_at::text, COALESCE(wi.updated_at, wi.started_at)::text
                FROM workflow_instances wi
                JOIN workflows w ON w.id = wi.workflow_id
@@ -68,7 +71,10 @@ pub async fn workspace_dashboard(
             "started_at": r.3, "updated_at": r.4
         })).collect()
     } else {
-        sqlx::query_as::<_, (Uuid, String, String, String, String)>(
+        // `wi.started_at` is NULLABLE with no DEFAULT and NULL means "not started", so the
+        // element is `Option<String>`: a NULL renders as JSON `null` instead of failing the
+        // whole-row decode (`decoding column 3: unexpected null`, kanban t_4a499b90).
+        sqlx::query_as::<_, (Uuid, String, String, Option<String>, String)>(
             r#"SELECT wi.id, w.name, wi.status, wi.started_at::text, COALESCE(wi.updated_at, wi.started_at)::text
                FROM workflow_instances wi
                JOIN workflows w ON w.id = wi.workflow_id
@@ -125,7 +131,10 @@ pub async fn activity_timeline(
     let ws_filter = q.workspace_id.and_then(|id| Uuid::parse_str(&id).ok());
 
     let events = if let Some(ws_id) = ws_filter {
-        sqlx::query_as::<_, (Uuid, String, String, String, String)>(
+        // `wi.started_at` is NULLABLE with no DEFAULT and NULL means "not started", so the
+        // element is `Option<String>`: a NULL renders as JSON `null` instead of failing the
+        // whole-row decode (`decoding column 3: unexpected null`, kanban t_4a499b90).
+        sqlx::query_as::<_, (Uuid, String, String, Option<String>, String)>(
             r#"SELECT wi.id, 'instance'::text as event_type, w.name as title,
                       wi.started_at::text, wi.status as description
                FROM workflow_instances wi
@@ -141,7 +150,10 @@ pub async fn activity_timeline(
         .fetch_all(&s.db)
         .await?
     } else {
-        sqlx::query_as::<_, (Uuid, String, String, String, String)>(
+        // `wi.started_at` is NULLABLE with no DEFAULT and NULL means "not started", so the
+        // element is `Option<String>`: a NULL renders as JSON `null` instead of failing the
+        // whole-row decode (`decoding column 3: unexpected null`, kanban t_4a499b90).
+        sqlx::query_as::<_, (Uuid, String, String, Option<String>, String)>(
             r#"SELECT wi.id, 'instance'::text as event_type, w.name as title,
                       wi.started_at::text, wi.status as description
                FROM workflow_instances wi

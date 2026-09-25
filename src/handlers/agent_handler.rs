@@ -130,14 +130,20 @@ pub async fn workspace_dashboard(
     };
 
     let active_instances: Vec<serde_json::Value> = if let Some(ref ws_id) = ws_bind {
-        sqlx::query_as::<_, (Uuid, String, String, String)>(
+        // `wi.started_at` is NULLABLE with no DEFAULT and NULL means "not started", so the
+        // element is `Option<String>`: a NULL renders as JSON `null` instead of failing the
+        // whole-row decode (`decoding column 3: unexpected null`, kanban t_4a499b90).
+        sqlx::query_as::<_, (Uuid, String, String, Option<String>)>(
             &format!("SELECT wi.id, COALESCE(w.name,'unnamed') as name, wi.status, wi.started_at::text FROM workflow_instances wi LEFT JOIN workflows w ON w.id = wi.workflow_id WHERE wi.aid = $1 {} AND wi.status IN ('running','in_progress','pending') ORDER BY wi.started_at DESC LIMIT 20", ws_clause)
         ).bind(aid).bind(ws_id).fetch_all(&s.db).await.map_err(|e| {
             eprintln!("SQL error in active_instances: {}", e);
             AppError::Internal("Query error".into())
         }).unwrap_or_default().into_iter().map(|r| json!({"id": r.0, "name": r.1, "status": r.2, "started_at": r.3})).collect()
     } else {
-        sqlx::query_as::<_, (Uuid, String, String, String)>(
+        // `wi.started_at` is NULLABLE with no DEFAULT and NULL means "not started", so the
+        // element is `Option<String>`: a NULL renders as JSON `null` instead of failing the
+        // whole-row decode (`decoding column 3: unexpected null`, kanban t_4a499b90).
+        sqlx::query_as::<_, (Uuid, String, String, Option<String>)>(
             "SELECT wi.id, COALESCE(w.name,'unnamed') as name, wi.status, wi.started_at::text FROM workflow_instances wi LEFT JOIN workflows w ON w.id = wi.workflow_id WHERE wi.aid = $1 AND wi.status IN ('running','in_progress','pending') ORDER BY wi.started_at DESC LIMIT 20"
         ).bind(aid).fetch_all(&s.db).await.map_err(|e| {
             eprintln!("SQL error in active_instances: {}", e);
@@ -170,11 +176,17 @@ pub async fn activity_timeline(
     };
 
     let events: Vec<serde_json::Value> = if let Some(ref ws_id) = ws_bind {
-        sqlx::query_as::<_, (Uuid, String, String, String)>(
+        // `wi.started_at` is NULLABLE with no DEFAULT and NULL means "not started", so the
+        // element is `Option<String>`: a NULL renders as JSON `null` instead of failing the
+        // whole-row decode (`decoding column 3: unexpected null`, kanban t_4a499b90).
+        sqlx::query_as::<_, (Uuid, String, String, Option<String>)>(
             &format!("SELECT wi.id, COALESCE(w.name,'workflow') as title, wi.status as description, wi.started_at::text as ts FROM workflow_instances wi LEFT JOIN workflows w ON w.id = wi.workflow_id WHERE wi.aid = $1 {} ORDER BY wi.started_at DESC LIMIT 30", ws_clause)
         ).bind(aid).bind(ws_id).fetch_all(&s.db).await.unwrap_or_default().into_iter().map(|r| json!({"id": r.0, "title": r.1, "description": r.2, "timestamp": r.3, "type": "instance"})).collect()
     } else {
-        sqlx::query_as::<_, (Uuid, String, String, String)>(
+        // `wi.started_at` is NULLABLE with no DEFAULT and NULL means "not started", so the
+        // element is `Option<String>`: a NULL renders as JSON `null` instead of failing the
+        // whole-row decode (`decoding column 3: unexpected null`, kanban t_4a499b90).
+        sqlx::query_as::<_, (Uuid, String, String, Option<String>)>(
             "SELECT wi.id, COALESCE(w.name,'workflow') as title, wi.status as description, wi.started_at::text as ts FROM workflow_instances wi LEFT JOIN workflows w ON w.id = wi.workflow_id WHERE wi.aid = $1 ORDER BY wi.started_at DESC LIMIT 30"
         ).bind(aid).fetch_all(&s.db).await.unwrap_or_default().into_iter().map(|r| json!({"id": r.0, "title": r.1, "description": r.2, "timestamp": r.3, "type": "instance"})).collect()
     };

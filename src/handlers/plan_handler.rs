@@ -474,11 +474,15 @@ pub async fn get_plan_capabilities(
     let resolved = features::resolve_plan_id(&state.db, aid).await?;
     let plan_id: Uuid = resolved.unwrap_or(Uuid::nil());
 
-    let plan_info: Option<(String, String, String)> =
-        sqlx::query_as("SELECT slug, name, features::text FROM plan_tiers WHERE id = $1")
-            .bind(plan_id)
-            .fetch_optional(&state.db)
-            .await?;
+    // `plan_tiers.features` is NULLABLE with DEFAULT '{}'::jsonb, so the missing value is the
+    // table's OWN default (kanban t_4a499b90); a bare `features::text` would fail the row decode
+    // (`decoding column 2: unexpected null`) for a row that lost its default.
+    let plan_info: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT slug, name, COALESCE(features, '{}'::jsonb)::text FROM plan_tiers WHERE id = $1",
+    )
+    .bind(plan_id)
+    .fetch_optional(&state.db)
+    .await?;
 
     let (plan_slug, plan_name, _plan_features) =
         plan_info.unwrap_or_else(|| ("free".to_string(), "Free".to_string(), "{}".to_string()));
