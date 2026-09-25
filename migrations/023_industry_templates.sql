@@ -1,40 +1,21 @@
--- 023: Link existing workflow templates to appropriate industries
--- Maps templates to industries based on their category slug
-
--- Ensure id column has a default UUID generator
-ALTER TABLE industry_templates ALTER COLUMN id SET DEFAULT gen_random_uuid();
-
--- idempotent: clean existing links first so we can re-run safely
-DELETE FROM industry_templates;
-
--- Templates in government-contracting category -> government-contracting industry
-INSERT INTO industry_templates (industry_slug, template_id)
-SELECT 'government-contracting', wt.id
-FROM workflow_templates wt
-JOIN template_categories tc ON tc.id = wt.category_id
-WHERE tc.slug = 'government-contracting'
-ON CONFLICT (industry_slug, template_id) DO NOTHING;
-
--- Templates in marketing category -> marketing-agencies industry
-INSERT INTO industry_templates (industry_slug, template_id)
-SELECT 'marketing-agencies', wt.id
-FROM workflow_templates wt
-JOIN template_categories tc ON tc.id = wt.category_id
-WHERE tc.slug = 'marketing'
-ON CONFLICT (industry_slug, template_id) DO NOTHING;
-
--- Templates in operations category -> service-businesses industry
-INSERT INTO industry_templates (industry_slug, template_id)
-SELECT 'service-businesses', wt.id
-FROM workflow_templates wt
-JOIN template_categories tc ON tc.id = wt.category_id
-WHERE tc.slug = 'operations'
-ON CONFLICT (industry_slug, template_id) DO NOTHING;
-
--- Templates in onboarding category -> professional-services industry
-INSERT INTO industry_templates (industry_slug, template_id)
-SELECT 'professional-services', wt.id
-FROM workflow_templates wt
-JOIN template_categories tc ON tc.id = wt.category_id
-WHERE tc.slug = 'onboarding'
-ON CONFLICT (industry_slug, template_id) DO NOTHING;
+-- 023: industry -> workflow-template links (NEUTRALISED, card t_d31f646a)
+--
+-- This file used to ALTER/INSERT into `industry_templates`. That relation is created by NO
+-- migration and exists in NO app database (`to_regclass('public.industry_templates')` is NULL,
+-- `fleet-dbtype-audit.py --only WorkflowSwift` reported it as TABLE-MISSING), so every statement
+-- below failed with 42P01. Its seed slugs did not line up either: it matched
+-- `template_categories.slug IN ('marketing','operations','onboarding')` while that table's slugs
+-- are e-commerce / government-contracting / marketing-agency / real-estate / saas / site-flipping.
+--
+-- In THIS database the file is recorded in `_migrations` (2026-08-09) by the old migration runner
+-- that recorded files even when their statements failed, so it is skipped at boot. On a FRESH or
+-- restored database, however, it would run, raise 42P01, and — per src/db.rs — a file that fails is
+-- not recorded and is fatal by default, so the service would refuse to boot.
+--
+-- The industry -> template mapping is DERIVED in this app, not stored: `template_categories.slug`
+-- IS the industry slug and `workflow_templates.category` carries it, which is exactly the join the
+-- app's own `v_plan_industry_templates` view uses. src/handlers/template_handler.rs was repointed
+-- there (t_d31f646a); no mapping table is needed, so this migration becomes a documented no-op
+-- instead of an ALTER against a relation that will never exist.
+--
+-- Deliberately comment-only: it must stay a clean, recordable batch on a fresh database.
