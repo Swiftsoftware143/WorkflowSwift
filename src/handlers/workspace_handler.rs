@@ -163,15 +163,20 @@ pub async fn create_user_workspace(
                 .unwrap_or_else(|| industry_slug.to_string());
 
         let db_id = Uuid::new_v4();
+        // `dashboards` has no `slug` column: every other writer (auth/handlers.rs,
+        // industry_handler.rs, dashboard_handler.rs) inserts (id, aid, name, description[, layout])
+        // and nothing in the crate reads dashboards.slug. The workspace slug already lives on
+        // portfolio_companies.slug (the row inserted just above), so naming it here made this
+        // statement a guaranteed ERROR 42703 — and the `let _ =` swallowed it, which is why
+        // auto-generated dashboards were silently missing (kanban t_b9c74751).
         let _ = sqlx::query(
-            r#"INSERT INTO dashboards (id, aid, name, description, slug)
-               VALUES ($1, $2, $3, $4, $5)"#,
+            r#"INSERT INTO dashboards (id, aid, name, description)
+               VALUES ($1, $2, $3, $4)"#,
         )
         .bind(db_id)
         .bind(aid)
         .bind(format!("{} Dashboard", industry_name))
         .bind(format!("Auto-generated dashboard for {} workspace", name))
-        .bind(&final_slug)
         .execute(&state.db)
         .await;
 

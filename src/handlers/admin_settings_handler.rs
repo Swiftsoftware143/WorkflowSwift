@@ -1137,32 +1137,31 @@ pub async fn admin_create_account(
 
     // Set industry if provided
     if !industry_slug.is_empty() {
-        let industry_id: Option<Uuid> =
+        // The industry has to exist before an account can be tagged with it.
+        let industry_exists: Option<Uuid> =
             sqlx::query_scalar("SELECT id FROM industries WHERE slug = $1")
                 .bind(&industry_slug)
                 .fetch_optional(&state.db)
                 .await?
                 .flatten();
 
-        if let Some(ind_id) = industry_id {
-            let existing_industry = sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM account_industries WHERE account_id = $1 AND industry_id = $2"
+        if industry_exists.is_some() {
+            // `account_industries` is keyed by (aid, industry_slug) — that is the UNIQUE index
+            // (`account_industries_aid_industry_slug_key`) and the pair every other writer
+            // (auth/handlers.rs, workspace_handler.rs, industry_handler.rs) and every reader uses.
+            // `account_id` / `industry_id` are not columns of this table; naming them made this
+            // block a guaranteed ERROR 42703 on account creation (kanban t_b9c74751).
+            // DO NOTHING keeps the old behaviour exactly — an existing row is left untouched, so an
+            // industry the account deactivated is not silently re-activated — without the
+            // check-then-insert race the deleted COUNT query carried.
+            sqlx::query(
+                r#"INSERT INTO account_industries (aid, industry_slug) VALUES ($1, $2)
+                   ON CONFLICT (aid, industry_slug) DO NOTHING"#,
             )
             .bind(account_id)
-            .bind(ind_id)
-            .fetch_one(&state.db)
-            .await
-            .unwrap_or(0);
-
-            if existing_industry == 0 {
-                sqlx::query(
-                    "INSERT INTO account_industries (account_id, industry_id) VALUES ($1, $2)",
-                )
-                .bind(account_id)
-                .bind(ind_id)
-                .execute(&state.db)
-                .await?;
-            }
+            .bind(&industry_slug)
+            .execute(&state.db)
+            .await?;
         }
     }
 

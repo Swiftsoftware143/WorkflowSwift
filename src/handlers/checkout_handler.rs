@@ -307,21 +307,17 @@ pub async fn create_checkout_session(
         .and_then(|v| v.as_str())
         .and_then(|s| Uuid::parse_str(s).ok());
 
-    // Resolve success_url: explicit > plan's thank_you_url > /thank-you.html
-    let success_url = if let Some(url) = req.get("success_url").and_then(|v| v.as_str()) {
-        url.to_string()
-    } else if let Some(pid) = purchasable_id {
-        sqlx::query_scalar::<_, Option<String>>(
-            "SELECT thank_you_url FROM plan_tiers WHERE id = $1",
-        )
-        .bind(pid)
-        .fetch_optional(&state.db)
-        .await?
-        .flatten()
-        .unwrap_or_else(|| "/thank-you.html".to_string())
-    } else {
-        "/thank-you.html".to_string()
-    };
+    // Resolve success_url: explicit, else the static /thank-you.html.
+    // `plan_tiers` has no `thank_you_url` column and no surface writes one: `checkout_url` there is
+    // the payment link the provider returns (checkout_url, this file:383), and neither the plan CRUD
+    // (plan_handler.rs::update_plan / admin_update_plan) nor the admin Plans UI sends a per-plan
+    // thank-you page. Selecting it made every create-session without an explicit success_url a
+    // guaranteed ERROR 42703 (kanban t_b9c74751); the documented default is the real fallback.
+    let success_url = req
+        .get("success_url")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| "/thank-you.html".to_string());
 
     let cancel_url = req
         .get("cancel_url")

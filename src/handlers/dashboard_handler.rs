@@ -138,7 +138,9 @@ pub async fn push_dashboard_data(
         )));
     }
 
-    // Deduct credit for dashboard data storage
+    // Deduct credit for dashboard data storage.
+    // NB (t_b9c74751): this statement binds 4 values into 3 placeholders — the dashboard_type never
+    // reaches `description` (sqlx 0.8 tolerates the extra bind; verified live, the row is written).
     let tx_id = Uuid::new_v4();
     sqlx::query(
         r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
@@ -250,32 +252,55 @@ pub async fn push_dashboard_data(
     };
 
     let mut triggered_ids: Vec<String> = Vec::new();
-    for wf_id in matching_workflows {
-        // Create a simple trigger payload
-        let trigger_payload = serde_json::json!({
-            "data": data,
-            "source": "dashboard_trigger",
-            "metric_key": metric_key,
-        });
+    if !matching_workflows.is_empty() {
+        // `workflow_instances.client_id` is NOT NULL *and* FK -> clients(id), so the random
+        // placeholder uuid this loop used to bind could never be inserted — every dashboard trigger
+        // failed, silently, because the error was dropped. Resolve the same system client the
+        // capture path uses, once per account (kanban t_b9c74751).
+        match crate::execution::find_or_create_system_client(&state.db, aid, "dashboard_trigger")
+            .await
+        {
+            Ok(client_id) => {
+                for wf_id in matching_workflows {
+                    // Create a simple trigger payload — stored on the instance's `context` column
+                    // (migrations/059_workflow_instances_context.sql; the name was a phantom 42703).
+                    let trigger_payload = serde_json::json!({
+                        "data": data,
+                        "source": "dashboard_trigger",
+                        "metric_key": metric_key,
+                    });
 
-        // Create a workflow instance
-        let instance_id = Uuid::new_v4();
-        let placeholder_client_id = Uuid::new_v4();
-        let instance_result = sqlx::query(
-            r#"INSERT INTO workflow_instances (id, workflow_id, client_id, aid, name, status, current_step_order, context)
-               VALUES ($1, $2, $3, $4, $5, 'active', 0, $6::jsonb)"#
-        )
-        .bind(instance_id)
-        .bind(wf_id)
-        .bind(placeholder_client_id)
-        .bind(aid)
-        .bind(format!("Auto-triggered from dashboard: {}", dashboard_type))
-        .bind(&trigger_payload)
-        .execute(&state.db)
-        .await;
+                    // Create a workflow instance
+                    let instance_id = Uuid::new_v4();
+                    let instance_result = sqlx::query(
+                        r#"INSERT INTO workflow_instances (id, workflow_id, client_id, aid, name, status, current_step_order, context)
+                           VALUES ($1, $2, $3, $4, $5, 'active', 0, $6::jsonb)"#
+                    )
+                    .bind(instance_id)
+                    .bind(wf_id)
+                    .bind(client_id)
+                    .bind(aid)
+                    .bind(format!("Auto-triggered from dashboard: {}", dashboard_type))
+                    .bind(&trigger_payload)
+                    .execute(&state.db)
+                    .await;
 
-        if instance_result.is_ok() {
-            triggered_ids.push(instance_id.to_string());
+                    match instance_result {
+                        Ok(_) => triggered_ids.push(instance_id.to_string()),
+                        Err(e) => tracing::error!(
+                            "Dashboard trigger: instance insert for workflow {} (aid={}) failed: {}",
+                            wf_id,
+                            aid.to_string(),
+                            e
+                        ),
+                    }
+                }
+            }
+            Err(e) => tracing::error!(
+                "Dashboard trigger for aid={} could not resolve a system client: {}",
+                aid.to_string(),
+                e
+            ),
         }
     }
 

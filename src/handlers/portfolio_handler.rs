@@ -17,11 +17,15 @@ pub async fn list_portfolio_companies(
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let rows = sqlx::query("SELECT id::text, name, slug, settings::text, created_at::text FROM portfolio_companies WHERE aid = $1 ORDER BY name")
+    // `portfolio_companies.domain` — the company's own web domain. Column added in
+    // migrations/058_portfolio_companies_domain.sql: the internal sync contract carries `domain`
+    // (ADASwift's twin endpoint stores it on tenants/clients) and this handler already reads it,
+    // but the table never had the column, so every sync 42703'd on the statement below.
+    let rows = sqlx::query("SELECT id::text, name, slug, email, description, domain, settings::text, created_at::text FROM portfolio_companies WHERE aid = $1 ORDER BY name")
         .bind(aid)
         .fetch_all(&state.db).await?;
     let companies: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({"id": r.try_get::<&str,_>("id").unwrap_or(""), "name": r.try_get::<&str,_>("name").unwrap_or(""), "slug": r.try_get::<&str,_>("slug").unwrap_or("")})
+        json!({"id": r.try_get::<&str,_>("id").unwrap_or(""), "name": r.try_get::<&str,_>("name").unwrap_or(""), "slug": r.try_get::<&str,_>("slug").unwrap_or(""), "email": r.try_get::<&str,_>("email").unwrap_or(""), "description": r.try_get::<&str,_>("description").unwrap_or(""), "domain": r.try_get::<&str,_>("domain").unwrap_or("")})
     }).collect();
     Ok(Json(json!({"portfolio_companies": companies})))
 }
@@ -156,7 +160,7 @@ pub async fn internal_create_portfolio_company(
     .await.ok();
 
     sqlx::query(
-        "INSERT INTO portfolio_companies (id, aid, name, slug, email, description, domain) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, account_slug = EXCLUDED.account_slug, domain = EXCLUDED.domain"
+        "INSERT INTO portfolio_companies (id, aid, name, slug, email, description, domain) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, domain = EXCLUDED.domain"
     )
     .bind(id)
     .bind(aid)
@@ -164,6 +168,7 @@ pub async fn internal_create_portfolio_company(
     .bind(&slug)
     .bind(&email)
     .bind(&description)
+    .bind(&domain)
     .execute(&state.db)
     .await?;
 
