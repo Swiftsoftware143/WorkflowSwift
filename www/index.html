@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>WorkflowSwift — Automate Everything. Visualize Everything.</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="alternate icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
 <meta name="description" content="WorkflowSwift is the all-in-one automation and data visualization platform. Build visual workflows, dynamic dashboards, and connect your tools without code.">
 <meta name="keywords" content="workflow automation, data visualization, no-code, business process automation, dashboards, workflow builder">
 <meta property="og:title" content="WorkflowSwift — Automate Everything. Visualize Everything.">
@@ -78,6 +80,7 @@ footer a:hover{color:#DC2626}
   <a href="/" class="logo"><div class="logo-icon">WS</div>WorkflowSwift</a>
   <div class="nav-links">
     <a href="#features">Features</a>
+    <a href="#extension">Chrome Extension</a>
     <a href="https://app.workflowswift.com/login">Log In</a>
     <a href="https://app.workflowswift.com/register" class="btn btn-primary">Get Started</a>
   </div>
@@ -136,6 +139,53 @@ footer a:hover{color:#DC2626}
 </div>
 </section>
 
+<section class="features" id="extension">
+<div class="container">
+  <h2>Collect market intel <span class="accent">from your browser</span></h2>
+  <p class="subtitle">Swift Market Intel is a Chrome extension that captures listings, prices, reviews and profiles from 12+ marketplaces and pushes them straight into your WorkflowSwift workspace.</p>
+  <div class="feature-grid">
+    <div class="feature-card">
+      <div class="icon">🛒</div>
+      <h3>Supported platforms</h3>
+      <p>Etsy, Amazon, eBay, Facebook Marketplace, Shopify, Alibaba, AliExpress, Craigslist, Pinterest, TikTok, Instagram, Yelp and Google Maps.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">📥</div>
+      <h3>One-click capture</h3>
+      <p>Open a listing, hit <em>Scrape Current Page</em>, and the structured data lands in WorkflowSwift where your workflows and dashboards can use it.</p>
+    </div>
+    <div class="feature-card">
+      <div class="icon">🔑</div>
+      <h3>Connect with your API token</h3>
+      <p>Paste your WorkflowSwift API token into the extension's Settings, hit <em>Test Connection</em>, and your browser is linked to your own account.</p>
+    </div>
+  </div>
+  <div class="hero-actions" style="margin-top:28px">
+    <a href="/api/v1/extension.zip" class="btn btn-primary" download>Download the extension (.zip) →</a>
+    <a href="/swift-market-intel-extension.html" class="btn btn-outline">Install guide</a>
+  </div>
+  <p class="subtitle" style="margin-top:14px;font-size:0.9rem">Manifest V3 · the button always serves the current build, straight from the WorkflowSwift app<span id="ext-version"></span>.</p>
+  <div style="max-width:720px;margin:26px auto 0;text-align:left">
+    <h3 style="margin-bottom:8px">Install in three steps</h3>
+    <ol style="margin:0 0 0 20px;line-height:1.75;font-size:0.95rem">
+      <li>Download the zip and unpack it into a folder you will keep — Chrome loads the extension from that folder, so don't delete it afterwards.</li>
+      <li>Open <code>chrome://extensions</code> in Chrome, switch on <strong>Developer mode</strong> (top-right), click <strong>Load unpacked</strong> and select that folder (the one holding <code>manifest.json</code>).</li>
+      <li>In WorkflowSwift, open <strong>API Keys</strong>, click <strong>+ New API Key</strong> and copy it, then paste it into the extension's <strong>Options</strong> page and press <strong>Test Connection</strong>.</li>
+    </ol>
+    <p class="subtitle" style="margin-top:12px;font-size:0.9rem"><strong>Sideload only:</strong> Swift Market Intel is not published on the Chrome Web Store, so there is no one-click &ldquo;Add to Chrome&rdquo; — Chrome will tell you the extension came from outside the store, and updates are manual (download the current build again and press <em>Reload</em> on <code>chrome://extensions</code>). The extension asks for the 12 marketplace domains below plus <code>activeTab</code> — never &ldquo;all sites&rdquo;.</p>
+  </div>
+  <script>
+  // The version line is filled from extension-latest.json, which the release script rewrites on
+  // every publish (ws-publish-extension.sh). No version is hardcoded here, so this page cannot
+  // advertise an older build than the one the download button actually serves.
+  fetch('/extension-latest.json?t=' + Date.now()).then(function(r){return r.json()}).then(function(d){
+    var el = document.getElementById('ext-version');
+    if (el && d && d.version) el.textContent = ' — v' + d.version + ', ' + Math.round(d.size/1024) + ' KB, sha256 ' + String(d.sha256).slice(0,12) + '\u2026';
+  }).catch(function(){});
+  </script>
+</div>
+</section>
+
 <section class="cta">
 <div class="container">
   <h2>Ready to <span class="accent">automate</span> your work?</h2>
@@ -147,6 +197,11 @@ footer a:hover{color:#DC2626}
 <footer>
 <div class="container">
   <p>© 2026 WorkflowSwift — <a href="https://swiftsoftware.net">A SwiftSoftware Company</a></p>
+  <p style="margin-top:8px">
+    <a href="/terms">Terms of Service</a> &nbsp;·&nbsp;
+    <a href="/privacy">Privacy Policy</a> &nbsp;·&nbsp;
+    <a href="/refunds">Refund & Cancellation Policy</a>
+  </p>
 </div>
 </footer>
 
@@ -166,5 +221,39 @@ footer a:hover{color:#DC2626}
   }
 }
 </script>
+<!-- Cookie Consent Banner -->
+<div id="cookie-banner" style="position:fixed;bottom:0;left:0;right:0;background:#0f172a;color:#e2e8f0;z-index:99999;padding:16px 24px;font-family:system-ui,sans-serif;font-size:13px;box-shadow:0 -4px 20px rgba(0,0,0,.4);display:none">
+  <div style="max-width:1100px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+    <div style="flex:1;min-width:250px">
+      <strong style="font-size:14px">🍪 Cookie Consent</strong>
+      <p style="margin:4px 0 0;color:#94a3b8;line-height:1.5">We use cookies for analytics, security, and to improve your experience. By continuing, you agree to our <a href="/privacy.html" style="color:#38bdf8">Privacy Policy</a> and <a href="/terms.html" style="color:#38bdf8">Terms of Service</a>.</p>
+    </div>
+    <div style="display:flex;gap:8px;flex-shrink:0">
+      <button onclick="acceptCookies()" style="background:#2563eb;color:#fff;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px">Accept All</button>
+      <button onclick="declineCookies()" style="background:transparent;color:#94a3b8;border:1px solid #475569;padding:8px 20px;border-radius:6px;cursor:pointer;font-size:13px">Decline</button>
+    </div>
+  </div>
+</div>
+<script>
+(function(){
+  var choice = localStorage.getItem('cookie_consent');
+  if (!choice) {
+    document.getElementById('cookie-banner').style.display = 'block';
+  }
+  window.acceptCookies = function(){
+    localStorage.setItem('cookie_consent','accepted');
+    document.getElementById('cookie-banner').style.display = 'none';
+  };
+  window.declineCookies = function(){
+    localStorage.setItem('cookie_consent','declined');
+    document.getElementById('cookie-banner').style.display = 'none';
+    // Disable GA/GTM if present
+    if (typeof gtag === 'function') { window['ga-disable-all'] = true; }
+    var scripts = document.querySelectorAll('script[src*="googletagmanager"],script[src*="analytics"]');
+    scripts.forEach(function(s){ s.remove(); });
+  };
+})();
+</script>
+
 </body>
 </html>
