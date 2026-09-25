@@ -73,8 +73,8 @@ pub async fn list_templates(
             let templates = if let Some(surface_id) = query.surface {
                 sqlx::query_as::<_, WorkflowTemplate>(
                     r#"SELECT wt.* FROM workflow_templates wt
-                       INNER JOIN industry_templates it ON it.template_id = wt.id
-                       WHERE it.industry_slug = $1 AND wt.is_public = true
+                       INNER JOIN template_categories tc ON tc.slug = wt.category AND tc.is_active = true
+                       WHERE tc.slug = $1 AND wt.is_public = true
                        AND (wt.surface_id = $2 OR wt.surface_id IS NULL)
                        ORDER BY wt.name ASC"#,
                 )
@@ -85,8 +85,8 @@ pub async fn list_templates(
             } else {
                 sqlx::query_as::<_, WorkflowTemplate>(
                     r#"SELECT wt.* FROM workflow_templates wt
-                       INNER JOIN industry_templates it ON it.template_id = wt.id
-                       WHERE it.industry_slug = $1 AND wt.is_public = true
+                       INNER JOIN template_categories tc ON tc.slug = wt.category AND tc.is_active = true
+                       WHERE tc.slug = $1 AND wt.is_public = true
                        ORDER BY wt.name ASC"#,
                 )
                 .bind(industry_slug)
@@ -103,9 +103,9 @@ pub async fn list_templates(
         let templates: Vec<WorkflowTemplate> = if let Some(surface_id) = query.surface {
             sqlx::query_as::<_, WorkflowTemplate>(
                 r#"SELECT DISTINCT wt.* FROM workflow_templates wt
-                   INNER JOIN industry_templates it ON it.template_id = wt.id
+                   INNER JOIN template_categories tc ON tc.slug = wt.category AND tc.is_active = true
                    WHERE (wt.aid = $1 OR (wt.is_public = true))
-                   AND it.industry_slug = $2
+                   AND tc.slug = $2
                    AND (wt.surface_id = $3 OR wt.surface_id IS NULL)
                    ORDER BY wt.name ASC"#,
             )
@@ -117,9 +117,9 @@ pub async fn list_templates(
         } else {
             sqlx::query_as::<_, WorkflowTemplate>(
                 r#"SELECT DISTINCT wt.* FROM workflow_templates wt
-                   INNER JOIN industry_templates it ON it.template_id = wt.id
+                   INNER JOIN template_categories tc ON tc.slug = wt.category AND tc.is_active = true
                    WHERE (wt.aid = $1 OR (wt.is_public = true))
-                   AND it.industry_slug = $2
+                   AND tc.slug = $2
                    ORDER BY wt.name ASC"#,
             )
             .bind(aid)

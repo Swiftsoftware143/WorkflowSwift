@@ -183,10 +183,15 @@ pub async fn internal_assign_tag(
         return Err(AppError::Unauthorized);
     }
 
+    // REPOINT (card t_d31f646a): `entity_tags` exists in no database. This app's tag model is
+    // `tags` (per-account, column `aid`) + `tag_assignments` (tag_id, entity_type, entity_id) —
+    // the same pair the JWT route tag_handler::assign_tag writes. The EXISTS keeps the tenant
+    // scoping the old statement carried: a tag_id owned by another tenant is not attachable.
     sqlx::query(
-        r#"INSERT INTO entity_tags (tenant_id, entity_id, entity_type, tag_id)
-           VALUES ($1, $2, $3, $4)
-           ON CONFLICT (tenant_id, entity_id, entity_type, tag_id) DO NOTHING"#,
+        r#"INSERT INTO tag_assignments (id, tag_id, entity_type, entity_id)
+           SELECT gen_random_uuid(), $4, $3, $2
+           WHERE EXISTS (SELECT 1 FROM tags t WHERE t.id = $4 AND t.aid = $1)
+           ON CONFLICT (tag_id, entity_type, entity_id) DO NOTHING"#,
     )
     .bind(req.tenant_id)
     .bind(req.entity_id)
@@ -216,7 +221,10 @@ pub async fn internal_remove_tag(
     }
 
     sqlx::query(
-        r#"DELETE FROM entity_tags WHERE tenant_id = $1 AND entity_id = $2 AND entity_type = $3 AND tag_id = $4"#
+        r#"DELETE FROM tag_assignments ta
+           USING tags t
+           WHERE ta.tag_id = $4 AND t.id = ta.tag_id AND t.aid = $1
+             AND ta.entity_id = $2 AND ta.entity_type = $3"#,
     )
     .bind(req.tenant_id)
     .bind(req.entity_id)
