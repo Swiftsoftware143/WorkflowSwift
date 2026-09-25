@@ -762,7 +762,7 @@ async fn handle_checkout_completed(
 
     // Look up the checkout session before updating — grab customer_email from metadata
     let session_row = sqlx::query(
-        r#"SELECT id, account_id, user_id, metadata, purchasable_type, purchasable_id
+        r#"SELECT id, status, account_id, user_id, metadata, purchasable_type, purchasable_id
            FROM checkout_sessions
            WHERE provider_session_id = $1
              AND provider_type = $2"#,
@@ -771,6 +771,65 @@ async fn handle_checkout_completed(
     .bind(provider_type)
     .fetch_optional(&state.db)
     .await?;
+
+    // ── Credential delivery runs BEFORE the session is marked completed ──
+    //
+    // The mail IS the credential for a brand-new buyer: `deliver_credentials` generates the
+    // password and the API never returns it, so recording the checkout as completed while the send
+    // failed left a paying customer with nothing to log in with while every response said
+    // "success" (log-only — the defect behind this card). The outcome is now persisted on the
+    // session itself (`metadata.credential_delivery`), and a failure is surfaced as 5xx at the end
+    // of this function so the payment provider retries the webhook; the retry re-generates the
+    // password and re-sends, which is this buyer's only way back in.
+    let mut delivery_error: Option<String> = None;
+    if let Some(row) = session_row.as_ref() {
+        let metadata: serde_json::Value = row.get("metadata");
+        let customer_email = metadata
+            .get("customer_email")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let customer_name = metadata
+            .get("customer_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Valued Customer");
+        let session_status: String = row.get("status");
+        let last_delivery = metadata
+            .get("credential_delivery")
+            .and_then(|d| d.get("status"))
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
+        let session_account_id: Uuid = row.get("account_id");
+        let session_ptype: String = row.get("purchasable_type");
+
+        // Deliver on the first pass, or on a provider retry of a delivery that already failed.
+        // A session completed before this change (no `credential_delivery` marker) is left alone:
+        // re-sending credentials for an old purchase would be a surprise, not a repair.
+        let needs_delivery =
+            last_delivery != "sent" && (session_status == "pending" || last_delivery == "failed");
+
+        if needs_delivery && !customer_email.is_empty() {
+            let result = deliver_credentials(
+                state,
+                customer_email,
+                customer_name,
+                session_account_id,
+                &session_ptype,
+            )
+            .await;
+            record_credential_delivery(&state.db, &provider_session_id, provider_type, &result)
+                .await;
+            match result {
+                Ok(()) => tracing::info!(
+                    "Credentials delivered for provider session {}",
+                    provider_session_id
+                ),
+                Err(e) => {
+                    tracing::error!("Failed to deliver credentials: {}", e);
+                    delivery_error = Some(e);
+                }
+            }
+        }
+    }
 
     // Update the checkout session status
     let result = sqlx::query(
@@ -791,10 +850,20 @@ async fn handle_checkout_completed(
 
     if result.rows_affected() == 0 {
         tracing::warn!(
-            "No pending checkout session found for provider session: {}",
+            "No pending checkout session found for provider session: {} (already completed — \
+             only credential delivery can still be outstanding)",
             provider_session_id
         );
-        return Ok(());
+        // The money-side effects below ran on the first pass, so skip them here. The delivery
+        // outcome of *this* attempt is still authoritative: asking the provider to retry again is
+        // the only way a buyer who never received credentials ever gets them.
+        return match delivery_error {
+            Some(e) => Err(AppError::Internal(format!(
+                "credential delivery failed: {}",
+                e
+            ))),
+            None => Ok(()),
+        };
     }
 
     // Mark the webhook event as processed
@@ -803,34 +872,15 @@ async fn handle_checkout_completed(
         .execute(&state.db)
         .await?;
 
-    // ── Credential delivery ──
+    // ── Money-side effects ──
+    //
+    // Credential delivery already ran above, before the session flipped to 'completed'. This block
+    // is only the purchase bookkeeping, and it must happen whether or not the mail went out: the
+    // customer paid either way, so a mail outage must not also cost them the plan they bought.
     if let Some(row) = session_row {
-        let metadata: serde_json::Value = row.get("metadata");
-        let customer_email = metadata
-            .get("customer_email")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let customer_name = metadata
-            .get("customer_name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Valued Customer");
         let _session_account_id: Uuid = row.get("account_id");
         let _ptype: String = row.get("purchasable_type");
         let purchasable_id: Option<Uuid> = row.try_get("purchasable_id").ok().flatten();
-
-        if !customer_email.is_empty() {
-            if let Err(e) = deliver_credentials(
-                state,
-                customer_email,
-                customer_name,
-                _session_account_id,
-                &_ptype,
-            )
-            .await
-            {
-                tracing::error!("Failed to deliver credentials: {}", e);
-            }
-        }
 
         // FunnelSwift affiliate conversion webhook (fire-and-forget)
         let psid = provider_session_id.clone();
@@ -868,6 +918,17 @@ async fn handle_checkout_completed(
         "Checkout completed: provider_session={}",
         provider_session_id
     );
+
+    // The purchase is complete either way (the session is paid and the plan is attributed above).
+    // The one thing that is *not* complete is the credential delivery: return 5xx so the payment
+    // provider retries the webhook and the buyer gets a real second chance at their password.
+    if let Some(e) = delivery_error {
+        return Err(AppError::Internal(format!(
+            "credential delivery failed: {}",
+            e
+        )));
+    }
+
     Ok(())
 }
 
@@ -877,6 +938,11 @@ async fn handle_checkout_completed(
 /// 2. If user exists with password → send "purchase_confirmed"
 /// 3. If user exists without password → generate password, hash, update, send "welcome"
 /// 4. If user doesn't exist → create account + user, send "welcome"
+///
+/// `Err` means the customer did **not** get their mail — for cases 3 and 4 the password it just
+/// generated exists only in that message, so a caller must treat the error as a failed delivery
+/// (not a log line). `handle_checkout_completed` does exactly that: it records the outcome on the
+/// session and answers the payment provider with 5xx so the webhook is retried.
 async fn deliver_credentials(
     state: &AppState,
     email: &str,
@@ -911,18 +977,13 @@ async fn deliver_credentials(
             });
             email::send_email(state, email, "purchase_confirmed", &vars).await
         } else {
-            // User exists but no password — set one and send credentials
+            // User exists but has no usable password — mint one, send it, and only then store the
+            // hash. Storing first would leave the row looking like "credentials delivered" if the
+            // mail failed, and the retry would mail a receipt instead of the password.
             let password = generate_temp_password();
             let hash = hash_password(&password)
                 .await
                 .map_err(|e| format!("Password hashing failed: {}", e))?;
-
-            sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
-                .bind(&hash)
-                .bind(user.id)
-                .execute(&state.db)
-                .await
-                .map_err(|e| format!("Failed to update password: {}", e))?;
 
             let vars = json!({
                 "name": user.name,
@@ -930,7 +991,18 @@ async fn deliver_credentials(
                 "password": password,
                 "url": app_url,
             });
-            email::send_email(state, email, "welcome", &vars).await
+            let sent = email::send_email(state, email, "welcome", &vars).await;
+
+            if sent.is_ok() {
+                sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+                    .bind(&hash)
+                    .bind(user.id)
+                    .execute(&state.db)
+                    .await
+                    .map_err(|e| format!("Failed to update password: {}", e))?;
+            }
+
+            sent
         }
     } else {
         // New user — create account + user, send credentials
@@ -953,15 +1025,21 @@ async fn deliver_credentials(
         .await
         .map_err(|e| format!("Failed to create account: {}", e))?;
 
-        // Create user linked to account
+        // Create user linked to account — deliberately WITHOUT a usable password yet.
+        //
+        // The generated password exists only in the welcome mail, so it must not become the stored
+        // credential before the mail is actually out. An empty `password_hash` is the marker for
+        // "these credentials were never delivered": `login` answers 401 for it, and a retry of the
+        // checkout webhook lands in the `has_password == false` branch above, mints a fresh
+        // password and sends it. Committing the hash here would make the retry send a *receipt* to
+        // a buyer who never received credentials.
         sqlx::query(
             r#"INSERT INTO users (id, aid, email, password_hash, name, role, is_active)
-               VALUES ($1, $2, $3, $4, $5, 'staff', true)"#,
+               VALUES ($1, $2, $3, '', $4, 'staff', true)"#,
         )
         .bind(user_id)
         .bind(account_id)
         .bind(email)
-        .bind(&hash)
         .bind(name)
         .execute(&state.db)
         .await
@@ -974,8 +1052,66 @@ async fn deliver_credentials(
             "password": password,
             "url": app_url,
         });
-        email::send_email(state, email, "welcome", &vars).await
+        let sent = email::send_email(state, email, "welcome", &vars).await;
+
+        if sent.is_ok() {
+            // Only now is the password worth storing — the customer has it in their inbox.
+            sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+                .bind(&hash)
+                .bind(user_id)
+                .execute(&state.db)
+                .await
+                .map_err(|e| format!("Failed to store password: {}", e))?;
+        } else {
+            tracing::error!(
+                "Credentials for new account {} were NOT delivered — leaving password_hash empty \
+                 so the webhook retry re-issues them",
+                user_id
+            );
+        }
+
+        sent
     }
+}
+
+/// Persist the latest credential-delivery outcome on the checkout session itself
+/// (`metadata.credential_delivery` = `{status, at, error}`).
+///
+/// The session row is where a paid-but-undelivered purchase is visible to an admin
+/// (`GET /api/v1/checkout-sessions` returns this metadata), and it is what a provider retry reads
+/// to decide whether the delivery still needs to happen. Best-effort: bookkeeping must never turn a
+/// successful send into a failure.
+async fn record_credential_delivery(
+    db: &sqlx::PgPool,
+    provider_session_id: &str,
+    provider_type: &str,
+    result: &Result<(), String>,
+) {
+    let outcome = match result {
+        Ok(()) => json!({
+            "status": "sent",
+            "at": chrono::Utc::now().to_rfc3339(),
+            "error": null,
+        }),
+        Err(e) => json!({
+            "status": "failed",
+            "at": chrono::Utc::now().to_rfc3339(),
+            "error": e,
+        }),
+    };
+
+    let _ = sqlx::query(
+        r#"UPDATE checkout_sessions
+           SET metadata = jsonb_set(metadata, '{credential_delivery}', $1::jsonb, true),
+               updated_at = NOW()
+           WHERE provider_session_id = $2
+             AND provider_type = $3"#,
+    )
+    .bind(outcome.to_string())
+    .bind(provider_session_id)
+    .bind(provider_type)
+    .execute(db)
+    .await;
 }
 
 /// Generate a cryptographically random temporary password (12 chars)
@@ -1048,6 +1184,7 @@ pub async fn list_checkout_sessions(
     let rows = sqlx::query(
         r#"SELECT id, provider_type, purchasable_type, purchasable_id::text,
                   amount::text, currency, status, provider_session_id,
+                  metadata -> 'credential_delivery' AS credential_delivery,
                   created_at, updated_at
            FROM checkout_sessions
            WHERE account_id = $1
@@ -1067,6 +1204,7 @@ pub async fn list_checkout_sessions(
             "amount": r.try_get::<&str,_>("amount").unwrap_or("0"),
             "currency": r.try_get::<&str,_>("currency").unwrap_or(""),
             "status": r.try_get::<&str,_>("status").unwrap_or(""),
+            "credential_delivery": r.try_get::<Option<serde_json::Value>,_>("credential_delivery").unwrap_or(None),
             "provider_session_id": r.try_get::<Option<&str>,_>("provider_session_id").unwrap_or(None),
             "created_at": r.try_get::<chrono::DateTime<chrono::Utc>,_>("created_at")
                 .map(|t| t.to_rfc3339()).unwrap_or_default(),

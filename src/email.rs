@@ -14,7 +14,43 @@ use crate::state::AppState;
 
 /// Default From address — used only when the admin has not set one in
 /// Admin > Settings > Email. Not a credential, so it is safe as a constant.
-const DEFAULT_EMAIL_FROM: &str = "swiftsoftware143@yahoo.com";
+///
+/// It must live on the domain the provider actually sends through
+/// (`mail.workflowswift.com`, see `api_url`): Mailgun signs with that domain's DKIM, so a From on
+/// any other domain fails DMARC alignment at a strict receiver. Measured on the live domain — a
+/// message From `swiftsoftware143@yahoo.com` sent through `mail.workflowswift.com` was accepted
+/// and then failed with remote code `554 reason=espblock` (yahoo.com publishes `p=reject`), while
+/// the same message From `noreply@mail.workflowswift.com` was delivered (`250 ok dirdel`).
+const DEFAULT_EMAIL_FROM: &str = "noreply@mail.workflowswift.com";
+
+/// The organisation-level domain of an address or From header:
+/// `WorkflowSwift <noreply@mail.workflowswift.com>` -> `workflowswift.com`.
+/// Used only to warn about DMARC-alignment-breaking From addresses.
+fn org_domain(value: &str) -> String {
+    let host = match value.rfind('@') {
+        Some(at) => &value[at + 1..],
+        None => value,
+    };
+    let host = host
+        .split('/')
+        .next()
+        .unwrap_or(host)
+        .trim_matches(|c: char| c == '>' || c == ' ' || c == '.')
+        .to_ascii_lowercase();
+    let labels: Vec<&str> = host.split('.').filter(|l| !l.is_empty()).collect();
+    if labels.len() <= 2 {
+        labels.join(".")
+    } else {
+        labels[labels.len() - 2..].join(".")
+    }
+}
+
+/// Does this Mailgun endpoint send through `domain`? A Mailgun API URL embeds the sending domain
+/// in its path (`https://api.mailgun.net/v3/<domain>/messages`), which is the domain Mailgun signs
+/// DKIM with — so this is the check that decides whether a From is DMARC-aligned.
+fn mailgun_url_sends_as(api_url: &str, domain: &str) -> bool {
+    !domain.is_empty() && api_url.to_ascii_lowercase().contains(domain)
+}
 
 /// Render a template string by replacing {{key}} placeholders with values from `vars`.
 fn render_template(template: &str, vars: &serde_json::Value) -> String {
@@ -557,8 +593,24 @@ async fn send_via_mailgun(
     text_body: &str,
     html_body: &str,
 ) -> Result<(), String> {
+    let from = from_header(cfg);
+
+    // A From on a domain that is not the sending domain's organisation fails DMARC alignment at a
+    // strict receiver: the provider accepts the message and the *recipient* rejects it, so the
+    // only symptom is a 554 in the provider's event log. Warn loudly instead of shipping mail into
+    // that hole (the same check is why `DEFAULT_EMAIL_FROM` lives on mail.workflowswift.com).
+    let from_domain = org_domain(&from);
+    if !from_domain.is_empty() && !mailgun_url_sends_as(&cfg.api_url, &from_domain) {
+        eprintln!(
+            "[email] From domain '{}' is not the domain this Mailgun endpoint sends as ('{}') — \
+             strict receivers reject unaligned mail (DMARC); set the From address on that domain \
+             in Admin > Settings > Email",
+            from_domain, cfg.api_url
+        );
+    }
+
     let mut params = std::collections::HashMap::new();
-    params.insert("from", from_header(cfg));
+    params.insert("from", from);
     params.insert("to", to.to_string());
     params.insert("subject", subject.to_string());
     params.insert("text", text_body.to_string());
@@ -709,4 +761,47 @@ async fn send_via_smtp(
         .await
         .map(|_| ())
         .map_err(|e| format!("SMTP send failed: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn org_domain_reads_the_domain_of_a_from_header() {
+        assert_eq!(
+            org_domain("WorkflowSwift <noreply@mail.workflowswift.com>"),
+            "workflowswift.com"
+        );
+        // The From that shipped before this fix: same organisation as the sending domain is NOT
+        // the same thing — yahoo.com is a different organisation and a strict receiver rejects it.
+        assert_eq!(
+            org_domain("WorkflowSwift <swiftsoftware143@yahoo.com>"),
+            "yahoo.com"
+        );
+    }
+
+    #[test]
+    fn mailgun_url_sends_as_the_domain_in_its_path() {
+        let url = "https://api.mailgun.net/v3/mail.workflowswift.com/messages";
+        // What the app stores today: aligned, so no warning.
+        assert!(mailgun_url_sends_as(
+            url,
+            &org_domain("WorkflowSwift <noreply@mail.workflowswift.com>")
+        ));
+        // What it stored while this card was open: Mailgun accepted it and Yahoo answered
+        // `554 espblock`, because yahoo.com is not a domain this endpoint signs for.
+        assert!(!mailgun_url_sends_as(
+            url,
+            &org_domain("WorkflowSwift <swiftsoftware143@yahoo.com>")
+        ));
+        // Never warn on an unconfigured endpoint.
+        assert!(!mailgun_url_sends_as(url, ""));
+    }
+
+    #[test]
+    fn default_from_is_aligned_with_the_mailgun_sending_domain() {
+        let url = "https://api.mailgun.net/v3/mail.workflowswift.com/messages";
+        assert!(mailgun_url_sends_as(url, &org_domain(DEFAULT_EMAIL_FROM)));
+    }
 }

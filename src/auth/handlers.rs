@@ -293,6 +293,14 @@ pub async fn login(
         return Err(AppError::Forbidden("Account is deactivated".to_string()));
     }
 
+    // A user created by a checkout whose credential mail never went out has no usable password
+    // (checkout_handler::deliver_credentials leaves `password_hash` empty on purpose). There is no
+    // stored hash to parse, so this has to be an ordinary invalid-credentials answer rather than a
+    // 500 from the hasher.
+    if user.password_hash.trim().is_empty() {
+        return Err(AppError::InvalidCredentials);
+    }
+
     // Verify password — off the reactor, bounded by the same process-wide semaphore the
     // API-key path uses (argon2_verify_result). Reached without any credential, so inline
     // this is a free way for an unauthenticated caller to park every worker thread.
@@ -452,6 +460,11 @@ pub async fn forgot_password(
             .execute(&state.db)
             .await?;
 
+        // A send failure here is NOT returned to the caller, on purpose: answering 5xx only for
+        // addresses that exist turns forgot-password into an account-existence oracle, and the
+        // reset token is already in the DB either way. The failure is surfaced where an admin
+        // looks instead — `send_email` records last_send_ok/last_send_error/last_send_template in
+        // the `admin_settings.email` row the Email Provider panel renders (t_b28d3432).
         match send_reset_email(&state, &user.email, &token).await {
             Ok(_) => tracing::info!("Password reset email sent to {}", user.email),
             Err(e) => tracing::error!(
