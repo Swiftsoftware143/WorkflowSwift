@@ -90,8 +90,10 @@ the provider is an admin choice (`smtp`, `mailgun`, `sendgrid`, `sendiio`).
 
 ## Workspaces, agents and tickets
 
-Users create **workspaces** within their tenant; a workspace can carry its own industry and its
-own **provider keys**, and gives the dashboard a per-workspace view.
+Users create **workspaces** within their tenant (the `portfolio_companies` table); a workspace carries
+a name and a slug, `POST` takes an optional `industry_slug` that seeds that workspace's dashboard, and
+`GET /api/v1/agents?workspace_id={id}` scopes the agent list to one workspace. **Provider keys are
+per tenant, never per workspace** — see BYOK below.
 
 | Endpoint | Method | Description |
 |---|---|---|
@@ -107,12 +109,12 @@ exposes it — WorkflowSwift only hands work off and receives results.
 ## BYOK — provider keys
 
 Keys the **customer** brings (OpenAI, Resend/SendGrid, social, CoreSwift, …) are stored in
-`provider_keys` **per tenant** (`aid`) / per workspace, entered in the app UI.
+`provider_keys` **per tenant** (`aid`), one row per (tenant, provider), entered in the app UI.
 
 | Endpoint | Method | Description |
 |---|---|---|
 | `/api/v1/provider-keys` | GET | List configured providers — **values masked** |
-| `/api/v1/provider-keys` | POST | Save/update a tenant or workspace provider key |
+| `/api/v1/provider-keys` | POST | Save/update a tenant provider key |
 | `/api/v1/provider-keys/{provider}` | DELETE | Remove a provider key |
 | `/api/v1/provider-keys/{provider}/test` | POST | Live connection probe |
 | `/api/v1/provider-presets`, `/available-providers` | GET | Preset catalogue (public) |
