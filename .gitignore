@@ -7,3 +7,9 @@ workflowswift-api
 *.bak
 *.bak2
 *.bak.*
+# Secrets never enter the tree (kanban t_5ed88f7b): the real values live in
+# /etc/swift/env/workflowswift.env; .env.example is the publishable template.
+.env
+.env.local
+*.pem
+*.key
