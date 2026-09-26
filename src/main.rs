@@ -88,6 +88,19 @@ async fn main() {
         "Request body-read deadline: {:?} on every route that reads a body, 408 above that (BODY_READ_DEADLINE_SECS)",
         body_read_deadline.duration()
     );
+
+    // Stripe signature freshness (kanban t_72a4bcdf): how far a delivery's `t=` stamp may be from
+    // this host's clock before the receiver refuses it even though its HMAC verified. In the boot
+    // log for the same reason as the two bounds above — an operator diagnosing "every Stripe
+    // delivery is being refused" has to be able to read the value in force, and it is also the value
+    // that says whether THIS box's clock is the suspect.
+    tracing::info!(
+        "Stripe webhook signature tolerance: {}s from this host's clock; a correctly-signed delivery \
+         further away is answered 503 stripe_signature_timestamp_out_of_tolerance and logged \
+         (STRIPE_WEBHOOK_TOLERANCE_SECS, clamped 30..86400, default {})",
+        config.stripe_signature_tolerance_secs,
+        crate::handlers::checkout_handler::DEFAULT_STRIPE_SIGNATURE_TOLERANCE_SECS
+    );
     let provider_key_cache = crate::rate_limit::ProviderKeyCache::new(300); // 5 min TTL
 
     let state = AppState {

@@ -20,6 +20,13 @@ pub struct AppConfig {
     /// and its task, connection and partially-read body buffer are released (kanban t_e7cba83e);
     /// the handler's own work is not bounded by it. `BODY_READ_DEADLINE_SECS`.
     pub body_read_deadline_secs: u64,
+    /// How far a Stripe delivery's `t=` stamp may be from THIS host's clock before the receiver
+    /// refuses it even though its HMAC verified (kanban t_72a4bcdf, the freshness arm of the
+    /// `stripe_webhook` contract — the sibling of the arm ADASwift shipped as t_08628ca6). An
+    /// absolute difference, so a stamp in the future is bounded the same way as one in the past.
+    /// Defaults to Stripe's own 300 s; a host whose clock wanders can be widened without a rebuild.
+    /// `STRIPE_WEBHOOK_TOLERANCE_SECS`.
+    pub stripe_signature_tolerance_secs: i64,
     pub internal_sync_key: String,
     pub n8n_url: String,
     pub n8n_webhook_url: String,
@@ -97,6 +104,17 @@ impl AppConfig {
             .unwrap_or(crate::rate_limit::DEFAULT_BODY_READ_DEADLINE_SECS)
             .clamp(5, 300);
 
+        // Stripe signature freshness (kanban t_72a4bcdf). Same posture again: unset or unparseable
+        // falls back to the default (Stripe's own 300 s) rather than refusing to boot, and the value
+        // is clamped so a mistyped one cannot become an outage — 30 s would refuse ordinary
+        // retries and a clock-skewed genuine delivery, and a day-sized value would hand a captured
+        // `Stripe-Signature` header a day-long replay window.
+        let stripe_signature_tolerance_secs = env::var("STRIPE_WEBHOOK_TOLERANCE_SECS")
+            .ok()
+            .and_then(|v| v.trim().parse::<i64>().ok())
+            .unwrap_or(crate::handlers::checkout_handler::DEFAULT_STRIPE_SIGNATURE_TOLERANCE_SECS)
+            .clamp(30, 86_400);
+
         let internal_sync_key = env::var("INTERNAL_SYNC_KEY").unwrap_or_default();
         let n8n_url = env::var("N8N_URL").unwrap_or_else(|_| "http://localhost:5681".to_string());
         let n8n_webhook_url =
@@ -122,6 +140,7 @@ impl AppConfig {
             db_max_connections,
             auth_in_flight_cap,
             body_read_deadline_secs,
+            stripe_signature_tolerance_secs,
             internal_sync_key,
             n8n_url,
             n8n_webhook_url,

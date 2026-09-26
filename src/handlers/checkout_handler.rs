@@ -706,14 +706,54 @@ struct StripeRejection {
     audit_status: &'static str,
 }
 
+/// Stripe's own documented default tolerance for a `t=` stamp, and this receiver's default: a
+/// delivery whose stamp is further than this from THIS host's clock is refused even when its HMAC
+/// verifies (see `stripe_webhook`, arm 4). Overridable with `STRIPE_WEBHOOK_TOLERANCE_SECS`.
+pub const DEFAULT_STRIPE_SIGNATURE_TOLERANCE_SECS: i64 = 300;
+
+/// The two fields of a `Stripe-Signature` header this receiver cares about — `t=` (when the
+/// signature was generated) and `v1=` (the HMAC over `"{t}.{body}"`) — read in ONE place so the
+/// verifier and the freshness arm can never disagree about which bytes were signed.
+fn stripe_signature_parts(signature: &str) -> (Option<&str>, Option<&str>) {
+    let mut timestamp = None;
+    let mut v1 = None;
+    for part in signature.split(',') {
+        if let Some(t) = part.strip_prefix("t=") {
+            timestamp = Some(t);
+        } else if let Some(s) = part.strip_prefix("v1=") {
+            v1 = Some(s);
+        }
+    }
+    (timestamp, v1)
+}
+
+/// The `t=` stamp as epoch seconds, when the header carries one that is actually a number. `None`
+/// means "this delivery gives no usable time" — the freshness arm refuses that too, because a stamp
+/// that cannot be read cannot bound anything.
+fn stripe_signature_timestamp(signature: &str) -> Option<i64> {
+    stripe_signature_parts(signature)
+        .0
+        .and_then(|t| t.trim().parse::<i64>().ok())
+}
+
 /// The Stripe receiver's refusal contract as a pure function of what the deployment holds
 /// (`secret`: the active `stripe` row's signing secret, `None` when there is nothing to verify
-/// with), what the delivery carried (`signature`: the `Stripe-Signature` header) and the verdict
-/// of the HMAC check. Unit-tested below; see `stripe_webhook` for why each status was chosen.
+/// with), what the delivery carried (`signature`: the `Stripe-Signature` header), the verdict of
+/// the HMAC check, and — for the freshness arm — the delivery's own `t=` stamp (`signed_at`),
+/// this host's clock (`now`) and the tolerated distance between them (`tolerance_secs`).
+/// Unit-tested below; see `stripe_webhook` for why each status was chosen.
+///
+/// The arms are ordered CONFIG → PRESENCE → AUTHENTICITY → FRESHNESS. Freshness is deliberately
+/// last: an ancient stamp on a signature that does not verify says nothing (the signature is not
+/// genuine, whenever it claims to be from), so the verification arm names it instead. Only a
+/// delivery whose HMAC already verified can be called STALE.
 fn stripe_rejection(
     secret: Option<&str>,
     signature: &str,
     signature_ok: bool,
+    signed_at: Option<i64>,
+    now: i64,
+    tolerance_secs: i64,
 ) -> Option<StripeRejection> {
     // Nothing to verify with — the receiver cannot accept ANY event, and that is a state an
     // operator fixes from the admin panel, so asking for a retry is the right call.
@@ -737,6 +777,20 @@ fn stripe_rejection(
         return Some(StripeRejection {
             status: StatusCode::SERVICE_UNAVAILABLE,
             reason: "stripe_signature_verification_failed",
+            audit_status: "signature_failed",
+        });
+    }
+    // The signature is genuine, so the only thing left to decide is whether it is STILL GOOD.
+    // `t=` is when Stripe generated the pair, and the pair is a bearer credential for exactly these
+    // bytes: without this arm the same header+body verifies for ever (t_72a4bcdf). An absolute
+    // difference, so a stamp far in the FUTURE — which would extend the window just as far as a
+    // stamp in the past — is refused the same way. `signed_at == None` here means the `t=` field
+    // verified as part of the payload but is not a number, so this delivery carries no clock to
+    // bound: refused, because an unreadable stamp cannot bound anything.
+    if signed_at.is_none_or(|t| (now - t).abs() > tolerance_secs) {
+        return Some(StripeRejection {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            reason: "stripe_signature_timestamp_out_of_tolerance",
             audit_status: "signature_failed",
         });
     }
@@ -764,6 +818,8 @@ fn stripe_rejection(
 ///   `stripe_signature_missing`.
 /// - a signing secret IS stored and the signature does not verify -> 503
 ///   `stripe_signature_verification_failed`.
+/// - the signature VERIFIES and its `t=` stamp is further from this host's clock than
+///   `stripe_signature_tolerance_secs` -> 503 `stripe_signature_timestamp_out_of_tolerance`.
 ///
 ///   Why 503 here and the 401 that `paypal_webhook` answers for the same-sounding arm: PayPal's
 ///   verdict is computed by PayPal itself, so `verification_status != "SUCCESS"` is an
@@ -787,6 +843,49 @@ fn stripe_rejection(
 /// Every refusal except the malformed body records its delivery in `payment_webhook_events` —
 /// the only durable record — with a `status` that names WHICH arm fired (`not_configured` vs
 /// `signature_failed`) and the reason in `error_message`.
+///
+/// WHY THIS RECEIVER BOUNDS THE AGE OF THE `t=` STAMP (the fourth arm; kanban t_72a4bcdf — DECIDED
+/// on the sibling receiver as t_08628ca6, where the alternative "the replay is harmless" was
+/// measured and rejected, so this card only ports the decided contract).
+///
+/// `{t}.{body}` is a bearer credential for exactly those bytes. The HMAC proves the bytes were
+/// signed by someone holding the signing secret; it says nothing about WHEN, so before this arm a
+/// `Stripe-Signature` header plus its body — captured from a proxy log, a misbehaving client, a
+/// stale retry queue, or any endpoint that echoes headers — verified FOR EVER. That is not
+/// theoretical on this receiver: MEASURED against the pre-fix binary (see
+/// `/opt/swift/audits/t_72a4bcdf/`), a correctly-signed `checkout.session.expired` carrying a stamp
+/// an hour old was accepted `200 {"status":"processed"}` and flipped a real `pending` row in
+/// `checkout_sessions` to `expired`. `checkout.session.completed` no-ops once the session has left
+/// `pending`, but the dispatch match is a growth point: every event type added to it inherits the
+/// full replay. So the "harmless" answer is false today for `expired` and cannot be kept true for
+/// tomorrow, and the bound is the smaller change.
+///
+/// The value is Stripe's own documented default — 300 s, `DEFAULT_STRIPE_SIGNATURE_TOLERANCE_SECS`,
+/// overridable with `STRIPE_WEBHOOK_TOLERANCE_SECS` and clamped 30 s..24 h. It is Stripe's default
+/// because that is the window their libraries use and any delivery Stripe itself makes lands inside
+/// it; a deliberately smaller value would only add ways to refuse a genuine receipt. The comparison
+/// is an ABSOLUTE difference, so a stamp far in the future — which would extend the window just as
+/// far as a stamp in the past — is refused identically.
+///
+/// 503, like the other signature arms and for the same reason: this verdict is computed from THIS
+/// host's clock, so a stale stamp is at least as likely to be our clock being wrong (or a box with
+/// no NTP) as a replay, and the two are indistinguishable from the bytes. Stripe re-signs every
+/// retry attempt — that is what makes the HMAC arm recoverable — so a genuine delivery, or one that
+/// sat in a queue, verifies on the next attempt with a fresh stamp, while a captured header never
+/// can. 401 would assert "not a genuine Stripe event", which we cannot support; 200 would silently
+/// lose a receipt we had already refused. It cannot amplify: a forged request gets a 503 for itself
+/// and nothing else.
+///
+/// Freshness is checked AFTER authenticity (`stripe_rejection` orders the arms), so an ancient stamp
+/// on a signature that does not verify is reported as `stripe_signature_verification_failed` —
+/// nothing is known to be genuine about it, whenever it claims to be from.
+///
+/// Distinguishable in the audit row without widening the existing status CHECK: the arm writes
+/// `status = 'signature_failed'` (a signature that did not pass the receiver's contract for THIS
+/// delivery) with `error_message = 'stripe_signature_timestamp_out_of_tolerance'`, names itself in
+/// the response body, and logs its own ERROR line with the measured age and the tolerance in force —
+/// which is also the line to read if EVERY delivery starts landing here: that means this host's
+/// clock, not an attack.
 pub async fn stripe_webhook(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -821,7 +920,20 @@ pub async fn stripe_webhook(
         (Some(secret), false) => verify_stripe_signature(&body, signature, secret),
         _ => false,
     };
-    let rejection = stripe_rejection(secret, signature, signature_ok);
+    // The `t=` stamp is only a clock once the HMAC verified (see `stripe_rejection`'s arm order):
+    // an ancient stamp on a FORGED signature is just a forged signature. `now` is read once, here,
+    // and the tolerance comes from `AppConfig` so a host with a wandering clock can be widened
+    // without a rebuild (STRIPE_WEBHOOK_TOLERANCE_SECS).
+    let signed_at = stripe_signature_timestamp(signature);
+    let now = chrono::Utc::now().timestamp();
+    let rejection = stripe_rejection(
+        secret,
+        signature,
+        signature_ok,
+        signed_at,
+        now,
+        state.config.stripe_signature_tolerance_secs,
+    );
 
     // Log the delivery either way — a refusal is evidence and belongs in the audit table.
     let audit_status = match &rejection {
@@ -850,6 +962,25 @@ pub async fn stripe_webhook(
                  verified. Answering 503 so Stripe retries (up to 3 days); paste the endpoint's \
                  whsec_… in Admin > Payment gateways and the retries verify. event_id={}",
                 event_id
+            );
+        } else if rejection.reason == "stripe_signature_timestamp_out_of_tolerance" {
+            // Its own line, because the operator action is different from "the secret is wrong":
+            // the HMAC VERIFIED, so the secret is right and only the delivery's clock is off.
+            tracing::error!(
+                "Stripe webhook REJECTED — stripe_signature_timestamp_out_of_tolerance \
+                 (event_id={}, signed_at={:?}, age={:?}s, tolerance={}s): the signature VERIFIED, \
+                 so the signing secret is right, but this delivery's `t=` stamp is further from \
+                 this host's clock than the tolerance — which is what stops a captured \
+                 Stripe-Signature header from verifying for ever. Answering 503 so Stripe retries: \
+                 Stripe re-signs every attempt, so a genuine delivery (or one that sat in a queue) \
+                 verifies with a fresh stamp on the retry, while a captured header never can. If \
+                 EVERY delivery starts landing here, this host's clock is the suspect — fix it, or \
+                 widen STRIPE_WEBHOOK_TOLERANCE_SECS (default {}s).",
+                event_id,
+                signed_at,
+                signed_at.map(|t| now - t),
+                state.config.stripe_signature_tolerance_secs,
+                DEFAULT_STRIPE_SIGNATURE_TOLERANCE_SECS
             );
         } else {
             tracing::error!(
@@ -1551,21 +1682,19 @@ pub async fn list_checkout_sessions(
 }
 
 /// Verify Stripe webhook signature using the signing secret
+///
+/// This answers ONE question — "do these bytes carry an HMAC made with our signing secret, over
+/// exactly this `t=` and exactly this body?" — and nothing about WHEN. Freshness is a separate arm
+/// (see `stripe_rejection`); the two read the header through `stripe_signature_parts` so they can
+/// never disagree about the bytes that were signed.
 fn verify_stripe_signature(body: &[u8], signature: &str, secret: &str) -> bool {
     // Stripe sends signatures in the format: t=timestamp,v1=signature
     // We need to extract the v1 signature and verify with HMAC-SHA256
 
-    let parts: Vec<&str> = signature.split(',').collect();
-    let mut timestamp = "";
-    let mut expected_sig = "";
-
-    for part in &parts {
-        if let Some(t) = part.strip_prefix("t=") {
-            timestamp = t;
-        } else if let Some(s) = part.strip_prefix("v1=") {
-            expected_sig = s;
-        }
-    }
+    let (timestamp, expected_sig) = stripe_signature_parts(signature);
+    let (Some(timestamp), Some(expected_sig)) = (timestamp, expected_sig) else {
+        return false;
+    };
 
     if timestamp.is_empty() || expected_sig.is_empty() {
         return false;
@@ -1643,9 +1772,21 @@ fn base64_encode_auth(credentials: &str) -> String {
 mod stripe_contract_tests {
     use super::*;
 
-    /// `stripe_rejection` as a one-line string, so the whole contract reads as a table.
+    /// The tolerance in force for the tests below: the shipped default.
+    const TOL: i64 = DEFAULT_STRIPE_SIGNATURE_TOLERANCE_SECS;
+    /// A FIXED "now". The contract is a function of the clock, so the tests pass one in rather than
+    /// reading the wall clock — otherwise a test could flake on a slow machine.
+    const NOW: i64 = 1_800_000_000;
+
+    /// `stripe_rejection` as a one-line string, so the whole contract reads as a table. Assumes the
+    /// delivery's stamp is current (the freshness arm has its own test below).
     fn arm(secret: Option<&str>, signature: &str, ok: bool) -> String {
-        match stripe_rejection(secret, signature, ok) {
+        arm_at(secret, signature, ok, Some(NOW))
+    }
+
+    /// The same, with an explicit `t=` stamp — `None` meaning "no readable stamp".
+    fn arm_at(secret: Option<&str>, signature: &str, ok: bool, signed_at: Option<i64>) -> String {
+        match stripe_rejection(secret, signature, ok, signed_at, NOW, TOL) {
             None => "verified".to_string(),
             Some(r) => format!("{} {} {}", r.status.as_u16(), r.reason, r.audit_status),
         }
@@ -1676,5 +1817,143 @@ mod stripe_contract_tests {
         );
         // Only a positive verdict is admitted, and it is never a rejection.
         assert_eq!(arm(Some("whsec_probe"), "t=1,v1=aa", true), "verified");
+    }
+
+    /// t_72a4bcdf (the arm ADASwift decided as t_08628ca6): a signature that VERIFIES is not a
+    /// licence to accept the body for ever. The `{t}.{body}` pair is a bearer credential, so a
+    /// stamp outside the tolerance is refused even though the HMAC is genuine — in BOTH directions
+    /// around this host's clock, and only for a delivery whose authenticity was already
+    /// established.
+    #[test]
+    fn stripe_receiver_refuses_a_signature_whose_stamp_is_not_current() {
+        // The ordinary case: a stamp at "now" verifies.
+        assert_eq!(arm(Some("whsec_probe"), "t=1,v1=aa", true), "verified");
+        // The boundary is INCLUSIVE (the comparison is `>`), and just inside it still verifies.
+        assert_eq!(
+            arm_at(Some("whsec_probe"), "t=1,v1=aa", true, Some(NOW - TOL)),
+            "verified"
+        );
+        assert_eq!(
+            arm_at(Some("whsec_probe"), "t=1,v1=aa", true, Some(NOW - TOL + 1)),
+            "verified"
+        );
+        // One second past the bound in the PAST: this is the replay — a header captured earlier,
+        // still carrying a genuine HMAC over a body we would act on.
+        assert_eq!(
+            arm_at(Some("whsec_probe"), "t=1,v1=aa", true, Some(NOW - TOL - 1)),
+            "503 stripe_signature_timestamp_out_of_tolerance signature_failed"
+        );
+        // The shape the card describes: a delivery captured an hour ago, and one from weeks ago.
+        assert_eq!(
+            arm_at(Some("whsec_probe"), "t=1,v1=aa", true, Some(NOW - 3600)),
+            "503 stripe_signature_timestamp_out_of_tolerance signature_failed"
+        );
+        assert_eq!(
+            arm_at(
+                Some("whsec_probe"),
+                "t=1,v1=aa",
+                true,
+                Some(NOW - 86_400 * 30)
+            ),
+            "503 stripe_signature_timestamp_out_of_tolerance signature_failed"
+        );
+        // The FUTURE is bounded identically, or a stamp dated next month would hand the same
+        // captured pair a month-long window.
+        assert_eq!(
+            arm_at(
+                Some("whsec_probe"),
+                "t=1,v1=aa",
+                true,
+                Some(NOW + 86_400 * 30)
+            ),
+            "503 stripe_signature_timestamp_out_of_tolerance signature_failed"
+        );
+        // ... while ordinary clock skew is NOT an outage: a few seconds either way still verifies.
+        assert_eq!(
+            arm_at(Some("whsec_probe"), "t=1,v1=aa", true, Some(NOW + 5)),
+            "verified"
+        );
+        assert_eq!(
+            arm_at(Some("whsec_probe"), "t=1,v1=aa", true, Some(NOW - 5)),
+            "verified"
+        );
+        // A `t=` whose text verified as part of the payload but is not a number carries no clock,
+        // so it cannot be bounded — refused rather than waved through.
+        assert_eq!(
+            arm_at(Some("whsec_probe"), "t=nope,v1=aa", true, None),
+            "503 stripe_signature_timestamp_out_of_tolerance signature_failed"
+        );
+        // FRESHNESS IS DECIDED AFTER AUTHENTICITY: an ancient stamp on a FORGED signature is just a
+        // forged signature, and the audit row must say that rather than blame this host's clock.
+        assert_eq!(
+            arm_at(Some("whsec_probe"), "t=1,v1=aa", false, Some(NOW - 86_400)),
+            "503 stripe_signature_verification_failed signature_failed"
+        );
+        // ... and a deployment with nothing to verify with is named as not_configured, not as stale.
+        assert_eq!(
+            arm_at(None, "t=1,v1=aa", true, Some(NOW - 86_400)),
+            "503 stripe_not_configured not_configured"
+        );
+        // A missing `Stripe-Signature` header is still `signature_missing`, even with no stamp.
+        assert_eq!(
+            arm_at(Some("whsec_probe"), "", false, None),
+            "503 stripe_signature_missing signature_failed"
+        );
+        // The arm answers 503 like every other signature refusal (Stripe retries, so a genuine
+        // delivery is re-signed; Stripe also flags the endpoint failing, so a wrong clock is loud),
+        // and it lands in the audit table with the existing `signature_failed` vocabulary — the
+        // reason in `error_message` is what distinguishes it.
+        let r = stripe_rejection(
+            Some("whsec_probe"),
+            "t=1,v1=aa",
+            true,
+            Some(NOW - 3 * TOL),
+            NOW,
+            TOL,
+        )
+        .expect("a stale stamp must be a refusal");
+        assert_eq!(r.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(r.reason, "stripe_signature_timestamp_out_of_tolerance");
+        assert_eq!(r.audit_status, "signature_failed");
+    }
+
+    /// Both arms read `Stripe-Signature` through the same parser — the verifier hashes the `t=`
+    /// text it is given, and the freshness arm has to agree on what that text is — and the
+    /// tolerance is the deliberate 300 s Stripe ships, not whatever a variable happened to hold.
+    #[test]
+    fn the_header_is_read_once_and_the_tolerance_is_the_decided_value() {
+        assert_eq!(stripe_signature_timestamp("t=1800000000,v1=aa"), Some(NOW));
+        assert_eq!(stripe_signature_timestamp("v1=aa,t=1800000000"), Some(NOW));
+        assert_eq!(stripe_signature_timestamp("t=1800000000"), Some(NOW));
+        assert_eq!(stripe_signature_timestamp("v1=aa"), None);
+        assert_eq!(stripe_signature_timestamp(""), None);
+        assert_eq!(stripe_signature_timestamp("t=nope,v1=aa"), None);
+        assert_eq!(stripe_signature_parts("t=1,v1=aa"), (Some("1"), Some("aa")));
+        assert_eq!(stripe_signature_parts("nolabel"), (None, None));
+        assert_eq!(DEFAULT_STRIPE_SIGNATURE_TOLERANCE_SECS, 300);
+    }
+
+    /// The arm that used to answer 200 must not answer 2xx any more: a 2xx tells Stripe the event
+    /// was delivered, so it never retries and the receipt is lost silently. Covers every arm,
+    /// including the two freshness directions.
+    #[test]
+    fn no_refusal_arm_is_answered_2xx() {
+        for (secret, signature, ok, signed_at) in [
+            (None, "", false, Some(NOW)),
+            (None, "t=1,v1=aa", true, Some(NOW)),
+            (Some("whsec_probe"), "", false, Some(NOW)),
+            (Some("whsec_probe"), "t=1,v1=aa", false, Some(NOW)),
+            (Some("whsec_probe"), "t=1,v1=aa", true, Some(NOW - 86_400)),
+            (Some("whsec_probe"), "t=1,v1=aa", true, Some(NOW + 86_400)),
+            (Some("whsec_probe"), "t=1,v1=aa", true, None),
+        ] {
+            let rejection = stripe_rejection(secret, signature, ok, signed_at, NOW, TOL)
+                .expect("must be a refusal");
+            assert!(
+                !rejection.status.is_success(),
+                "arm {secret:?}/{signature:?}/{ok}/{signed_at:?} must not be 2xx, got {}",
+                rejection.status
+            );
+        }
     }
 }
