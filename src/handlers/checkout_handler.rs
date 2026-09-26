@@ -1349,25 +1349,26 @@ async fn handle_checkout_completed(
         let _ptype: String = row.get("purchasable_type");
         let purchasable_id: Option<Uuid> = row.try_get("purchasable_id").ok().flatten();
 
-        // FunnelSwift affiliate conversion webhook (fire-and-forget)
-        let psid = provider_session_id.clone();
-        let ptype = _ptype.clone();
-        tokio::spawn(async move {
-            let funnelswift_url = std::env::var("FUNNELSWIFT_URL").unwrap_or_default();
-            if !funnelswift_url.is_empty() {
-                let _ = reqwest::Client::new()
-                    .post(format!("{}/api/v1/webhooks/conversion", funnelswift_url))
-                    .json(&serde_json::json!({
-                        "source_app": "workflowswift",
-                        "purchasable_type": ptype,
-                        "provider_session_id": psid,
-                    }))
-                    .timeout(std::time::Duration::from_secs(5))
-                    .send()
-                    .await;
-            }
-        });
-
+        // No cross-app conversion post here — deleted by kanban t_f6eb8834, do not re-add.
+        //
+        // What it did: `POST {FUNNELSWIFT_URL}/api/v1/webhooks/conversion` with
+        // `{source_app, purchasable_type, provider_session_id}` — no `X-Internal-Key`, no `amount`,
+        // no `lead_id`/`lead_email`/`affiliate_id` — and dropped the response (`let _ = …send()`).
+        // Since kanban t_f408b7cc that receiver is a real, key-gated one, so the post answered
+        // `401 Invalid internal key` (measured live, audits/t_f6eb8834/01-live-probes.txt) and
+        // credited nothing — silently, because nothing read the response.
+        //
+        // Why deleted instead of repaired: WorkflowSwift holds no referral data at this point in
+        // the flow. The crate names no affiliate/cookie/referral id, and the session's `metadata`
+        // is whatever the caller posted (live rows carry `customer_name`/`customer_email` only).
+        // The one attribution join key is the buyer's email, and the paid-plan path directly below
+        // already sends it — key-authenticated — as the fleet's upgrade event. Measured against
+        // the live receiver (audits/t_f6eb8834/02-arm-a-double-credit.json): that path credited the
+        // probe commission (200 / 10.00 on a 100.00 sale); re-sending the SAME purchase through the
+        // conversion receiver wrote a SECOND commission row (double pay) unless it carried the
+        // upgrade event's own `event_id`, in which case the receiver answered `already-recorded`
+        // and wrote nothing. So it could only double-pay or duplicate — never add a credit.
+        //
         // Credit the referring affiliate for the paid-plan upgrade (if this is a plan purchase).
         if _ptype == "plan" {
             if let Some(plan_id) = purchasable_id {

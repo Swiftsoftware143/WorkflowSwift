@@ -174,9 +174,13 @@ credits per call.
   `POST /api/v1/webhooks/paypal` (signature-verified in the handler).
 - Affiliate attribution is owned by FunnelSwift, not by this app: WorkflowSwift stores no affiliate
   records and exposes **no** `/api/v1/affiliates` endpoint (the auto-generated stub that answered
-  500 was deleted — kanban t_01fa9bbc). Checkout reports a conversion
-  (`POST {FUNNELSWIFT_URL}/api/v1/webhooks/conversion`) and a paid plan upgrade notifies
-  `POST {FUNNELSWIFT_URL}/api/v1/internal/affiliate/upgrade-event`; the referral is credited there.
+  500 was deleted — kanban t_01fa9bbc). A paid plan upgrade notifies
+  `POST {FUNNELSWIFT_URL}/api/v1/internal/affiliate/upgrade-event` (key-authenticated) and the
+  referral is credited there — that is the only conversion this app reports. The keyless
+  `POST {FUNNELSWIFT_URL}/api/v1/webhooks/conversion` post was **deleted** (kanban t_f6eb8834): it
+  sent no `X-Internal-Key` and no attribution, so the now key-gated receiver refused it `401` and
+  the conversion was lost silently; re-adding it would only double-pay, because the upgrade event
+  above already credits the same purchase.
 - Per-account registries backed by real tables: `/api/v1/tag-groups` (Tags & Labels -> Tag Groups,
   `tag_groups`, migration 054) and `/api/v1/webhooks` (Communications -> Webhooks, `webhooks`,
   migration 055). The `webhooks` table is the tenant's own endpoint registry — it is not the
