@@ -156,6 +156,12 @@ const API = (() => {
     removeUser: (id) => fetch(base + '/users/' + encodeURIComponent(id), { method:'DELETE', headers: headers() }).then(handle),
     // --- Panel wiring: endpoints that were served but reachable from no shipped surface ---
     getTimeline: () => fetch(base + '/dashboard/timeline', { headers: headers() }).then(handle),
+    // GET /dashboard/workspace -- the account's running/in-progress/pending instances plus its
+    // automation count, in one call (kanban t_b2f20b5b: the route answered 200 with real rows and
+    // no served surface called it). The window is deliberately wide -- a running instance must not
+    // drop off the dashboard just because it started weeks ago (the started_at recency-gate class,
+    // kanban t_da64fe12) -- and limit is high so active_count is the real count, not the page cap.
+    getWorkspaceDashboard: () => fetch(base + '/dashboard/workspace?days=3650&limit=100', { headers: headers() }).then(handle),
     getPlanCapabilities: () => fetch(base + '/plans/capabilities', { headers: headers() }).then(handle),
     rolloverCredits: () => fetch(base + '/credits/rollover', { method:'POST', headers: headers(), body: JSON.stringify({}) }).then(handle),
     removeAccountIndustry: (slug) => fetch(base + '/accounts/industry/' + encodeURIComponent(slug), { method:'DELETE', headers: headers() }).then(handle),
@@ -202,7 +208,7 @@ const setView = (v, params) => { S.current = v; S.viewParams = params || {}; ren
 const closeModal = () => { S.modal = null; renderApp(); };
 // Team / plan / timeline state (kept out of the S literal above so the two lanes editing this
 // file do not collide on one very long line).
-Object.assign(S, { users:null, teamErr:null, invited:null, permsTarget:null, timeline:null, planCaps:null, rolloverMsg:null, timelineTried:false, planCapsTried:false });
+Object.assign(S, { users:null, teamErr:null, invited:null, permsTarget:null, timeline:null, planCaps:null, rolloverMsg:null, timelineTried:false, planCapsTried:false, wsDash:null, wsDashTried:false });
 
 const statusBadge = (s) => {
   const m = { active:'b-green', pending:'b-amber', running:'b-blue', completed:'b-green', failed:'b-red', draft:'b-gray', deleted:'b-red', paused:'b-gray', won:'b-green', lost:'b-red', open:'b-blue', closed:'b-gray' };
@@ -331,6 +337,9 @@ const applyCountUps = () => { (S.widgets||[]).forEach((w,i)=>{ const n=wnum(w); 
 const loadDashTabs = async (slug) => { try { const r = await API.getDashboardTabs(slug || currentIndustrySlug()); S.dashboardTabs = r.tabs || r.items || r || []; } catch(e){ S.dashboardTabs=[]; } };
 // GET /dashboard/timeline was served but uncalled — the account's own activity feed.
 const loadTimeline = async () => { try { const r = await API.getTimeline(); S.timeline = r.timeline || r.items || []; } catch(e){ S.timeline=[]; } renderApp(); };
+// GET /dashboard/workspace -- the "running now" tile (kanban t_b2f20b5b). Silent on failure:
+// the tile is hidden rather than showing a false 0, so a broken call cannot lie on the dashboard.
+const loadWsDash = async () => { try { const r = await API.getWorkspaceDashboard(); S.wsDash = (r && r.dashboard) ? r.dashboard : null; } catch(e){ S.wsDash = null; } renderApp(); };
 
 // Sample-value generator so any account can populate its widgets without waiting on n8n.
 const sampleValueFor = (w, idx) => {
@@ -374,6 +383,7 @@ const DashboardView = () => {
   // NOTE: a plain `&& !S.loading` guard here never fires — loadCredits()/loadWidgets() set
   // S.loading = true synchronously before their first await. Use a tried-flag instead.
   if (S.timeline === null && !S.timelineTried) { S.timelineTried = true; loadTimeline(); }
+  if (S.wsDash === null && !S.wsDashTried) { S.wsDashTried = true; loadWsDash(); }
   const widgets = S.widgets || [];
   const metas = { bg:'#fff', fg:'#0f172a' };
   return html`
@@ -390,6 +400,17 @@ const DashboardView = () => {
       ${(S.timeline||[]).length ? html`<div class="card" style="margin-bottom:16px">
         <h3 class="font-semibold text-gray-800 mb-3">Recent activity</h3>
         <ul class="mfeed tfeed">${(S.timeline||[]).slice(0,8).map((t,i)=>html`<li key=${i}><span>${t.title||t.description||t.action||t.event_type||'—'}</span><span class="text-xs text-gray-400">${fmtDate(t.created_at||t.at||t.timestamp||t.occurred_at)}</span></li>`)}</ul>
+      </div>` : ''}
+      ${S.wsDash ? html`<div class="card" style="margin-bottom:16px" id="wsdash">
+        <h3 class="font-semibold text-gray-800 mb-3">Running now</h3>
+        <div class="flex items-center gap-6 mb-3">
+          <div><div class="text-2xl font-extrabold text-gray-900" id="wsdash-active">${S.wsDash.active_count || 0}</div><div class="text-xs text-gray-500">active instance${(S.wsDash.active_count||0)===1?'':'s'} (running / in progress / pending)</div></div>
+          <div><div class="text-2xl font-extrabold text-gray-900" id="wsdash-automations">${S.wsDash.total_automations || 0}</div><div class="text-xs text-gray-500">automation${(S.wsDash.total_automations||0)===1?'':'s'} configured</div></div>
+          <div class="ml-auto"><button class="btn-outline text-sm" onClick=${()=>setView('instances')}>View instances</button></div>
+        </div>
+        ${(S.wsDash.active_instances||[]).length === 0 ? html`<p class="text-sm text-gray-500">Nothing running right now.</p>` : html`
+          <ul class="mfeed tfeed">${(S.wsDash.active_instances||[]).slice(0,5).map((i,ix)=>html`<li key=${i.id||ix}><span>${i.workflow_name || '-'} <span class="text-xs text-gray-400">${i.status || ''}</span></span><span class="text-xs text-gray-400">${fmtDate(i.started_at || i.updated_at)}</span></li>`)}</ul>
+          ${(S.wsDash.active_instances||[]).length > 5 ? html`<p class="text-xs text-gray-400 mt-2">+${(S.wsDash.active_instances||[]).length - 5} more -- see Instances.</p>` : ''}`}
       </div>` : ''}
       ${widgets.length === 0 ? html`
         <div class="card"><div class="empty">
