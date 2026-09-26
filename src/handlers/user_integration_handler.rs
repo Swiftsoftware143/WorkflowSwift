@@ -165,18 +165,28 @@ pub async fn upsert_integration(
 
     // If a base_url is provided and the provider requires one, validate it's present
     // We fetch from available_providers to check
-    if let Ok(Some(requires_url)) = sqlx::query_scalar::<_, bool>(
+    // `requires_base_url` is NULLABLE (DEFAULT false), so it decodes as Option<bool>. A bare
+    // `bool` made the whole statement fail with sqlx "unexpected null; try decoding as an
+    // Option" for a NULL row, and `if let Ok(Some(..))` then skipped this validation with no
+    // signal at all - the requirement silently unenforced (kanban t_b7276a9a).
+    if let Ok(Some(requires_url)) = sqlx::query_scalar::<_, Option<bool>>(
         "SELECT requires_base_url FROM available_providers WHERE key = $1",
     )
     .bind(provider)
     .fetch_optional(&state.db)
     .await
     {
-        if requires_url && base_url.is_none() {
+        if requires_url == Some(true) && base_url.is_none() {
             return Err(AppError::BadRequest(format!(
                 "base_url is required for provider '{}'",
                 provider
             )));
+        }
+        if requires_url.is_none() {
+            tracing::warn!(
+                provider = %provider,
+                "available_providers.requires_base_url is NULL - base_url requirement not enforced"
+            );
         }
     }
 
