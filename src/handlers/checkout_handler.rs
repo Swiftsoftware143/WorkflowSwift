@@ -402,10 +402,12 @@ pub async fn create_checkout_session(
 
     // Resolve success_url: explicit, else the static /thank-you.html.
     // `plan_tiers` has no `thank_you_url` column and no surface writes one: `checkout_url` there is
-    // the payment link the provider returns (checkout_url, this file:383), and neither the plan CRUD
-    // (plan_handler.rs::update_plan / admin_update_plan) nor the admin Plans UI sends a per-plan
-    // thank-you page. Selecting it made every create-session without an explicit success_url a
-    // guaranteed ERROR 42703 (kanban t_b9c74751); the documented default is the real fallback.
+    // the payment link the provider returns (checkout_url, this file:383), and neither the live plan
+    // CRUD (`admin_settings_handler::admin_update_plan_full`, the only plan writer mounted —
+    // routes.rs:701; the unmounted `plan_handler` duplicates were deleted in kanban t_647203c7) nor
+    // the admin Plans UI sends a per-plan thank-you page. Selecting it made every create-session
+    // without an explicit success_url a guaranteed ERROR 42703 (kanban t_b9c74751); the documented
+    // default is the real fallback.
     let success_url = req
         .get("success_url")
         .and_then(|v| v.as_str())
