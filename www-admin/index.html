@@ -735,29 +735,74 @@ function renderCheckoutSessions(c){
   });
 }
 
-// --- Integration destination values (GET /integration-destinations/values?provider=&destination_type=) ---
-// The route answers 400 unless BOTH params are present, so the form always sends both.
+// --- Integration destination values (GET /integration-destinations) ---------------------------
+// The provider / action / destination-type lists come from the destination CATALOGUE route
+// GET /integration-destinations: its 3-level cascade (no params -> providers, ?provider= ->
+// actions, ?provider=&action= -> destination types) is exactly the shape this panel needs.
+// Before kanban t_92388cf3 all three lists were hardcoded here (3 providers, 3-3-2 types), so the
+// panel could not reach catalogue tuples /values DOES serve — e.g. coreswift / add_note / category.
+// The value lookup itself is unchanged: GET /integration-destinations/values?provider=&
+// destination_type= answers 400 unless BOTH params are present, so Load stays disabled until a
+// destination type is picked.
 function renderDestinationValues(c){
-  const PROV=[['coreswift','CoreSwift'],['funnelswift','FunnelSwift'],['incentiveswift','IncentiveSwift']];
-  const TYPES={coreswift:['list','tags','pipeline_stage'],funnelswift:['landing_page','tags'],incentiveswift:['campaign','milestone_level']};
   c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-1">Integration Destination Values</h2>'
-   +'<p class="text-xs text-gray-400 mb-4">The values a step can target for a provider + destination type (GET /integration-destinations/values). Falls back to built-in placeholders when the provider API is unreachable &mdash; the <b>source</b> line tells you which you are looking at.</p>'
+   +'<p class="text-xs text-gray-400 mb-4">The values a step can target for a provider + destination type (GET /integration-destinations/values). Provider, action and destination type are read from the destination catalogue (GET /integration-destinations); the <b>source</b> line says whether the values are live from the provider API or the built-in fallback.</p>'
    +'<div class="flex gap-3 items-end mb-4">'
-   +'<div><label class="text-xs text-gray-500">Provider</label><select id="dvprov" class="input">'+PROV.map(p=>'<option value="'+p[0]+'">'+p[1]+'</option>').join('')+'</select></div>'
-   +'<div><label class="text-xs text-gray-500">Destination type</label><select id="dvtype" class="input"></select></div>'
-   +'<button class="btn btn-primary btn-sm" id="dvload">Load values</button></div>'
+   +'<div><label class="text-xs text-gray-500">Provider</label><select id="dvprov" class="input"><option value="">Loading&hellip;</option></select></div>'
+   +'<div><label class="text-xs text-gray-500">Action</label><select id="dvact" class="input"><option value="">&mdash;</option></select></div>'
+   +'<div><label class="text-xs text-gray-500">Destination type</label><select id="dvtype" class="input"><option value="">&mdash;</option></select></div>'
+   +'<button class="btn btn-primary btn-sm" id="dvload" disabled>Load values</button></div>'
    +'<div id="dvdata"><p class="text-gray-400 text-sm">Pick a provider and load.</p></div></div>';
-  const psel=c.querySelector('#dvprov'),tsel=c.querySelector('#dvtype');
-  const fill=()=>{tsel.innerHTML=(TYPES[psel.value]||[]).map(t=>'<option value="'+t+'">'+t+'</option>').join('')};
-  fill();psel.onchange=fill;
-  c.querySelector('#dvload').onclick=async()=>{
-    const el=c.querySelector('#dvdata');el.innerHTML='<p class="text-gray-400 text-sm">Loading...</p>';
+  const psel=c.querySelector('#dvprov'),asel=c.querySelector('#dvact'),tsel=c.querySelector('#dvtype');
+  const dbox=c.querySelector('#dvdata'),lbtn=c.querySelector('#dvload');
+  const fill=(sel,rows,ph)=>{ sel.innerHTML=(rows.length?'':'<option value="">'+escHtml(ph)+'</option>')
+    +rows.map(r=>'<option value="'+escHtml(r.v)+'">'+escHtml(r.l)+'</option>').join(''); };
+  const fail=(what)=>{ dbox.innerHTML='<p class="text-red-500 text-sm">'+escHtml(what)+' failed: '+escHtml(LAST_ERR||'request failed')+'</p>'; lbtn.disabled=true; };
+  const loadTypes=async()=>{
+    fill(tsel,[],'pick an action'); lbtn.disabled=true;
+    if(!psel.value||!asel.value)return;
+    const d=await api('/integration-destinations?provider='+encodeURIComponent(psel.value)+'&action='+encodeURIComponent(asel.value));
+    if(!d)return fail('Destination catalogue');
+    const rows=((d&&d.destinations)||[]).map(x=>({v:x.type,l:x.label||x.type}));
+    fill(tsel,rows,'this action targets nothing');
+    lbtn.disabled=!rows.length;
+    if(!rows.length)dbox.innerHTML='<p class="text-gray-400 text-sm">No destination types for '+escHtml(psel.value)+' / '+escHtml(asel.value)+'.</p>';
+  };
+  const loadActions=async()=>{
+    fill(asel,[],'no actions'); fill(tsel,[],'pick an action'); lbtn.disabled=true;
+    if(!psel.value)return;
+    const d=await api('/integration-destinations?provider='+encodeURIComponent(psel.value));
+    if(!d)return fail('Destination catalogue');
+    const rows=((d&&d.actions)||[]).map(x=>({v:x.key,l:x.label||x.key}));
+    fill(asel,rows,'no actions');
+    if(!rows.length){ dbox.innerHTML='<p class="text-gray-400 text-sm">This provider has no destination catalogue rows.</p>'; return; }
+    dbox.innerHTML='<p class="text-gray-400 text-sm">Pick a destination type and load.</p>';
+    await loadTypes();
+  };
+  psel.onchange=loadActions; asel.onchange=loadTypes;
+  (async()=>{
+    const d=await api('/integration-destinations');
+    if(!d)return fail('Destination catalogue');
+    const provs=((d&&d.providers)||[]).map(x=>({v:x.key,l:x.name||x.key}));
+    fill(psel,provs,'no providers');
+    if(!psel.value){lbtn.disabled=true;return}
+    // Land on a provider that actually HAS catalogue rows: the providers are listed by name, and
+    // the platform's own list is mostly email/AI/API providers with no destinations at all. The
+    // scan stops at the first hit (coreswift), so it is two requests, not twenty.
+    for(const key of provs.map(x=>x.v)){
+      psel.value=key; await loadActions();
+      if(asel.value)break;
+    }
+  })();
+  lbtn.onclick=async()=>{
+    if(!psel.value||!tsel.value)return;
+    dbox.innerHTML='<p class="text-gray-400 text-sm">Loading...</p>';
     const d=await api('/integration-destinations/values?provider='+encodeURIComponent(psel.value)+'&destination_type='+encodeURIComponent(tsel.value));
-    if(!d){el.innerHTML='<p class="text-red-500 text-sm">Request failed: '+LAST_ERR+'</p>';return}
+    if(!d){dbox.innerHTML='<p class="text-red-500 text-sm">Request failed: '+escHtml(LAST_ERR)+'</p>';return}
     const vals=(d&&d.values)||[];
-    el.innerHTML='<p class="text-xs text-gray-400 mb-2">source: '+String(d.source||'-')+' ('+vals.length+' value'+(vals.length===1?'':'s')+')</p>'
+    dbox.innerHTML='<p class="text-xs text-gray-400 mb-2">source: '+escHtml(String(d.source||'-'))+' ('+vals.length+' value'+(vals.length===1?'':'s')+')</p>'
      +(vals.length?'<table class="table"><thead><tr><th>Value id</th><th>Label</th></tr></thead><tbody>'
-       +vals.map(v=>'<tr><td>'+String(v.id==null?'-':v.id)+'</td><td>'+String(v.label==null?'-':v.label)+'</td></tr>').join('')+'</tbody></table>'
+       +vals.map(v=>'<tr><td>'+escHtml(String(v.id==null?'-':v.id))+'</td><td>'+escHtml(String(v.label==null?'-':v.label))+'</td></tr>').join('')+'</tbody></table>'
       :'<p class="text-gray-400 text-sm">No values.</p>');
   };
 }
