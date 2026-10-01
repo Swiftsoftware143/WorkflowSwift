@@ -52,6 +52,22 @@ async fn main() {
     tracing::info!("Running database migrations...");
     db::run_migrations(&pool).await;
 
+    // At-rest seal for the system-mail credential (kanban t_a794cb09). All three writers of the
+    // `admin_settings.email` row seal before they store; this is what converges a row that arrives
+    // plaintext from a database restored out of an older dump (or from a writer added later).
+    // Never fatal: a broken credential row must not stop the app booting.
+    match crate::email::seal_legacy_config_secrets(&pool).await {
+        Ok(0) => {}
+        Ok(n) => tracing::warn!(
+            rows = n,
+            "admin_settings.email: sealed legacy plaintext credential(s) at rest"
+        ),
+        Err(e) => tracing::error!(
+            "admin_settings.email credential backfill failed (plaintext may remain at rest): {}",
+            e
+        ),
+    }
+
     // At-rest encryption posture for BYOK provider credentials. This belongs in the boot log:
     // without the master key, provider key writes fail closed, and that must be visible before
     // a customer hits it (never silently fall back to plaintext).

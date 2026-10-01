@@ -138,6 +138,12 @@ pub async fn list_settings(
     for row in &rows {
         let key: String = row.try_get("key")?;
         let mut value: serde_json::Value = row.try_get("value")?;
+        // Same read-path rule as `get_setting` (kanban t_a794cb09): mask the DECRYPTED credential.
+        if key == "email" {
+            if let Err(e) = crate::email::open_config_secrets(&state.db, &mut value).await {
+                tracing::error!(error = %e, "could not open admin_settings.email for the admin view");
+            }
+        }
         if is_secret_field(&key) {
             if let serde_json::Value::String(s) = &value {
                 if !s.is_empty() {
@@ -186,6 +192,14 @@ pub async fn get_setting(
 
     let key_str: String = row.try_get("key")?;
     let mut value: serde_json::Value = row.try_get("value")?;
+    // `admin_settings.email` carries a SEALED credential (kanban t_a794cb09): open it FIRST, so
+    // the mask the admin is shown is derived from the credential and never from the envelope
+    // (`enc...XYZ`), and so the panel never round-trips ciphertext as though it were the key.
+    if key_str == "email" {
+        if let Err(e) = crate::email::open_config_secrets(&state.db, &mut value).await {
+            tracing::error!(error = %e, "could not open admin_settings.email for the admin view");
+        }
+    }
     if is_secret_field(&key_str) {
         if let serde_json::Value::String(s) = &value {
             if !s.is_empty() {
@@ -260,6 +274,14 @@ pub async fn update_setting(
     }
 
     let admin_id = Uuid::parse_str(&claims.sub).unwrap_or(Uuid::nil());
+
+    // `admin_settings.email` holds a credential (kanban t_a794cb09): seal it before it reaches the
+    // database, so this generic route cannot store the fleet-wide Mailgun private key in the clear.
+    if key == "email" {
+        crate::email::seal_config_secrets(&state.db, &mut value)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to seal email credentials: {e}")))?;
+    }
 
     sqlx::query(
         r#"INSERT INTO admin_settings (key, value, description, updated_at, updated_by)

@@ -8,6 +8,7 @@
 //! skips the send instead of silently using a server-wide env var.
 
 use serde_json::json;
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::state::AppState;
@@ -204,6 +205,15 @@ async fn record_send_outcome(state: &AppState, template_type: &str, result: &Res
         json!(template_type.to_string()),
     );
 
+    // This is a THIRD writer of the `email` row (kanban t_a794cb09): it reads the whole value,
+    // adds the last-send fields and writes it back, so it must keep the credential sealed —
+    // otherwise a send would re-publish a credential that arrived plaintext.
+    if let Err(e) = seal_config_secrets(&state.db, &mut cfg).await {
+        eprintln!(
+            "[email] could not seal admin_settings.email before recording the send outcome: {e}"
+        );
+    }
+
     let _ =
         sqlx::query("UPDATE admin_settings SET value = $1, updated_at = NOW() WHERE key = 'email'")
             .bind(&cfg)
@@ -244,6 +254,98 @@ impl EmailConfig {
     }
 }
 
+/// The credential fields carried inside the `admin_settings.email` object. They are sealed with
+/// the SAME `enc:v1:` envelope this app already uses for `provider_keys`/`integration_targets` —
+/// this config was the one credential path that stored its value in the clear (kanban
+/// t_a794cb09), so a dump or a backup yielded a usable Mailgun private key for every fleet domain.
+pub const CONFIG_SECRET_FIELDS: [&str; 2] = ["api_key", "smtp_password"];
+
+/// Seal the credential fields of the email-config object IN PLACE, before it is stored.
+///
+/// * empty stays empty — a blank field is "no credential", never a ciphertext of nothing;
+/// * an already-sealed value is left exactly as it is: that is what the panel's masked
+///   round-trip carries back, and re-encrypting it would destroy the stored credential;
+/// * a missing master key makes this FAIL — a plaintext credential is never a fallback.
+pub async fn seal_config_secrets(
+    pool: &PgPool,
+    cfg: &mut serde_json::Value,
+) -> Result<(), crate::security::provider_key_crypto::CryptoError> {
+    let Some(obj) = cfg.as_object_mut() else {
+        return Ok(());
+    };
+    for field in CONFIG_SECRET_FIELDS {
+        let current = obj
+            .get(field)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if current.is_empty() || crate::security::provider_key_crypto::is_encrypted(&current) {
+            continue;
+        }
+        let sealed =
+            crate::security::provider_key_crypto::encrypt_for_storage(pool, &current).await?;
+        obj.insert(field.to_string(), serde_json::Value::String(sealed));
+    }
+    Ok(())
+}
+
+/// Open the credential fields of the email-config object IN PLACE after a DB read, so what
+/// reaches a provider (or the admin panel) is the credential and never the envelope. A value
+/// without the envelope is a legacy plaintext row and is passed through unchanged.
+pub async fn open_config_secrets(
+    pool: &PgPool,
+    cfg: &mut serde_json::Value,
+) -> Result<(), crate::security::provider_key_crypto::CryptoError> {
+    let Some(obj) = cfg.as_object_mut() else {
+        return Ok(());
+    };
+    for field in CONFIG_SECRET_FIELDS {
+        let current = obj
+            .get(field)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if current.is_empty() || !crate::security::provider_key_crypto::is_encrypted(&current) {
+            continue;
+        }
+        let opened =
+            crate::security::provider_key_crypto::decrypt_from_storage(pool, &current).await?;
+        obj.insert(field.to_string(), serde_json::Value::String(opened));
+    }
+    Ok(())
+}
+
+/// Seal every credential still sitting in the clear in the `admin_settings.email` row.
+///
+/// Three writers touch this row (the admin settings route, the generic
+/// `PUT /api/v1/admin/settings/{key}` route and `record_send_outcome`); all of them seal, and
+/// this is what converges a row that arrives plaintext from a database restored out of a dump
+/// taken before the change. Idempotent; returns the number of rows it had to rewrite.
+pub async fn seal_legacy_config_secrets(
+    pool: &PgPool,
+) -> Result<u64, crate::security::provider_key_crypto::CryptoError> {
+    let mut value: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT value FROM admin_settings WHERE key = 'email'")
+            .fetch_optional(pool)
+            .await?;
+    let Some(mut value) = value.take() else {
+        return Ok(0);
+    };
+    if !value.is_object() {
+        return Ok(0);
+    }
+    let before = value.clone();
+    seal_config_secrets(pool, &mut value).await?;
+    if value == before {
+        return Ok(0);
+    }
+    sqlx::query("UPDATE admin_settings SET value = $1, updated_at = NOW() WHERE key = 'email'")
+        .bind(&value)
+        .execute(pool)
+        .await?;
+    Ok(1)
+}
+
 fn cfg_str(cfg: &serde_json::Value, key: &str) -> String {
     cfg.get(key)
         .and_then(|v| v.as_str())
@@ -276,6 +378,17 @@ async fn get_email_config(state: &AppState) -> Option<EmailConfig> {
             return None;
         }
     };
+
+    // The credential is ciphertext at rest (kanban t_a794cb09): open it before the provider sees
+    // it — an `enc:v1:` envelope sent as a Basic-auth password is a guaranteed 401, not a send.
+    let mut cfg = cfg;
+    if let Err(e) = open_config_secrets(&state.db, &mut cfg).await {
+        eprintln!(
+            "[email] admin_settings.email credential cannot be opened ({e}) — \
+             skipping send (PROVIDER_KEY_ENC_SECRET mismatch?)"
+        );
+        return None;
+    }
 
     let provider = {
         let p = cfg_str(&cfg, "provider").to_ascii_lowercase();
