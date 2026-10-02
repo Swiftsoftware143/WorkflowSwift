@@ -264,8 +264,8 @@ async fn fire_n8n_webhook(
 /// n8n's reason for refusing, in a form a human can read.
 ///
 /// An n8n 404 body is ~430 bytes of JSON, and truncating it at 300 cuts exactly the
-/// sentence that tells the caller what to fix (`…"message":"The requested webhook
-/// "POST x" is not registered.`). Prefer the machine-readable `message`, then `hint`
+/// sentence that tells the caller what to fix (`…“message”:“The requested webhook
+/// “POST x” is not registered.`). Prefer the machine-readable `message`, then `hint`
 /// (which names the fix: activate the workflow), and only fall back to a blob.
 fn n8n_reason(body: &serde_json::Value) -> String {
     for key in ["message", "hint"] {
