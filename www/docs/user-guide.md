@@ -216,11 +216,12 @@ Your tier today:
 ## Custom branding
 
 Not available. There is no branding editor, and no page or email in this app renders a per-tenant
-logo or colour: the `logo_url`, `branding_name`, `primary_color` and `accent_color` columns on your
-account exist but nothing reads or writes them. The "Custom Branding" plan feature that used to
-promise white-labelling was retired on 2026-10-02 (kanban t_413b4aab) for exactly that reason. The
-footer text on your account (`footer_year` / `footer_company`) *is* real and settable through
-`PUT /api/v1/accounts/{id}`.
+logo or colour. The `logo_url`, `branding_name`, `primary_color` and `accent_color` columns that
+used to sit on your account were **dropped on 2026-10-02** (migration 077, kanban t_731bf864) —
+nothing read or wrote them — so the database no longer carries the capability either. The "Custom
+Branding" plan feature that promised white-labelling was retired the same day (kanban t_413b4aab)
+for exactly that reason. The footer text on your account (`footer_year` / `footer_company`) *is*
+real and settable through `PUT /api/v1/accounts`.
 
 ## Integrations
 

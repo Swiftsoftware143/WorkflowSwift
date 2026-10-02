@@ -216,22 +216,32 @@ Your tier today:
 ## Custom branding
 
 Not available. There is no branding editor, and no page or email in this app renders a per-tenant
-logo or colour: the `logo_url`, `branding_name`, `primary_color` and `accent_color` columns on your
-account exist but nothing reads or writes them. The "Custom Branding" plan feature that used to
-promise white-labelling was retired on 2026-10-02 (kanban t_413b4aab) for exactly that reason. The
-footer text on your account (`footer_year` / `footer_company`) *is* real and settable through
-`PUT /api/v1/accounts/{id}`.
+logo or colour. The `logo_url`, `branding_name`, `primary_color` and `accent_color` columns that
+used to sit on your account were **dropped on 2026-10-02** (migration 077, kanban t_731bf864) —
+nothing read or wrote them — so the database no longer carries the capability either. The "Custom
+Branding" plan feature that promised white-labelling was retired the same day (kanban t_413b4aab)
+for exactly that reason. The footer text on your account (`footer_year` / `footer_company`) *is*
+real and settable through `PUT /api/v1/accounts`.
 
 ## Integrations
 
-- **Integration Center** (`GET /integrations`): connect CoreSwift — inbound captured leads are
-  pushed to CoreSwift contacts using **your** CoreSwift key, and captured workflows can push to a
-  CoreSwift list. `GET /integrations/coreswift/status` reports whether your key is connected.
+- **CoreSwift spoke**: `GET /integrations/coreswift/status` reports whether your CoreSwift key is
+  connected, `GET /integrations/coreswift/lists` proxies the CoreSwift list catalogue, and
+  `POST /integrations/coreswift/push` pushes captured leads manually. The key itself is stored per
+  account through the provider-key surface (`GET/POST /api/v1/provider-keys`) — the credential store
+  every delivery path in this app reads.
 - **Integration targets** (`/integration-targets`) are the configured destinations a run can push
-  to (webhook URL, provider preset, daily cap). They are set up for your account by the operator, and
-  so is a step's binding to one: the **Builder has no target picker and the steps API accepts no
-  binding field**, so a workflow you build in the app does not dispatch to a target. What you
-  configure yourself is the **Integration Center** above.
+  to. A target routes by EITHER a literal `webhook_url` OR a `provider_preset` chosen from the
+  provider catalogue (`GET /provider-presets`); the admin console's **Integrations →
+  Integration Targets** panel sets either, and the dispatch uses the preset's `base_url` when the
+  target has no webhook URL. What is still NOT wired is a step's binding to a target: the **Builder
+  has no target picker and the steps API accepts no binding field**, so a workflow you build in the
+  app does not dispatch to a target.
+- **Retired 2026-10-02 (kanban t_cb839034)**: the per-user "Integration Center" store
+  (`user_integrations`) and its routes. `GET`/`POST /api/v1/integrations`, `GET
+  /api/v1/integrations/native`, `POST /api/v1/integrations/native/{provider}`, `DELETE
+  /api/v1/integrations/{provider}` and `POST /api/v1/integrations/health-check` are gone (404);
+  provider credentials live only in `provider_keys`, the store every delivery path reads.
 - **Incoming webhook**: `POST /api/v1/incoming` is what other Swift tools push leads to. It is
   protected by an internal key.
 

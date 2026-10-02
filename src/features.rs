@@ -60,8 +60,11 @@ pub const NUMERIC_LIMIT_KEYS: [&str; 14] = [
 /// `custom_reports` — they sell a SOFTWARE capability that does not exist in this crate, so they
 /// were advertised on paid tiers with nothing behind them:
 ///   * `custom_branding` — the `accounts` branding columns (logo_url / branding_name /
-///     primary_color / accent_color) have no writer, no reader and no renderer, and this app has
-///     no per-tenant public page to white-label;
+///     primary_color / accent_color) had no writer, no reader and no renderer, and this app has
+///     no per-tenant public page to white-label; kanban t_731bf864 then DROPPED those columns
+///     (plus the equally unused `custom_domain`) in migration 077, so the schema no longer
+///     advertises the capability either. Re-adding the key requires the writer, the gate AND the
+///     render surface first — see models/account.rs;
 ///   * `audit_logs` — the `audit_logs` table holds 0 rows and is written by nothing; its only
 ///     reader (`GET /dashboard/activity`) was deleted by kanban t_3a8ccd2a;
 ///   * `custom_reports` — no report table, handler, route or console surface.

@@ -39,7 +39,9 @@ paid tier up, and each named a software capability the crate does not have:
 
 - `custom_branding` — the `accounts` branding columns (`logo_url`, `branding_name`,
   `primary_color`, `accent_color`) have no writer, no reader and no renderer, and this app has no
-  per-tenant public page to white-label in the first place.
+  per-tenant public page to white-label in the first place. **The columns themselves were then
+  dropped** (`077_drop_account_branding_columns.sql`, kanban t_731bf864), together with the equally
+  unused `custom_domain`; they had 0 non-null values across all 8 accounts.
 - `audit_logs` — the `audit_logs` table holds **0 rows** and is written by nothing; its only
   reader (`GET /dashboard/activity`) was deleted by kanban t_3a8ccd2a.
 - `custom_reports` — there is no report table, handler, route or console surface anywhere.
@@ -101,11 +103,13 @@ tags, portfolio companies, industries, plan creation, and **n8n deployment** (`n
 | `/api/v1/admin/impersonate` / `stop-impersonation` | POST | Support impersonation |
 
 A tenant (`accounts`) carries the slug, footer text (`footer_year` / `footer_company`, writable via
-`PUT /api/v1/accounts/{id}`), industry, retention days and **its own Hexomatic key**. The
-`logo_url` / `branding_name` / `primary_color` / `accent_color` columns exist but **nothing in this
-app writes or renders them** — which is why kanban t_413b4aab retired the `custom_branding` plan
-flag that advertised white-label branding. Users (`users.aid`) belong to one tenant; `users.role`
-is `admin` / `member` (`perm_is_super_admin` marks the platform operator).
+`PUT /api/v1/accounts`), industry, retention days and **its own Hexomatic key**. The
+`logo_url` / `branding_name` / `primary_color` / `accent_color` branding columns and the unused
+`custom_domain` were **dropped** on 2026-10-02 (migration 077, kanban t_731bf864): nothing in this
+app wrote or rendered them, so the schema no longer advertises white-label branding. The plan flag
+that sold it (`custom_branding`) had already been retired by kanban t_413b4aab. Users (`users.aid`)
+belong to one tenant; `users.role` is `admin` / `member` (`perm_is_super_admin` marks the platform
+operator).
 
 ## Admin settings, retention and email
 
@@ -173,6 +177,13 @@ keys) is argon2-hashed; `integration_targets.api_key` uses the same envelope (mi
 | `/api/v1/integrations/coreswift/push` | POST | Manual push of captured leads |
 | `/api/v1/user-keys` | GET/POST | Per-user integration keys (+ `/{id}` DELETE, `/health-check`) |
 
+The per-user `user_integrations` family (`GET`/`POST /api/v1/integrations`, `/native`,
+`/native/{provider}`, `DELETE /{provider}`, `/health-check`) and the console's "My Integrations"
+panel were RETIRED on 2026-10-02 (kanban t_cb839034): that store had 0 rows and no delivery path
+read it — every delivery path reads `provider_keys` — so those paths answer 404, and the table is
+dropped by migration `076`. `GET /api/v1/integrations/resolve` (the step-provider resolver) and the
+CoreSwift spoke above are unaffected.
+
 Inbound: `POST /api/v1/incoming` (internal key) is the single endpoint every Swift tool pushes
 to — WorkflowSwift matches the payload to an active workflow, creates an instance and steps
 through it, dispatching to integration targets and n8n. A workflow only dispatches to a target when
@@ -192,6 +203,15 @@ shipped writer, so it is provisioned server-side.
   /api/v1/integration-targets/{id}`). Each row carries `webhook_url`, a `provider_preset`,
   `allowed_domains` and `daily_limit`; `webhook_security::check_webhook_security` enforces the
   domain allowlist and the daily cap, counting rows in `delivery_log`.
+- **The URL source** is the target's `webhook_url` or, when that is blank, its `provider_preset` — a
+  key in `integration_provider_presets`, served by `GET /api/v1/provider-presets`
+  (8 rows). The console's **Integration Targets** panel offers the catalogue as a SELECT, the create
+  and update routes validate the key against it (an unknown key is a field-level 422, never a
+  23503), and both accept `provider_preset` — a string sets it, `null` clears it. `forward_dispatch`
+  appends the payload's `path` to the preset's `base_url`, and the dispatch security gate validates
+  that same effective URL, so a preset-routed target needs no webhook URL at all (kanban t_cb839034
+  wired this half of the routing contract: until then the read was live while 5/5 rows had no writer
+  for the column).
 - **The binding** is the column `workflow_steps.integration_target_id`.
   The executor reads it at `src/execution.rs` in the arm
   `"integration" | "integration_dispatch"`, i.e. **a step dispatches only if its `step_type` is
