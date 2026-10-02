@@ -1,3 +1,47 @@
+//! WorkflowSwift site settings — the DB row is the SOURCE OF TRUTH; the static pages are
+//! materialized by a HOST-side applier, never by the request path.
+//!
+//! WHY (kanban t_0be214ec; same class as IncentiveSwift t_3fb0d3d2, ADASwift t_1f427190,
+//! CoreSwift-CRM t_02986434 and t_9dede800; evidence /opt/swift/audits/t_0be214ec/)
+//! --------------------------------------------------------------------------------------------
+//! Two defects were measured here before anything was changed:
+//!
+//! 1. **No applier existed at all.** The marketing page + the three legal pages are plain files
+//!    under `/opt/swift/nginx/www/workflowswift/` (served by nginx for workflowswift.com). The
+//!    service runs in a container with ZERO mounts (`docker inspect workflowswift --format
+//!    '{{json .Mounts}}'` -> `[]`), so `PUT /api/v1/admin/site` could never write them: it
+//!    UPSERTed the `admin_settings` row FIRST, then died in `regenerate_html` reading a path that
+//!    does not exist anywhere — `/opt/swift/www/workflowswift/index.html` — answering 500 *after*
+//!    the write had landed (measured live: PUT `{}` -> 500 while the row's `updated_at` moved,
+//!    log line "Failed to read /opt/swift/www/workflowswift/index.html: No such file or
+//!    directory"). An admin saw a red toast for a save that had in fact committed.
+//!
+//! 2. **The three editors the card names were honoured by NOTHING.** `canonical_url`,
+//!    `favicon_url` and the `homepage.headline`/`subheadline` pair were stored by the panel and
+//!    read by no renderer, so an operator's input appeared nowhere on the served page. The card's
+//!    arm (a) applies: the served page already carries the elements (`<link rel="canonical">`,
+//!    one `rel="icon"`, one `<h1>`, the hero paragraph), so they are made REAL by in-place
+//!    surgery, and both the code defaults and the row are reconciled to the SERVED bytes so the
+//!    first apply is a byte-level no-op.
+//!
+//! The request-path write is retired the way the four sibling apps proved it: the row is the
+//! source of truth, `update_site` writes ONLY the row and answers 2xx naming the applier, and
+//! `/opt/swift/bin/ws-site-apply.sh` runs `workflowswift-api apply-site-settings` on the HOST
+//! (where the files actually are) from cron. The alternative — mounting the served root into the
+//! container — was rejected for the same reason the siblings rejected it: that root is also the
+//! target of the repo->served publish gate (`/opt/swift/fleet/marketing-www-parity.py`), and a
+//! container that writes it makes two writers for one tree with no reconciliation.
+//!
+//! INVARIANTS THIS MODULE KEEPS
+//! --------------------------------------------------------------------------------------------
+//! * No request path writes a file. `update_site` = one UPSERT + 2xx.
+//! * A blank `legal_*` can never downgrade a published page: the applier guards on the VALUE
+//!   (`trim().is_empty()` -> skip + reason), and `preserve_nonblank` refuses the same blank at the
+//!   STORE, so the panel's GET-then-PUT round trip cannot blank the row either.
+//! * A blank `canonical_url` / `favicon_url` / hero value leaves the SHIPPED element alone:
+//!   clearing a field can never blank a live page.
+//! * The applier is idempotent: a file is only rewritten when its bytes would change, so a
+//!   scheduled run is free and the repo/served parity gate stays quiet.
 use axum::{
     extract::{Json, State},
     response::IntoResponse,
@@ -15,32 +59,63 @@ use crate::AppState;
 
 const SITE_KEY: &str = "workflowswift_site";
 
+/// Where the static marketing page and the three legal pages live. These are HOST paths: the app
+/// runs in a container with ZERO mounts, so the only process that can write them is the same binary
+/// executed on the host (`workflowswift-api apply-site-settings`, driven by
+/// /opt/swift/bin/ws-site-apply.sh).
+pub(crate) const SITE_ROOT: &str = "/opt/swift/nginx/www/workflowswift/";
+pub(crate) const SITE_INDEX: &str = "/opt/swift/nginx/www/workflowswift/index.html";
+
+/// The legal pages this applier owns: (slug, settings key). The row carries the BODY that sits
+/// between the page's `</h1>` and its `.back` footer — the same convention CoreSwift-CRM and
+/// IncentiveSwift reconciled to — so the render is in-place surgery on the served bytes and a
+/// reconciled row is byte-identical to what is served.
+pub(crate) const LEGAL_PAGES: [(&str, &str); 3] = [
+    ("terms", "legal_tos"),
+    ("privacy", "legal_privacy"),
+    ("refunds", "legal_refunds"),
+];
+
+/// The legal keys `preserve_nonblank` protects at the store.
+const LEGAL_KEYS: [&str; 3] = ["legal_tos", "legal_privacy", "legal_refunds"];
+
 /// GET /api/v1/admin/site — get site settings (SEO, tracking, homepage)
 pub async fn get_site(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
     require_admin(&claims)?;
+    let settings = load_settings(&state.db).await?;
+    Ok(Json(settings))
+}
 
+/// The stored settings merged over the code defaults — the same value `get_site` serves, and the
+/// input to the host-side applier.
+pub(crate) async fn load_settings(db: &sqlx::PgPool) -> Result<serde_json::Value, AppError> {
     let defaults = default_site_settings();
 
     let row = sqlx::query("SELECT value FROM admin_settings WHERE key = $1")
         .bind(SITE_KEY)
-        .fetch_optional(&state.db)
+        .fetch_optional(db)
         .await?;
 
-    let settings = match row {
+    Ok(match row {
         Some(r) => {
             let val: serde_json::Value = r.try_get("value")?;
             merge_json(defaults, val)
         }
         None => defaults,
-    };
-
-    Ok(Json(settings))
+    })
 }
 
-/// PUT /api/v1/admin/site — update site settings & regenerate HTML
+/// PUT /api/v1/admin/site — save site settings.
+///
+/// Deliberately NO file writes on this path. The static pages are HOST paths and this service runs
+/// in a container with no mount for them, so writing them here could only ever answer 500 — after
+/// the row above had already committed, and an admin then saw a failure for a save that had in fact
+/// landed (kanban t_0be214ec: measured PUT `{}` -> 500 with the row's `updated_at` already moved).
+/// The row IS the source of truth (`get_site` reads it); the pages are materialized by the
+/// host-side applier, which is their only writer.
 pub async fn update_site(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -56,18 +131,23 @@ pub async fn update_site(
         .fetch_optional(&state.db)
         .await?;
 
-    let merged = match existing_row {
-        Some(r) => {
-            let existing_val: serde_json::Value = r.try_get("value")?;
-            merge_json(existing_val, req)
-        }
+    let existing: Option<serde_json::Value> = match existing_row {
+        Some(r) => Some(r.try_get("value")?),
+        None => None,
+    };
+
+    let merged = match &existing {
+        Some(existing_val) => merge_json(existing_val.clone(), req),
         None => req,
     };
 
+    // The STORE-side value guard: a blank/absent incoming `legal_*` keeps the stored text.
+    let (merged, preserved) = preserve_nonblank_legal(existing.as_ref(), merged);
+
     sqlx::query(
         r#"INSERT INTO admin_settings (key, value, description, updated_at, updated_by)
-           VALUES ($1, $2::jsonb, 'WorkflowSwift site settings (SEO, tracking, homepage)', NOW(), $3)
-           ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = NOW(), updated_by = $3"#
+           VALUES ($1, $2::jsonb, 'WorkflowSwift site settings (SEO, tracking, homepage, legal)', NOW(), $3)
+           ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = NOW(), updated_by = $3"#,
     )
     .bind(SITE_KEY)
     .bind(merged.to_string())
@@ -75,25 +155,131 @@ pub async fn update_site(
     .execute(&state.db)
     .await?;
 
-    // Regenerate HTML
-    regenerate_html(&merged)?;
-
-    Ok(Json(
-        json!({"message": "Site settings updated", "slug": "workflowswift"}),
-    ))
+    Ok(Json(json!({
+        "message": "Site settings saved",
+        // The keys whose stored text a blank incoming value was refused for — the caller can see
+        // exactly what was kept instead of having to diff the row.
+        "preserved": preserved,
+        "static_pages": {
+            "writer": "/opt/swift/bin/ws-site-apply.sh (workflowswift-api apply-site-settings)",
+            "within_minutes": 5
+        }
+    })))
 }
 
-fn regenerate_html(settings: &serde_json::Value) -> Result<(), AppError> {
-    let html_path = "/opt/swift/www/workflowswift/index.html";
-    let html = fs::read_to_string(html_path)
-        .map_err(|e| AppError::Internal(format!("Failed to read {}: {}", html_path, e)))?;
+/// A blank string (or null, or a missing key) is how "the operator cleared this field" and "this
+/// form was rendered from a GET that merged the code defaults" look identical on the wire — and the
+/// defaults carry `""` for all three legal keys. Refuse the blank at the STORE when the row already
+/// holds text, so a GET-then-PUT round trip can never blank a live policy's source text. (The
+/// applier guards the same value at the render, so the page is protected twice over.)
+fn preserve_nonblank_legal(
+    existing: Option<&serde_json::Value>,
+    mut merged: serde_json::Value,
+) -> (serde_json::Value, Vec<String>) {
+    let mut preserved = Vec::new();
+    for key in LEGAL_KEYS {
+        let stored_has_text = existing
+            .and_then(|e| e.get(key))
+            .map(|v| !is_blank(Some(v)))
+            .unwrap_or(false);
+        if stored_has_text && is_blank(merged.get(key)) {
+            if let (Some(dst), Some(src)) = (merged.get_mut(key), existing.and_then(|e| e.get(key)))
+            {
+                *dst = src.clone();
+                preserved.push(key.to_string());
+                tracing::warn!(
+                    key,
+                    "blank legal value refused: the stored legal text was preserved"
+                );
+            }
+        }
+    }
+    (merged, preserved)
+}
 
-    let html = inject_site_settings(&html, settings);
+fn is_blank(v: Option<&serde_json::Value>) -> bool {
+    match v {
+        None | Some(serde_json::Value::Null) => true,
+        Some(serde_json::Value::String(s)) => s.trim().is_empty(),
+        Some(_) => false,
+    }
+}
 
-    fs::write(html_path, &html)
-        .map_err(|e| AppError::Internal(format!("Failed to write {}: {}", html_path, e)))?;
+/// `(path, rendered bytes)` for every file the applier owns and has a value for.
+pub(crate) type PlanTargets = Vec<(String, String)>;
+/// `(path, reason)` for every file deliberately left alone.
+pub(crate) type PlanSkips = Vec<(String, String)>;
 
-    Ok(())
+/// Render every file this applier owns, WITHOUT touching the disk.
+///
+/// Returns `(targets, skipped)`: `targets` is `(path, rendered bytes)` for every file whose source
+/// value exists, `skipped` is `(path, reason)` for the ones deliberately left alone — a blank legal
+/// value lands here, never in `targets`.
+pub(crate) fn plan(settings: &serde_json::Value) -> (PlanTargets, PlanSkips) {
+    let mut targets: PlanTargets = Vec::new();
+    let mut skipped: PlanSkips = Vec::new();
+
+    if !std::path::Path::new(SITE_ROOT).is_dir() {
+        skipped.push((
+            SITE_ROOT.to_string(),
+            "directory is not present in this runtime (host-only path)".to_string(),
+        ));
+        return (targets, skipped);
+    }
+
+    match fs::read_to_string(SITE_INDEX) {
+        Ok(before) => targets.push((
+            SITE_INDEX.to_string(),
+            inject_site_settings(&before, settings),
+        )),
+        Err(e) => skipped.push((SITE_INDEX.to_string(), format!("unreadable: {}", e))),
+    }
+
+    for (slug, key) in LEGAL_PAGES {
+        let path = format!("{}{}.html", SITE_ROOT, slug);
+        match settings.get(key).and_then(|v| v.as_str()) {
+            // Blank or absent means "no policy text configured" -> leave the published page alone.
+            Some(text) if !text.trim().is_empty() => match fs::read_to_string(&path) {
+                Ok(before) => {
+                    let mut rendered = before.clone();
+                    replace_legal_body(&mut rendered, text);
+                    targets.push((path, rendered));
+                }
+                Err(e) => skipped.push((path, format!("unreadable: {}", e))),
+            },
+            _ => skipped.push((
+                path,
+                format!(
+                    "{} is blank or absent - the published page is left alone",
+                    key
+                ),
+            )),
+        }
+    }
+
+    (targets, skipped)
+}
+
+/// Materialize `settings` into the static marketing page + the three legal pages.
+///
+/// Returns `(written, skipped)`; every skipped entry is `(path, reason)`. Idempotent: a file is only
+/// rewritten when its bytes would change, and nothing here is fatal — the caller reports the
+/// outcome so no surface can claim a regeneration that did not happen.
+pub(crate) fn apply_to_disk(settings: &serde_json::Value) -> (Vec<String>, PlanSkips) {
+    let (targets, mut skipped) = plan(settings);
+    let mut written: Vec<String> = Vec::new();
+
+    for (path, rendered) in targets {
+        match fs::read_to_string(&path) {
+            Ok(before) if before == rendered => skipped.push((path, "unchanged".to_string())),
+            _ => match fs::write(&path, rendered.as_bytes()) {
+                Ok(_) => written.push(path),
+                Err(e) => skipped.push((path, e.to_string())),
+            },
+        }
+    }
+
+    (written, skipped)
 }
 
 fn inject_site_settings(html: &str, s: &serde_json::Value) -> String {
@@ -123,12 +309,19 @@ fn inject_site_settings(html: &str, s: &serde_json::Value) -> String {
         "og:description",
         s.get("og_description").and_then(|v| v.as_str()),
     );
-    upsert_meta_prop(
-        &mut result,
-        "og:image",
-        s.get("og_image_url").and_then(|v| v.as_str()),
-    );
-    upsert_meta_prop(&mut result, "og:type", None);
+    // A blank `og_image_url` means "no share image configured". It must NOT inject an empty
+    // `<meta property="og:image" content="">`: the served page carries no such tag, so the
+    // injection made every apply rewrite the head (measured: it was the only reason `--check`
+    // read `would-write` on an otherwise reconciled row). Blank -> the `None` arm, which is a
+    // no-op when the tag is absent.
+    let og_image = s
+        .get("og_image_url")
+        .and_then(|v| v.as_str())
+        .filter(|v| !v.trim().is_empty());
+    upsert_meta_prop(&mut result, "og:image", og_image);
+    // NOTE: `og:type` is deliberately NOT passed here with `None`. The shipped page carries
+    // `<meta property="og:type" content="website">` and the settings row has no `og_type` key, so
+    // the old `upsert_meta_prop(..., None)` call DELETED a served tag on every render.
 
     // ── Schema.org ──
     if let Some(schema_json) = s.get("schema_json").and_then(|v| v.as_str()) {
@@ -181,7 +374,134 @@ fn inject_site_settings(html: &str, s: &serde_json::Value) -> String {
         }
     }
 
+    // ── The editors no reader honoured (kanban t_0be214ec) ──
+    // `canonical_url`, `favicon_url` and the two `homepage` hero fields were written to the row by
+    // the panel and read by NOTHING, so an operator's input landed in
+    // `admin_settings.workflowswift_site` and appeared nowhere. Each is now IN-PLACE surgery on an
+    // element the served page already carries, and each is a no-op when the value equals the
+    // shipped one — the reconciled row is the shipped row, so the applier's `--check` stays
+    // `unchanged` and the first apply cannot rewrite the live homepage. A blank value leaves the
+    // shipped element alone: clearing a field can never blank a live page.
+    if let Some(c) = s.get("canonical_url").and_then(|v| v.as_str()) {
+        if !c.trim().is_empty() {
+            upsert_link_href(&mut result, "canonical", c);
+        }
+    }
+    if let Some(f) = s.get("favicon_url").and_then(|v| v.as_str()) {
+        if !f.trim().is_empty() {
+            // Only the `rel="icon"` tag is the operator's; the `alternate icon` href is a
+            // content-hashed deploy asset and stays as shipped. The tag prefix carries the closing
+            // quote so `rel="icon"` can never match `rel="alternate icon"`.
+            upsert_link_href(&mut result, "icon", f);
+        }
+    }
+    if let Some(hp) = s.get("homepage") {
+        if let Some(h) = hp.get("headline").and_then(|v| v.as_str()) {
+            if !h.trim().is_empty() {
+                // VERBATIM, not escaped: the shipped headline is
+                // `Build workflows<br>that <span class="accent">actually work</span>.` and escaping
+                // it would publish the markup as text and drop the accent span. The panel already
+                // advertises `Headline (HTML ok)`.
+                replace_inner(&mut result, "<h1>", "</h1>", h);
+            }
+        }
+        if let Some(sh) = hp.get("subheadline").and_then(|v| v.as_str()) {
+            if !sh.trim().is_empty() {
+                // The hero paragraph is the first `<p>` AFTER the `<h1>`. It is deliberately NOT
+                // the first `<p class="subtitle">`: on this page that element is the FEATURES
+                // section's subtitle further down, not the hero.
+                replace_inner_after(&mut result, "</h1>", "<p", "</p>", sh);
+            }
+        }
+    }
+
     result
+}
+
+/// Point the `href` of the FIRST `<link rel="{rel}"` tag at `href`, inserting the attribute into a
+/// tag that has none, or injecting a whole `<link>` into `<head>` when the page carries no such tag.
+fn upsert_link_href(r: &mut String, rel: &str, href: &str) {
+    let pat = format!("<link rel=\"{}\"", rel);
+    match r.find(&pat) {
+        None => inject_before_head_end(r, &format!("<link rel=\"{}\" href=\"{}\">", rel, href)),
+        Some(p) => {
+            // Bound the search to this one tag: a following tag's href must never be rewritten.
+            let tag_end = match r[p..].find('>') {
+                Some(e) => p + e,
+                None => return,
+            };
+            match r[p..tag_end].find("href=\"") {
+                Some(h) => {
+                    let a = p + h + "href=\"".len();
+                    match r[a..tag_end].find('"') {
+                        Some(e) => r.replace_range(a..a + e, href),
+                        None => r.insert_str(tag_end, &format!(" href=\"{}\"", href)),
+                    }
+                }
+                None => r.insert_str(tag_end, &format!(" href=\"{}\"", href)),
+            }
+        }
+    }
+}
+
+/// Replace the inner HTML of the FIRST `open`…`close` element with `value`, verbatim.
+fn replace_inner(r: &mut String, open: &str, close: &str, value: &str) {
+    let start = match r.find(open) {
+        Some(p) => p + open.len(),
+        None => return,
+    };
+    if let Some(e) = r[start..].find(close) {
+        r.replace_range(start..start + e, value);
+    }
+}
+
+/// Replace the inner HTML of the first `open_prefixed` element that appears AFTER `anchor`.
+///
+/// Used for the hero paragraph: the served page carries four `<p>` elements and only the one that
+/// follows the `<h1>` is the hero, so an anchored lookup is what makes "the subheadline" mean the
+/// same thing to the applier and to the operator.
+fn replace_inner_after(r: &mut String, anchor: &str, open_prefix: &str, close: &str, value: &str) {
+    let a = match r.find(anchor) {
+        Some(p) => p + anchor.len(),
+        None => return,
+    };
+    let op = match r[a..].find(open_prefix) {
+        Some(p) => a + p,
+        None => return,
+    };
+    let start = match r[op..].find('>') {
+        Some(e) => op + e + 1,
+        None => return,
+    };
+    if let Some(e) = r[start..].find(close) {
+        r.replace_range(start..start + e, value);
+    }
+}
+
+/// Replace the legal page's BODY: the bytes between its `</h1>` line and its `.back` footer.
+///
+/// In-place surgery (rather than a re-typed wrapper template) is what makes `render(row)`
+/// byte-identical to the SERVED page for a reconciled row: everything outside the body — the
+/// styles, the `<h1>`, the back-nav, the closing tags — is left exactly as published.
+fn replace_legal_body(r: &mut String, body: &str) {
+    let anchor = match r.find("<div class=\"container\">") {
+        Some(p) => p,
+        None => return,
+    };
+    let h1 = match r[anchor..].find("</h1>") {
+        Some(e) => anchor + e + "</h1>".len(),
+        None => return,
+    };
+    let start = if r[h1..].starts_with('\n') {
+        h1 + 1
+    } else {
+        h1
+    };
+    let end = match r[start..].find("<div class=\"back\">") {
+        Some(e) => start + e,
+        None => return,
+    };
+    r.replace_range(start..end, body);
 }
 
 fn replace_title(result: &mut String, new_title: &str) {
@@ -368,27 +688,51 @@ fn merge_json(a: serde_json::Value, b: serde_json::Value) -> serde_json::Value {
     }
 }
 
+/// The code defaults, reconciled to the SERVED bytes of
+/// `/opt/swift/nginx/www/workflowswift/index.html` (kanban t_0be214ec).
+///
+/// Every value the injector reads and WRITES into the page is here as the bytes the page already
+/// carries, so a fresh install (no row) renders the published page byte-for-byte — the same
+/// reconciliation the row received. The legal bodies stay `""`: a blank legal value is SKIPPED, so
+/// an unconfigured install cannot blank the three published policy pages.
 fn default_site_settings() -> serde_json::Value {
     json!({
-        "title": "WorkflowSwift | No-Code Visual Workflow Automation Platform",
-        "description": "Connect your data, your tools, and your teams with WorkflowSwift. Build powerful, automated sequences using our drag-and-drop visual builder—no coding required.",
-        "keywords": "workflow automation platform, no-code automation, visual workflow builder, business process automation, API integration, webhook automation, WorkflowSwift",
-        "og_title": "Automate Everything. Code Nothing. | WorkflowSwift",
-        "og_description": "Build visual automation pipelines that connect your favorite apps, trigger automatically, and display real-time data on industry-specific dashboards.",
+        "title": "WorkflowSwift — Automate Everything. Visualize Everything.",
+        "description": "WorkflowSwift is the all-in-one automation and data visualization platform. Build visual workflows, dynamic dashboards, and connect your tools without code.",
+        "keywords": "workflow automation, data visualization, no-code, business process automation, dashboards, workflow builder",
+        "og_title": "WorkflowSwift — Automate Everything. Visualize Everything.",
+        "og_description": "Build visual workflows, dynamic dashboards, and connect your tools without code.",
         "og_image_url": "",
         "favicon_url": "",
-        "canonical_url": "https://workflowswift.com",
+        "canonical_url": "https://workflowswift.com/",
         "ga_id": "",
         "gtm_id": "",
         "head_scripts": "",
         "body_scripts": "",
-        "schema_json": "{\"@context\":\"https://schema.org\",\"@type\":\"SoftwareApplication\",\"name\":\"WorkflowSwift\",\"operatingSystem\":\"All\",\"applicationCategory\":\"BusinessApplication\",\"offers\":{\"@type\":\"Offer\",\"price\":\"0.00\",\"priceCurrency\":\"USD\"},\"description\":\"No-code visual workflow automation platform. Connect data, tools, and teams with drag-and-drop pipelines.\",\"aggregateRating\":{\"@type\":\"AggregateRating\",\"ratingValue\":\"4.9\",\"reviewCount\":\"142\"},\"featureList\":\"Webhook triggers, scheduled runs, HTTP requests, conditional logic, email actions, dashboard widgets, browser automation, AI prompts, manual review steps\"}",
+        // The served page's own JSON-LD block, verbatim — leading and trailing newline included,
+        // because `upsert_schema` replaces the tag's inner text byte-for-byte.
+        "schema_json": r#"
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "WorkflowSwift",
+  "description": "No-code automation and data visualization platform",
+  "url": "https://workflowswift.com",
+  "applicationCategory": "BusinessApplication",
+  "operatingSystem": "Web",
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+  }
+}
+"#,
         "homepage": {
             "logo_text": "WorkflowSwift",
             "sign_in_url": "",
             "nav_cta_text": "Sign In",
-            "headline": "Automate Everything.<br>Code Nothing.",
-            "subheadline": "Connect your data, your tools, and your teams with powerful, visual automation pipelines.",
+            "headline": "Build workflows<br>that <span class=\"accent\">actually work</span>.",
+            "subheadline": "No-code automation meets dynamic data dashboards. Connect your tools, build visual workflows, see everything in one place. WorkflowSwift turns your data into action.",
             "button_text": "Start Building Free",
             "secondary_button_text": "Sign In",
             "features_heading": "Everything You Need to Automate",
@@ -405,4 +749,135 @@ fn require_admin(claims: &Claims) -> Result<(), AppError> {
         return Err(AppError::Forbidden("Admin access required".to_string()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn served_index() -> Option<String> {
+        fs::read_to_string("/opt/swift/nginx/www/workflowswift/index.html").ok()
+    }
+
+    #[test]
+    fn a_reconciled_row_leaves_the_live_homepage_byte_for_byte() {
+        // The reconciliation invariant: render(code defaults) == the SERVED page. Reads the real
+        // served file when it is present (the applier host), skips otherwise so the container's
+        // `cargo test` stays green.
+        let Some(before) = served_index() else { return };
+        let rendered = inject_site_settings(&before, &default_site_settings());
+        if rendered != before {
+            let a: Vec<&str> = before.lines().collect();
+            let b: Vec<&str> = rendered.lines().collect();
+            let mut shown = 0;
+            for (i, _) in a.iter().enumerate().filter(|(i, _)| a.get(*i) != b.get(*i)) {
+                eprintln!(
+                    "line {}: served={:?} rendered={:?}",
+                    i + 1,
+                    a.get(i),
+                    b.get(i)
+                );
+                shown += 1;
+                if shown > 8 {
+                    break;
+                }
+            }
+            panic!("the code defaults no longer render the served homepage byte-for-byte");
+        }
+    }
+
+    #[test]
+    fn the_three_editors_now_change_the_page() {
+        let html = "<head><link rel=\"icon\" href=\"/shipped.svg\">\
+                    <link rel=\"canonical\" href=\"https://workflowswift.com/\"></head>\
+                    <body><h1>old</h1><p>hero</p><p class=\"subtitle\">features</p></body>";
+        let s = json!({
+            "canonical_url": "https://example.com/probe",
+            "favicon_url": "/probe.ico",
+            "homepage": { "headline": "PROBE-H1", "subheadline": "PROBE-SUB" }
+        });
+        let out = inject_site_settings(html, &s);
+        assert!(out.contains("<link rel=\"canonical\" href=\"https://example.com/probe\">"));
+        assert!(out.contains("<link rel=\"icon\" href=\"/probe.ico\">"));
+        assert!(out.contains("<h1>PROBE-H1</h1>"));
+        assert!(out.contains("<p>PROBE-SUB</p>"));
+        // The FEATURES subtitle must not be the element the subheadline editor moves.
+        assert!(out.contains("<p class=\"subtitle\">features</p>"));
+    }
+
+    #[test]
+    fn a_blank_value_leaves_the_shipped_element_alone() {
+        let html = "<head><link rel=\"icon\" href=\"/shipped.svg\"></head>\
+                    <body><h1>kept</h1><p>kept-hero</p></body>";
+        let s = json!({
+            "canonical_url": "   ",
+            "favicon_url": "",
+            "homepage": { "headline": "", "subheadline": "  " }
+        });
+        let out = inject_site_settings(html, &s);
+        assert_eq!(out, html);
+    }
+
+    #[test]
+    fn a_blank_og_image_does_not_inject_a_tag_and_og_type_is_never_deleted() {
+        let html = "<head><meta property=\"og:type\" content=\"website\"></head><body></body>";
+        let out = inject_site_settings(html, &default_site_settings());
+        assert!(
+            !out.contains("og:image"),
+            "a blank og_image_url must not inject an empty tag"
+        );
+        assert!(
+            out.contains("<meta property=\"og:type\" content=\"website\">"),
+            "og:type is served copy the settings row has no key for"
+        );
+    }
+
+    #[test]
+    fn a_blank_legal_value_is_skipped_never_rendered() {
+        let s = default_site_settings();
+        let (targets, skipped) = plan(&s);
+        // On the host (served root present) the index is the only target; the three legal bodies
+        // are blank, so they are skipped with a reason and can never be blanked.
+        let legal_targets = targets
+            .iter()
+            .filter(|(p, _)| p.ends_with(".html") && !p.ends_with("index.html"))
+            .count();
+        assert_eq!(legal_targets, 0);
+        assert_eq!(
+            skipped
+                .iter()
+                .filter(|(_, r)| r.contains("blank or absent"))
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    fn the_legal_body_replacement_is_in_place_and_idempotent() {
+        let page = "<div class=\"container\">\n<h1>Terms of Service</h1>\nOLD BODY\n<div class=\"back\">x</div>\n</div>\n</body>\n</html>\n";
+        // The region the applier owns is exactly the bytes between `</h1>\n` and
+        // `<div class="back">` — trailing newline INCLUDED, which is the same slice the
+        // reconciliation stores in the row. Replacing it with its own bytes is a no-op.
+        let mut same = page.to_string();
+        replace_legal_body(&mut same, "OLD BODY\n");
+        assert_eq!(same, page);
+
+        let mut r = page.to_string();
+        replace_legal_body(&mut r, "NEW BODY\n");
+        assert_eq!(
+            r,
+            "<div class=\"container\">\n<h1>Terms of Service</h1>\nNEW BODY\n<div class=\"back\">x</div>\n</div>\n</body>\n</html>\n",
+            "everything outside the body must be untouched"
+        );
+
+        // Idempotent.
+        let mut again = r.clone();
+        replace_legal_body(&mut again, "NEW BODY\n");
+        assert_eq!(again, r);
+
+        // A page with no marker pair is returned unchanged rather than corrupted.
+        let mut odd = "<html><body>no markers</body></html>".to_string();
+        replace_legal_body(&mut odd, "X");
+        assert_eq!(odd, "<html><body>no markers</body></html>");
+    }
 }

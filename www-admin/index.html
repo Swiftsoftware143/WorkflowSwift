@@ -831,7 +831,7 @@ window.unassignTag=async function(tagId){
 };
 
 function renderSiteConfig(c){
-  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">Site Configuration</h2><p class="text-xs text-gray-400 mb-4">SEO, tracking, legal pages, and homepage content. Changes regenerate the live marketing page on save.</p><div id="scdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
+  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">Site Configuration</h2><p class="text-xs text-gray-400 mb-4">SEO, tracking, legal pages, and homepage content. Changes are materialized on the host within 5 minutes.</p><div id="scdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
   var L=function(n,v,t){var tp=t||"text";return tp==="textarea"?"<div class=\"form-group\"><label class=\"block text-xs font-medium text-gray-500\">"+v+"</label><textarea class=\"input\" name=\""+n+"\" rows=\"3\"></textarea></div>":"<div class=\"form-group\"><label class=\"block text-xs font-medium text-gray-500\">"+v+"</label><input class=\"input\" type=\""+tp+"\" name=\""+n+"\"></div>"};
   var GV=function(id){var el=document.querySelector('[name="'+id+'"]');return el?el.value:""};
   api("/admin/site").then(function(d){
@@ -893,7 +893,7 @@ function renderSiteConfig(c){
       body.schema_json=GV("schema_json");
       var st=document.getElementById("savestatus");st.textContent="Saving...";st.className="text-sm ml-3 text-blue-600";
       var r=await api("/admin/site",{method:"PUT",body:JSON.stringify(body)});
-      if(r){st.textContent="Saved! Marketing page regenerated.";st.className="text-sm ml-3 text-green-600"}
+      if(r){st.textContent="Saved! Pages materialize on the host within 5 minutes.";st.className="text-sm ml-3 text-green-600"}
       else{st.textContent="Error saving.";st.className="text-sm ml-3 text-red-600"}
     };
   }).catch(function(){c.querySelector("#scdata").innerHTML="<p class=\"text-red-400\">Not available.</p>"});

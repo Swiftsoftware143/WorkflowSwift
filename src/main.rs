@@ -35,6 +35,18 @@ pub use state::AppState;
 
 #[tokio::main]
 async fn main() {
+    // Host-side applier mode (kanban t_0be214ec), checked BEFORE anything else: it needs only
+    // DATABASE_URL, renders with the same code the server runs, and must never boot a second API
+    // on the live port (no config load, no migrations, no worker, no listener).
+    //
+    //   workflowswift-api apply-site-settings            write only the files whose bytes change
+    //   workflowswift-api apply-site-settings --check    render and report, write NOTHING
+    //   workflowswift-api apply-site-settings --emit DIR also drop the rendered bytes under DIR
+    if std::env::args().nth(1).as_deref() == Some("apply-site-settings") {
+        apply_site_settings_mode().await;
+        return;
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
         .with_target(true)
@@ -188,4 +200,121 @@ async fn shutdown_signal() {
 
     tokio::time::sleep(Duration::from_millis(500)).await;
     tracing::info!("Server shutdown complete");
+}
+
+/// The host-side applier (`workflowswift-api apply-site-settings`, driven by
+/// /opt/swift/bin/ws-site-apply.sh from cron). It is the ONLY writer of
+/// /opt/swift/nginx/www/workflowswift/*.html.
+///
+/// It prints one machine-readable summary line — `site artifacts: written=N skipped=M` — and one
+/// line per file it touched or deliberately left alone, so the cron log and the card's proof can
+/// both read what happened without a second probe.
+///
+/// `--check` renders and reports `state=unchanged|would-write` with both sha256s but writes
+/// NOTHING, which is the instrument a reconciliation uses BEFORE the first real apply: the applier
+/// is idempotent only once the DB and the served bytes agree, so a row holding stale copy would
+/// rewrite the live homepage on the first run (the near-miss caught on ADASwift, card t_1f427190).
+/// `--emit DIR` drops the rendered bytes elsewhere for a byte-for-byte diff.
+async fn apply_site_settings_mode() {
+    use sha2::{Digest, Sha256};
+
+    let args: Vec<String> = std::env::args().collect();
+    let check = args.iter().any(|a| a == "--check");
+    let emit_dir = args
+        .iter()
+        .position(|a| a == "--emit")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
+
+    let url = match std::env::var("DATABASE_URL") {
+        Ok(u) => u,
+        Err(_) => {
+            eprintln!("apply-site-settings: DATABASE_URL is not set");
+            std::process::exit(2);
+        }
+    };
+
+    let db = db::connect(&url, 1, 4).await;
+
+    let settings = match crate::handlers::site_handler::load_settings(&db).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "apply-site-settings: cannot read the site settings row: {:?}",
+                e
+            );
+            std::process::exit(1);
+        }
+    };
+
+    let (targets, skipped) = crate::handlers::site_handler::plan(&settings);
+
+    // --emit: drop the rendered bytes somewhere else so they can be compared byte-for-byte with the
+    // served file WITHOUT this process writing anything under SITE_ROOT.
+    if let Some(dir) = emit_dir {
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            eprintln!(
+                "apply-site-settings: cannot create --emit dir {}: {}",
+                dir, e
+            );
+            std::process::exit(1);
+        }
+        for (path, rendered) in &targets {
+            let name = std::path::Path::new(path)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "rendered".to_string());
+            let dest = std::path::Path::new(&dir).join(name);
+            if let Err(e) = std::fs::write(&dest, rendered.as_bytes()) {
+                eprintln!(
+                    "apply-site-settings: cannot write {}: {}",
+                    dest.display(),
+                    e
+                );
+                std::process::exit(1);
+            }
+            println!("emit {} -> {}", path, dest.display());
+        }
+    }
+
+    if check {
+        for (path, reason) in &skipped {
+            println!("skip {} {}", path, reason);
+        }
+        for (path, rendered) in &targets {
+            let now = std::fs::read_to_string(path).unwrap_or_default();
+            let state = if now == *rendered {
+                "unchanged"
+            } else {
+                "would-write"
+            };
+            println!(
+                "check {} state={} sha256={} served_sha256={}",
+                path,
+                state,
+                hex::encode(Sha256::digest(rendered.as_bytes())),
+                hex::encode(Sha256::digest(now.as_bytes())),
+            );
+        }
+        println!(
+            "site artifacts (check, nothing written): targets={} skipped={}",
+            targets.len(),
+            skipped.len()
+        );
+        return;
+    }
+
+    let (written, skipped) = crate::handlers::site_handler::apply_to_disk(&settings);
+    for path in &written {
+        println!("write {} (the rendered bytes differ from the file)", path);
+    }
+    for (path, reason) in &skipped {
+        println!("skip {} {}", path, reason);
+    }
+    // Exactly one machine-readable line for the cron log.
+    println!(
+        "site artifacts: written={} skipped={}",
+        written.len(),
+        skipped.len()
+    );
 }
