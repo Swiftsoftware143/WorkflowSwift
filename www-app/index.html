@@ -1241,21 +1241,30 @@ const openWfModal = (wf) => {
   // Surface reassignment lives here (item: the update path). Load the registry BEFORE mounting
   // so the form never re-renders under the operator's keystrokes.
   S.wfEdit = wf || null;
+  // kanban t_8b4aba31 — every open re-seeds the shared draft (from the row for the edit modal),
+  // so a reopened form never shows a stale value and a mid-save renderApp() cannot reset it.
+  S.formSeeded = false;
   if (S.surfaces) { S.modal='wf'; renderApp(); return; }
   loadSurfacesOnce(() => { S.modal='wf'; renderApp(); });
 };
 const openProspectModal = () => { S.modal='prospect'; renderApp(); };
-const openBrandModal = () => { S.modal='brand'; renderApp(); };
-const openCompetitorModal = () => { S.modal='comp'; renderApp(); };
-const openApiKeyModal = () => { S.modal='apikey'; S.modalErr=null; renderApp(); };
+const openBrandModal = () => { S.formSeeded=false; S.modal='brand'; renderApp(); };
+const openCompetitorModal = () => { S.formSeeded=false; S.modal='comp'; renderApp(); };
+const openApiKeyModal = () => { S.formSeeded=false; S.modal='apikey'; S.modalErr=null; renderApp(); };
 
-const ApiKeyModal = () => { let name='';
-  const save = async () => { if(!name) return toast('Give the key a name','err'); S.loading=true; S.modalErr=null; renderApp();
-    try { const r = await API.createApiKey(name); S.newApiKey = r.key; S.apiKeys=null; S.modalErr=null; toast('API key created'); closeModal(); }
+const ApiKeyModal = () => {
+  // kanban t_8b4aba31 — the draft lives in the SHARED view object (S.views['apikey_form']), never a
+  // per-render local: save() itself does `S.loading=true; renderApp()`, so the old single-local
+  // declaration was re-initialised MID-SAVE and a resubmit after a failure was a silent no-op. Seeded
+  // ON OPEN (the "+ New API Key" button clears S.formSeeded) and value=${f.name} makes it visible.
+  const f = viewState('apikey_form', { name: '' });
+  if (!S.formSeeded) { f.name=''; S.formSeeded = true; }
+  const save = async () => { if(!f.name) return toast('Give the key a name','err'); S.loading=true; S.modalErr=null; renderApp();
+    try { const r = await API.createApiKey(f.name); S.newApiKey = r.key; S.apiKeys=null; S.modalErr=null; toast('API key created'); closeModal(); }
     catch(e){ S.modalErr = e.message || 'Could not create API key'; toast(S.modalErr,'err'); }
     S.loading=false; renderApp(); };
   return html`<${ModalShell} title="New API Key" onClose=${closeModal}>
-    <div class="mb-4"><label class="label">Name</label><input class="input" onInput=${e=>name=e.target.value} placeholder="e.g. Chrome extension" /></div>
+    <div class="mb-4"><label class="label">Name</label><input class="input" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="e.g. Chrome extension" /></div>
     <p class="text-xs text-gray-500 mb-4">A name is just for your reference — use it to say which tool uses this key. The key itself is generated for you and shown once.</p>
     ${S.modalErr && html`<div style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:12px;border-radius:10px;font-size:13px;margin-bottom:16px">${S.modalErr}</div>`}
     <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Create API Key'}</button>
@@ -1265,42 +1274,62 @@ const ApiKeyModal = () => { let name='';
 // sent when a surface is chosen, and the API keeps the stored value when the field is absent
 // (`req.surface_id.or(existing.surface_id)`), so an untouched form never clears it.
 const WfModal = () => {
+  // kanban t_8b4aba31 — same class and the WORSE one: its inputs DO carry value=${...}, so a re-render
+  // while the edit modal is open REVERTED the visible fields to the stored row and Save then wrote the
+  // row's OLD values back (rule 4's pattern needs an `st.editItem` read and cannot see it). The draft
+  // lives in the SHARED view object, re-seeded FROM THE ROW on every open (openWfModal clears
+  // S.formSeeded), so a mid-save renderApp() cannot revert it to the stored row.
   const wf = S.wfEdit || null;
-  let name = wf ? (wf.name || '') : '', desc = wf ? (wf.description || '') : '', cat = wf ? (wf.category || '') : '';
-  let surface = (wf && wf.surface_id) ? wf.surface_id : '';
+  const f = viewState('wf_form', { name:'', desc:'', cat:'', surface:'' });
+  if (!S.formSeeded) {
+    f.name = wf ? (wf.name || '') : ''; f.desc = wf ? (wf.description || '') : '';
+    f.cat = wf ? (wf.category || '') : ''; f.surface = (wf && wf.surface_id) ? wf.surface_id : '';
+    S.formSeeded = true;
+  }
   const surfaces = S.surfaces || [];
-  const save = async () => { if(!name) return toast('Name required','err'); S.loading=true; renderApp();
+  const save = async () => { if(!f.name) return toast('Name required','err'); S.loading=true; renderApp();
     try {
-      const body = { name, description: desc, category: cat };
-      if (surface) body.surface_id = surface;
+      const body = { name: f.name, description: f.desc, category: f.cat };
+      if (f.surface) body.surface_id = f.surface;
       if (wf) { await API.put('/workflows/' + wf.id, body); toast('Workflow updated'); }
       else { await API.post('/workflows', body); toast('Workflow created'); }
       S.workflows = null; closeModal();
     } catch(e){ toast(e.message,'err'); }
     S.loading=false; renderApp(); };
   return html`<${ModalShell} title=${wf ? 'Edit Workflow' : 'New Workflow'} onClose=${closeModal}>
-    <div class="mb-4"><label class="label">Name</label><input class="input" value=${name} onInput=${e=>name=e.target.value} placeholder="My Workflow" /></div>
-    <div class="mb-4"><label class="label">Category</label><input class="input" value=${cat} onInput=${e=>cat=e.target.value} placeholder="e.g. Sales" /></div>
-    <div class="mb-4"><label class="label">Description</label><textarea class="input" rows=3 onInput=${e=>desc=e.target.value} placeholder="What does this workflow do?">${desc}</textarea></div>
+    <div class="mb-4"><label class="label">Name</label><input class="input" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="My Workflow" /></div>
+    <div class="mb-4"><label class="label">Category</label><input class="input" value=${f.cat} onInput=${e=>f.cat=e.target.value} placeholder="e.g. Sales" /></div>
+    <div class="mb-4"><label class="label">Description</label><textarea class="input" rows=3 onInput=${e=>f.desc=e.target.value} placeholder="What does this workflow do?">${f.desc}</textarea></div>
     ${surfaces.length ? html`<div class="mb-4"><label class="label">Surface</label>
-      <select class="input" value=${surface} onChange=${e=>surface=e.target.value}>
+      <select class="input" value=${f.surface} onChange=${e=>f.surface=e.target.value}>
         <option value="">No surface</option>
         ${surfaces.map(s=>html`<option key=${s.id} value=${s.id}>${s.name}</option>`)}
       </select></div>` : ''}
     <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():(wf?'Save Workflow':'Create Workflow')}</button>
   <//>`; };
-const BrandModal = () => { let name='', kw='';
-  const save = async () => { if(!name) return toast('Brand name required','err'); const keywords = kw.split(',').map(s=>s.trim()).filter(Boolean); S.loading=true; renderApp(); try { await API.post('/brand-monitors', { brand_name: name, keywords, platforms: ['web','news','social'] }); toast('Brand monitor created'); S.brands=null; closeModal(); } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+const BrandModal = () => {
+  // kanban t_8b4aba31 — create-only modal draft in the SHARED view object (seed ON OPEN via
+  // S.formSeeded). The old mid-line declaration was reset by save()'s own renderApp(), so a resubmit
+  // after a failure was a silent no-op with NO request issued (the DOM kept the text because no
+  // value=${...} binding existed). value=${f.<key>} now makes the shared draft visible.
+  const f = viewState('brand_form', { name:'', kw:'' });
+  if (!S.formSeeded) { f.name=''; f.kw=''; S.formSeeded = true; }
+  const save = async () => { if(!f.name) return toast('Brand name required','err'); const keywords = f.kw.split(',').map(s=>s.trim()).filter(Boolean); S.loading=true; renderApp(); try { await API.post('/brand-monitors', { brand_name: f.name, keywords, platforms: ['web','news','social'] }); toast('Brand monitor created'); S.brands=null; closeModal(); } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
   return html`<${ModalShell} title="New Brand Monitor" onClose=${closeModal}>
-    <div class="mb-4"><label class="label">Brand Name</label><input class="input" onInput=${e=>name=e.target.value} placeholder="Your Company" /></div>
-    <div class="mb-4"><label class="label">Keywords (comma separated)</label><input class="input" onInput=${e=>kw=e.target.value} placeholder="brand, product, keyword" /></div>
+    <div class="mb-4"><label class="label">Brand Name</label><input class="input" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="Your Company" /></div>
+    <div class="mb-4"><label class="label">Keywords (comma separated)</label><input class="input" value=${f.kw} onInput=${e=>f.kw=e.target.value} placeholder="brand, product, keyword" /></div>
     <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Create Monitor'}</button>
   <//>`; };
-const CompetitorModal = () => { let name='', web='';
-  const save = async () => { if(!name) return toast('Name required','err'); S.loading=true; renderApp(); try { await API.post('/competitors', { name, website: web }); toast('Competitor added'); S.competitors=null; closeModal(); } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+const CompetitorModal = () => {
+  // kanban t_8b4aba31 — create-only modal draft in the SHARED view object (seed ON OPEN via
+  // S.formSeeded); same silent no-op on resubmit as its sibling modals, same missing value=${...}
+  // binding (the DOM kept the text while the handlers read the emptied locals).
+  const f = viewState('comp_form', { name:'', web:'' });
+  if (!S.formSeeded) { f.name=''; f.web=''; S.formSeeded = true; }
+  const save = async () => { if(!f.name) return toast('Name required','err'); S.loading=true; renderApp(); try { await API.post('/competitors', { name: f.name, website: f.web }); toast('Competitor added'); S.competitors=null; closeModal(); } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
   return html`<${ModalShell} title="Add Competitor" onClose=${closeModal}>
-    <div class="mb-4"><label class="label">Competitor Name</label><input class="input" onInput=${e=>name=e.target.value} placeholder="Competitor Inc" /></div>
-    <div class="mb-4"><label class="label">Website</label><input class="input" onInput=${e=>web=e.target.value} placeholder="https://competitor.com" /></div>
+    <div class="mb-4"><label class="label">Competitor Name</label><input class="input" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="Competitor Inc" /></div>
+    <div class="mb-4"><label class="label">Website</label><input class="input" value=${f.web} onInput=${e=>f.web=e.target.value} placeholder="https://competitor.com" /></div>
     <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Add Competitor'}</button>
   <//>`; };
 // ===== Builder (kanban t_ef3b13f4) =====
