@@ -186,16 +186,23 @@ chatbot, Alexa skill, kiosk): `GET/POST /surfaces` (name, slug, description).
 Plan limits are enforced **at the API** (`402 Payment Required` when you exceed them) and can be
 set per plan by an admin: `max_workflows`, `max_templates`, `max_instances`, `max_users`,
 `max_automations`, `max_integrations`, `max_api_keys`, `max_clients`, `max_portfolio`,
-`max_tags`, `max_industries`, `retention_days`, plus the on/off features `n8n_deploy`,
-`api_access`, `custom_branding`, `priority_support`, `dedicated_support`, `sla_guarantee`,
-`audit_logs`, `custom_reports`. `-1` (or `unlimited`) means unlimited.
+`max_tags`, `max_industries`, `retention_days`, plus the on/off features enforced by a gate —
+`n8n_deploy`, `api_access`. `-1` (or `unlimited`) means unlimited.
+
+Three more on/off entries — `priority_support` ("Priority email and chat support"),
+`dedicated_support` ("Dedicated account manager") and `sla_guarantee` ("Service level agreement
+guarantee") — are **not enforced by code and are not meant to be**. They record which plan promises
+what to the support team, and they are honoured by the support process, not by an API check.
 
 **Retired plan features (2026-10-02).** `csv_export`, `webhook_export` and `google_sheets` are no
 longer plan features. They were listed as included on every plan, but nothing in this app ever
 produced a CSV, pushed an export over a webhook, or could reach Google Sheets — so they promised
 something you would never have received. Export itself was retired as a workflow step on the same
-day (see *Export is retired* above). A plan feature now exists only where the app actually enforces
-it.
+day (see *Export is retired* above). `custom_branding` ("White-label branding options"),
+`audit_logs` ("Access to audit log history") and `custom_reports` ("Custom report builder access")
+were retired in the same pass for the same reason: no branding renderer, no audit history (the
+audit table is empty and nothing writes to it) and no report builder exist anywhere in the product.
+A plan feature now exists only where the app actually enforces it.
 
 Your tier today:
 
@@ -208,8 +215,12 @@ Your tier today:
 
 ## Custom branding
 
-Set logo, primary/accent colour, custom domain and footer text per tenant
-(`PUT /accounts/{id}`) — available on plans that include `custom_branding`.
+Not available. There is no branding editor, and no page or email in this app renders a per-tenant
+logo or colour: the `logo_url`, `branding_name`, `primary_color` and `accent_color` columns on your
+account exist but nothing reads or writes them. The "Custom Branding" plan feature that used to
+promise white-labelling was retired on 2026-10-02 (kanban t_413b4aab) for exactly that reason. The
+footer text on your account (`footer_year` / `footer_company`) *is* real and settable through
+`PUT /api/v1/accounts/{id}`.
 
 ## Integrations
 

@@ -21,8 +21,9 @@ a plan agree.
 - Numeric: `max_workflows`, `max_templates`, `max_instances`, `max_users`, `max_automations`,
   `max_integrations`, `max_api_keys`, `max_clients`, `max_portfolio`, `max_tags`,
   `max_industries`, `retention_days`
-- On/off: `n8n_deploy`, `api_access`, `custom_branding`, `priority_support`, `dedicated_support`,
-  `sla_guarantee`, `audit_logs`, `custom_reports`
+- On/off, **enforced by a gate**: `n8n_deploy`, `api_access`
+- On/off, **support-tier promises** (not code gates — see below): `priority_support`,
+  `dedicated_support`, `sla_guarantee`
 
 **Retired keys (kanban t_1aa78926).** `csv_export`, `webhook_export` and `google_sheets` used to be
 settable per plan and are gone — from `plan_tiers.features`, from the plan payloads and from
@@ -31,6 +32,31 @@ settable per plan and are gone — from `plan_tiers.features`, from the plan pay
 no CSV writer/store/download, no export contract to gate, and no Google credential, OAuth flow,
 provider preset or destination row. A plan that advertises an entitlement the app cannot deliver is
 the defect, not a feature. A flag belongs here only together with the gate that enforces it.
+
+**Retired keys (kanban t_413b4aab).** `custom_branding`, `audit_logs` and `custom_reports` are gone
+the same way (migration `075_retire_unbacked_plan_flags.sql`). They were off on Free but on from a
+paid tier up, and each named a software capability the crate does not have:
+
+- `custom_branding` — the `accounts` branding columns (`logo_url`, `branding_name`,
+  `primary_color`, `accent_color`) have no writer, no reader and no renderer, and this app has no
+  per-tenant public page to white-label in the first place.
+- `audit_logs` — the `audit_logs` table holds **0 rows** and is written by nothing; its only
+  reader (`GET /dashboard/activity`) was deleted by kanban t_3a8ccd2a.
+- `custom_reports` — there is no report table, handler, route or console surface anywhere.
+
+Removing them changed nothing a tenant could receive: no console renders these key names, the
+tenant console reads `GET /api/v1/plans` for **name and price only**, and the marketing site never
+names them. Do not re-add one without both the gate that enforces it and the surface that delivers it.
+
+**Support-tier promises (kanban t_413b4aab) — deliberately NOT gated.** `priority_support`
+("Priority email and chat support"), `dedicated_support` ("Dedicated account manager") and
+`sla_guarantee` ("Service level agreement guarantee") have **no code path and are not supposed to**:
+their mechanism is the support process, and which tier promises what is a pricing/support-contract
+decision, not an engineering one. They stay in `plan_tiers.features` and
+`plan_feature_definitions`, are named here on purpose, and are pinned by the
+`boolean_keys_are_either_gated_or_documented_support_promises` test in `src/features.rs`, so the
+next "a flag no gate reads" census does not re-flag them. If a future pass wants them *removed*,
+that is a pricing decision to make first.
 
 **Semantics:** `-1` or the string `"unlimited"` means unlimited; `0` means "not included in this
 plan" (any attempt returns `402 Payment Required`); any other number is a hard cap and the
@@ -44,7 +70,7 @@ boundary is refused with `402`. A key that is absent is treated as *not configur
 | `/api/v1/admin/plans` | POST | Create a plan — accepts the limit keys **either at the top level or inside `features`** |
 | `/api/v1/admin/plans/{id}` | PUT | Update a plan — limits are **merged**, so saving one field never wipes the others |
 | `/api/v1/admin/plans/{id}` | DELETE | Delete a plan |
-| `/api/v1/admin/feature-definitions` | GET | The 22 canonical feature keys, their value type, default and category |
+| `/api/v1/admin/feature-definitions` | GET | The 16 canonical feature keys, their value type, default and category |
 
 **Where enforcement happens:** `src/features.rs` resolves the account's plan
 (`account_plans` → `accounts.plan_id` → lowest-`sort_order` active tier, so an account with no
@@ -74,10 +100,12 @@ tags, portfolio companies, industries, plan creation, and **n8n deployment** (`n
 | `/api/v1/admin/usage` | GET | Usage dashboard — credits, executions, n8n status per account |
 | `/api/v1/admin/impersonate` / `stop-impersonation` | POST | Support impersonation |
 
-A tenant (`accounts`) carries the slug, branding (logo, primary/accent colour, custom domain,
-footer), industry, retention days and **its own Hexomatic key**. Users (`users.aid`) belong to
-one tenant; `users.role` is `admin` / `member` (`perm_is_super_admin` marks the platform
-operator).
+A tenant (`accounts`) carries the slug, footer text (`footer_year` / `footer_company`, writable via
+`PUT /api/v1/accounts/{id}`), industry, retention days and **its own Hexomatic key**. The
+`logo_url` / `branding_name` / `primary_color` / `accent_color` columns exist but **nothing in this
+app writes or renders them** — which is why kanban t_413b4aab retired the `custom_branding` plan
+flag that advertised white-label branding. Users (`users.aid`) belong to one tenant; `users.role`
+is `admin` / `member` (`perm_is_super_admin` marks the platform operator).
 
 ## Admin settings, retention and email
 

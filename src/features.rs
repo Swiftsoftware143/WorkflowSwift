@@ -38,20 +38,40 @@ pub const NUMERIC_LIMIT_KEYS: [&str; 14] = [
 
 /// The canonical boolean (on/off) feature keys the admin UI can set per plan.
 ///
-/// `csv_export`, `webhook_export` and `google_sheets` were removed here by kanban t_1aa78926:
-/// all three were ON for every plan (Free included) and NO code path in this crate implements or
-/// enforces them (no CSV writer/store/download, no export contract, no Google credential or
-/// destination), so the plans advertised entitlements the app cannot deliver. They are retired in
-/// migrations/074_retire_export_entitlements.sql — do not re-add one without a gate to honour it.
-pub const BOOLEAN_FLAG_KEYS: [&str; 8] = [
+/// Exactly two documented classes live here (kanban t_413b4aab, asserted by
+/// `boolean_keys_are_either_gated_or_documented_support_promises`):
+///
+///   1. GATED — a live gate in this crate reads the key:
+///      * `n8n_deploy`  — the n8n deploy path (`can_deploy_n8n` is its dedicated mirror column);
+///      * `api_access`  — API-key minting AND use (`has_api_access` is its mirror column).
+///   2. SUPPORT PROMISES — no code path, because the promise is the support process:
+///      * `priority_support`  — "Priority email and chat support";
+///      * `dedicated_support` — "Dedicated account manager";
+///      * `sla_guarantee`     — "Service level agreement guarantee".
+///      These are kept deliberately: retiring them is a pricing/support-contract decision, not an
+///      engineering one. They are named in docs/admin-guide.md section "Support-tier promises" so
+///      the next "a flag no gate reads" census does not re-flag them.
+///
+/// RETIRED here by kanban t_1aa78926 (migration 074): `csv_export`, `webhook_export`,
+/// `google_sheets` — all three ON for every plan including Free and honoured by no code path
+/// (no CSV writer/store/download, no export contract, no Google credential or destination).
+///
+/// RETIRED here by kanban t_413b4aab (migration 075): `custom_branding`, `audit_logs`,
+/// `custom_reports` — they sell a SOFTWARE capability that does not exist in this crate, so they
+/// were advertised on paid tiers with nothing behind them:
+///   * `custom_branding` — the `accounts` branding columns (logo_url / branding_name /
+///     primary_color / accent_color) have no writer, no reader and no renderer, and this app has
+///     no per-tenant public page to white-label;
+///   * `audit_logs` — the `audit_logs` table holds 0 rows and is written by nothing; its only
+///     reader (`GET /dashboard/activity`) was deleted by kanban t_3a8ccd2a;
+///   * `custom_reports` — no report table, handler, route or console surface.
+/// Do not re-add any of them without the gate that honours them, plus the surface that delivers.
+pub const BOOLEAN_FLAG_KEYS: [&str; 5] = [
     "n8n_deploy",
     "api_access",
-    "custom_branding",
     "priority_support",
     "dedicated_support",
     "sla_guarantee",
-    "audit_logs",
-    "custom_reports",
 ];
 
 /// Aliases accepted for a feature key — (features JSONB keys..., dedicated column).
@@ -75,12 +95,12 @@ fn aliases(key: &str) -> (&'static [&'static str], Option<&'static str>) {
         "retention_days" => (&["retention_days"], Some("retention_days")),
         "n8n_deploy" => (&["n8n_deploy", "can_deploy_n8n"], Some("can_deploy_n8n")),
         "api_access" => (&["api_access", "has_api_access"], Some("has_api_access")),
-        "custom_branding" => (&["custom_branding", "branding"], None),
+        // Kept as support-CONTRACT promises, not code gates (kanban t_413b4aab). The three that
+        // used to sit here — custom_branding, audit_logs, custom_reports — had no mechanism and
+        // were retired in migrations/075_retire_unbacked_plan_flags.sql.
         "priority_support" => (&["priority_support"], None),
         "dedicated_support" => (&["dedicated_support"], None),
         "sla_guarantee" => (&["sla_guarantee"], None),
-        "audit_logs" => (&["audit_logs"], None),
-        "custom_reports" => (&["custom_reports"], None),
         other => (&[], other_column(other)),
     }
 }
@@ -537,7 +557,7 @@ mod tests {
         assert!(tier_column_sql("max_templates").is_none());
     }
 
-    /// The six statements are complete literals: table, column and the one bind, nothing assembled.
+    /// The five statements are complete literals: table, column and the one bind, nothing assembled.
     #[test]
     fn statements_are_complete_literals() {
         for col in [
@@ -558,5 +578,38 @@ mod tests {
                 "{col}: statement reads a different column: {sql}"
             );
         }
+    }
+
+    /// The boolean registry is exactly two documented classes (kanban t_413b4aab):
+    ///
+    ///   1. keys a live gate in this crate reads — `n8n_deploy` (the n8n deploy path) and
+    ///      `api_access` (API-key mint AND use);
+    ///   2. keys that are support-CONTRACT promises honoured by the support process, not by code —
+    ///      `priority_support`, `dedicated_support`, `sla_guarantee`, named in
+    ///      docs/admin-guide.md section "Support-tier promises".
+    ///
+    /// A key in NEITHER class is the defect this card exists to kill: a plan-editor toggle that
+    /// sells a software capability no code path delivers (seven of them were retired in
+    /// migrations 074 and 075). Adding one now fails here until it is either wired to a gate or
+    /// explicitly documented as a support promise — so the "a flag no gate reads" census cannot
+    /// silently grow again.
+    #[test]
+    fn boolean_keys_are_either_gated_or_documented_support_promises() {
+        const GATED: [&str; 2] = ["n8n_deploy", "api_access"];
+        const SUPPORT_PROMISES: [&str; 3] =
+            ["priority_support", "dedicated_support", "sla_guarantee"];
+
+        let mut expected: Vec<&str> = GATED
+            .iter()
+            .chain(SUPPORT_PROMISES.iter())
+            .copied()
+            .collect();
+        expected.sort_unstable();
+        let mut actual = BOOLEAN_FLAG_KEYS.to_vec();
+        actual.sort_unstable();
+        assert_eq!(
+            actual, expected,
+            "a boolean plan key arrived that is neither gated nor a documented support promise"
+        );
     }
 }
