@@ -25,6 +25,16 @@ A catalogue the shipped code READS belongs in a guarded migration and nowhere el
 here: a row set is product-owned when the value is authored in this repository **and** a mounted
 route would answer differently without it.
 
+`workflow_template_steps` (10 rows) is product-owned too, but the SHAPE of one of its columns had to
+be repaired rather than seeded: `013_seed_data.sql` wrote the Government Contracting lifecycle STAGE
+NAMES ('discovery', 'qualify', …) into `step_type` instead of step types, and
+`POST /templates/{id}/install` copies that column verbatim into `workflow_steps` — so every install
+produced a workflow of steps the engine could not run. `073_template_steps_executable_types.sql`
+remaps the ten literals ('discovery' → 'data-card', the other nine → 'manual', the human gate the
+engine parks on), is idempotent, and reports (never rewrites) any row left outside the executable
+vocabulary; the write paths and install now refuse such a step with a named reason (kanban
+t_27a15474).
+
 ## Row sets the OPERATOR owns — do NOT seed these, document them instead
 
 Measured (kanban t_82d61045, audit `/opt/swift/audits/t_82d61045/`). Each is a real fresh-vs-live

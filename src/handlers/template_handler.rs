@@ -182,6 +182,41 @@ pub async fn list_templates(
     })))
 }
 
+/// Refuse a template step the steps API would not accept.
+///
+/// `workflow_template_steps.step_type` is copied VERBATIM into `workflow_steps` by
+/// `POST /templates/{id}/install` (below), so a template may only carry step types the engine has
+/// an arm for — otherwise installing it manufactures the exact defect kanban t_fe60cdf5 closed at
+/// the steps API: a workflow made entirely of steps that fall through the engine's `_` arm
+/// (`skipped`, `unexecutable`, named in the run's warnings[]) and never run anything.
+///
+/// Before kanban t_27a15474 nothing on the template path validated the column at all, and the
+/// seeded Government Contracting template held ten lifecycle STAGE NAMES ('discover', 'qualify',
+/// 'team', ...) in it: the `name` column already carries those labels ('Discover', 'Qualify', ...),
+/// so the stage words were simply the wrong vocabulary for `step_type`. Migration 073 remaps the
+/// seeded rows and this guard is what stops the class from coming back — on `create_template` and
+/// `import_template` (so a tenant cannot build such a template) and on `install` (so a template that
+/// predates the guard is refused with a named reason instead of installing into a dead workflow).
+///
+/// A Notify step's deliverable channel is the same rule one level down, so it is checked here too
+/// by the steps API's own function (kanban t_08be842f).
+fn assert_template_step_runnable(
+    step_type: &str,
+    name: &str,
+    config: &Option<serde_json::Value>,
+) -> Result<(), AppError> {
+    if !crate::execution::is_executable_step_type(step_type) {
+        return Err(AppError::Validation(format!(
+            "Template step '{}' has step type '{}', which has no executor in this app. Installing \
+             this template would create a workflow whose steps do nothing. Valid step types are: {}",
+            name,
+            step_type,
+            crate::execution::executable_step_type_list()
+        )));
+    }
+    super::workflow_handler::assert_notify_channel_ok(step_type, config)
+}
+
 pub async fn create_template(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -189,6 +224,12 @@ pub async fn create_template(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     features::enforce_feature_limit(&state.db, aid, "max_templates", "Templates").await?;
+
+    // Validate EVERY step before the template row exists: a refused step must not leave an empty
+    // template behind (t_27a15474).
+    for step in &req.steps {
+        assert_template_step_runnable(&step.step_type, &step.name, &step.config)?;
+    }
 
     let template_id = Uuid::new_v4();
     let template = sqlx::query_as::<_, WorkflowTemplate>(
@@ -367,6 +408,14 @@ pub async fn install_template_as_workflow(
         ));
     }
 
+    // Refuse BEFORE the workflow row exists: a template that carries a step type this app cannot
+    // execute is answered with a named reason instead of installing into a workflow whose every
+    // step is `skipped`/`unexecutable` (kanban t_27a15474; the seeded template hit this for all ten
+    // of its rows). The check runs up front so a refusal cannot leave a half-built workflow behind.
+    for step in &template_steps {
+        assert_template_step_runnable(&step.step_type, &step.name, &step.config)?;
+    }
+
     // Allow caller to override name/description/surface_id
     let workflow_name = req
         .get("name")
@@ -529,6 +578,12 @@ pub async fn import_template(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     features::enforce_feature_limit(&state.db, aid, "max_templates", "Templates").await?;
 
+    // Same guard as create_template, and for the same reason: this is the other door a template can
+    // come in through, and install copies its steps verbatim into a workflow (kanban t_27a15474).
+    for step in &req.steps {
+        assert_template_step_runnable(&step.step_type, &step.name, &step.config)?;
+    }
+
     let template_id = Uuid::new_v4();
     let template = sqlx::query_as::<_, WorkflowTemplate>(
         r#"INSERT INTO workflow_templates (id, aid, name, description, category, tags, is_public, surface_id)
@@ -566,4 +621,70 @@ pub async fn import_template(
         StatusCode::CREATED,
         Json(json!({"template": template, "imported": true})),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A template step whose type the engine has no arm for must be refused on the template path
+    /// exactly as `POST /workflows/{id}/steps` refuses it: install copies the row VERBATIM into
+    /// `workflow_steps`, so accepting it would manufacture a workflow of steps that do nothing
+    /// (kanban t_27a15474). The refusal has to name both the offending type and the valid list, or
+    /// the caller cannot act on it.
+    #[test]
+    fn a_stage_name_step_type_is_refused() {
+        let err = assert_template_step_runnable("manage", "Manage", &None)
+            .expect_err("a stage name is not a step type");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("'manage'"),
+            "the refusal must name the type: {msg}"
+        );
+        assert!(
+            msg.contains("manual"),
+            "the refusal must list the valid types: {msg}"
+        );
+        // The whole seeded lifecycle vocabulary is in this class, not just one word.
+        for stage in [
+            "discovery",
+            "qualify",
+            "team",
+            "propose",
+            "submit",
+            "track",
+            "manage",
+            "intel",
+            "outreach",
+            "dashboard",
+        ] {
+            assert!(
+                assert_template_step_runnable(stage, "Stage", &None).is_err(),
+                "'{stage}' is a lifecycle stage, not a step type"
+            );
+        }
+    }
+
+    /// The two shapes an install actually has to accept: the Data Card the template opens with and
+    /// the `manual` human gates the rest of the lifecycle becomes (migration 073) — plus the Notify
+    /// channel rule the steps API enforces, which must hold on this path too.
+    #[test]
+    fn executable_step_types_pass_and_an_undeliverable_channel_does_not() {
+        assert!(assert_template_step_runnable("data-card", "Discover", &None).is_ok());
+        assert!(assert_template_step_runnable("manual", "Qualify", &Some(json!({}))).is_ok());
+        assert!(assert_template_step_runnable(
+            "notify",
+            "Outreach",
+            &Some(json!({"channel": "webhook"}))
+        )
+        .is_ok());
+        let err =
+            assert_template_step_runnable("notify", "Outreach", &Some(json!({"channel": "email"})))
+                .expect_err("email has no sender in this app");
+        assert!(
+            err.to_string().contains("email"),
+            "the refusal must name the channel: {err}"
+        );
+    }
 }

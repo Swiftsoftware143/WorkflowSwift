@@ -62,12 +62,27 @@ Base API: `https://workflowswift.com/api/v1` — all non-public endpoints need
   itself**: it appears in **Instances** as `failed`, and
   its run history names the failing step and the reason the step gave. A run that **succeeds** is
   visible in n8n's own execution record and does not create an instance of its own.
-- A template that is **not included in your plan is locked** — the lock is enforced server-side,
-  so the padlock badge is not just decoration.
 - **Credits**: charged per execution, and the amount comes from the workflow's tier
   (`simple` = 2, `medium` = 3, `complex` = 5, `ai_enhanced` = 7 — the full table is in the
   `deduct` response). Running out is refused by the API, not just warned about in the UI.
   Check `GET /credits/balance`.
+
+## Templates
+
+- A template is a **starting point for a workflow**: `Install as Workflow` (`POST
+  /templates/{id}/install`) copies its steps into a new workflow of yours, which you can then edit
+  in the Builder. `Export JSON` downloads the template as a file, `Import JSON` creates a new
+  private template from one.
+- Every template step is a **step type this app can actually run**, and install copies it
+  as-is. That is now enforced on the way in: a template carrying a step type with no executor is
+  refused — on create, on import and on install — with the offending step named and the valid
+  types listed, so an install can no longer produce a workflow made of steps that do nothing.
+- The gallery's **Government Contracting Lifecycle** template is a 10-stage checklist: its first
+  step is the Data Card every workflow opens with (pick your dashboard widget for it), and each
+  stage after it is a **Manual / Approval** step — the run parks at the stage and you **Approve**
+  or **Reject** it from the instance's run history to move on.
+- A template that is **not included in your plan is locked** — the lock is enforced server-side,
+  so the padlock badge is not just decoration.
 
 ## Surfaces
 

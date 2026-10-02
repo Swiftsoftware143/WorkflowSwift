@@ -1888,6 +1888,86 @@ mod tests {
         }
     }
 
+    /// Files under `migrations/` are read with `std::fs` and NOT with the `include_str!` macro: the
+    /// fleet's from-zero harness detects the app's migration runner by grepping `src/` for an
+    /// `include_str!` whose path points into the migrations directory and, finding one, concludes
+    /// that the install path is a hardcoded array of exactly those files — it then reports the other
+    /// 80 as UNREGISTERED and refuses the deploy (measured on this app, deploy-app.sh step 0b: rc 3
+    /// APPLY-FAIL, because the truncated list starts at `013_seed_data.sql`, whose `plan_tiers` does
+    /// not exist yet). This app's runner (`src/db.rs`) reads the directory at runtime, so the harness
+    /// must keep seeing `read_dir` — hence no `include_str!` here, not even inside a comment.
+    fn migration_source(name: &str) -> String {
+        std::fs::read_to_string(format!("{}/migrations/{name}", env!("CARGO_MANIFEST_DIR")))
+            .unwrap_or_else(|e| panic!("migrations/{name} is not readable: {e}"))
+    }
+
+    /// Migration 073's census list must agree with this constant: a list that drifts would make the
+    /// migration report a runnable row as leftover (or the reverse). Each side is read out of its
+    /// own source, so neither can be edited alone (kanban t_27a15474).
+    #[test]
+    fn the_migration_vocabulary_matches_the_engine() {
+        let sql = migration_source("073_template_steps_executable_types.sql");
+        let start = sql
+            .find("step_type NOT IN (")
+            .expect("the migration's vocabulary census is in the file");
+        let end = start + sql[start..].find(')').expect("the census list terminator");
+        let mut declared: Vec<String> = sql[start..end]
+            .split('\'')
+            .skip(1)
+            .step_by(2)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+        declared.sort();
+        declared.dedup();
+        let mut engine: Vec<String> = EXECUTABLE_STEP_TYPES
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        engine.sort();
+        engine.dedup();
+        assert_eq!(
+            declared, engine,
+            "migration 073's executable list and EXECUTABLE_STEP_TYPES have drifted apart"
+        );
+    }
+
+    /// The ten rows migrations/013_seed_data.sql seeded hold lifecycle STAGE NAMES in `step_type`
+    /// (the human label already lives in `name`), which is the whole defect of kanban t_27a15474:
+    /// install copies the column verbatim into `workflow_steps`. Migration 073 must remap every one
+    /// of them, and none of them may ever be mistaken for a step type.
+    #[test]
+    fn the_seeded_template_stage_names_are_remapped() {
+        let seed = migration_source("013_seed_data.sql");
+        let mig = migration_source("073_template_steps_executable_types.sql");
+        const PREFIX: &str = "(uuid_generate_v4(), gov_template_id, '";
+        let mut stages: Vec<String> = Vec::new();
+        for line in seed.lines() {
+            let line = line.trim();
+            if let Some(rest) = line.strip_prefix(PREFIX) {
+                if let Some((stage, _)) = rest.split_once('\'') {
+                    stages.push(stage.to_string());
+                }
+            }
+        }
+        assert_eq!(
+            stages.len(),
+            10,
+            "the seed's ten template step rows were not parsed: {stages:?}"
+        );
+        for stage in &stages {
+            assert!(
+                !is_executable_step_type(stage),
+                "'{stage}' is a stage name, not a step type — the seed was wrong"
+            );
+            assert!(
+                mig.contains(&format!("('{stage}', ")),
+                "migration 073 does not remap the seeded stage '{stage}'"
+            );
+        }
+    }
+
     /// The console is the surface the product sells from: every step type its Builder offers must
     /// be executable, or the tenant builds a step that silently does nothing.
     #[test]

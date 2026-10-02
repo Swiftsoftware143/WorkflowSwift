@@ -858,7 +858,11 @@ fn notify_channel_error(channel: &str) -> AppError {
 
 /// Refuse a notify step whose `config.channel` this product cannot deliver on. Every other step
 /// type passes through untouched.
-fn assert_notify_channel_ok(
+///
+/// `pub(crate)` because the template write paths enforce the SAME rule: a template step is copied
+/// verbatim into `workflow_steps` by `POST /templates/{id}/install`, so a channel the steps API
+/// refuses cannot be allowed to arrive through a template (kanban t_27a15474).
+pub(crate) fn assert_notify_channel_ok(
     step_type: &str,
     config: &Option<serde_json::Value>,
 ) -> Result<(), AppError> {

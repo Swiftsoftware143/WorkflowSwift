@@ -33,43 +33,56 @@ Base API: `https://workflowswift.com/api/v1` — all non-public endpoints need
   when you create it** — to change the type, delete the step and add a new one.
 - **Step 1 is a Data Card step**: it picks a dashboard widget **by name** (e.g. "Orlando
   Plumbers") from the widgets in your dashboard — nothing is hardcoded.
-- **Deploy to n8n** (plan-gated), **run manually**, and every run creates an **instance** with
+- **Step types**: Data Card, AI Action, Export, Notify, Delay/Wait, Fork, HTTP Request, Action,
+  Render Video/Image/Audio, Condition, Webhook and Manual/Approval — and **every one of them
+  executes**. The API refuses any other step type (`POST /workflows/{id}/steps` answers `400`), so
+  a step that cannot run can no longer be created. **Research is retired** for that reason: no path
+  in this app performs a research call.
+- **Notify**: the one channel is **Webhook** — the step POSTs `{message, data}` to the URL you put in
+  its Recipient field, so the receiving end gets the run's own item. The **Email and SMS channels are
+  retired** (2026-10-02): this app has no tenant-triggered mail sender (its mail provider is
+  template-based platform mail, not a workflow sender) and no SMS provider at all, so both were
+  channels a step could be built on that delivered nothing. The API refuses them the same way it
+  refuses an unknown step type, and a step stored with one keeps its place as a no-op that names the
+  retirement. Its URL goes through the same destination check as an HTTP Request step, and a
+  destination that answers non-2xx (or cannot be reached) fails the step — the run history records
+  the status and the reason, so a notification that did not go out is never reported as sent.
+- **HTTP Request / Action / Render Video/Image/Audio**: an HTTP Request or Action step calls the
+  URL you configure, with the method you pick, and the run history records the status and the reply.
+  A Render step calls your provider's `endpoint` and logs the result under **Renditions** (provider,
+  asset id and URL come from the provider's own response). Both refuse a destination that resolves
+  inside the platform's own network — loopback, private or link-local addresses are never called —
+  so a step can not be used to read an internal service.
+- **Deploy to n8n** (plan-gated) and **run manually**. A manual run creates an **instance** with
   traceable state, a step-by-step history and full execution logs.
-- The n8n copy is what an **external** caller triggers: it answers **`POST`** on the webhook path
-  the deploy response returns (`/webhook/wfs/<account>/<workflow>` on your n8n host), and n8n
-  replies `200 "Workflow was started"` as soon as it accepts the call. A `GET` on the same path is
-  refused with a 404 naming POST — the trigger carries the caller's data, so the method is part of
-  the contract (`webhook_method: "POST"` in the deploy response).
+- The n8n copy is what an **external** caller triggers: **`POST`** the webhook path the deploy
+  response returns (`webhook_path`, and `webhook_method` names the verb — `POST`; the same path
+  answers a `GET` with a 404 that names POST). n8n answers `200 "Workflow was started"` as soon as
+  it accepts the trigger, so that caller never waits for the run. A run that then **fails reports
+  itself**: it appears in **Instances** as `failed`, and
+  its run history names the failing step and the reason the step gave. A run that **succeeds** is
+  visible in n8n's own execution record and does not create an instance of its own.
+- **Credits**: charged per execution, and the amount comes from the workflow's tier
+  (`simple` = 2, `medium` = 3, `complex` = 5, `ai_enhanced` = 7 — the full table is in the
+  `deduct` response). Running out is refused by the API, not just warned about in the UI.
+  Check `GET /credits/balance`.
+
+## Templates
+
+- A template is a **starting point for a workflow**: `Install as Workflow` (`POST
+  /templates/{id}/install`) copies its steps into a new workflow of yours, which you can then edit
+  in the Builder. `Export JSON` downloads the template as a file, `Import JSON` creates a new
+  private template from one.
+- Every template step is a **step type this app can actually run**, and install copies it
+  as-is. That is now enforced on the way in: a template carrying a step type with no executor is
+  refused — on create, on import and on install — with the offending step named and the valid
+  types listed, so an install can no longer produce a workflow made of steps that do nothing.
+- The gallery's **Government Contracting Lifecycle** template is a 10-stage checklist: its first
+  step is the Data Card every workflow opens with (pick your dashboard widget for it), and each
+  stage after it is a **Manual / Approval** step — the run parks at the stage and you **Approve**
+  or **Reject** it from the instance's run history to move on.
 - A template that is **not included in your plan is locked** — the lock is enforced server-side,
   so the padlock badge is not just decoration.
-- **Credits**: 1 credit per execution. Running out is refused by the API, not just warned about
-  in the UI. Check `GET /credits/balance`.
-
-### Builder
-
-**Builder** in the sidebar (or the **Builder** button on a workflow row) is the step-configuration
-surface. Pick a workflow, then:
-
-- **+ Add Step** — the type locks once created, as above. A Data Card step lists your real
-  dashboard widgets by name to choose from.
-- **↑ / ↓** reorder the steps. A move that would leave a non-Data-Card step first is refused by
-  the API and shown as an error — step 1 must be the Data Card.
-- **Validate** checks the whole step list against the rules and lists errors/warnings inline.
-- **Edit** changes the name, description and step config in place; **Del** removes the step.
-- **Notify** posts the run's data (`{message, data}`) to a **webhook URL you own** — that URL is the
-  step's Recipient field. Email and SMS are no longer offered: this app has no tenant mail sender and
-  no SMS provider, so a step built on either would have delivered nothing.
-
-## Renditions
-
-Renditions are the media a workflow produces — a **Render Video / Image / Audio** step (or the
-n8n mirror's log node) records each generated asset here.
-
-- **Renditions** in the sidebar shows the tenant summary (active, expiring within 7 days, by asset
-  type, by provider), the gallery, and a **per-workflow timeline** (pick the workflow in the filter).
-- Select two or more assets and **Stitch selected** to group them into one parent rendition.
-- The **status** filter switches between Active, Expired and All. Deleting a rendition retires it
-  (status `expired`) instead of erasing it, so it stays retrievable until purged.
 
 ## Surfaces
 
@@ -157,16 +170,11 @@ Set logo, primary/accent colour, custom domain and footer text per tenant
 
 ## Chrome extension — Swift Market Intel
 
-- **Download**: `https://workflowswift.com/api/v1/extension.zip` — this is a live route on the app
-  (`GET /extension.zip`, no auth) that serves the build embedded in the running API binary, so the
-  URL never points at a superseded release and can be linked from anywhere. The static copies
-  (`/swift-market-intel-extension-<version>.zip` and the rolling alias
-  `/swift-market-intel-extension.zip`) are CDN-cached mirrors — prefer the `/api/v1/` URL.
-  Install guide: `/swift-market-intel-extension.html`. Version + sha256 of the current build:
-  `/extension-latest.json` (rewritten by `/opt/swift/scripts/ws-publish-extension.sh` on release).
+- **Download**: `https://workflowswift.com/swift-market-intel-extension-1.2.0.zip`
+  (rolling alias `/swift-market-intel-extension.zip`; pin the versioned file — the alias can lag
+  behind the CDN cache). Install guide: `/swift-market-intel-extension.html`.
 - **Install**: unpack the zip, then `chrome://extensions` → Developer mode → *Load unpacked* →
-  pick the folder containing `manifest.json`. Sideload-only — not on the Chrome Web Store, so there
-  is no "Add to Chrome" button and updates are manual.
+  pick the folder containing `manifest.json`. Not on the Chrome Web Store, so updates are manual.
 - **Connect**: extension Options → paste your API token → leave **API Base URL** at
   `https://workflowswift.com/api/v1` → *Test Connection* → Save.
 - **Collect**: open a supported listing → extension icon → *Scrape Current Page* →
