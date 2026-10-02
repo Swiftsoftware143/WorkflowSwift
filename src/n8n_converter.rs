@@ -383,6 +383,27 @@ fn failure_arm_nodes(
     )
 }
 
+/// The HTTP method the generated mirror's OWN trigger registers (kanban t_d4dd6e42).
+///
+/// The Webhook node's default is **GET**, and the node this converter used to emit carried no
+/// `httpMethod` at all, so the mirror's only entry point registered GET-only. Measured live on
+/// n8n 2.34.6 (`/opt/swift/audits/t_70baf9b0/30-probe-post.txt`, §B3): a verbatim copy of the
+/// emitted node imported and activated gave `webhook_entity -> ('…','GET','Webhook')`,
+/// `POST /webhook/<path>` -> `404 {"code":404,"message":"This webhook is not registered for POST
+/// requests. Did you mean to make a GET request?"}`, `GET /webhook/<path>` -> `200 {"message":
+/// "Workflow was started"}`. The deploy route hands the tenant that path as "available for
+/// external triggers", so the 404 landed on the caller the path exists for.
+///
+/// POST, and only POST: an external workflow trigger is a data-carrying call, this graph's
+/// downstream nodes read the run item (`$json`), and a GET query string cannot carry it — every
+/// machine-facing entry point in this fleet takes POST (this box's other n8n webhook, the
+/// market-intel workflow, registers POST; so do the app's own receivers). A Webhook node at
+/// typeVersion 1 takes ONE method; accepting GET as well would need a typeVersion-2 node, whose
+/// other defaults are a change this card did not measure. Nothing calls the path today — 0 of the
+/// 23 live `workflows` rows carry `n8n_webhook_path` and n8n holds 0 `wfs/` webhooks — so POST
+/// breaks no existing caller.
+pub const MIRROR_TRIGGER_METHOD: &str = "POST";
+
 pub fn convert_steps_to_n8n(
     steps: &[Value],
     aid: Uuid,
@@ -407,6 +428,8 @@ pub fn convert_steps_to_n8n(
         "position": [250, 300],
         "webhookId": webhook_id,
         "parameters": {
+            // Without this key n8n falls back to GET and a POST caller 404s (t_d4dd6e42).
+            "httpMethod": MIRROR_TRIGGER_METHOD,
             "path": webhook_path,
             "options": {}
         }
@@ -2215,6 +2238,68 @@ mod tests {
             webhook["parameters"]["responseMode"].is_null(),
             "no responseMode at all: n8n's onReceived default answers 200 immediately"
         );
+    }
+
+    /// kanban t_d4dd6e42 — the generated mirror's ONLY entry point must register as POST.
+    ///
+    /// The Webhook node's default is GET, so the node this converter emitted without `httpMethod`
+    /// registered a GET-only webhook on the live n8n 2.34.6: `webhook_entity` ->
+    /// `('zzprobe-…','GET','Webhook')`, `POST /webhook/<path>` -> 404 "This webhook is not
+    /// registered for POST requests", `GET /webhook/<path>` -> 200 + a real execution
+    /// (`/opt/swift/audits/t_70baf9b0/30-probe-post.txt`, §B3). The path is what the deploy route
+    /// hands a tenant and stores in `lifecycle_summary` as the external trigger, so the 404 landed
+    /// on exactly the caller the path exists for.
+    ///
+    /// Pinned three ways, because the defect was a MISSING key and not a wrong value: the method is
+    /// present, it is literally `POST`, and the node stays at typeVersion 1 — a silent upgrade to a
+    /// v2 node (the only way to accept GET as well) must break this test rather than ship.
+    #[test]
+    fn the_generated_trigger_registers_post_and_only_post() {
+        let g = graph();
+
+        let triggers: Vec<&Value> = g
+            .nodes
+            .iter()
+            .filter(|n| n["type"] == "n8n-nodes-base.webhook")
+            .collect();
+        assert_eq!(triggers.len(), 1, "one trigger per graph: {triggers:?}");
+        let t = triggers[0];
+        assert_eq!(t["id"], "webhook");
+        assert_eq!(t["name"], "Webhook");
+
+        // The presence of the key IS the fix: n8n's Webhook node defaults to GET.
+        assert_eq!(
+            t["parameters"]["httpMethod"],
+            json!(MIRROR_TRIGGER_METHOD),
+            "the trigger must name its method — n8n's default is GET"
+        );
+        assert_eq!(
+            t["parameters"]["httpMethod"],
+            json!("POST"),
+            "POST is the decision (t_d4dd6e42): external triggers carry data"
+        );
+        assert!(
+            t["parameters"]["httpMethod"].is_string(),
+            "a multi-method accept is an ARRAY and needs a typeVersion-2 node",
+        );
+        assert_eq!(
+            t["typeVersion"],
+            json!(1),
+            "v1 is the node this fleet measured; v2 changes other defaults"
+        );
+
+        // The path stays the one the deploy route returns and stores.
+        let path = t["parameters"]["path"].as_str().unwrap_or("");
+        assert!(
+            path.starts_with("wfs/"),
+            "namespaced trigger path, got {path}"
+        );
+
+        // The trigger is the graph's entry point, not a decorative node: it drives the first
+        // callback node, so this IS the node whose method a caller hits.
+        let conns = g.connections.as_object().expect("connections object");
+        let driven = conns.get("Webhook").expect("the trigger drives the graph");
+        assert_eq!(driven["main"][0][0]["node"], "Auth & Credit");
     }
 
     /// kanban t_70baf9b0 — the Notify step's n8n nodes, pinned to the shapes measured live on

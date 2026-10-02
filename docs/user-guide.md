@@ -53,9 +53,11 @@ Base API: `https://workflowswift.com/api/v1` — all non-public endpoints need
   so a step can not be used to read an internal service.
 - **Deploy to n8n** (plan-gated) and **run manually**. A manual run creates an **instance** with
   traceable state, a step-by-step history and full execution logs.
-- The n8n copy is what an **external** caller triggers (it has its own webhook path). n8n answers
-  `200 "Workflow was started"` as soon as it accepts the trigger, so that caller never waits for
-  the run. A run that then **fails reports itself**: it appears in **Instances** as `failed`, and
+- The n8n copy is what an **external** caller triggers: **`POST`** the webhook path the deploy
+  response returns (`webhook_path`, and `webhook_method` names the verb — `POST`; the same path
+  answers a `GET` with a 404 that names POST). n8n answers `200 "Workflow was started"` as soon as
+  it accepts the trigger, so that caller never waits for the run. A run that then **fails reports
+  itself**: it appears in **Instances** as `failed`, and
   its run history names the failing step and the reason the step gave. A run that **succeeds** is
   visible in n8n's own execution record and does not create an instance of its own.
 - A template that is **not included in your plan is locked** — the lock is enforced server-side,

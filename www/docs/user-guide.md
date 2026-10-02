@@ -35,6 +35,11 @@ Base API: `https://workflowswift.com/api/v1` — all non-public endpoints need
   Plumbers") from the widgets in your dashboard — nothing is hardcoded.
 - **Deploy to n8n** (plan-gated), **run manually**, and every run creates an **instance** with
   traceable state, a step-by-step history and full execution logs.
+- The n8n copy is what an **external** caller triggers: it answers **`POST`** on the webhook path
+  the deploy response returns (`/webhook/wfs/<account>/<workflow>` on your n8n host), and n8n
+  replies `200 "Workflow was started"` as soon as it accepts the call. A `GET` on the same path is
+  refused with a 404 naming POST — the trigger carries the caller's data, so the method is part of
+  the contract (`webhook_method: "POST"` in the deploy response).
 - A template that is **not included in your plan is locked** — the lock is enforced server-side,
   so the padlock badge is not just decoration.
 - **Credits**: 1 credit per execution. Running out is refused by the API, not just warned about

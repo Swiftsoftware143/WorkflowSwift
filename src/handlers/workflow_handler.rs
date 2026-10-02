@@ -526,10 +526,14 @@ async fn mirror_to_n8n(
         // The steps already ran in-process, so re-triggering n8n here would
         // execute the same workflow twice (duplicate emails/API calls).
         "triggered": false,
-        "trigger_note": "steps were executed in-process; the n8n copy is available for external triggers",
+        "trigger_note": "steps were executed in-process; the n8n copy is available for external triggers (POST)",
         "n8n_workflow_id": mirror_id,
         "action": if created { "created" } else { "updated" },
         "webhook_path": n8n_wf.webhook_path,
+        // The method is part of the contract the tenant is handed (kanban t_d4dd6e42): the
+        // Webhook node's own default was GET, and a path with no verb named is what let a
+        // GET-only registration ship unnoticed.
+        "webhook_method": crate::n8n_converter::MIRROR_TRIGGER_METHOD,
         "name": n8n_wf.name,
         "node_count": n8n_wf.nodes.len(),
     });
@@ -1153,6 +1157,7 @@ pub async fn deploy_workflow_to_n8n(
         Ok(v) => Ok(Json(json!({
             "deployed": true,
             "webhook_path": v.get("webhook_path").cloned().unwrap_or(serde_json::Value::Null),
+            "webhook_method": crate::n8n_converter::MIRROR_TRIGGER_METHOD,
             "name": v.get("name").cloned().unwrap_or(serde_json::Value::Null),
             "node_count": v.get("node_count").cloned().unwrap_or(serde_json::Value::Null),
             // Idempotence is visible here too: the id is stable, and a later
