@@ -733,6 +733,16 @@ struct EmailTemplateRow {
 
 // ---- Core sender ----
 
+/// The provider vocabulary of this app's mail sender — ONE list, read by the Admin > Settings >
+/// Email picker (www-admin/index.html) and by `GET /api/v1/integrations/resolve` for an `email`
+/// step. Each entry has an arm in `send_email_request` below; `smtp` and `mailgun` are the two
+/// that are only reachable through their own field set.
+///
+/// The resolver used to answer for the `email` STEP TYPE with a hand-kept
+/// `["sendgrid","smtp","mailgun"]` — which both omitted `sendiio` (a transport the admin UI offers)
+/// and carried the RETIRED `export` step type in the same arm (kanban t_88082a4c).
+pub const EMAIL_PROVIDERS: &[&str] = &["smtp", "mailgun", "sendgrid", "sendiio"];
+
 /// Send one message through whichever provider the admin selected in
 /// Admin > Settings > Email. Providers: `smtp` | `mailgun` | `sendgrid` | `sendiio`.
 ///
@@ -998,6 +1008,26 @@ mod tests {
         ));
         // Never warn on an unconfigured endpoint.
         assert!(!mailgun_url_sends_as(url, ""));
+    }
+
+    #[test]
+    fn the_email_provider_vocabulary_matches_the_admin_picker() {
+        // Every provider the sender declares must be one the admin UI actually offers, and vice
+        // versa: the resolver serves this list for an `email` step (kanban t_88082a4c), so a
+        // transport the admin can select but the list omits (or one it names but the picker does
+        // not) is the drift this const exists to stop.
+        let admin = include_str!("../www-admin/index.html");
+        for provider in EMAIL_PROVIDERS {
+            assert!(
+                admin.contains(&format!("'{provider}'")),
+                "email provider '{provider}' is missing from the Admin > Settings > Email picker"
+            );
+        }
+        assert_eq!(
+            EMAIL_PROVIDERS.len(),
+            4,
+            "the admin picker offers four providers"
+        );
     }
 
     #[test]
