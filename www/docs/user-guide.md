@@ -62,6 +62,11 @@ Base API: `https://workflowswift.com/api/v1` — all non-public endpoints need
   itself**: it appears in **Instances** as `failed`, and
   its run history names the failing step and the reason the step gave. A run that **succeeds** is
   visible in n8n's own execution record and does not create an instance of its own.
+  The n8n copy goes through the **same destination check** as the in-process run: a step whose URL
+  resolves inside the platform's own network (loopback, private or link-local), is empty, or is an
+  n8n run-time expression is **not** deployed — the deploy (or the run that mirrors it) reports the
+  step and the reason and writes nothing to n8n, so n8n never calls a destination the app itself
+  would refuse.
 - **Credits**: charged per execution, and the amount comes from the workflow's tier
   (`simple` = 2, `medium` = 3, `complex` = 5, `ai_enhanced` = 7 — the full table is in the
   `deduct` response). Running out is refused by the API, not just warned about in the UI.

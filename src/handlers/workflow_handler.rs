@@ -406,6 +406,48 @@ async fn run_in_process(
     })
 }
 
+/// Refuse to hand n8n a destination this app would refuse itself.
+///
+/// The mirrored graph is executed by n8n — a separate container — so the destination gate the
+/// in-process arms call (`security::webhook_security::gate_step_destination`) does NOT run on it
+/// (kanban t_2741ac13; both legs measured in `/opt/swift/audits/t_2741ac13/`). Every URL the graph
+/// would call that is not one of this app's own callbacks is the tenant's to choose, so it goes
+/// through the SAME gate, on the SAME vocabulary, before the graph is handed to n8n. There is no
+/// second blocklist here on purpose.
+///
+/// A refusal fails the mirror: nothing is written to n8n and the run reports why (the caller turns
+/// the Err into the `n8n.error` block plus a warning). Writing the graph anyway would put a node
+/// whose destination this app refuses into a second executor — the exact read primitive the engine
+/// gate exists to close — and writing it with that node REMOVED would make the external run
+/// silently do less than the tenant's workflow.
+///
+/// Fail closed on a destination the app cannot READ as a literal: a URL carrying an n8n expression
+/// (`={{ … }}`) is resolved by n8n at run time, so the app cannot gate what it cannot see.
+async fn gate_mirror_destinations(
+    n8n_wf: &n8n_converter::N8nWorkflow,
+    callback_base_url: &str,
+) -> Result<(), String> {
+    for (node, url) in n8n_converter::tenant_destinations(n8n_wf, callback_base_url) {
+        let shown: String = url.chars().take(120).collect();
+        if url.trim().is_empty() {
+            return Err(format!(
+                "step '{}' has no destination URL, so there is nothing to gate — set the step's URL and deploy again",
+                node
+            ));
+        }
+        if url.contains("{{") {
+            return Err(format!(
+                "step '{}' has a destination this app cannot read ('{}'): n8n resolves it at run time, so the app cannot check it — use a literal URL",
+                node, shown
+            ));
+        }
+        crate::security::webhook_security::gate_step_destination(&url)
+            .await
+            .map_err(|e| format!("step '{}' destination refused: {}", node, e))?;
+    }
+    Ok(())
+}
+
 /// Mirror a workflow into n8n over its REST API with an API key.
 /// Called only when the plan enables `n8n_deploy`; the caller turns any Err
 /// into a warning. Never uses docker: this container has no docker binary and
@@ -456,6 +498,9 @@ async fn mirror_to_n8n(
         &callback_base_url,
         state.config.internal_sync_key.as_str(),
     );
+    // The graph n8n will run is NOT the graph this process runs: gate its destinations before it
+    // leaves the box (kanban t_2741ac13). A refusal here fails the mirror and is reported.
+    gate_mirror_destinations(&n8n_wf, &callback_base_url).await?;
     let n8n_json = n8n_converter::to_n8n_json(&n8n_wf);
 
     // n8n's public REST API (the one an API key works against). The mirror is an
@@ -1556,6 +1601,73 @@ mod data_card_first_tests {
             assert_data_card_first(&current, &projected).is_ok(),
             "a workflow that already breaks the rule must not become uneditable"
         );
+    }
+}
+
+/// The mirror's nodes run in n8n, not in this process, so the engine's destination gate does not
+/// cover them (kanban t_2741ac13). These legs pin both halves of the fix: a tenant destination the
+/// gate allows still mirrors, and a destination the gate refuses (or one it cannot read) fails the
+/// mirror with a reason that names the step — instead of writing a graph n8n would happily fetch.
+#[cfg(test)]
+mod mirror_destination_gate_tests {
+    use super::*;
+    use crate::n8n_converter::{convert_steps_to_n8n, tenant_destinations, N8nWorkflow};
+
+    const BASE: &str = "https://app.example.com";
+
+    fn graph(url: &str) -> N8nWorkflow {
+        let steps = vec![
+            json!({"step_type": "data-card", "name": "Card", "config": {"metric_key": "m"}}),
+            json!({"step_type": "http-request", "name": "Tenant API",
+                   "config": {"method": "GET", "url": url}}),
+        ];
+        convert_steps_to_n8n(&steps, Uuid::new_v4(), Uuid::new_v4(), BASE, "sync-key")
+    }
+
+    #[tokio::test]
+    async fn a_public_destination_still_mirrors() {
+        let g = graph("http://209.222.97.179:18099/hit/x");
+        assert!(gate_mirror_destinations(&g, BASE).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_loopback_destination_fails_the_mirror_and_names_the_step() {
+        let g = graph("http://127.0.0.1:18098/hit/loopback");
+        let err = gate_mirror_destinations(&g, BASE)
+            .await
+            .expect_err("a loopback destination must fail the mirror");
+        assert!(err.contains("Tenant API"), "{err}");
+        assert!(err.contains("127.0.0.1"), "{err}");
+        assert!(err.contains("not a valid destination"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_run_time_expression_is_refused_rather_than_shipped_ungated() {
+        let g = graph("={{ $json.target }}");
+        let err = gate_mirror_destinations(&g, BASE)
+            .await
+            .expect_err("a destination the app cannot read must not be shipped");
+        assert!(err.contains("Tenant API"), "{err}");
+        assert!(err.contains("run time"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn an_empty_destination_is_refused() {
+        let g = graph("");
+        let err = gate_mirror_destinations(&g, BASE)
+            .await
+            .expect_err("an empty destination must not be shipped");
+        assert!(err.contains("has no destination URL"), "{err}");
+    }
+
+    /// This app's own callbacks are generated here, not tenant input: a graph of one Data Card step
+    /// emits callbacks to this app's origin only, and the gate is offered nothing.
+    #[tokio::test]
+    async fn this_apps_own_callbacks_are_not_gated() {
+        let steps = vec![json!({"step_type": "data-card", "name": "Card", "config": {}})];
+        let g = convert_steps_to_n8n(&steps, Uuid::new_v4(), Uuid::new_v4(), BASE, "sync-key");
+        assert!(tenant_destinations(&g, BASE).is_empty());
+        assert!(gate_mirror_destinations(&g, BASE).await.is_ok());
     }
 }
 

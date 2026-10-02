@@ -1605,6 +1605,51 @@ pub fn to_n8n_json(wf: &N8nWorkflow) -> Value {
     })
 }
 
+/// Every destination a generated graph would CALL that is not one of this app's own callbacks —
+/// i.e. every URL that came out of a step's config and is therefore the tenant's to choose.
+///
+/// WHY THIS EXISTS (kanban t_2741ac13): the destination gate the in-process engine runs
+/// (`crate::security::webhook_security::gate_step_destination`) covers the engine only. A mirrored
+/// graph is executed by n8n — a separate container — so the very same step config becomes a node
+/// n8n fetches with nothing in front of it. Measured live, both legs: an `http-request` step pointed
+/// at `http://127.0.0.1:18098/...` was refused in-process (0 sink hits), while the mirror of that
+/// same workflow, once activated and triggered, fetched that loopback address from inside the n8n
+/// container and returned the sink's body into the run (`/opt/swift/audits/t_2741ac13/`).
+///
+/// This is the choke point next to `harden_callback_nodes`: whatever a future arm emits, the caller
+/// finds the URLs it has to gate HERE, so a new arm cannot add an ungated destination. Only
+/// `n8n-nodes-base.httpRequest` nodes take a URL (the other emitted types — noOp, wait, if, switch,
+/// code, webhook, errorTrigger, respondToWebhook, googleSheets, writeBinaryFile — carry none), and
+/// this app's own callbacks are excluded by their exact origin prefix: they are generated here and
+/// carry this app's bearer, never a tenant destination.
+pub fn tenant_destinations(wf: &N8nWorkflow, callback_base_url: &str) -> Vec<(String, String)> {
+    let prefix = format!("{}/api/v1/", callback_base_url.trim_end_matches('/'));
+    let mut out = Vec::new();
+    for node in &wf.nodes {
+        if node.get("type").and_then(|t| t.as_str()) != Some("n8n-nodes-base.httpRequest") {
+            continue;
+        }
+        let Some(url) = node
+            .get("parameters")
+            .and_then(|p| p.get("url"))
+            .and_then(|u| u.as_str())
+        else {
+            continue;
+        };
+        if url.starts_with(&prefix) {
+            continue;
+        }
+        out.push((
+            node.get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("(unnamed node)")
+                .to_string(),
+            url.to_string(),
+        ));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1637,6 +1682,68 @@ mod tests {
         // hardcode a tenant id), and the converter's output does not depend on WHICH uuid it is
         // given — every assertion below is about node shape.
         convert_steps_to_n8n(&steps(), Uuid::new_v4(), Uuid::new_v4(), BASE, KEY)
+    }
+
+    /// The mirror is executed by n8n — a separate container — so the engine's destination gate does
+    /// NOT cover the nodes it runs (kanban t_2741ac13). `tenant_destinations` is how the caller finds
+    /// the URLs to gate, so this is the census that fails first when a new arm emits a destination
+    /// nobody gates: every URL-bearing step hands its config URL over, and NONE of this app's own
+    /// callbacks (generated here, carrying this app's bearer) is ever offered to the gate.
+    #[test]
+    fn tenant_destinations_are_the_step_configs_urls_and_never_this_apps_callbacks() {
+        use std::collections::BTreeMap;
+        let steps = vec![
+            json!({"step_type": "http-request", "name": "Tenant API",
+                   "config": {"method": "POST", "url": "https://api.tenant.example/lead"}}),
+            json!({"step_type": "notify", "name": "Hook out",
+                   "config": {"channel": "webhook", "recipient": "https://hooks.tenant.example/x"}}),
+            json!({"step_type": "render_image", "name": "Render",
+                   "config": {"provider": "probe", "endpoint": "https://render.tenant.example/api"}}),
+            json!({"step_type": "ai-action", "name": "Agent",
+                   "config": {"gateway_url": "https://gateway.tenant.example"}}),
+            json!({"step_type": "export", "name": "Export",
+                   "config": {"destination": "http", "url": "https://export.tenant.example/append"}}),
+        ];
+        let g = convert_steps_to_n8n(&steps, Uuid::new_v4(), Uuid::new_v4(), BASE, KEY);
+        let got: BTreeMap<String, String> = tenant_destinations(&g, BASE).into_iter().collect();
+        assert_eq!(
+            got.len(),
+            5,
+            "one destination per url-bearing step: {got:?}"
+        );
+        assert_eq!(got["Tenant API"], "https://api.tenant.example/lead");
+        assert_eq!(got["Hook out"], "https://hooks.tenant.example/x");
+        assert_eq!(got["Render"], "https://render.tenant.example/api");
+        assert_eq!(
+            got["Agent"],
+            "https://gateway.tenant.example/api/chat/completions"
+        );
+        assert_eq!(got["Export"], "https://export.tenant.example/append");
+    }
+
+    /// Same rule, swept over EVERY arm the converter emits (the probe list the callback census
+    /// uses): no app callback and no run-time expression may ever be handed to the gate as a tenant
+    /// destination.
+    #[test]
+    fn the_tenant_destination_census_excludes_app_callbacks_and_expressions() {
+        for (step_type, config) in census_probes() {
+            let step = json!({
+                "step_type": step_type,
+                "name": format!("Step {step_type}"),
+                "config": config,
+            });
+            let g = convert_steps_to_n8n(&[step], Uuid::new_v4(), Uuid::new_v4(), BASE, KEY);
+            for (node, url) in tenant_destinations(&g, BASE) {
+                assert!(
+                    !url.starts_with(BASE),
+                    "{step_type}: {node} is this app's own callback, not a tenant destination: {url}"
+                );
+                assert!(
+                    !url.contains("{{"),
+                    "{step_type}: {node} carries an n8n expression, which no gate can read: {url}"
+                );
+            }
+        }
     }
 
     fn is_app_callback(node: &Value) -> bool {
