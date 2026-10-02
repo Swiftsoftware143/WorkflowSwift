@@ -95,7 +95,6 @@ pub const EXECUTABLE_STEP_TYPES: &[&str] = &[
     "data-card",
     "data_card",
     "notify",
-    "export",
     "delay",
     "wait",
     "transform",
@@ -106,20 +105,54 @@ pub const EXECUTABLE_STEP_TYPES: &[&str] = &[
     "render_media",
     "render_image",
     "render_audio",
-    "generate",
     "format",
     "design",
-    "publish",
     "loop",
     "condition",
     "manual",
     "webhook",
 ];
 
+/// Step types that were OFFERED or accepted and are now RETIRED because nothing in this app can
+/// deliver what they advertise (kanban t_02519738). They stay in this list — and out of
+/// `EXECUTABLE_STEP_TYPES` — so the write path refuses them and a row written straight into the
+/// database is an honest `skipped` step whose `unexecutable` marker reaches the run's `warnings[]`.
+///
+/// * `export` — the CONSOLE offered it ("CSV / Resend / SendGrid / CoreSwift CRM", step config
+///   `destination`) and the engine POSTed a platform-shaped body to
+///   `{N8N_WEBHOOK_URL}/webhook/workflowswift-export` — not registered (404) — and returned
+///   `status: "completed"` for BOTH the 404 and a transport failure, so a tenant's Export step was
+///   recorded and shown as completed having exported nothing (measured live 2026-10-02). No
+///   exporter exists on either side: CSV has no store or download surface in this app,
+///   Resend/SendGrid are credentials the platform does not hold, and the CoreSwift CRM path is an
+///   inbound lead push, not an export contract. Same disposition as `research`/`openclaw`
+///   (t_fe60cdf5) and the undeliverable Notify channels (t_08be842f).
+/// * `publish` / `generate` — the same platform webhooks (`workflowswift-publish`,
+///   `workflowswift-generate`), the same 404, never offered by the console and with 0 rows
+///   fleet-wide. The n8n mirror had already retired both into a pass-through that NAMES what is
+///   missing (kanban t_642b6894); the engine's arms are retired here the same way — by not being
+///   step types at all.
+/// * `research` / `openclaw` — retired before this list existed (kanban t_fe60cdf5; nothing in this
+///   app performs either), and named here so the write path's refusal says "retired" for them too.
+pub const RETIRED_STEP_TYPES: &[&str] = &["export", "publish", "generate", "research", "openclaw"];
+
 /// Is this a step type the engine can execute? The write path's and the validator's one rule.
 pub fn is_executable_step_type(step_type: &str) -> bool {
     EXECUTABLE_STEP_TYPES.contains(&step_type)
 }
+
+/// Was this step type retired (offered/accepted once, delivers nothing)? The write path's refusal
+/// names the shape, and a stored row of this type is `unexecutable` in the walk.
+pub fn is_retired_step_type(step_type: &str) -> bool {
+    RETIRED_STEP_TYPES.contains(&step_type)
+}
+
+/// Why an AI Action step cannot run in this app (kanban t_02519738). One string, so the step
+/// result, the run's `warnings[]` and the unit test all state the same gap.
+pub const AI_ACTION_NO_LLM_PATH: &str =
+    "AI Action cannot run in this app: nothing here calls an LLM \
+     provider (the tenant's provider key is stored but nothing reads it), and the platform webhook \
+     the step used to POST to is not registered. Its prompt was not sent anywhere.";
 
 /// The accepted vocabulary as one line, for a 400 body / a validation error.
 pub fn executable_step_type_list() -> String {
@@ -246,6 +279,23 @@ fn notify_undeliverable_result(step: usize, channel: &str, reason: &str) -> Valu
         "channel": channel,
         "undeliverable": reason,
         "reason": reason,
+    })
+}
+
+/// A step this app cannot execute AT ALL — the console offers it (or the API accepted it) but no
+/// path in this crate performs the work, so the step did nothing and `why` NAMES the missing piece.
+///
+/// It is `skipped`, not `failed` (nothing upstream failed — there is nothing upstream) and
+/// certainly not `completed`; `undeliverable` carries the reason to the run's `warnings[]`
+/// (`workflow_handler::run_in_process`), the same shape a Notify channel with no sender gets
+/// (kanban t_08be842f).
+fn step_without_an_executor_result(step: usize, step_type: &str, why: &str) -> Value {
+    json!({
+        "step": step,
+        "type": step_type,
+        "status": "skipped",
+        "undeliverable": why,
+        "reason": why,
     })
 }
 
@@ -453,7 +503,19 @@ fn step_error_text(result: &Value) -> Option<String> {
         }
     }
     match result.get("status") {
-        Some(Value::Number(n)) => Some(format!("upstream returned HTTP {}", n)),
+        // A numeric `status` is the upstream HTTP code a `webhook`/`http-request`/`notify`/
+        // `render_*` arm stored. It belongs in the log row only when the call FAILED: applied
+        // without this check the walk wrote `error_message = "upstream returned HTTP 200"` on a
+        // `completed` step, i.e. every successful outbound call carried a fake error (measured live
+        // 2026-10-02, kanban t_02519738).
+        Some(Value::Number(n)) => {
+            let code = n.as_u64().unwrap_or(0);
+            if (200..400).contains(&code) {
+                None
+            } else {
+                Some(format!("upstream returned HTTP {}", code))
+            }
+        }
         _ => None,
     }
 }
@@ -1217,84 +1279,31 @@ async fn walk(
                     "note": "Waiting for its due time — the background worker advances it",
                 })
             }
-            "generate" | "ai-action" | "ai_action" => {
-                // Call the configured LLM provider
-                let provider = step_config
-                    .get("provider")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("openai");
-                let prompt = step_config
-                    .get("prompt")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let model = step_config
-                    .get("model")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("gpt-4");
-                let system_prompt = step_config
-                    .get("system_prompt")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-
-                // Try to call the AI provider via n8n or direct API
-                // For now, route through n8n which handles provider routing
-                let n8n_payload = json!({
-                    "action": "generate",
-                    "provider": provider,
-                    "model": model,
-                    "system_prompt": system_prompt,
-                    "prompt": prompt,
-                    "context": context,
-                    "contact": contact,
-                    "data": data,
-                    "campaign_slug": slug,
-                });
-
-                let n8n_url = format!(
-                    "{}/webhook/workflowswift-generate",
-                    state.config.n8n_webhook_url.trim_end_matches('/')
-                );
-                let client = reqwest::Client::new();
-                let mut req = client
-                    .post(&n8n_url)
-                    .json(&n8n_payload)
-                    .timeout(std::time::Duration::from_secs(60));
-                if !state.config.n8n_api_key.is_empty() {
-                    req = req.header("X-API-Key", &state.config.n8n_api_key);
-                }
-
-                let mut payload_req = req.send().await;
-
-                // If the n8n webhook doesn't exist, try direct API call as fallback
-                if payload_req.is_err() {
-                    // Fallback: send to the default n8n workflow handler
-                    let fallback_url = format!(
-                        "{}/webhook/incoming/content-gen",
-                        state.config.n8n_webhook_url.trim_end_matches('/')
-                    );
-                    let client = reqwest::Client::new();
-                    let mut fallback_req = client
-                        .post(&fallback_url)
-                        .json(&n8n_payload)
-                        .timeout(std::time::Duration::from_secs(60));
-                    if !state.config.n8n_api_key.is_empty() {
-                        fallback_req = fallback_req.header("X-API-Key", &state.config.n8n_api_key);
-                    }
-                    payload_req = fallback_req.send().await;
-                }
-
-                match payload_req {
-                    Ok(resp) => {
-                        let status = resp.status().as_u16();
-                        let body = resp.text().await.unwrap_or_default();
-                        json!({"step": i, "type": "generate", "status": if status == 200 || status == 201 { "completed" } else { "error" }, "provider": provider, "response": body, "status_code": status})
-                    }
-                    Err(e) => {
-                        // If no external AI provider is configured, mark as completed with note
-                        // so the workflow still continues
-                        json!({"step": i, "type": "generate", "status": "completed", "provider": provider, "note": format!("AI generation queued (n8n not available: {})", e), "generated_content": prompt})
-                    }
-                }
+            "ai-action" | "ai_action" => {
+                // The console OFFERS AI Action ("Runs an LLM prompt; the output stays editable",
+                // www-app/index.html). This app cannot run it, and this arm used to hide that: it
+                // POSTed a platform-shaped body to
+                // `{N8N_WEBHOOK_URL}/webhook/workflowswift-generate` — not registered (404) — fell
+                // back to `/webhook/incoming/content-gen` (also 404, measured live 2026-10-02) and
+                // then reported `status: "completed"` carrying `generated_content: <the prompt>`:
+                // a generation that never happened, wrapped around a webhook that never existed.
+                // Even the 404 leg misled — it read as "upstream failed" rather than "this app has
+                // no LLM path".
+                //
+                // Measured on the live app 2026-10-02 (kanban t_02519738): the app stores the
+                // tenant's provider keys (`user_integrations` + `provider_key_crypto`; the list
+                // `/integrations/providers?step_type=ai-action` serves is
+                // openai/anthropic/deepseek/gemini) and no code in this crate calls a provider, so
+                // the step is `skipped` with an `undeliverable` reason that NAMES the gap — the
+                // same honest no-op a Notify channel with no sender gets (kanban t_08be842f) —
+                // and `run_in_process` surfaces it in the run's `warnings[]`. Implementing the
+                // provider call (whose key, which model, what it costs) is a product decision and
+                // is carded separately.
+                json!(step_without_an_executor_result(
+                    i,
+                    "ai-action",
+                    AI_ACTION_NO_LLM_PATH
+                ))
             }
             "format" | "transform" | "code" => {
                 let format_type = step_config
@@ -1330,123 +1339,17 @@ async fn walk(
 
                 json!({"step": i, "type": "design", "status": "completed", "style": style, "dimensions": dimensions, "note": "Design queued — will generate visual assets via configured provider"})
             }
-            "publish" => {
-                let provider = step_config
-                    .get("provider")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("webhook");
-                let message = step_config
-                    .get("message")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let platforms: Vec<String> = step_config
-                    .get("platforms")
-                    .and_then(|v| v.as_array())
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let media_url = step_config
-                    .get("media_url")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-
-                // Route to n8n which handles multi-platform publishing
-                let n8n_payload = json!({
-                    "action": "publish",
-                    "provider": provider,
-                    "platforms": platforms,
-                    "message": message,
-                    "media_url": media_url,
-                    "context": context,
-                    "contact": contact,
-                    "data": data,
-                });
-
-                let n8n_url = format!(
-                    "{}/webhook/workflowswift-publish",
-                    state.config.n8n_webhook_url.trim_end_matches('/')
-                );
-                let client = reqwest::Client::new();
-                let mut req = client
-                    .post(&n8n_url)
-                    .json(&n8n_payload)
-                    .timeout(std::time::Duration::from_secs(30));
-                if !state.config.n8n_api_key.is_empty() {
-                    req = req.header("X-API-Key", &state.config.n8n_api_key);
-                }
-
-                let publish_result = req.send().await;
-
-                match publish_result {
-                    Ok(resp) => {
-                        let status = resp.status().as_u16();
-                        let body = resp.text().await.unwrap_or_default();
-                        json!({"step": i, "type": "publish", "status": if status == 200 || status == 201 { "completed" } else { "error" }, "provider": provider, "platforms": platforms, "response": body})
-                    }
-                    Err(e) => {
-                        // If no publishing provider configured, mark as attempted
-                        json!({"step": i, "type": "publish", "status": "completed", "provider": provider, "platforms": platforms, "note": format!("Publish queued (n8n: {})", e)})
-                    }
-                }
-            }
-            "export" => {
-                let format = step_config
-                    .get("format")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("csv");
-                let targets: Vec<String> = step_config
-                    .get("targets")
-                    .and_then(|v| v.as_array())
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let filename = step_config
-                    .get("filename")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("workflow-export");
-
-                // Send export job to n8n
-                let n8n_payload = json!({
-                    "action": "export",
-                    "format": format,
-                    "targets": targets,
-                    "filename": filename,
-                    "context": context,
-                    "contact": contact,
-                    "data": data,
-                });
-
-                let n8n_url = format!(
-                    "{}/webhook/workflowswift-export",
-                    state.config.n8n_webhook_url.trim_end_matches('/')
-                );
-                let client = reqwest::Client::new();
-                let mut req = client
-                    .post(&n8n_url)
-                    .json(&n8n_payload)
-                    .timeout(std::time::Duration::from_secs(30));
-                if !state.config.n8n_api_key.is_empty() {
-                    req = req.header("X-API-Key", &state.config.n8n_api_key);
-                }
-
-                let export_result = req.send().await;
-
-                match export_result {
-                    Ok(resp) => {
-                        let body = resp.text().await.unwrap_or_default();
-                        json!({"step": i, "type": "export", "status": "completed", "format": format, "targets": targets, "response": body})
-                    }
-                    Err(e) => {
-                        json!({"step": i, "type": "export", "status": "completed", "format": format, "targets": targets, "note": format!("Export queued (n8n: {})", e)})
-                    }
-                }
-            }
+            // `publish` and `export` used to have arms here. Both POSTed a platform-shaped body to
+            // a webhook that is not registered — `{N8N_WEBHOOK_URL}/webhook/workflowswift-publish`
+            // and `…/webhook/workflowswift-export` — and `export` (the CONSOLE-offered one)
+            // returned `status: "completed"` for the 404 AND for a transport failure, so a tenant's
+            // Export step was shown as completed having exported nothing (measured live 2026-10-02,
+            // kanban t_02519738). No exporter exists to point them at: CSV has no store or download
+            // surface in this app, Resend/SendGrid are credentials the platform does not hold, and
+            // the CoreSwift CRM path is an inbound lead push. Both step types are RETIRED
+            // (`RETIRED_STEP_TYPES`): the write path refuses them, the console no longer offers
+            // `export`, and a row written straight into the database reaches the `_` arm below as
+            // an honest `skipped` step whose `unexecutable` marker lands in the run's `warnings[]`.
             "notify" => {
                 let channel = step_config
                     .get("channel")
@@ -1710,6 +1613,98 @@ mod tests {
             Some("upstream returned HTTP 404")
         );
         assert_eq!(step_error_text(&json!({"status": "completed"})), None);
+        // A SUCCESS code is not an error (kanban t_02519738): every successful outbound step used
+        // to carry `error_message = "upstream returned HTTP 200"` in its log row.
+        assert_eq!(step_error_text(&json!({"status": 200})), None);
+        assert_eq!(step_error_text(&json!({"status": 204})), None);
+        assert_eq!(step_error_text(&json!({"status": 302})), None);
+        assert_eq!(
+            step_error_text(&json!({"status": 500})).as_deref(),
+            Some("upstream returned HTTP 500")
+        );
+    }
+
+    /// kanban t_02519738: `export` (the console-offered arm), `publish` and `generate` addressed a
+    /// platform webhook that is not registered and reported an outcome the app never produced.
+    ///
+    /// The control leg is the PRE-FIX shape: a 404 body from `/webhook/workflowswift-export`
+    /// wrapped with `status: "completed"`, exactly what the running binary returned and the walk
+    /// recorded as success. The retired types now reach the walk's `_` arm.
+    #[test]
+    fn a_retired_step_type_is_not_a_completed_step() {
+        let body = "{\"code\":404,\"message\":\"The requested webhook \\\"POST \
+                    workflowswift-export\\\" is not registered.\"}";
+        let control = json!({
+            "step": 1, "type": "export", "status": "completed", "format": "csv",
+            "targets": ["coreswift"], "response": body,
+        });
+        assert_eq!(
+            classify_step_status(&control),
+            "completed",
+            "the pre-fix export arm reported a 404 as a completed Export step"
+        );
+
+        for retired in RETIRED_STEP_TYPES {
+            let result = unexecutable_step_result(1, retired);
+            assert_eq!(
+                classify_step_status(&result),
+                "skipped",
+                "'{retired}' must not read as completed ({result})"
+            );
+            assert_eq!(
+                result.get("unexecutable").and_then(|v| v.as_str()),
+                Some(*retired),
+                "the walk's marker must NAME the retired type so the run warning can"
+            );
+            assert!(
+                result
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .contains("has no executor in this app"),
+                "{result}"
+            );
+            assert!(
+                step_error_text(&result)
+                    .unwrap_or_default()
+                    .contains("has no executor"),
+                "the reason reaches the execution log row"
+            );
+        }
+    }
+
+    /// kanban t_02519738: the console OFFERS AI Action and the app stores the tenant's provider
+    /// key, but nothing in this crate calls a provider. The control leg is the PRE-FIX shape — the
+    /// transport-failure arm reported a completed step carrying `generated_content: <the prompt>`,
+    /// i.e. content that was never generated.
+    #[test]
+    fn an_ai_action_step_with_no_llm_path_is_not_a_completed_step() {
+        let control = json!({
+            "step": 1, "type": "generate", "status": "completed", "provider": "openai",
+            "note": "AI generation queued (n8n not available: connect error)",
+            "generated_content": "Summarise the incoming lead",
+        });
+        assert_eq!(
+            classify_step_status(&control),
+            "completed",
+            "the pre-fix arm claimed a generation that never happened"
+        );
+
+        let result = step_without_an_executor_result(1, "ai-action", AI_ACTION_NO_LLM_PATH);
+        assert_eq!(classify_step_status(&result), "skipped");
+        assert!(
+            result.get("generated_content").is_none(),
+            "no arm may report content it did not generate"
+        );
+        let reason = result
+            .get("undeliverable")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        assert!(
+            reason.contains("no LLM") || reason.contains("nothing here calls an LLM provider"),
+            "the reason NAMES the gap: {reason}"
+        );
+        assert_eq!(step_error_text(&result).as_deref(), Some(reason));
     }
 
     #[test]
@@ -1880,12 +1875,30 @@ mod tests {
             );
         }
         // The retired names must not be accepted: nothing in this app executes either.
-        for retired in ["research", "openclaw"] {
+        for retired in [
+            "research", "openclaw",
+            // kanban t_02519738: offered/accepted once, delivered nothing.
+            "export", "publish", "generate",
+        ] {
             assert!(
                 !is_executable_step_type(retired),
                 "'{retired}' must be retired — no live path in this app runs it"
             );
+            assert!(
+                is_retired_step_type(retired),
+                "'{retired}' is retired and must be in RETIRED_STEP_TYPES so the write path's \
+                 refusal can name it"
+            );
+            assert!(
+                !arms.iter().any(|a| a == retired),
+                "'{retired}' is retired but the engine still has an arm for it: {arms:?}"
+            );
         }
+        // ...and the console mut not offer them (the other half of the same vocabulary).
+        assert!(
+            !include_str!("../www-app/index.html").contains("{ k:'export'"),
+            "the console must not offer the retired export step"
+        );
     }
 
     /// Files under `migrations/` are read with `std::fs` and NOT with the `include_str!` macro: the
@@ -1927,10 +1940,29 @@ mod tests {
             .collect();
         engine.sort();
         engine.dedup();
-        assert_eq!(
-            declared, engine,
-            "migration 073's executable list and EXECUTABLE_STEP_TYPES have drifted apart"
-        );
+        // Migration 073 is ALREADY APPLIED, so its embedded list is a SNAPSHOT of the vocabulary of
+        // 2026-10-02 and cannot be edited — sqlx checksums it and an edited applied migration makes
+        // the app exit(1) at boot. What must hold is that every step type the migration NAMES is a
+        // type this app KNOWS: executable, or explicitly RETIRED (kanban t_02519738 moved `export`,
+        // `publish` and `generate` from the first set to the second). A word in neither set would
+        // mean the migration blessed a type nobody has ever run.
+        for t in &declared {
+            assert!(
+                is_executable_step_type(t) || is_retired_step_type(t),
+                "migration 073 names step type '{t}', which this app neither executes nor marks \
+                 retired — the vocabulary drifted (executable today: {engine:?})"
+            );
+        }
+        // And a retirement may only RE-CLASSIFY a type the app really accepted: the three this card
+        // retired are in the snapshot (073 and the steps API accepted all three). `research` and
+        // `openclaw` were retired BEFORE 073 was written and were never in its list.
+        for r in ["export", "publish", "generate"] {
+            assert!(
+                declared.iter().any(|d| d == r),
+                "'{r}' is retired but migration 073's vocabulary snapshot never named it, so it was \
+                 never an accepted step type"
+            );
+        }
     }
 
     /// The ten rows migrations/013_seed_data.sql seeded hold lifecycle STAGE NAMES in `step_type`

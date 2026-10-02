@@ -1008,6 +1008,18 @@ pub async fn create_workflow_step(
     // The whole vocabulary is `crate::execution::EXECUTABLE_STEP_TYPES`, so a step the engine has
     // no arm for cannot be created at all. Before kanban t_fe60cdf5 this handler validated NOTHING
     // and the API happily accepted types that fell through the engine's `_` arm and did nothing.
+    //
+    // A RETIRED type says so by name (kanban t_02519738): `export` was the console-offered one and
+    // used to be accepted, POSTed to a platform webhook that is not registered, and reported
+    // `completed` for the 404 AND for a transport failure.
+    if crate::execution::is_retired_step_type(&req.step_type) {
+        return Err(AppError::Validation(format!(
+            "Step type '{}' is retired: nothing in this app performs it, so the step would do \
+             nothing. Valid step types are: {}",
+            req.step_type,
+            crate::execution::executable_step_type_list()
+        )));
+    }
     if !crate::execution::is_executable_step_type(&req.step_type) {
         return Err(AppError::Validation(format!(
             "Step type '{}' has no executor in this app. Valid step types are: {}",
@@ -1344,12 +1356,9 @@ pub async fn validate_workflow_steps(
         ("http-request", vec!["url", "method"]),
         ("action", vec!["url", "method"]),
         ("ai-action", vec!["prompt"]),
-        ("generate", vec!["prompt"]),
-        ("export", vec!["destination"]),
         ("notify", vec!["channel", "recipient"]),
         ("data-card", vec!["metric_key"]),
         ("design", vec!["prompt"]),
-        ("publish", vec!["content"]),
         ("condition", vec!["field"]),
         ("webhook", vec!["url"]),
         ("format", vec!["input_content"]),
@@ -1392,6 +1401,19 @@ pub async fn validate_workflow_steps(
         // validator blessed a workflow whose steps did nothing (kanban t_fe60cdf5). `research` and
         // `openclaw` are retired: nothing in this app can run either (see the decision record).
         let valid_types = crate::execution::EXECUTABLE_STEP_TYPES;
+
+        // A RETIRED type says so by name (kanban t_02519738): `export` was the console-offered one.
+        if crate::execution::is_retired_step_type(step_type) {
+            errors.push(format!(
+                "Step {} '{}': step type '{}' is retired — nothing in this app performs it, so the \
+                 step would do nothing. Valid types are: {}",
+                i + 1,
+                step_name,
+                step_type,
+                valid_types.join(", ")
+            ));
+            continue;
+        }
 
         if !valid_types.contains(&step_type) {
             errors.push(format!(

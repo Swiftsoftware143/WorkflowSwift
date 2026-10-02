@@ -1061,73 +1061,25 @@ fn convert_user_steps(
             }
 
             "export" => {
-                let destination = config
-                    .get("destination")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("http");
-                match destination {
-                    "google_sheets" | "sheets" => {
-                        let node = json!({
-                            "id": node_id,
-                            "name": step_name,
-                            "type": "n8n-nodes-base.googleSheets",
-                            "typeVersion": 4,
-                            "position": [x_pos, y_base],
-                            "parameters": {
-                                "operation": "append",
-                                "documentId": config.get("sheet_id").and_then(|v| v.as_str()).unwrap_or(""),
-                                "sheetName": config.get("sheet_name").and_then(|v| v.as_str()).unwrap_or("Sheet1"),
-                                "columns": {
-                                    "mappingMode": "defineBelow",
-                                    "value": "={{ $json }}"
-                                },
-                                "options": {}
-                            }
-                        });
-                        nodes.push(node);
-                    }
-                    "csv" => {
-                        let filename = config
-                            .get("filename")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("export.csv");
-                        let node = json!({
-                            "id": node_id,
-                            "name": step_name,
-                            "type": "n8n-nodes-base.writeBinaryFile",
-                            "typeVersion": 1,
-                            "position": [x_pos, y_base],
-                            "parameters": {
-                                "fileName": filename,
-                                "dataPropertyName": "data",
-                                "options": {}
-                            }
-                        });
-                        nodes.push(node);
-                    }
-                    _ => {
-                        // Generic HTTP POST export
-                        let url = config.get("url").and_then(|v| v.as_str()).unwrap_or("");
-                        let node = json!({
-                            "id": node_id,
-                            "name": step_name,
-                            "type": "n8n-nodes-base.httpRequest",
-                            "typeVersion": 4.2,
-                            "position": [x_pos, y_base],
-                            "parameters": {
-                                "method": "POST",
-                                "url": url,
-                                "sendBody": true,
-                                "bodyParameters": {
-                                    "parameters": [
-                                        { "name": "data", "value": "={{ $json }}" }
-                                    ]
-                                }
-                            }
-                        });
-                        nodes.push(node);
-                    }
-                }
+                // RETIRED (kanban t_02519738): `export` is no longer a step type this app accepts
+                // (src/execution.rs RETIRED_STEP_TYPES) — the console's destinations (CSV / Resend /
+                // SendGrid / CoreSwift CRM) have no sender or store on either side, and the engine's
+                // arm POSTed a platform webhook that is not registered and reported `completed`
+                // anyway. This arm used to emit REAL-looking nodes for `google_sheets` / `csv` /
+                // anything-else: the `_` branch produced an `httpRequest` node with an EMPTY url,
+                // which is the "node has configuration issues" shape that makes the tenant's whole
+                // generated workflow un-activatable (see this file's `publish`/`generate` notes), and
+                // even the working branches delivered nothing a tenant could reach (a file written
+                // inside the n8n container). A row written straight into the database keeps its place
+                // in the graph as a pass-through that NAMES the retirement — the same disposition the
+                // engine applies to a step it cannot execute.
+                nodes.push(passthrough_node(
+                    &node_id,
+                    step_name,
+                    (x_pos, y_base),
+                    step_type,
+                    "the Export step is RETIRED in this app: no exporter exists (CSV has no store or download surface, Resend/SendGrid hold no credential here, and CoreSwift CRM is an inbound lead push), so this step exported nothing. Delete it or use an HTTP Request step pointing at your own endpoint.",
+                ));
             }
 
             "delay" | "wait" => {
@@ -1701,14 +1653,16 @@ mod tests {
                    "config": {"provider": "probe", "endpoint": "https://render.tenant.example/api"}}),
             json!({"step_type": "ai-action", "name": "Agent",
                    "config": {"gateway_url": "https://gateway.tenant.example"}}),
-            json!({"step_type": "export", "name": "Export",
-                   "config": {"destination": "http", "url": "https://export.tenant.example/append"}}),
+            // `export` used to be here: a `http` destination emitted an `httpRequest` node whose
+            // url is the tenant's, so it had to be gated. The step type is RETIRED (kanban
+            // t_02519738) and its node is now a pass-through that names the retirement and calls
+            // nothing — no destination to gate.
         ];
         let g = convert_steps_to_n8n(&steps, Uuid::new_v4(), Uuid::new_v4(), BASE, KEY);
         let got: BTreeMap<String, String> = tenant_destinations(&g, BASE).into_iter().collect();
         assert_eq!(
             got.len(),
-            5,
+            4,
             "one destination per url-bearing step: {got:?}"
         );
         assert_eq!(got["Tenant API"], "https://api.tenant.example/lead");
@@ -1718,7 +1672,6 @@ mod tests {
             got["Agent"],
             "https://gateway.tenant.example/api/chat/completions"
         );
-        assert_eq!(got["Export"], "https://export.tenant.example/append");
     }
 
     /// Same rule, swept over EVERY arm the converter emits (the probe list the callback census
@@ -2083,11 +2036,6 @@ mod tests {
                             st.clone(),
                             json!({"channel": ch, "recipient": "ops@example.com"}),
                         ));
-                    }
-                }
-                "export" => {
-                    for d in ["google_sheets", "csv", "resend", "coreswift"] {
-                        probes.push((st.clone(), json!({"destination": d})));
                     }
                 }
                 _ => {}

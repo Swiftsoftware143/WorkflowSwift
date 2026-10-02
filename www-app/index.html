@@ -1341,8 +1341,7 @@ const CompetitorModal = () => {
 // change was needed — every call below hits an existing, live handler.
 const STEP_TYPES = [
   { k:'data-card', label:'Data Card', hint:'Always step 1 — pulls the run\'s data from a named dashboard widget.' },
-  { k:'ai-action', label:'AI Action', hint:'Runs an LLM prompt; the output stays editable.' },
-  { k:'export', label:'Export', hint:'CSV / Resend / SendGrid / CoreSwift CRM.' },
+  { k:'ai-action', label:'AI Action', hint:'NOT LIVE YET — no LLM path in this app: the step is skipped with a warning.' },
   { k:'notify', label:'Notify', hint:'POSTs the run data to a webhook URL you own.' },
   { k:'delay', label:'Delay / Wait', hint:'Parks the instance until due; the execution worker advances it.' },
   { k:'fork', label:'Fork', hint:'Splits the run into parallel branches.' },
@@ -1447,11 +1446,16 @@ const StepModal = () => {
     switch (d.type) {
       case 'data-card': return widgetField;
       case 'ai-action': return area('Prompt', 'prompt', 'Summarise the incoming lead and draft a reply');
-      case 'export': return html`<div class="mb-4"><label class="label">Destination</label>
-        <select class="input" value=${d.destination} onChange=${e=>set('destination', e.target.value)}>
-          <option value="csv">CSV download</option><option value="resend">Resend (email)</option>
-          <option value="sendgrid">SendGrid (email)</option><option value="coreswift">CoreSwift CRM</option>
-        </select></div>`;
+      // Export is RETIRED (kanban t_02519738). It used to offer CSV / Resend / SendGrid / CoreSwift
+      // CRM, and the engine POSTed every run to a platform webhook that is not registered, then
+      // recorded the step as completed having exported nothing. No exporter exists to point it at,
+      // so the step type is refused by the API; this branch only exists so an old row opened in the
+      // Builder explains itself instead of silently showing an empty form.
+      case 'export': return html`<div class="mb-4"><label class="label">Exported</label>
+        <div class="text-xs text-gray-500">This Export step is retired — the app has no exporter (CSV
+        has no download surface, Resend/SendGrid hold no credential here, CoreSwift CRM is an inbound
+        lead push), so it exported nothing. Delete it, or use an HTTP Request step to POST the run to
+        your own endpoint.</div></div>`;
       // ONE channel, and it is the one the product can keep: `webhook` makes the run POST
       // {message, data} to a URL the tenant owns. Email and SMS used to be listed here and both
       // delivered nothing (no mail relay, no SMS provider — kanban t_08be842f), so they are gone

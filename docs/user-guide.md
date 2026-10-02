@@ -1,8 +1,8 @@
 # User Guide — WorkflowSwift
 
 WorkflowSwift turns a captured lead or form entry into automated, multi-step follow-up: an
-incoming webhook creates an instance, the engine walks the steps, and each step can call an AI
-provider, send an email, export to a CRM, notify someone, wait, or fork.
+incoming webhook creates an instance, the engine walks the steps, and each step can pull a
+dashboard Data Card, call an endpoint you own, notify a webhook, wait, or fork.
 
 Base API: `https://workflowswift.com/api/v1` — all non-public endpoints need
 `Authorization: Bearer <token>` from `POST /auth/login`. Health: `GET /api/v1/health`.
@@ -33,11 +33,21 @@ Base API: `https://workflowswift.com/api/v1` — all non-public endpoints need
   when you create it** — to change the type, delete the step and add a new one.
 - **Step 1 is a Data Card step**: it picks a dashboard widget **by name** (e.g. "Orlando
   Plumbers") from the widgets in your dashboard — nothing is hardcoded.
-- **Step types**: Data Card, AI Action, Export, Notify, Delay/Wait, Fork, HTTP Request, Action,
+- **Step types**: Data Card, AI Action, Notify, Delay/Wait, Fork, HTTP Request, Action,
   Render Video/Image/Audio, Condition, Webhook and Manual/Approval — and **every one of them
   executes**. The API refuses any other step type (`POST /workflows/{id}/steps` answers `400`), so
   a step that cannot run can no longer be created. **Research is retired** for that reason: no path
   in this app performs a research call.
+- **Export is retired** (2026-10-02): the destinations it advertised — CSV download, Resend,
+  SendGrid, CoreSwift CRM — have no sender and no store on either side (this app holds no
+  Resend/SendGrid credential, offers no file download, and CoreSwift is an inbound lead push, not an
+  export contract). Every run used to be POSTed at a platform webhook that is not registered and the
+  step was **recorded as completed having exported nothing**. The API refuses the type now, the
+  Builder no longer offers it, and an old Export step is skipped with a warning that says so. To get
+  data out, use an **HTTP Request** step pointing at an endpoint you own.
+- **AI Action is not live yet**: the Builder offers the step and the app stores your provider key,
+  but no code in this app calls an LLM provider. A run reports the step as **skipped** and names the
+  gap in the run history — it does not claim a generation.
 - **Notify**: the one channel is **Webhook** — the step POSTs `{message, data}` to the URL you put in
   its Recipient field, so the receiving end gets the run's own item. The **Email and SMS channels are
   retired** (2026-10-02): this app has no tenant-triggered mail sender (its mail provider is
