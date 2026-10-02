@@ -56,9 +56,15 @@ Base API: `https://workflowswift.com/api/v1` — all non-public endpoints need
   three types, the Builder never offered them, and an old step of one of those types is skipped with
   a warning that names the gap — it is never reported as having transformed anything. If you need
   custom logic, use an **HTTP Request** step to call a service you own that runs your code.
-- **AI Action is not live yet**: the Builder offers the step and the app stores your provider key,
-  but no code in this app calls an LLM provider. A run reports the step as **skipped** and names the
-  gap in the run history — it does not claim a generation.
+- **AI Action runs on your own provider key** (2026-10-02). In the Builder, pick AI Action, choose
+  the provider — **OpenAI, Anthropic, DeepSeek or Gemini** — and write the prompt; connect that
+  provider's key once under **Provider Keys**. The step sends your prompt straight to that provider
+  and the run stores the provider's own reply as the step's output, together with the provider's HTTP
+  status. It costs **0 credits**: it runs on your key, never a platform one. The write path refuses a
+  step whose provider is not one of those four, and refuses one that names none. With no key
+  connected the step is **skipped** with that reason in the run history; a provider error (a rejected
+  key, a rate limit) **fails** the step and shows the provider's status code. Nothing is ever
+  reported as generated unless the provider generated it.
 - **Notify**: the one channel is **Webhook** — the step POSTs `{message, data}` to the URL you put in
   its Recipient field, so the receiving end gets the run's own item. The **Email and SMS channels are
   retired** (2026-10-02): this app has no tenant-triggered mail sender (its mail provider is

@@ -8,7 +8,7 @@
 //!   WorkflowSwift (UI) → this converter → n8n import → n8n webhook trigger
 //!
 //! Each WorkflowSwift step_type maps to one or more n8n nodes:
-//!   - "ai-action"    → OpenClaw HTTP Request node
+//!   - "ai-action"    → pass-through: the AI call runs in THIS app's engine (`src/ai_llm.rs`) on the tenant's own provider key (kanban t_03e4d3d9); the n8n graph carries no provider credential
 //!   - "http-request" → n8n HTTP Request node
 //!   - "data-card"    → dashboard push node
 //!   - "export"       → Google Sheets / SendGrid / CSV
@@ -17,7 +17,7 @@
 //!   - "fork"         → n8n Switch node (parallel branches)
 //!   - "action"       → Generic API call
 //!   - "transform"    → RETIRED (kanban t_81602ca1): was an n8n Code node carrying the tenant's `config.code` verbatim — same for "code" and "format"; now a pass-through that names the gap, and the write path refuses all three
-//!   - "openclaw"     → OpenClaw reasoning step
+//!   - "openclaw"     → RETIRED: nothing in this app performs it (same pass-through arm as ai-action)
 //!
 //! Callbacks into THIS app exist only for routes the app actually serves — `credits/balance`,
 //! `credits/deduct`, `dashboard/push-widget-data` and `renditions` (kanban t_642b6894). Every
@@ -834,49 +834,38 @@ fn convert_user_steps(
                 nodes.push(node);
             }
 
-            "ai-action" | "openclaw" => {
-                let prompt = config.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
-                let model = config
-                    .get("model")
+            // AI Action is executed by THIS app's own engine (`src/execution.rs` -> `src/ai_llm.rs`)
+            // against the tenant's connected provider key. n8n holds no provider credential, so the
+            // graph cannot carry the call: this node is a pass-through whose notes say where the work
+            // happens. It used to emit `n8n-nodes-base.httpRequest` at `config.gateway_url` — default
+            // `http://localhost:18792`, i.e. nothing at all inside the n8n container (kanban
+            // t_03e4d3d9) — while the console collected only a prompt, so no console-built AI Action
+            // ever reached a real destination. `openclaw` shares this arm and is a
+            // RETIRED_STEP_TYPES name: nothing in this app performs it.
+            "ai-action" | "ai_action" | "openclaw" => {
+                let provider = config
+                    .get("provider")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("deepseek/deepseek-chat");
-
-                // OpenClaw HTTP node — POST to the gateway
-                // The user provides their OpenClaw gateway URL in Integration Center
-                let openclaw_url = config
-                    .get("gateway_url")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("http://localhost:18792");
-
-                let node = json!({
-                    "id": node_id,
-                    "name": step_name,
-                    "type": "n8n-nodes-base.httpRequest",
-                    "typeVersion": 4.2,
-                    "position": [x_pos, y_base],
-                    "parameters": {
-                        "method": "POST",
-                        "url": format!("{}/api/chat/completions", openclaw_url.trim_end_matches('/')),
-                        "authentication": "none",
-                        "sendHeaders": true,
-                        "headerParameters": {
-                            "parameters": [
-                                { "name": "Content-Type", "value": "application/json" }
-                            ]
-                        },
-                        "sendBody": true,
-                        "bodyParameters": {
-                            "parameters": [
-                                { "name": "model", "value": model },
-                                { "name": "messages", "value": json!([
-                                    {"role": "user", "content": prompt}
-                                ])},
-                                { "name": "temperature", "value": 0.7 }
-                            ]
-                        }
-                    }
-                });
-                nodes.push(node);
+                    .unwrap_or("");
+                let note = if crate::ai_llm::provider_by_key(provider).is_some() {
+                    "runs in this app's own engine against the provider key you connected under \
+                     Provider Keys (0 credits) — the n8n graph carries no provider credential, so \
+                     this node is a pass-through."
+                        .to_string()
+                } else {
+                    format!(
+                        "names no provider this app calls, so it would do nothing. Set the step's \
+                         provider to one of: {} and connect its key under Provider Keys.",
+                        crate::ai_llm::provider_key_list()
+                    )
+                };
+                nodes.push(passthrough_node(
+                    &node_id,
+                    step_name,
+                    (x_pos, y_base),
+                    step_type,
+                    &note,
+                ));
             }
 
             "data-card" => {
@@ -1600,7 +1589,8 @@ mod tests {
                    "config": {"channel": "email", "recipient": "ops@example.com"}}),
             json!({"step_type": "http-request", "name": "Tenant API",
                    "config": {"url": "https://api.tenant.example/lead", "method": "POST"}}),
-            json!({"step_type": "ai-action", "name": "OpenClaw", "config": {}}),
+            json!({"step_type": "ai-action", "name": "AI Action",
+                   "config": {"provider": "deepseek", "prompt": "Summarise the lead"}}),
             json!({"step_type": "report", "name": "Report",
                    "config": {"metric_key": "weekly", "period": "7d"}}),
         ]
@@ -1629,9 +1619,11 @@ mod tests {
                    "config": {"channel": "webhook", "recipient": "https://hooks.tenant.example/x"}}),
             json!({"step_type": "render_image", "name": "Render",
                    "config": {"provider": "probe", "endpoint": "https://render.tenant.example/api"}}),
-            json!({"step_type": "ai-action", "name": "Agent",
-                   "config": {"gateway_url": "https://gateway.tenant.example"}}),
-            // `export` used to be here: a `http` destination emitted an `httpRequest` node whose
+            // `ai-action` used to be here: its arm emitted an `httpRequest` node at
+            // `config.gateway_url` (default `http://localhost:18792`), so it had to be gated. The
+            // step now runs in this app's engine against a CONSTANT provider URL (kanban
+            // t_03e4d3d9) and the mirror node is a pass-through — no tenant destination to gate.
+            // `export` used to be here too: a `http` destination emitted an `httpRequest` node whose
             // url is the tenant's, so it had to be gated. The step type is RETIRED (kanban
             // t_02519738) and its node is now a pass-through that names the retirement and calls
             // nothing — no destination to gate.
@@ -1640,16 +1632,12 @@ mod tests {
         let got: BTreeMap<String, String> = tenant_destinations(&g, BASE).into_iter().collect();
         assert_eq!(
             got.len(),
-            4,
+            3,
             "one destination per url-bearing step: {got:?}"
         );
         assert_eq!(got["Tenant API"], "https://api.tenant.example/lead");
         assert_eq!(got["Hook out"], "https://hooks.tenant.example/x");
         assert_eq!(got["Render"], "https://render.tenant.example/api");
-        assert_eq!(
-            got["Agent"],
-            "https://gateway.tenant.example/api/chat/completions"
-        );
     }
 
     /// Same rule, swept over EVERY arm the converter emits (the probe list the callback census

@@ -173,12 +173,108 @@ pub fn is_retired_step_type(step_type: &str) -> bool {
     RETIRED_STEP_TYPES.contains(&step_type)
 }
 
-/// Why an AI Action step cannot run in this app (kanban t_02519738). One string, so the step
-/// result, the run's `warnings[]` and the unit test all state the same gap.
-pub const AI_ACTION_NO_LLM_PATH: &str =
-    "AI Action cannot run in this app: nothing here calls an LLM \
-     provider (the tenant's provider key is stored but nothing reads it), and the platform webhook \
-     the step used to POST to is not registered. Its prompt was not sent anywhere.";
+/// Why an AI Action step did nothing: the account has no key connected for the provider the step
+/// names (kanban t_03e4d3d9). The step runs on the TENANT'S OWN key, so there is no platform
+/// fallback to silently try — the reason says where to add one.
+fn ai_action_no_key_reason(provider: &str) -> String {
+    format!(
+        "AI Action did nothing: no '{}' key is connected for this account, and this step runs on \
+         your own provider key (0 credits). Add one under Provider Keys, then re-run.",
+        provider
+    )
+}
+
+/// Why an AI Action step did nothing: the step names no provider, or one this app cannot call.
+fn ai_action_no_provider_reason(named: &str) -> String {
+    if named.is_empty() {
+        format!(
+            "AI Action did nothing: the step names no provider. This app calls exactly: {}.",
+            crate::ai_llm::provider_key_list()
+        )
+    } else {
+        format!(
+            "AI Action did nothing: '{}' is not an LLM provider this app calls. Valid providers: {}.",
+            named,
+            crate::ai_llm::provider_key_list()
+        )
+    }
+}
+
+/// An AI Action step that did nothing, carrying the provider it named so the console can point at
+/// the right Provider Keys row. `skipped` + `undeliverable`, exactly like a Notify channel with no
+/// sender (kanban t_08be842f): the reason reaches the run's `warnings[]`.
+fn ai_action_undeliverable_result(step: usize, provider: &str, why: &str) -> Value {
+    let mut result = step_without_an_executor_result(step, "ai-action", why);
+    result["provider"] = json!(provider);
+    result
+}
+
+/// The result of the AI Action arm's one outbound call (kanban t_03e4d3d9).
+///
+/// `Ok((status, body))` is the PROVIDER'S answer: the status code is stored, so `classify_step_status`
+/// maps a non-2xx to a `failed` step (a 401 from the provider is a failed step, never a
+/// completion), and `generated_content` is only ever the provider's own message. A 2xx whose body
+/// carries no message is an `error` — the arm this replaced answered `completed` with
+/// `generated_content: <the prompt>`, i.e. a generation that never happened.
+///
+/// `Err` is a transport failure / timeout: the destination was never reached, so it is an `error`
+/// naming why, never a completion.
+fn ai_action_step_result(
+    step: usize,
+    provider: &str,
+    model: &str,
+    call: Result<(u16, String), String>,
+) -> Value {
+    match call {
+        Ok((status, body)) => {
+            let content = if (200..300).contains(&status) {
+                crate::ai_llm::provider_by_key(provider)
+                    .and_then(|p| crate::ai_llm::extract_content(p, &body))
+            } else {
+                None
+            };
+            match content {
+                Some(text) => json!({
+                    "step": step,
+                    "type": "ai-action",
+                    "status": status,
+                    "provider": provider,
+                    "model": model,
+                    "generated_content": text,
+                    "response": truncate_for_log(&body, 500),
+                }),
+                None if (200..300).contains(&status) => json!({
+                    "step": step,
+                    "type": "ai-action",
+                    "status": "error",
+                    "provider": provider,
+                    "model": model,
+                    "error": format!(
+                        "{} answered HTTP {} without a message, so the step generated nothing",
+                        provider, status
+                    ),
+                    "response": truncate_for_log(&body, 500),
+                }),
+                None => json!({
+                    "step": step,
+                    "type": "ai-action",
+                    "status": status,
+                    "provider": provider,
+                    "model": model,
+                    "response": truncate_for_log(&body, 500),
+                }),
+            }
+        }
+        Err(e) => json!({
+            "step": step,
+            "type": "ai-action",
+            "status": "error",
+            "provider": provider,
+            "model": model,
+            "error": e,
+        }),
+    }
+}
 
 /// The accepted vocabulary as one line, for a 400 body / a validation error.
 pub fn executable_step_type_list() -> String {
@@ -1306,30 +1402,95 @@ async fn walk(
                 })
             }
             "ai-action" | "ai_action" => {
-                // The console OFFERS AI Action ("Runs an LLM prompt; the output stays editable",
-                // www-app/index.html). This app cannot run it, and this arm used to hide that: it
-                // POSTed a platform-shaped body to
+                // The console OFFERS AI Action and collects the tenant's provider key (Provider
+                // Keys panel). This arm IS the LLM path (kanban t_03e4d3d9) — before it, nothing
+                // in this crate called a provider: the step POSTed a platform-shaped body to
                 // `{N8N_WEBHOOK_URL}/webhook/workflowswift-generate` — not registered (404) — fell
                 // back to `/webhook/incoming/content-gen` (also 404, measured live 2026-10-02) and
                 // then reported `status: "completed"` carrying `generated_content: <the prompt>`:
                 // a generation that never happened, wrapped around a webhook that never existed.
-                // Even the 404 leg misled — it read as "upstream failed" rather than "this app has
-                // no LLM path".
                 //
-                // Measured on the live app 2026-10-02 (kanban t_02519738): the app stores the
-                // tenant's provider keys (`user_integrations` + `provider_key_crypto`; the list
-                // `/integrations/providers?step_type=ai-action` serves is
-                // openai/anthropic/deepseek/gemini) and no code in this crate calls a provider, so
-                // the step is `skipped` with an `undeliverable` reason that NAMES the gap — the
-                // same honest no-op a Notify channel with no sender gets (kanban t_08be842f) —
-                // and `run_in_process` surfaces it in the run's `warnings[]`. Implementing the
-                // provider call (whose key, which model, what it costs) is a product decision and
-                // is carded separately.
-                json!(step_without_an_executor_result(
-                    i,
-                    "ai-action",
-                    AI_ACTION_NO_LLM_PATH
-                ))
+                // BYOK, and the product decision is written down in `crate::ai_llm`: the credential
+                // is the TENANT'S OWN key from `provider_keys` (the same mapping
+                // `/integrations/resolve?step_type=ai-action` serves), so the call costs 0 credits
+                // and spends no platform money; the destination is a CONSTANT per provider, never a
+                // value out of step config, so no new SSRF surface is opened.
+                //
+                // Four outcomes, none of them a fabricated completion:
+                //   * no/unknown provider, or a blank prompt -> `skipped` naming what is missing;
+                //   * provider named but no key connected  -> `skipped` naming the Provider Keys row;
+                //   * the provider answered                 -> the provider's HTTP status + its own
+                //                                              message as `generated_content`;
+                //   * transport failure / no message in a 2xx -> `error`, never `completed`.
+                let prompt = step_config
+                    .get("prompt")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let named_provider = step_config
+                    .get("provider")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                if prompt.trim().is_empty() {
+                    json!(ai_action_undeliverable_result(
+                        i,
+                        named_provider,
+                        "AI Action did nothing: the step has a blank Prompt. Write the prompt this \
+                         step should send to your provider, then re-run."
+                    ))
+                } else if let Some(provider) = crate::ai_llm::provider_by_key(named_provider) {
+                    // The tenant's own key. `provider_keys.base_url` is deliberately NOT honoured:
+                    // the destination is the provider constant, so a tenant cannot point its own
+                    // credential at an address of its choosing (the SSRF surface the step arms'
+                    // `gate_step_destination` exists to close).
+                    let stored = crate::handlers::provider_keys_handler::get_provider_key(
+                        &state.db,
+                        aid,
+                        provider.key,
+                    )
+                    .await;
+
+                    match stored {
+                        Err(e) => json!({
+                            "step": i,
+                            "type": "ai-action",
+                            "status": "error",
+                            "provider": provider.key,
+                            "error": format!(
+                                "could not read the account's {} key: {}",
+                                provider.key, e
+                            ),
+                        }),
+                        Ok(None) => json!(ai_action_undeliverable_result(
+                            i,
+                            provider.key,
+                            &ai_action_no_key_reason(provider.key)
+                        )),
+                        Ok(Some((api_key, _base_url, _metadata))) if api_key.is_empty() => {
+                            json!(ai_action_undeliverable_result(
+                                i,
+                                provider.key,
+                                &ai_action_no_key_reason(provider.key)
+                            ))
+                        }
+                        Ok(Some((api_key, _base_url, _metadata))) => {
+                            let model = step_config
+                                .get("model")
+                                .and_then(|v| v.as_str())
+                                .filter(|m| !m.trim().is_empty())
+                                .unwrap_or(provider.default_model);
+                            let call =
+                                crate::ai_llm::generate(provider, model, &api_key, prompt).await;
+                            ai_action_step_result(i, provider.key, model, call)
+                        }
+                    }
+                } else {
+                    json!(ai_action_undeliverable_result(
+                        i,
+                        named_provider,
+                        &ai_action_no_provider_reason(named_provider)
+                    ))
+                }
             }
             // `transform`, `code` and `format` used to have an arm here, and it was the app's half of
             // the divergence kanban t_81602ca1 settled. It ran NO JavaScript: it read `format` /
@@ -1688,12 +1849,12 @@ mod tests {
         }
     }
 
-    /// kanban t_02519738: the console OFFERS AI Action and the app stores the tenant's provider
-    /// key, but nothing in this crate calls a provider. The control leg is the PRE-FIX shape — the
-    /// transport-failure arm reported a completed step carrying `generated_content: <the prompt>`,
-    /// i.e. content that was never generated.
+    /// kanban t_03e4d3d9: the arm used to report `completed` carrying
+    /// `generated_content: <the prompt>` — a generation that never happened. The first block is
+    /// that PRE-FIX shape as a control; every shape the arm can now produce is asserted below, and
+    /// none of them claims content nobody generated.
     #[test]
-    fn an_ai_action_step_with_no_llm_path_is_not_a_completed_step() {
+    fn an_ai_action_step_never_claims_content_nobody_generated() {
         let control = json!({
             "step": 1, "type": "generate", "status": "completed", "provider": "openai",
             "note": "AI generation queued (n8n not available: connect error)",
@@ -1705,21 +1866,82 @@ mod tests {
             "the pre-fix arm claimed a generation that never happened"
         );
 
-        let result = step_without_an_executor_result(1, "ai-action", AI_ACTION_NO_LLM_PATH);
-        assert_eq!(classify_step_status(&result), "skipped");
-        assert!(
-            result.get("generated_content").is_none(),
-            "no arm may report content it did not generate"
-        );
-        let reason = result
+        // No key connected -> `skipped`, naming the provider and where to connect it.
+        let no_key =
+            ai_action_undeliverable_result(1, "deepseek", &ai_action_no_key_reason("deepseek"));
+        assert_eq!(classify_step_status(&no_key), "skipped");
+        assert!(no_key.get("generated_content").is_none());
+        let reason = no_key
             .get("undeliverable")
             .and_then(|v| v.as_str())
             .unwrap_or_default();
         assert!(
-            reason.contains("no LLM") || reason.contains("nothing here calls an LLM provider"),
-            "the reason NAMES the gap: {reason}"
+            reason.contains("deepseek"),
+            "the reason names the provider: {reason}"
         );
-        assert_eq!(step_error_text(&result).as_deref(), Some(reason));
+        assert!(reason.contains("Provider Keys"), "and the fix: {reason}");
+        assert_eq!(step_error_text(&no_key).as_deref(), Some(reason));
+
+        // A provider this app cannot call -> `skipped` naming the whole vocabulary.
+        let unknown =
+            ai_action_undeliverable_result(1, "mystery", &ai_action_no_provider_reason("mystery"));
+        assert_eq!(classify_step_status(&unknown), "skipped");
+        assert!(unknown
+            .get("undeliverable")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .contains("openai, anthropic, deepseek, gemini"));
+
+        // The provider ANSWERED: its status code is kept and `generated_content` is its own message.
+        let answered = ai_action_step_result(
+            1,
+            "deepseek",
+            "deepseek-chat",
+            Ok((
+                200,
+                r#"{"choices":[{"message":{"content":"a real answer"}}]}"#.to_string(),
+            )),
+        );
+        assert_eq!(classify_step_status(&answered), "completed");
+        assert_eq!(answered.get("generated_content").unwrap(), "a real answer");
+
+        // A 401 from the provider is a FAILED step, never a completion.
+        let refused = ai_action_step_result(
+            1,
+            "openai",
+            "gpt-4o-mini",
+            Ok((401, r#"{"error":{"message":"invalid key"}}"#.to_string())),
+        );
+        assert_eq!(classify_step_status(&refused), "failed");
+        assert!(refused.get("generated_content").is_none());
+        assert_eq!(
+            step_error_text(&refused).as_deref(),
+            Some("upstream returned HTTP 401")
+        );
+
+        // A transport failure -> `error`, naming why.
+        let transport = ai_action_step_result(
+            1,
+            "openai",
+            "gpt-4o-mini",
+            Err("could not reach OpenAI: connect error".to_string()),
+        );
+        assert_eq!(classify_step_status(&transport), "failed");
+        assert!(transport
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .contains("could not reach"));
+
+        // A 2xx whose body carries no message is an ERROR, not a completed step with nothing in it.
+        let empty = ai_action_step_result(
+            1,
+            "gemini",
+            "gemini-2.0-flash",
+            Ok((200, r#"{"candidates":[]}"#.to_string())),
+        );
+        assert_eq!(classify_step_status(&empty), "failed");
+        assert!(empty.get("generated_content").is_none());
     }
 
     #[test]

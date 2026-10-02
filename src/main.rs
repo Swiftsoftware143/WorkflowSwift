@@ -7,6 +7,7 @@
     clippy::needless_late_init,
     clippy::type_complexity
 )]
+mod ai_llm;
 mod auth;
 mod config;
 mod db;

@@ -975,6 +975,13 @@ const PROVIDER_SLOTS = [
   ['mailgun','Mailgun'], ['sendgrid','SendGrid'], ['sendiio','Sendiio'], ['mailchimp','Mailchimp'],
   ['n8n','n8n'], ['coreswift_crm','CoreSwift CRM'], ['webhook','Custom Webhook'], ['smtp','SMTP'],
 ];
+// The providers the AI Action step can run on — the same four the API accepts for `ai-action`
+// (src/ai_llm.rs AI_PROVIDERS). Kept as a separate list because PROVIDER_SLOTS above also carries
+// the mail/CRM/integration slots that have nothing to do with an LLM call.
+const AI_PROVIDER_SLOTS = [['openai','OpenAI'], ['anthropic','Anthropic'], ['deepseek','DeepSeek'], ['gemini','Google Gemini']];
+const connectedProviderSet = () => new Set((S.providerKeys || [])
+  .filter(k => k && k.is_active !== false && (k.has_key === true || (k.api_key && k.api_key !== '(empty)')))
+  .map(k => k.provider));
 const ProviderKeysView = () => {
   if (!S.providerKeys && !S.loading) loadProviderKeys();
   const list = S.providerKeys || [];
@@ -1341,7 +1348,7 @@ const CompetitorModal = () => {
 // change was needed — every call below hits an existing, live handler.
 const STEP_TYPES = [
   { k:'data-card', label:'Data Card', hint:'Always step 1 — pulls the run\'s data from a named dashboard widget.' },
-  { k:'ai-action', label:'AI Action', hint:'NOT LIVE YET — no LLM path in this app: the step is skipped with a warning.' },
+  { k:'ai-action', label:'AI Action', hint:'Sends your prompt to the AI provider key you connected under Provider Keys (0 credits — it runs on YOUR key).' },
   { k:'notify', label:'Notify', hint:'POSTs the run data to a webhook URL you own.' },
   { k:'delay', label:'Delay / Wait', hint:'Parks the instance until due; the execution worker advances it.' },
   { k:'fork', label:'Fork', hint:'Splits the run into parallel branches.' },
@@ -1394,7 +1401,9 @@ const openStepModal = (wfId, step) => { loadWidgetCatalog(); S.stepValidation = 
 // duration_seconds, fork reads branches, notify reads channel + recipient.
 const draftConfig = (d) => { switch (d.type) {
   case 'data-card': return { widget_name: d.widget_name, metric_key: d.metric_key };
-  case 'ai-action': return { prompt: d.prompt };
+  // `provider` is REQUIRED by the write path and read by the engine (src/execution.rs -> src/ai_llm.rs):
+  // the step names the provider whose key it uses, and only the four this app can call are accepted.
+  case 'ai-action': return { prompt: d.prompt, provider: d.provider };
   case 'export': return { destination: d.destination, format: 'csv', targets: [d.destination] };
   // `channel` is always `webhook`: Notify has exactly one channel this product can deliver on
   // (src/execution.rs NOTIFY_CHANNELS). Email and SMS were removed on 2026-10-02 (kanban
@@ -1445,7 +1454,28 @@ const StepModal = () => {
   const cfgFields = () => {
     switch (d.type) {
       case 'data-card': return widgetField;
-      case 'ai-action': return area('Prompt', 'prompt', 'Summarise the incoming lead and draft a reply');
+      // AI Action runs in this app's engine on the key you connected under Provider Keys
+      // (src/execution.rs -> src/ai_llm.rs). The field set is exactly what the destination needs:
+      // the prompt, and WHICH provider's key to use. No gateway URL — that was the old, dead
+      // OpenClaw fallback (`http://localhost:18792`, nothing inside n8n).
+      case 'ai-action': {
+        if (!S.providerKeys && !S.loading) loadProviderKeys();
+        const connected = connectedProviderSet();
+        const picked = d.provider || '';
+        return html`
+          ${area('Prompt', 'prompt', 'Summarise the incoming lead and draft a reply')}
+          <div class="mb-4"><label class="label">Provider</label>
+            <select class="input" value=${picked} onChange=${e=>set('provider', e.target.value)}>
+              <option value="">Select the provider whose key this step uses…</option>
+              ${AI_PROVIDER_SLOTS.map(p => html`<option key=${p[0]} value=${p[0]}>${p[1]}${connected.has(p[0]) ? ' — key connected' : ' — no key yet'}</option>`)}
+            </select>
+            ${!picked
+              ? html`<div class="text-xs text-gray-500 mt-1">This step must name a provider — the run is refused without one.</div>`
+              : (connected.has(picked)
+                ? html`<div class="text-xs text-gray-500 mt-1">Runs on <strong>your ${picked}</strong> key — 0 credits. If it fails, the run shows the provider's own error and status code.</div>`
+                : html`<div class="text-xs text-gray-500 mt-1">No <strong>${picked}</strong> key connected yet — the step will be skipped (with that reason in the run) until you add one under Provider Keys.</div>`)}
+          </div>`;
+      }
       // Export is RETIRED (kanban t_02519738). It used to offer CSV / Resend / SendGrid / CoreSwift
       // CRM, and the engine POSTed every run to a platform webhook that is not registered, then
       // recorded the step as completed having exported nothing. No exporter exists to point it at,

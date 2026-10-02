@@ -554,6 +554,8 @@ pub async fn resolve_step_provider(
 
     let step_type = params.get("step_type").map(|s| s.as_str()).unwrap_or("");
     let requested_provider = params.get("provider");
+    // The LLM step types are the ones with no platform fallback: their credential is the tenant's.
+    let is_llm_step = matches!(step_type, "ai-action" | "ai_prompt");
 
     if step_type.is_empty() {
         return Err(AppError::BadRequest("step_type is required".into()));
@@ -561,7 +563,10 @@ pub async fn resolve_step_provider(
 
     // Map step types to the providers they can use
     let provider_options: Vec<&str> = match step_type {
-        "ai-action" | "ai_prompt" => vec!["openai", "anthropic", "deepseek", "gemini"],
+        // ONE vocabulary with the engine (kanban t_03e4d3d9): the providers this app can actually
+        // call are `crate::ai_llm::AI_PROVIDERS`, so the resolver cannot advertise one the
+        // AI Action step would refuse to run.
+        "ai-action" | "ai_prompt" => crate::ai_llm::provider_keys(),
         "email" | "export" => vec!["sendgrid", "smtp", "mailgun"],
         "integration" => vec![
             "coreswift",
@@ -635,6 +640,21 @@ pub async fn resolve_step_provider(
                 "has_key": true,
                 "base_url": base_url,
             })
+        } else if is_llm_step {
+            // There is no platform LLM credential (kanban t_03e4d3d9): the app must not advertise a
+            // "system" run at 1 credit that nothing can perform. An AI step runs on the tenant's own
+            // key, or it does not run.
+            json!({
+                "source": "none",
+                "provider": provider,
+                "credit_cost": 0,
+                "message": format!(
+                    "No {} key connected for this account. AI Action runs on YOUR provider key (0 \
+                     credits) — add one under Provider Keys.",
+                    provider
+                ),
+                "available_providers": provider_options
+            })
         } else {
             // Fall back to system default
             json!({
@@ -644,6 +664,14 @@ pub async fn resolve_step_provider(
                 "message": "Using WorkflowSwift system — 1 credit per call"
             })
         }
+    } else if is_llm_step {
+        json!({
+            "source": "none",
+            "credit_cost": 0,
+            "message": "No connected provider key for this account. AI Action runs on YOUR provider \
+                        key (0 credits) — connect one under Provider Keys.",
+            "available_providers": provider_options
+        })
     } else {
         // No user integration found — fall back to system
         json!({

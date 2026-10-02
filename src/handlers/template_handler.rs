@@ -214,7 +214,10 @@ fn assert_template_step_runnable(
             crate::execution::executable_step_type_list()
         )));
     }
-    super::workflow_handler::assert_notify_channel_ok(step_type, config)
+    super::workflow_handler::assert_notify_channel_ok(step_type, config)?;
+    // An AI Action step's provider is the same rule one level down (kanban t_03e4d3d9): a template
+    // that names a provider this app cannot call would install a dead step into a live workflow.
+    super::workflow_handler::assert_ai_provider_ok(step_type, config)
 }
 
 /// A template step in the order install would copy it into the new workflow.

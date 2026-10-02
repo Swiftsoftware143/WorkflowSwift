@@ -932,6 +932,43 @@ pub(crate) fn assert_notify_channel_ok(
     }))
 }
 
+/// Refuse an AI Action step whose `config.provider` this app cannot call (kanban t_03e4d3d9).
+///
+/// The engine's `ai-action` arm (`src/execution.rs`) calls exactly `crate::ai_llm::AI_PROVIDERS`,
+/// so any other provider is a step that would be `skipped` at run time. Refusing it here — on
+/// create, on edit and on the template path, exactly like the Notify channel rule — makes that a
+/// named error at the write path instead of a surprise hours later. A MISSING provider is refused
+/// too: the step names no destination to resolve a key for.
+pub(crate) fn assert_ai_provider_ok(
+    step_type: &str,
+    config: &Option<serde_json::Value>,
+) -> Result<(), AppError> {
+    if !matches!(step_type, "ai-action" | "ai_action") {
+        return Ok(());
+    }
+    let provider = config
+        .as_ref()
+        .and_then(|c| c.get("provider"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if crate::ai_llm::provider_by_key(provider).is_some() {
+        return Ok(());
+    }
+    Err(AppError::Validation(if provider.is_empty() {
+        format!(
+            "AI Action step names no provider — it must name the provider whose key it uses. \
+             Valid providers: {}",
+            crate::ai_llm::provider_key_list()
+        )
+    } else {
+        format!(
+            "AI Action step provider '{}' is not one this app calls. Valid providers: {}",
+            provider,
+            crate::ai_llm::provider_key_list()
+        )
+    }))
+}
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct StepOrderRow {
     id: Uuid,
@@ -1050,6 +1087,10 @@ pub async fn create_workflow_step(
     // A notify step's CHANNEL is vocabulary too (kanban t_08be842f).
     assert_notify_channel_ok(&req.step_type, &req.config)?;
 
+    // And an AI Action step's PROVIDER is vocabulary (kanban t_03e4d3d9): the engine calls exactly
+    // `crate::ai_llm::AI_PROVIDERS`, so any other name is a step that could not run.
+    assert_ai_provider_ok(&req.step_type, &req.config)?;
+
     let step = sqlx::query_as::<_, WorkflowStep>(
         r#"INSERT INTO workflow_steps (id, workflow_id, step_type, name, description, sort_order, config)
            VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -1108,6 +1149,9 @@ pub async fn update_workflow_step(
     // An edit may not write a notify channel the product cannot deliver on either (kanban
     // t_08be842f): this is also the path a legacy `email` step takes to become deliverable.
     assert_notify_channel_ok(&current_type, &req.config)?;
+
+    // An edit may not name an AI provider this app cannot call either (kanban t_03e4d3d9).
+    assert_ai_provider_ok(&current_type, &req.config)?;
 
     // An absent sort_order PRESERVES the stored position. It used to default to 0,
     // which silently teleported any edited step to the front of the workflow — and
@@ -1374,7 +1418,7 @@ pub async fn validate_workflow_steps(
     let required_config_fields: std::collections::HashMap<&str, Vec<&str>> = [
         ("http-request", vec!["url", "method"]),
         ("action", vec!["url", "method"]),
-        ("ai-action", vec!["prompt"]),
+        ("ai-action", vec!["prompt", "provider"]),
         ("notify", vec!["channel", "recipient"]),
         ("data-card", vec!["metric_key"]),
         ("design", vec!["prompt"]),
@@ -1460,6 +1504,27 @@ pub async fn validate_workflow_steps(
                     step_name,
                     channel,
                     crate::execution::notify_channel_list()
+                ));
+            }
+        }
+
+        // An AI Action step's PROVIDER is vocabulary too (kanban t_03e4d3d9): the engine calls the
+        // four providers in `crate::ai_llm`, so a workflow that names anything else is reported
+        // here exactly as an unknown step type is. (A missing provider is caught by the required
+        // config check just below.)
+        if matches!(step_type, "ai-action" | "ai_action") {
+            let provider = step
+                .get("config")
+                .and_then(|c| c.get("provider"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if !provider.is_empty() && crate::ai_llm::provider_by_key(provider).is_none() {
+                errors.push(format!(
+                    "Step {} '{}' (ai-action): Unknown provider '{}'. Valid providers are: {}",
+                    i + 1,
+                    step_name,
+                    provider,
+                    crate::ai_llm::provider_key_list()
                 ));
             }
         }
