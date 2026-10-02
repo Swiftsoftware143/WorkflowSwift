@@ -100,6 +100,10 @@ pub async fn dispatch_integration(
                 "dispatched": true,
                 "target_id": target_id_str,
                 "status": status,
+                // Which credential authenticated the outbound request: "target" (the row's own key),
+                // "provider" (the account provider_keys fallback) or "none". Surfaced here as well as
+                // in the executor's step result so an operator can see who won without a packet capture.
+                "credential_source": result.get("credential_source"),
                 "response": result.get("body"),
             })))
         }
