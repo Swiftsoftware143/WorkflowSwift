@@ -201,67 +201,28 @@ pub async fn instance_callback(
     })))
 }
 
-pub async fn advance_instance(
-    State(state): State<AppState>,
-    Extension(claims): Extension<Claims>,
-    Path(id): Path<Uuid>,
-    Json(req): Json<serde_json::Value>,
-) -> ApiResult<impl IntoResponse> {
-    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-
-    let instance = sqlx::query_as::<_, WorkflowInstance>(
-        "SELECT * FROM workflow_instances WHERE id = $1 AND aid = $2",
-    )
-    .bind(id)
-    .bind(aid)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::NotFound("Instance not found".to_string()))?;
-
-    let current_order: i32 = req
-        .get("current_step_order")
-        .and_then(|v| v.as_i64())
-        .map(|n| n as i32)
-        .unwrap_or(0);
-    // NOTE (kanban t_fa169e94): this handler used to fan out to every row of
-    // `workflow_step_integrations` bound to the step at `current_order` and dispatch one HTTP
-    // request per row. That table was retired in the same change. It had carried ZERO rows since
-    // migration 018 (its only writer, POST /api/v1/step-integrations, had no caller in any served
-    // root), and this read was the SECOND source of truth for "where does a step dispatch to",
-    // duplicating the mechanism the engine actually uses: a step dispatches through its own
-    // `workflow_steps.integration_target_id` column, read by the executor (src/execution.rs, the
-    // `integration_dispatch` / `integration` arm) and by POST /api/v1/integration-dispatch. The
-    // read is removed rather than left returning [] forever, so there is exactly one mechanism.
-    // See migrations/067_drop_orphaned_step_integrations.sql for the census.
-    // Update the instance's current step
-    if current_order > 0 {
-        sqlx::query(
-            "UPDATE workflow_instances SET current_step_order = $1, updated_at = NOW() WHERE id = $2",
-        )
-        .bind(current_order)
-        .bind(id)
-        .execute(&state.db)
-        .await?;
-    }
-
-    // Optionally mark completed
-    let completed = req
-        .get("completed")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    if completed {
-        sqlx::query(
-            "UPDATE workflow_instances SET status = 'completed', completed_at = NOW(), updated_at = NOW() WHERE id = $1",
-        )
-        .bind(id)
-        .execute(&state.db)
-        .await?;
-    }
-
-    Ok(Json(json!({
-        "message": "Instance advanced"
-    })))
-}
+// NOTE (kanban t_afccb1a8): `POST /api/v1/instances/{id}/advance` and its handler `advance_instance`
+// used to live here. The route and the handler were REMOVED, not repaired. Three measured reasons:
+//
+//   1. The only caller in the shipped product was the tenant shell's Instances row button, and that
+//      call was malformed: the shell's `API.post(p, b)` omits the body when `b` is undefined but
+//      still sends `Content-Type: application/json`, while this handler's extractor was a REQUIRED
+//      `Json` — so every click answered 400 "Failed to parse the request body as JSON: EOF while
+//      parsing a value at line 1 column 0" (reproduced in real Chromium against
+//      app.workflowswift.com). The control was dead from the day it shipped.
+//   2. Even a well-formed body advanced nothing. The handler read `current_step_order` from the
+//      REQUEST and wrote that same value straight back, so the served body-less call carried 0 ->
+//      no UPDATE; `completed` was absent -> no status change. The gesture was a no-op by
+//      construction; it also could not settle a step, because settling needs the step's own id.
+//   3. Progress is owned by the engine, not by a client-supplied index: `execution::walk` moves
+//      `current_step_order` as it executes and a parked run is settled per step by
+//      `decide_instance_step` (POST /instances/{id}/steps/{step_id}/decision) or by the background
+//      worker for a due delay. Incrementing a pointer would have skipped a step without running it.
+//
+// Removing it also closes a write path: any tenant could have written an arbitrary
+// `current_step_order` (and `completed: true`) onto its own instance, both of which only the engine
+// should ever set. The former fan-out to `workflow_step_integrations` was retired in t_fa169e94;
+// this removes the route that hosted it.
 
 /// GET /api/v1/instances/{id}/logs — the run history of one instance.
 ///

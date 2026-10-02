@@ -119,8 +119,11 @@ pub async fn create_integration_target(
     // provider_keys uses: 'enc:v1:' + single-line base64 ciphertext, AES-256 via pgcrypto, master
     // key in the process environment. Nothing is stored in the clear — a missing master key fails
     // this request instead of silently persisting a plaintext key (see
-    // crate::security::provider_key_crypto). The one read-for-use site
-    // (instance_handler::advance_instance) decrypts before it puts the value on the wire.
+    // crate::security::provider_key_crypto). NOTE (kanban t_afccb1a8): the read-for-use site this
+    // comment used to name (instance_handler::advance_instance) was deleted with its route, and
+    // `forward_dispatch` authenticates with the credential stored in `provider_keys` — so this
+    // column currently has NO read-for-use site in src/ at all (the binding surface is missing,
+    // tracked by t_97a0bd3f). The encryption is unchanged; only the stale reference is corrected.
     // A missing `api_key` stays SQL NULL; an empty string stays '' (encrypt_for_storage returns ''
     // for empty input), which is what "no credential stored" looks like on this table.
     let api_key: Option<String> = match req.get("api_key").and_then(|v| v.as_str()) {

@@ -613,12 +613,15 @@ const InstancesView = () => {
       </header>
       ${list.length === 0 ? html`<div class="empty">No instances yet.</div>` : html`
       <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Status</th><th>Step</th><th>Started</th><th>Completed</th><th></th></tr></thead><tbody>
-        ${list.map(i => html`<tr key=${i.id}><td class="font-semibold">${i.name}</td><td>${statusBadge(i.status)}</td><td>${i.current_step_order ?? '—'}</td><td>${fmtDate(i.started_at)}</td><td>${fmtDate(i.completed_at)}</td><td class="text-right whitespace-nowrap"><button class="btn-outline text-xs" onClick=${()=>openLogs(i.id)}>Logs</button> <button class="btn-outline text-xs" onClick=${()=>advanceInstance(i.id)}>Advance</button></td></tr>`)}
+        ${list.map(i => html`<tr key=${i.id}><td class="font-semibold">${i.name}</td><td>${statusBadge(i.status)}</td><td>${i.current_step_order ?? '—'}</td><td>${fmtDate(i.started_at)}</td><td>${fmtDate(i.completed_at)}</td><td class="text-right whitespace-nowrap"><button class="btn-outline text-xs" onClick=${()=>openLogs(i.id)}>Logs</button></td></tr>`)}
       </tbody></table></div>`}
     </div>`;
 };
 const loadInstances = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.instances = (await API.get('/instances')).instances || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
-const advanceInstance = async (id) => { try { await API.post('/instances/'+id+'/advance'); toast('Instance advanced'); S.instances=null; loadInstances(); } catch(e){ toast(e.message,'err'); } };
+// No row-level "Advance" control here (kanban t_afccb1a8). The row's only action is "Logs": the run history it opens carries the real settle controls (Approve / Reject / Run now), one per
+// waiting step, wired to POST /instances/{id}/steps/{step_id}/decision. A row button can neither say
+// which step to settle nor reach the engine, and the one that used to be here answered 400 on every
+// click and advanced nothing even when the body parsed — so it is removed rather than repaired.
 
 // Run history for one instance: GET /instances/{id}/logs (workflow_execution_logs).
 // One row per step attempt, written by the execution engine — this is the surface

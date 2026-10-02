@@ -123,10 +123,10 @@ pub fn create_router(state: AppState) -> Router {
             get(handlers::instance_handler::get_instance)
                 .put(handlers::instance_handler::update_instance),
         )
-        .route(
-            "/{id}/advance",
-            post(handlers::instance_handler::advance_instance),
-        )
+        // NOTE: `/{id}/advance` used to be mounted here. Removed in t_afccb1a8 — see the retirement
+        // note in instance_handler.rs for the measurement. Progress is owned by the engine: the
+        // walk moves the step pointer, `/{id}/steps/{step_id}/decision` settles a waiting step, and
+        // the background worker advances a due delay.
         // The run history of one instance (workflow_execution_logs), tenant-scoped.
         .route(
             "/{id}/logs",
