@@ -138,11 +138,40 @@ database access as secret access until at-rest encryption is added.
 
 Inbound: `POST /api/v1/incoming` (internal key) is the single endpoint every Swift tool pushes
 to — WorkflowSwift matches the payload to an active workflow, creates an instance and steps
-through it, dispatching to integration targets and n8n.
+through it, dispatching to integration targets and n8n. A workflow only dispatches to a target when
+its step carries a seeded `integration_target_id` (see below).
 
 MultiDirectory referral events can also arrive this way, e.g.
 `{ "event": "referral_verified", "referrer_email": "...", "referee_email": "...", "zaarcash_earned": 100 }`,
 and a workflow can turn them into notifications or CRM updates.
+
+## Integration targets & step dispatch — operator-provisioned
+
+Measured 2026-10-02 (kanban t_97a0bd3f). Targets exist and dispatch works; the **binding** has no
+shipped writer, so it is provisioned server-side.
+
+- **Targets** (`integration_targets`, aid-scoped) are created/edited in the admin console under
+  **Integrations → Integration Targets** (`GET/POST /api/v1/integration-targets`, `PUT/DELETE
+  /api/v1/integration-targets/{id}`). Each row carries `webhook_url`, a `provider_preset`,
+  `allowed_domains` and `daily_limit`; `webhook_security::check_webhook_security` enforces the
+  domain allowlist and the daily cap, counting rows in `delivery_log`.
+- **The binding** is the column `workflow_steps.integration_target_id` (and its unused twin on
+  `workflow_template_steps`). The executor reads it at `src/execution.rs` in the arm
+  `"integration" | "integration_dispatch"`, i.e. **a step dispatches only if its `step_type` is
+  `integration`**. Neither the Builder (15 types) nor the app's own `POST
+  /api/v1/workflows/validate-steps` vocabulary (25 types) contains that type, and the steps API
+  (`POST/PUT /api/v1/workflows/{id}/steps`) accepts no `integration_target_id` field — a request
+  carrying one is accepted and the value is dropped. Seed it with SQL; there is no UI to bind a step
+  and none is wanted until a tenant can create its own targets.
+- **Credential:** `forward_dispatch` authenticates the outbound request with the account's
+  `provider_keys` row (`provider_keys_handler::get_provider_key`) — **not** with the target row's own
+  `api_key`, which is stored encrypted (`key_crypto`) and read by no path in `src/`. A target with a
+  key saved on it still dispatches with no `Authorization`/`x-api-key` header when no provider key is
+  configured; an empty provider key means an unauthenticated outbound POST.
+- **One-shot dispatch:** `POST /api/v1/integration-dispatch?target_id={id}` forwards one JSON body to
+  the target (auth'd route; every attempt is counted in `delivery_log`). The legacy
+  `n8n-templates/*.json` name `/api/integration-dispatch` (no `/v1`) — the API is mounted at
+  `/api/v1`, so those URLs are unrouted; n8n flows must use `/api/v1/integration-dispatch`.
 
 ## Affiliate product auto-sync
 

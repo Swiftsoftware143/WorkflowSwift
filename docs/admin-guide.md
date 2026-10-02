@@ -136,7 +136,9 @@ database access as secret access until at-rest encryption is added.
 
 Inbound: `POST /api/v1/incoming` (internal key) is the single endpoint every Swift tool pushes
 to — WorkflowSwift matches the payload to an active workflow, creates an instance and steps
-through it, dispatching to integration targets and n8n.
+through it, dispatching to integration targets and n8n. A workflow only dispatches to a target when
+its step carries a seeded `integration_target_id` — see `www/docs/admin-guide.md`, "Integration
+targets & step dispatch — operator-provisioned" (kanban t_97a0bd3f).
 
 MultiDirectory referral events can also arrive this way, e.g.
 `{ "event": "referral_verified", "referrer_email": "...", "referee_email": "...", "zaarcash_earned": 100 }`,

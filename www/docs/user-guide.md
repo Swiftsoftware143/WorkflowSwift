@@ -139,8 +139,11 @@ Set logo, primary/accent colour, custom domain and footer text per tenant
 - **Integration Center** (`GET /integrations`): connect CoreSwift — inbound captured leads are
   pushed to CoreSwift contacts using **your** CoreSwift key, and captured workflows can push to a
   CoreSwift list. `GET /integrations/coreswift/status` reports whether your key is connected.
-- **Integration targets** (`/integration-targets`) configure where a step dispatches to: the binding
-  is read from the step's own `integration_target_id` (`workflow_steps.integration_target_id`).
+- **Integration targets** (`/integration-targets`) are the configured destinations a run can push
+  to (webhook URL, provider preset, daily cap). They are set up for your account by the operator, and
+  so is a step's binding to one: the **Builder has no target picker and the steps API accepts no
+  binding field**, so a workflow you build in the app does not dispatch to a target. What you
+  configure yourself is the **Integration Center** above.
 - **Incoming webhook**: `POST /api/v1/incoming` is what other Swift tools push leads to. It is
   protected by an internal key.
 
