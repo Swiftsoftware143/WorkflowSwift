@@ -56,7 +56,12 @@ pub async fn create(
     Json(body): Json<CreateInput>,
 ) -> ApiResult<Json<Value>> {
     let id = Uuid::new_v4();
-    let aid = Uuid::nil();
+    // The system scope — a template owned by no account — is `aid IS NULL`, which is what
+    // migrations/070_email_templates_aid_fk.sql normalises the nil-UUID sentinel to before arming
+    // `email_templates_aid_fkey` (ON DELETE CASCADE). Bound, never written into the query text (gate
+    // rule 5a, class 5). A nil-UUID bind here would now raise 23503; `None` is the same scope to the
+    // schema, whose partial unique index is COALESCE(aid, nil-uuid) over `aid IS NULL`.
+    let aid = None::<Uuid>;
     sqlx::query("INSERT INTO email_templates (id, aid, name) VALUES ($1, $2, $3)")
         .bind(id)
         .bind(aid)
