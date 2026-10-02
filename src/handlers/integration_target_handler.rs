@@ -70,6 +70,7 @@ pub async fn list_integration_targets(
             "id": r.try_get::<&str,_>("id").unwrap_or(""),
             "name": r.try_get::<&str,_>("name").unwrap_or(""),
             "provider": r.try_get::<&str,_>("provider").unwrap_or(""),
+            "provider_preset": r.try_get::<Option<&str>,_>("provider_preset").unwrap_or(None),
             "webhook_url": r.try_get::<&str,_>("webhook_url").unwrap_or(""),
             "is_active": r.try_get::<bool,_>("is_active").unwrap_or(false),
             "allowed_domains": r.try_get::<Vec<String>,_>("allowed_domains").unwrap_or_default(),
