@@ -37,7 +37,13 @@ pub const NUMERIC_LIMIT_KEYS: [&str; 14] = [
 ];
 
 /// The canonical boolean (on/off) feature keys the admin UI can set per plan.
-pub const BOOLEAN_FLAG_KEYS: [&str; 10] = [
+///
+/// `csv_export`, `webhook_export` and `google_sheets` were removed here by kanban t_1aa78926:
+/// all three were ON for every plan (Free included) and NO code path in this crate implements or
+/// enforces them (no CSV writer/store/download, no export contract, no Google credential or
+/// destination), so the plans advertised entitlements the app cannot deliver. They are retired in
+/// migrations/074_retire_export_entitlements.sql — do not re-add one without a gate to honour it.
+pub const BOOLEAN_FLAG_KEYS: [&str; 8] = [
     "n8n_deploy",
     "api_access",
     "custom_branding",
@@ -46,8 +52,6 @@ pub const BOOLEAN_FLAG_KEYS: [&str; 10] = [
     "sla_guarantee",
     "audit_logs",
     "custom_reports",
-    "webhook_export",
-    "csv_export",
 ];
 
 /// Aliases accepted for a feature key — (features JSONB keys..., dedicated column).
@@ -71,14 +75,12 @@ fn aliases(key: &str) -> (&'static [&'static str], Option<&'static str>) {
         "retention_days" => (&["retention_days"], Some("retention_days")),
         "n8n_deploy" => (&["n8n_deploy", "can_deploy_n8n"], Some("can_deploy_n8n")),
         "api_access" => (&["api_access", "has_api_access"], Some("has_api_access")),
-        "csv_export" => (&["csv_export", "can_export"], Some("can_export")),
         "custom_branding" => (&["custom_branding", "branding"], None),
         "priority_support" => (&["priority_support"], None),
         "dedicated_support" => (&["dedicated_support"], None),
         "sla_guarantee" => (&["sla_guarantee"], None),
         "audit_logs" => (&["audit_logs"], None),
         "custom_reports" => (&["custom_reports"], None),
-        "webhook_export" => (&["webhook_export"], None),
         other => (&[], other_column(other)),
     }
 }
@@ -105,7 +107,6 @@ fn tier_column_sql(col: &str) -> Option<&'static str> {
         "retention_days" => Some("SELECT retention_days FROM plan_tiers WHERE id = $1"),
         "can_deploy_n8n" => Some("SELECT can_deploy_n8n FROM plan_tiers WHERE id = $1"),
         "has_api_access" => Some("SELECT has_api_access FROM plan_tiers WHERE id = $1"),
-        "can_export" => Some("SELECT can_export FROM plan_tiers WHERE id = $1"),
         _ => None,
     }
 }
@@ -545,7 +546,6 @@ mod tests {
             "retention_days",
             "can_deploy_n8n",
             "has_api_access",
-            "can_export",
         ] {
             let sql = tier_column_sql(col).expect("column has a statement");
             assert!(sql.starts_with("SELECT "), "{col}: no SELECT prefix");

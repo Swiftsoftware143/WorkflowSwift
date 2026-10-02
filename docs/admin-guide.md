@@ -13,7 +13,7 @@ works.
 
 **One source of truth.** A plan's limits live in `plan_tiers`, in the `features` JSONB under the
 **canonical key names**, mirrored into the legacy dedicated columns (`max_workflows`,
-`max_users`, `retention_days`, `can_export`, `can_deploy_n8n`, `has_api_access`) so both views of
+`max_users`, `retention_days`, `can_deploy_n8n`, `has_api_access`) so both views of
 a plan agree.
 
 **The keys:**
@@ -21,9 +21,16 @@ a plan agree.
 - Numeric: `max_workflows`, `max_templates`, `max_instances`, `max_users`, `max_automations`,
   `max_integrations`, `max_api_keys`, `max_clients`, `max_portfolio`, `max_tags`,
   `max_industries`, `retention_days`
-- On/off: `n8n_deploy`, `api_access`, `csv_export`, `webhook_export`, `custom_branding`,
-  `google_sheets`, `priority_support`, `dedicated_support`, `sla_guarantee`, `audit_logs`,
-  `custom_reports`
+- On/off: `n8n_deploy`, `api_access`, `custom_branding`, `priority_support`, `dedicated_support`,
+  `sla_guarantee`, `audit_logs`, `custom_reports`
+
+**Retired keys (kanban t_1aa78926).** `csv_export`, `webhook_export` and `google_sheets` used to be
+settable per plan and are gone — from `plan_tiers.features`, from the plan payloads and from
+`src/features.rs::BOOLEAN_FLAG_KEYS` (migration `074_retire_export_entitlements.sql`). All three were
+`true` on every plan including Free and **no code path in the crate honoured any of them**: there is
+no CSV writer/store/download, no export contract to gate, and no Google credential, OAuth flow,
+provider preset or destination row. A plan that advertises an entitlement the app cannot deliver is
+the defect, not a feature. A flag belongs here only together with the gate that enforces it.
 
 **Semantics:** `-1` or the string `"unlimited"` means unlimited; `0` means "not included in this
 plan" (any attempt returns `402 Payment Required`); any other number is a hard cap and the

@@ -175,9 +175,15 @@ Plan limits are enforced **at the API** (`402 Payment Required` when you exceed 
 set per plan by an admin: `max_workflows`, `max_templates`, `max_instances`, `max_users`,
 `max_automations`, `max_integrations`, `max_api_keys`, `max_clients`, `max_portfolio`,
 `max_tags`, `max_industries`, `retention_days`, plus the on/off features `n8n_deploy`,
-`api_access`, `csv_export`, `custom_branding`, `webhook_export`, `google_sheets`,
-`priority_support`, `dedicated_support`, `sla_guarantee`, `audit_logs`, `custom_reports`.
-`-1` (or `unlimited`) means unlimited.
+`api_access`, `custom_branding`, `priority_support`, `dedicated_support`, `sla_guarantee`,
+`audit_logs`, `custom_reports`. `-1` (or `unlimited`) means unlimited.
+
+**Retired plan features (2026-10-02).** `csv_export`, `webhook_export` and `google_sheets` are no
+longer plan features. They were listed as included on every plan, but nothing in this app ever
+produced a CSV, pushed an export over a webhook, or could reach Google Sheets — so they promised
+something you would never have received. Export itself was retired as a workflow step on the same
+day (see *Export is retired* above). A plan feature now exists only where the app actually enforces
+it.
 
 Your tier today:
 

@@ -27,10 +27,7 @@ fn collect_plan_limits(req: &serde_json::Value) -> serde_json::Map<String, serde
             }
             if plan_limits::NUMERIC_LIMIT_KEYS.contains(&k.as_str())
                 || plan_limits::BOOLEAN_FLAG_KEYS.contains(&k.as_str())
-                || matches!(
-                    k.as_str(),
-                    "can_export" | "can_deploy_n8n" | "has_api_access"
-                )
+                || matches!(k.as_str(), "can_deploy_n8n" | "has_api_access")
             {
                 out.insert(k.clone(), v.clone());
             }
@@ -421,9 +418,9 @@ pub async fn admin_list_plans(
         "SELECT id, name, slug, description, price_monthly::text as price_monthly,
                 price_yearly::text as price_yearly, features, checkout_url,
                 is_active, sort_order, created_at,
-                max_workflows, max_users, retention_days, can_export, can_deploy_n8n, has_api_access,
+                max_workflows, max_users, retention_days, can_deploy_n8n, has_api_access,
                 payment_provider
-         FROM plan_tiers ORDER BY sort_order ASC NULLS LAST"
+         FROM plan_tiers ORDER BY sort_order ASC NULLS LAST",
     )
     .fetch_all(&state.db)
     .await?;
@@ -457,7 +454,6 @@ pub async fn admin_list_plans(
         let retention_days = plan_limits::resolve_limit(&state.db, id, "retention_days")
             .await?
             .map(|n| n as i32);
-        let can_export = plan_limits::resolve_tier_flag(&state.db, id, "csv_export").await?;
         let can_deploy_n8n = plan_limits::resolve_tier_flag(&state.db, id, "n8n_deploy").await?;
         let has_api_access = plan_limits::resolve_tier_flag(&state.db, id, "api_access").await?;
         let payment_provider: Option<String> = row.try_get("payment_provider").ok();
@@ -491,7 +487,6 @@ pub async fn admin_list_plans(
             "max_workflows": max_workflows,
             "max_users": max_users,
             "retention_days": retention_days,
-            "can_export": can_export,
             "can_deploy_n8n": can_deploy_n8n,
             "has_api_access": has_api_access,
             "payment_provider": payment_provider,
@@ -546,7 +541,6 @@ pub async fn admin_create_plan(
     let max_workflows = limit_i32(&limit_map, "max_workflows");
     let max_users = limit_i32(&limit_map, "max_users");
     let retention_days = limit_i32(&limit_map, "retention_days");
-    let can_export = flag_bool(&limit_map, "csv_export").or(flag_bool(&limit_map, "can_export"));
     let can_deploy_n8n =
         flag_bool(&limit_map, "n8n_deploy").or(flag_bool(&limit_map, "can_deploy_n8n"));
     let has_api_access =
@@ -559,8 +553,8 @@ pub async fn admin_create_plan(
 
     let plan = sqlx::query(
         r#"INSERT INTO plan_tiers (id, name, slug, description, price_monthly, price_yearly, features, is_active, sort_order, payment_provider,
-                                  max_workflows, max_users, retention_days, can_export, can_deploy_n8n, has_api_access)
-           VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                                  max_workflows, max_users, retention_days, can_deploy_n8n, has_api_access)
+           VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15)
            RETURNING id, name, slug"#,
     )
     .bind(Uuid::new_v4())
@@ -576,7 +570,6 @@ pub async fn admin_create_plan(
     .bind(max_workflows)
     .bind(max_users)
     .bind(retention_days)
-    .bind(can_export)
     .bind(can_deploy_n8n)
     .bind(has_api_access)
     .fetch_one(&state.db)
@@ -640,7 +633,6 @@ pub async fn admin_update_plan_full(
         .get("retention_days")
         .and_then(|v| v.as_i64())
         .map(|v| v as i32);
-    let can_export = req.get("can_export").and_then(|v| v.as_bool());
     let can_deploy_n8n = req.get("can_deploy_n8n").and_then(|v| v.as_bool());
     let has_api_access = req.get("has_api_access").and_then(|v| v.as_bool());
     let payment_provider = req
@@ -680,11 +672,10 @@ pub async fn admin_update_plan_full(
             max_workflows = COALESCE($8, max_workflows),
             max_users = COALESCE($9, max_users),
             retention_days = COALESCE($10, retention_days),
-            can_export = COALESCE($11, can_export),
-            can_deploy_n8n = COALESCE($12, can_deploy_n8n),
-            has_api_access = COALESCE($13, has_api_access),
-            payment_provider = COALESCE($14, payment_provider)
-         WHERE id = $15"#,
+            can_deploy_n8n = COALESCE($11, can_deploy_n8n),
+            has_api_access = COALESCE($12, has_api_access),
+            payment_provider = COALESCE($13, payment_provider)
+         WHERE id = $14"#,
     )
     .bind(if name.is_empty() {
         None
@@ -704,7 +695,6 @@ pub async fn admin_update_plan_full(
     .bind(max_workflows)
     .bind(max_users)
     .bind(retention_days)
-    .bind(can_export)
     .bind(can_deploy_n8n)
     .bind(has_api_access)
     .bind(&payment_provider)
@@ -750,15 +740,13 @@ pub async fn admin_update_plan_full(
                 max_workflows  = COALESCE($1, max_workflows),
                 max_users      = COALESCE($2, max_users),
                 retention_days = COALESCE($3, retention_days),
-                can_export     = COALESCE($4, can_export),
-                can_deploy_n8n = COALESCE($5, can_deploy_n8n),
-                has_api_access = COALESCE($6, has_api_access)
-               WHERE id = $7"#,
+                can_deploy_n8n = COALESCE($4, can_deploy_n8n),
+                has_api_access = COALESCE($5, has_api_access)
+               WHERE id = $6"#,
         )
         .bind(limit_i32(&limit_map, "max_workflows"))
         .bind(limit_i32(&limit_map, "max_users"))
         .bind(limit_i32(&limit_map, "retention_days"))
-        .bind(flag_bool(&limit_map, "csv_export").or(flag_bool(&limit_map, "can_export")))
         .bind(flag_bool(&limit_map, "n8n_deploy").or(flag_bool(&limit_map, "can_deploy_n8n")))
         .bind(flag_bool(&limit_map, "api_access").or(flag_bool(&limit_map, "has_api_access")))
         .bind(id)
