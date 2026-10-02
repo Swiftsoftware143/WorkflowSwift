@@ -120,9 +120,13 @@ pub async fn dispatch_integration(
     }
 }
 
-/// Internal: forward a payload to an integration target using stored provider keys.
+/// Internal: forward a payload to an integration target.
 /// Used by the incoming handler to dispatch through workflow steps.
-/// Returns the status code and response body from the provider.
+///
+/// Credential precedence (kanban t_c603a937): the credential stored ON THE TARGET ROW
+/// (`integration_targets.api_key`) wins when it is set — a per-target operator override — and the
+/// account-scoped `provider_keys` row is the fallback. Returns the status code and response body
+/// from the provider.
 pub async fn forward_dispatch(
     db: &sqlx::PgPool,
     target_id: Uuid,
@@ -131,7 +135,7 @@ pub async fn forward_dispatch(
 ) -> Result<serde_json::Value, String> {
     // Fetch the integration target
     let row = sqlx::query(
-        "SELECT it.webhook_url, it.provider_preset, pp.base_url as preset_base_url
+        "SELECT it.webhook_url, it.provider_preset, it.api_key AS target_api_key, pp.base_url as preset_base_url
          FROM integration_targets it
          LEFT JOIN integration_provider_presets pp ON pp.key = it.provider_preset
          WHERE it.id = $1 AND it.aid = $2 AND it.is_active = true",
@@ -146,6 +150,7 @@ pub async fn forward_dispatch(
     let webhook_url: String = row.try_get("webhook_url").unwrap_or_default();
     let preset_key: Option<String> = row.try_get("provider_preset").unwrap_or(None);
     let preset_base_url: Option<String> = row.try_get("preset_base_url").unwrap_or(None);
+    let target_stored_key: Option<String> = row.try_get("target_api_key").unwrap_or(None);
 
     // Determine the provider name from the preset or webhook_url
     let provider_name = preset_key.clone().unwrap_or_else(|| {
@@ -157,12 +162,38 @@ pub async fn forward_dispatch(
             .to_string()
     });
 
-    // Look up the stored provider key from the provider_keys table
-    let (api_key, stored_base_url, metadata) =
+    // Account-scoped routing config: base_url + metadata, and the FALLBACK credential.
+    let (provider_api_key, stored_base_url, metadata) =
         provider_keys_handler::get_provider_key(db, aid, &provider_name)
             .await
             .map_err(|e| format!("DB error fetching provider key: {}", e))?
             .unwrap_or_else(|| (String::new(), None, json!({})));
+
+    // Credential precedence (kanban t_c603a937). A credential stored ON THE TARGET ROW is the
+    // per-target override and WINS; the account's `provider_keys` row is the fallback. Before this,
+    // `integration_targets.api_key` was written encrypted and read by no path in `src/`, so a target
+    // created WITH a credential still dispatched unauthenticated (measured on the wire: no
+    // `Authorization` / `x-api-key`).
+    //
+    // A stored target credential that cannot be decrypted FAILS the dispatch instead of silently
+    // falling back to the account key: silently dropping a credential the operator provisioned is
+    // the defect class this column was carded for. (`get_provider_key` degrades the same input to
+    // "no key"; that is the wrong answer for a per-target secret.)
+    let (api_key, key_source) = match target_stored_key.as_deref() {
+        Some(stored) if !stored.is_empty() => (
+            crate::security::provider_key_crypto::decrypt_from_storage(db, stored)
+                .await
+                .map_err(|e| {
+                    format!(
+                        "integration target {} has a stored credential that cannot be decrypted: {}",
+                        target_id, e
+                    )
+                })?,
+            "target",
+        ),
+        _ if !provider_api_key.is_empty() => (provider_api_key, "provider"),
+        _ => (String::new(), "none"),
+    };
 
     // Determine the actual URL to POST to
     let effective_base_url = stored_base_url.or(preset_base_url);
@@ -186,8 +217,17 @@ pub async fn forward_dispatch(
 
     let mut req = client.post(&target_url).json(payload);
 
-    // Inject stored API key as Authorization header if available
+    // Inject the credential chosen above (target row first, provider key as fallback) as
+    // Authorization + x-api-key. The value is validated as an HTTP header value first: reqwest
+    // PANICS on an invalid one, so a stored value with a control character must surface as a
+    // dispatch error instead of taking the process down.
     if !api_key.is_empty() {
+        ensure_header_safe(&api_key).map_err(|e| {
+            format!(
+                "credential from {} for provider '{}' is not usable as an HTTP header: {}",
+                key_source, provider_name, e
+            )
+        })?;
         req = req.header("Authorization", format!("Bearer {}", api_key));
         req = req.header("x-api-key", &api_key);
     }
@@ -218,5 +258,34 @@ pub async fn forward_dispatch(
     Ok(json!({
         "status": status,
         "body": body,
+        // Which credential authenticated the request: "target" (the row's own key),
+        // "provider" (the account's provider_keys fallback) or "none" (unauthenticated).
+        "credential_source": key_source,
     }))
+}
+
+/// A stored credential is about to become an HTTP header value, and reqwest panics on an invalid
+/// one. Check it first so a malformed stored value surfaces as a dispatch error, not a crash.
+fn ensure_header_safe(value: &str) -> Result<(), String> {
+    reqwest::header::HeaderValue::from_str(value)
+        .map(|_| ())
+        .map_err(|_| "value carries a character an HTTP header cannot (e.g. CR/LF)".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn header_safe_accepts_a_normal_credential() {
+        assert!(ensure_header_safe("sk-abc123").is_ok());
+        assert!(ensure_header_safe("key with spaces").is_ok());
+    }
+
+    #[test]
+    fn header_safe_rejects_header_injection() {
+        assert!(ensure_header_safe("sk-abc\r\nX-Evil: 1").is_err());
+        assert!(ensure_header_safe("sk-abc\nX-Evil: 1").is_err());
+        assert!(ensure_header_safe("sk-abc\rX").is_err());
+    }
 }

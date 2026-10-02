@@ -123,9 +123,11 @@ Every read endpoint returns the key masked (`sk-…161`); the raw value is never
 no env-var-only provider and no single global admin paste — if a provider has no per-tenant key,
 the related feature is simply "not connected".
 
-**Storage note (accurate as of this writing):** `provider_keys.api_key` is stored as plain text
-in the database; only `api_keys.key_hash` (the WorkflowSwift-issued keys) is argon2-hashed. Treat
-database access as secret access until at-rest encryption is added.
+**Storage note (measured 2026-10-02, kanban t_c603a937):** `provider_keys.api_key` is **ciphertext
+at rest** — `enc:v1:` + base64, AES-256 via pgcrypto, master key only in the process environment
+(`PROVIDER_KEY_ENC_SECRET`); migration `048` arms it, a DB CHECK refuses a value without the prefix,
+and a write fails closed when the master key is absent. `api_keys.key_hash` (the WorkflowSwift-issued
+keys) is argon2-hashed; `integration_targets.api_key` uses the same envelope (migration `053`).
 
 ## Integration Center — CoreSwift
 
@@ -155,19 +157,26 @@ shipped writer, so it is provisioned server-side.
   /api/v1/integration-targets/{id}`). Each row carries `webhook_url`, a `provider_preset`,
   `allowed_domains` and `daily_limit`; `webhook_security::check_webhook_security` enforces the
   domain allowlist and the daily cap, counting rows in `delivery_log`.
-- **The binding** is the column `workflow_steps.integration_target_id` (and its unused twin on
-  `workflow_template_steps`). The executor reads it at `src/execution.rs` in the arm
+- **The binding** is the column `workflow_steps.integration_target_id`.
+  The executor reads it at `src/execution.rs` in the arm
   `"integration" | "integration_dispatch"`, i.e. **a step dispatches only if its `step_type` is
   `integration`**. Neither the Builder (15 types) nor the app's own `POST
   /api/v1/workflows/validate-steps` vocabulary (25 types) contains that type, and the steps API
   (`POST/PUT /api/v1/workflows/{id}/steps`) accepts no `integration_target_id` field — a request
   carrying one is accepted and the value is dropped. Seed it with SQL; there is no UI to bind a step
-  and none is wanted until a tenant can create its own targets.
-- **Credential:** `forward_dispatch` authenticates the outbound request with the account's
-  `provider_keys` row (`provider_keys_handler::get_provider_key`) — **not** with the target row's own
-  `api_key`, which is stored encrypted (`key_crypto`) and read by no path in `src/`. A target with a
-  key saved on it still dispatches with no `Authorization`/`x-api-key` header when no provider key is
-  configured; an empty provider key means an unauthenticated outbound POST.
+  and none is wanted until a tenant can create its own targets. Migration `072` retired migration
+  018's other step columns (`api_path` / `api_method` on both step tables, and this table's
+  `integration_target_id` twin): measured 0 readers, 0 writers, 0 non-default rows, and installing a
+  template copies only `step_type/name/description/sort_order/config` into `workflow_steps`.
+- **Credential:** `forward_dispatch` sends `Authorization: Bearer <key>` + `x-api-key: <key>` from,
+  in order, **(1)** the credential stored ON THE TARGET ROW (`integration_targets.api_key`, ciphertext
+  at rest; set at create, rotated/cleared via `api_key` on `PUT /api/v1/integration-targets/{id}`),
+  else **(2)** the account's `provider_keys` row. A target credential that cannot be decrypted fails
+  the dispatch (5xx, reason in `delivery_log`) instead of falling back to the account key; with
+  neither set the POST goes out unauthenticated. Before 2026-10-02 the target-row `api_key` was read
+  by no path at all, so a target created with one still dispatched with no auth header (kanban
+  t_c603a937). The account row's `metadata.auth_type` still picks the `basic`/`x-api-key` shape, and
+  a `_forward_auth` string in the payload body overrides the Authorization header last.
 - **One-shot dispatch:** `POST /api/v1/integration-dispatch?target_id={id}` forwards one JSON body to
   the target (auth'd route; every attempt is counted in `delivery_log`). The legacy
   `n8n-templates/*.json` name `/api/integration-dispatch` (no `/v1`) — the API is mounted at

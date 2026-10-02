@@ -121,9 +121,11 @@ Every read endpoint returns the key masked (`sk-…161`); the raw value is never
 no env-var-only provider and no single global admin paste — if a provider has no per-tenant key,
 the related feature is simply "not connected".
 
-**Storage note (accurate as of this writing):** `provider_keys.api_key` is stored as plain text
-in the database; only `api_keys.key_hash` (the WorkflowSwift-issued keys) is argon2-hashed. Treat
-database access as secret access until at-rest encryption is added.
+**Storage note (measured 2026-10-02, kanban t_c603a937):** `provider_keys.api_key` is **ciphertext
+at rest** — `enc:v1:` + base64, AES-256 via pgcrypto, master key only in the process environment
+(`PROVIDER_KEY_ENC_SECRET`); migration `048` arms it, a DB CHECK refuses a value without the prefix,
+and a write fails closed when the master key is absent. `api_keys.key_hash` (the WorkflowSwift-issued
+keys) is argon2-hashed; `integration_targets.api_key` uses the same envelope (migration `053`).
 
 ## Integration Center — CoreSwift
 

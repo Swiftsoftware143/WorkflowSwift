@@ -119,13 +119,13 @@ pub async fn create_integration_target(
     // provider_keys uses: 'enc:v1:' + single-line base64 ciphertext, AES-256 via pgcrypto, master
     // key in the process environment. Nothing is stored in the clear — a missing master key fails
     // this request instead of silently persisting a plaintext key (see
-    // crate::security::provider_key_crypto). NOTE (kanban t_afccb1a8): the read-for-use site this
-    // comment used to name (instance_handler::advance_instance) was deleted with its route, and
-    // `forward_dispatch` authenticates with the credential stored in `provider_keys` — so this
-    // column currently has NO read-for-use site in src/ at all (the binding surface is missing,
-    // tracked by t_97a0bd3f). The encryption is unchanged; only the stale reference is corrected.
-    // A missing `api_key` stays SQL NULL; an empty string stays '' (encrypt_for_storage returns ''
-    // for empty input), which is what "no credential stored" looks like on this table.
+    // crate::security::provider_key_crypto). NOTE (kanban t_c603a937, wiring the column): the
+    // read-for-use site is `integration_dispatch_handler::forward_dispatch`, which prefers a
+    // credential stored on THIS row over the account's `provider_keys` entry — a per-target
+    // override. Before that change the column was written here and read by no path at all, so a
+    // target created with an `api_key` dispatched unauthenticated. A missing `api_key` stays SQL
+    // NULL; an empty string stays '' (encrypt_for_storage returns '' for empty input), which is
+    // what "no credential stored" looks like on this table — both mean "fall back to provider_keys".
     let api_key: Option<String> = match req.get("api_key").and_then(|v| v.as_str()) {
         Some(v) => Some(key_crypto::encrypt_for_storage(&state.db, v).await?),
         None => None,
@@ -233,6 +233,42 @@ pub async fn update_integration_target(
         .bind(req.get("daily_limit").and_then(|v| v.as_i64()).map(|n| n as i32).unwrap_or(1000))
         .bind(target_id).bind(aid)
         .execute(&state.db).await?;
+    }
+
+    // Credential rotation / clear (kanban t_c603a937). `forward_dispatch` now reads this column as
+    // the per-target override, so it must be maintainable here too: without this arm the column
+    // could only ever be set at create time and an operator could never rotate a leaked key.
+    //   {"api_key": "sk-..."} -> encrypted, replaces the stored credential
+    //   {"api_key": null}     -> clears the slot (SQL NULL); the dispatch falls back to provider_keys
+    //   {"api_key": ""}       -> stores the empty slot, same effect (encrypt_for_storage returns '')
+    if let Some(v) = req.get("api_key") {
+        match v.as_str() {
+            Some(s) => {
+                let encrypted = key_crypto::encrypt_for_storage(&state.db, s).await?;
+                sqlx::query(
+                    "UPDATE integration_targets SET api_key = $1, updated_at = NOW() WHERE id = $2 AND aid = $3",
+                )
+                .bind(encrypted)
+                .bind(target_id)
+                .bind(aid)
+                .execute(&state.db)
+                .await?;
+            }
+            None if v.is_null() => {
+                sqlx::query(
+                    "UPDATE integration_targets SET api_key = NULL, updated_at = NOW() WHERE id = $1 AND aid = $2",
+                )
+                .bind(target_id)
+                .bind(aid)
+                .execute(&state.db)
+                .await?;
+            }
+            None => {
+                return Err(AppError::BadRequest(
+                    "api_key must be a string, or null to clear it".into(),
+                ))
+            }
+        }
     }
 
     Ok(Json(json!({"status": "updated"})))
