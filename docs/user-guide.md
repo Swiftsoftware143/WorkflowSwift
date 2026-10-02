@@ -33,12 +33,19 @@ Base API: `https://workflowswift.com/api/v1` — all non-public endpoints need
   when you create it** — to change the type, delete the step and add a new one.
 - **Step 1 is a Data Card step**: it picks a dashboard widget **by name** (e.g. "Orlando
   Plumbers") from the widgets in your dashboard — nothing is hardcoded.
-- **Deploy to n8n** (plan-gated), **run manually**, and every run creates an **instance** with
+- **Deploy to n8n** (plan-gated) and **run manually**. A manual run creates an **instance** with
   traceable state, a step-by-step history and full execution logs.
+- The n8n copy is what an **external** caller triggers (it has its own webhook path). n8n answers
+  `200 "Workflow was started"` as soon as it accepts the trigger, so that caller never waits for
+  the run. A run that then **fails reports itself**: it appears in **Instances** as `failed`, and
+  its run history names the failing step and the reason the step gave. A run that **succeeds** is
+  visible in n8n's own execution record and does not create an instance of its own.
 - A template that is **not included in your plan is locked** — the lock is enforced server-side,
   so the padlock badge is not just decoration.
-- **Credits**: 1 credit per execution. Running out is refused by the API, not just warned about
-  in the UI. Check `GET /credits/balance`.
+- **Credits**: charged per execution, and the amount comes from the workflow's tier
+  (`simple` = 2, `medium` = 3, `complex` = 5, `ai_enhanced` = 7 — the full table is in the
+  `deduct` response). Running out is refused by the API, not just warned about in the UI.
+  Check `GET /credits/balance`.
 
 ## Surfaces
 
