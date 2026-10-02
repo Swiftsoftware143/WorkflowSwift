@@ -607,6 +607,9 @@ pub async fn n8n_run_outcome(
     // (`find_or_create_system_client`) with source "n8n".
     let client_id = crate::execution::find_or_create_system_client(&state.db, aid, "n8n").await?;
 
+    // One transaction: the run row and the log row that explains it either both land or neither.
+    let mut tx = state.db.begin().await?;
+
     let instance_id = Uuid::new_v4();
     let label = if execution_id.is_empty() {
         format!("{} (n8n)", workflow_name)
@@ -654,8 +657,33 @@ pub async fn n8n_run_outcome(
     .bind(&error_text)
     .bind(&execution_id)
     .bind(&context)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await?;
+
+    // The run row alone would leave the console's own "Logs" modal empty for this run —
+    // `GET /api/v1/instances/{id}/logs` reads `workflow_execution_logs` — so the failing node
+    // and its reason are recorded as the run's single log row, the same place the in-process
+    // engine records every step it walks. Both writes are one transaction: a run row whose
+    // explanation is missing is the half-answer this card exists to remove.
+    let log_step_name: String = if failing_node.is_empty() {
+        "n8n run".to_string()
+    } else {
+        failing_node.chars().take(255).collect()
+    };
+    sqlx::query(
+        r#"INSERT INTO workflow_execution_logs
+             (instance_id, workflow_id, step_type, step_name, sort_order, status,
+              error_message, started_at, completed_at)
+           VALUES ($1, $2, 'n8n-failure', $3, 0, 'failed', $4, NOW(), NOW())"#,
+    )
+    .bind(instance_id)
+    .bind(workflow_id)
+    .bind(&log_step_name)
+    .bind(&error_text)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
 
     tracing::warn!(
         aid = %aid, workflow_id = %workflow_id, instance_id = %instance_id,
