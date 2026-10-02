@@ -12,12 +12,19 @@
 //!   - "http-request" → n8n HTTP Request node
 //!   - "data-card"    → dashboard push node
 //!   - "export"       → Google Sheets / SendGrid / CSV
-//!   - "notify"       → Email / Slack / Telegram
+//!   - "notify"       → Email (n8n emailSend) / generic webhook
 //!   - "delay"        → n8n Wait node
 //!   - "fork"         → n8n Switch node (parallel branches)
 //!   - "action"       → Generic API call
 //!   - "transform"    → n8n Code / Set node
 //!   - "openclaw"     → OpenClaw reasoning step
+//!
+//! Callbacks into THIS app exist only for routes the app actually serves — `credits/balance`,
+//! `credits/deduct`, `dashboard/push-widget-data` and `renditions` (kanban t_642b6894). Every
+//! other arm that used to emit one is RETIRED: the step keeps its place in the graph as a
+//! `passthrough_node` whose notes name the capability the app does not have. The live census that
+//! proves the remaining set is served lives in `/opt/swift/audits/t_642b6894/`, and
+//! `app_callback_census_is_generated_from_the_converter` regenerates its input from this file.
 
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -589,6 +596,38 @@ fn get_node_id(node: &Value) -> String {
         .to_string()
 }
 
+/// A pass-through node for a step type this app does not execute through the n8n mirror.
+///
+/// The converter used to build a callback URL for every step arm, and 13 of the 17 declared
+/// targets were not served by this app (kanban t_642b6894): `provider-keys/{provider}/
+/// {generate,design,research}`, `instances/loop-check`, `research/{source}`, `enrich/{provider}`,
+/// `analyze`, `notifications/{channel}`, `engine/*` and `bridge/commands/publish` answered 404
+/// (or matched a path that accepts other methods only), so every run that reached one of them
+/// died there and the tenant's workflow stopped. None of those routes has an implementation
+/// anywhere in the app (measured: no handler, no writer, and every search/enrich/research handler
+/// is a hardcoded mock), so the arm was a fabrication rather than a spelling.
+///
+/// The step keeps its place in the graph as a no-op whose `notes` NAMES what is missing — the
+/// same disposition the app's own engine applies to a step type it cannot execute
+/// (`src/execution.rs`, the `_` arm: warning, run continues).
+fn passthrough_node(
+    node_id: &str,
+    node_name: &str,
+    pos: (i32, i32),
+    step_type: &str,
+    why: &str,
+) -> Value {
+    json!({
+        "id": node_id,
+        "name": node_name,
+        "type": "n8n-nodes-base.noOp",
+        "typeVersion": 1,
+        "position": [pos.0, pos.1],
+        "parameters": {},
+        "notes": format!("WorkflowSwift step type '{}': {}", step_type, why)
+    })
+}
+
 fn convert_user_steps(
     steps: &[Value],
     aid: Uuid,
@@ -773,33 +812,19 @@ fn convert_user_steps(
                         });
                         nodes.push(node);
                     }
+                    // RETIRED callback (kanban t_642b6894): `slack` and `telegram` are not
+                    // offered by the tenant console's Notify step (its Channel select is
+                    // email | webhook | sms, www-app/index.html) and WorkflowSwift serves no
+                    // slack/telegram sender, so the arm posted a route that never existed and
+                    // the run died there.
                     "slack" | "telegram" => {
-                        let node = json!({
-                            "id": node_id,
-                            "name": step_name,
-                            "type": "n8n-nodes-base.httpRequest",
-                            "typeVersion": 4.2,
-                            "position": [x_pos, y_base],
-                            "parameters": {
-                                "method": "POST",
-                                "url": callback_url(callback_base_url, &format!("notifications/{}", channel)),
-                                "authentication": "none",
-                                "sendHeaders": true,
-                                "headerParameters": {
-                                    "parameters": [
-                                        { "name": "Authorization", "value": CALLBACK_AUTH_EXPR }
-                                    ]
-                                },
-                                "sendBody": true,
-                                "bodyParameters": {
-                                    "parameters": [
-                                        { "name": "to", "value": recipient },
-                                        { "name": "message", "value": message }
-                                    ]
-                                }
-                            }
-                        });
-                        nodes.push(node);
+                        nodes.push(passthrough_node(
+                            &node_id,
+                            step_name,
+                            (x_pos, y_base),
+                            step_type,
+                            &format!("channel '{}' has no sender in WorkflowSwift (the console offers email | webhook | sms)", channel),
+                        ));
                     }
                     _ => {
                         // Generic webhook notification
@@ -1027,140 +1052,6 @@ fn convert_user_steps(
                 step_last_node_id = Some(log_id);
             }
 
-            // ===== Prospecting Steps: search, enrich, score =====
-            "search" | "scrape" => {
-                // Search/scrape step: calls the WorkflowSwift research endpoint
-                // which proxies to Hexomatic or Playwright scraper
-                let source = config
-                    .get("source")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("web");
-                let max_results = config
-                    .get("max_results")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(50);
-                let platforms = config
-                    .get("platforms")
-                    .and_then(|v| v.as_array())
-                    .map(|a| {
-                        a.iter()
-                            .map(|x| x.as_str().unwrap_or(""))
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    })
-                    .unwrap_or_default();
-
-                let node = json!({
-                    "id": node_id,
-                    "name": step_name,
-                    "type": "n8n-nodes-base.httpRequest",
-                    "typeVersion": 4.2,
-                    "position": [x_pos, y_base],
-                    "parameters": {
-                        "method": "POST",
-                        "url": callback_url(callback_base_url, &format!("research/{}", source)),
-                        "authentication": "none",
-                        "sendHeaders": true,
-                        "headerParameters": {
-                            "parameters": [
-                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
-                                { "name": "Content-Type", "value": "application/json" }
-                            ]
-                        },
-                        "sendBody": true,
-                        "bodyParameters": {
-                            "parameters": [
-                                { "name": "query", "value": "={{ $json.query || $json.search_term || $json.data }}" },
-                                { "name": "max_results", "value": max_results },
-                                { "name": "platforms", "value": platforms }
-                            ]
-                        }
-                    }
-                });
-                nodes.push(node);
-            }
-
-            "enrich" => {
-                // Enrichment step: calls enrichment API to fill in contact details
-                let provider = config
-                    .get("provider")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("auto");
-
-                let node = json!({
-                    "id": node_id,
-                    "name": step_name,
-                    "type": "n8n-nodes-base.httpRequest",
-                    "typeVersion": 4.2,
-                    "position": [x_pos, y_base],
-                    "parameters": {
-                        "method": "POST",
-                        "url": callback_url(callback_base_url, &format!("enrich/{}", provider)),
-                        "authentication": "none",
-                        "sendHeaders": true,
-                        "headerParameters": {
-                            "parameters": [
-                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
-                                { "name": "Content-Type", "value": "application/json" }
-                            ]
-                        },
-                        "sendBody": true,
-                        "bodyParameters": {
-                            "parameters": [
-                                { "name": "data", "value": "={{ $json }}" }
-                            ]
-                        }
-                    }
-                });
-                nodes.push(node);
-            }
-
-            "score" | "analyze" => {
-                // Scoring/analysis step: calls LLM to score or analyze data
-                let prompt = config
-                    .get("prompt")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Analyze the following data and provide a structured analysis:");
-                let model = config
-                    .get("model")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("deepseek/deepseek-chat");
-                let threshold = config
-                    .get("threshold")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0);
-
-                let node = json!({
-                    "id": node_id,
-                    "name": step_name,
-                    "type": "n8n-nodes-base.httpRequest",
-                    "typeVersion": 4.2,
-                    "position": [x_pos, y_base],
-                    "parameters": {
-                        "method": "POST",
-                        "url": callback_url(callback_base_url, "analyze"),
-                        "authentication": "none",
-                        "sendHeaders": true,
-                        "headerParameters": {
-                            "parameters": [
-                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
-                                { "name": "Content-Type", "value": "application/json" }
-                            ]
-                        },
-                        "sendBody": true,
-                        "bodyParameters": {
-                            "parameters": [
-                                { "name": "prompt", "value": prompt },
-                                { "name": "data", "value": "={{ $json }}" },
-                                { "name": "model", "value": model },
-                                { "name": "threshold", "value": threshold }
-                            ]
-                        }
-                    }
-                });
-                nodes.push(node);
-            }
-
             "report" => {
                 // Push data to dashboard widget
                 let metric_key = config
@@ -1192,129 +1083,6 @@ fn convert_user_steps(
                                 { "name": "metric_key", "value": metric_key },
                                 { "name": "period", "value": period },
                                 { "name": "value", "value": "={{ $json }}" }
-                            ]
-                        }
-                    }
-                });
-                nodes.push(node);
-            }
-
-            "alert" => {
-                // Notification/alert step (already handled below, but capture here too)
-                // Fall through to the existing notify handler by re-matching
-                // We'll replicate the notify logic here for completeness
-                let channel = config
-                    .get("channel")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("email");
-                let recipient = config
-                    .get("recipient")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let subject = config
-                    .get("subject")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("WorkflowSwift Alert");
-                let message = config.get("message").and_then(|v| v.as_str()).unwrap_or("");
-
-                let node = json!({
-                    "id": node_id,
-                    "name": step_name,
-                    "type": "n8n-nodes-base.httpRequest",
-                    "typeVersion": 4.2,
-                    "position": [x_pos, y_base],
-                    "parameters": {
-                        "method": "POST",
-                        "url": callback_url(callback_base_url, &format!("notifications/{}", channel)),
-                        "authentication": "none",
-                        "sendHeaders": true,
-                        "headerParameters": {
-                            "parameters": [
-                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR }
-                            ]
-                        },
-                        "sendBody": true,
-                        "bodyParameters": {
-                            "parameters": [
-                                { "name": "to", "value": recipient },
-                                { "name": "subject", "value": subject },
-                                { "name": "message", "value": message }
-                            ]
-                        }
-                    }
-                });
-                nodes.push(node);
-            }
-
-            "validation" | "config" => {
-                // Validation/config step: calls back to WorkflowSwift for validation
-                let checks = config
-                    .get("checks")
-                    .and_then(|v| v.as_array())
-                    .map(|a| serde_json::to_string(a).unwrap_or_default())
-                    .unwrap_or_default();
-
-                let node = json!({
-                    "id": node_id,
-                    "name": step_name,
-                    "type": "n8n-nodes-base.httpRequest",
-                    "typeVersion": 4.2,
-                    "position": [x_pos, y_base],
-                    "parameters": {
-                        "method": "POST",
-                        "url": callback_url(callback_base_url, "workflows/validate-config"),
-                        "authentication": "none",
-                        "sendHeaders": true,
-                        "headerParameters": {
-                            "parameters": [
-                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
-                                { "name": "Content-Type", "value": "application/json" }
-                            ]
-                        },
-                        "sendBody": true,
-                        "bodyParameters": {
-                            "parameters": [
-                                { "name": "checks", "value": checks },
-                                { "name": "test_connection", "value": config.get("test_connection").and_then(|v| v.as_bool()).unwrap_or(false) }
-                            ]
-                        }
-                    }
-                });
-                nodes.push(node);
-            }
-
-            "init" | "register" | "test" | "log" => {
-                // System steps: generally call back to WorkflowSwift internal API
-                let endpoint = match step_type {
-                    "init" => "engine/init",
-                    "register" => "engine/register",
-                    "test" => "engine/test",
-                    "log" => "engine/log",
-                    _ => "engine/action",
-                };
-
-                let node = json!({
-                    "id": node_id,
-                    "name": step_name,
-                    "type": "n8n-nodes-base.httpRequest",
-                    "typeVersion": 4.2,
-                    "position": [x_pos, y_base],
-                    "parameters": {
-                        "method": "POST",
-                        "url": callback_url(callback_base_url, endpoint),
-                        "authentication": "none",
-                        "sendHeaders": true,
-                        "headerParameters": {
-                            "parameters": [
-                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
-                                { "name": "Content-Type", "value": "application/json" }
-                            ]
-                        },
-                        "sendBody": true,
-                        "bodyParameters": {
-                            "parameters": [
-                                { "name": "config", "value": "={{ $json }}" },
-                                { "name": "step_name", "value": step_name }
                             ]
                         }
                     }
@@ -1377,51 +1145,19 @@ fn convert_user_steps(
                 });
                 nodes.push(node);
             }
-
-            // ===== Generate: LLM text/image generation (calls OpenAI/Anthropic) =====
             "generate" => {
-                let provider = config
-                    .get("provider")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("openai");
-                let prompt = config.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
-                let model = config
-                    .get("model")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("gpt-4");
-
-                // Route through WorkflowSwift's provider-key resolution
-                let node = json!({
-                    "id": node_id,
-                    "name": step_name,
-                    "type": "n8n-nodes-base.httpRequest",
-                    "typeVersion": 4.2,
-                    "position": [x_pos, y_base],
-                    "parameters": {
-                        "method": "POST",
-                        "url": callback_url(callback_base_url, &format!("provider-keys/{}/generate", provider)),
-                        "authentication": "none",
-                        "sendHeaders": true,
-                        "headerParameters": {
-                            "parameters": [
-                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
-                                { "name": "Content-Type", "value": "application/json" }
-                            ]
-                        },
-                        "sendBody": true,
-                        "bodyParameters": {
-                            "parameters": [
-                                { "name": "model", "value": model },
-                                { "name": "prompt", "value": prompt },
-                                { "name": "temperature", "value": config.get("temperature").and_then(|v| v.as_f64()).unwrap_or(0.7) }
-                            ]
-                        },
-                        "options": {
-                            "timeout": 120000
-                        }
-                    }
-                });
-                nodes.push(node);
+                // RETIRED callback (kanban t_642b6894): this arm used to POST an app path
+                // that has never been served, so the run died at the node (`onError:
+                // stopWorkflow`). WorkflowSwift makes no LLM call: /provider-keys serves list/upsert/delete and {provider}/test only, and the engine's own generate arm posts to n8n. The step keeps
+                // its place in the graph as a pass-through that NAMES what is missing -
+                // the disposition the app's own engine applies to a step it cannot execute.
+                nodes.push(passthrough_node(
+                    &node_id,
+                    step_name,
+                    (x_pos, y_base),
+                    step_type,
+                    "WorkflowSwift makes no LLM call: /provider-keys serves list/upsert/delete and {provider}/test only, and the engine's own generate arm posts to n8n",
+                ));
             }
 
             // ===== Format: Transform content for a specific platform =====
@@ -1473,149 +1209,47 @@ return output;
                 });
                 nodes.push(node);
             }
-
-            // ===== Design: Create visuals/assets (calls provider API) =====
             "design" => {
-                let provider = config
-                    .get("provider")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("artistly");
-                let prompt = config.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
-                let design_type = config
-                    .get("design_type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("graphic");
-
-                let node = json!({
-                    "id": node_id,
-                    "name": step_name,
-                    "type": "n8n-nodes-base.httpRequest",
-                    "typeVersion": 4.2,
-                    "position": [x_pos, y_base],
-                    "parameters": {
-                        "method": "POST",
-                        "url": callback_url(
-                            callback_base_url,
-                            &format!("provider-keys/{}/design/{}", provider, design_type),
-                        ),
-                        "authentication": "none",
-                        "sendHeaders": true,
-                        "headerParameters": {
-                            "parameters": [
-                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
-                                { "name": "Content-Type", "value": "application/json" }
-                            ]
-                        },
-                        "sendBody": true,
-                        "bodyParameters": {
-                            "parameters": [
-                                { "name": "prompt", "value": prompt },
-                                { "name": "design_type", "value": design_type },
-                                { "name": "style", "value": config.get("style").and_then(|v| v.as_str()).unwrap_or("modern") },
-                                { "name": "size", "value": config.get("size").and_then(|v| v.as_str()).unwrap_or("1024x1024") }
-                            ]
-                        },
-                        "options": {
-                            "timeout": 180000
-                        }
-                    }
-                });
-                nodes.push(node);
+                // RETIRED callback (kanban t_642b6894): this arm used to POST an app path
+                // that has never been served, so the run died at the node (`onError:
+                // stopWorkflow`). no design route exists in WorkflowSwift; the engine's design arm (src/execution.rs) returns a note and calls nothing. The step keeps
+                // its place in the graph as a pass-through that NAMES what is missing -
+                // the disposition the app's own engine applies to a step it cannot execute.
+                nodes.push(passthrough_node(
+                    &node_id,
+                    step_name,
+                    (x_pos, y_base),
+                    step_type,
+                    "no design route exists in WorkflowSwift; the engine's design arm (src/execution.rs) returns a note and calls nothing",
+                ));
             }
-
-            // ===== Publish: Post via Buffer (white-hat only) =====
             "publish" => {
-                let platform = config
-                    .get("platform")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("twitter");
-                let content = config
-                    .get("content")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("={{ $json }}");
-                let schedule_time = config
-                    .get("schedule_time")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-
-                // White-hat: always routes through Buffer API
-                let node = json!({
-                    "id": node_id,
-                    "name": step_name,
-                    "type": "n8n-nodes-base.httpRequest",
-                    "typeVersion": 4.2,
-                    "position": [x_pos, y_base],
-                    "parameters": {
-                        "method": "POST",
-                        "url": callback_url(callback_base_url, "bridge/commands/publish"),
-                        "authentication": "none",
-                        "sendHeaders": true,
-                        "headerParameters": {
-                            "parameters": [
-                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
-                                { "name": "Content-Type", "value": "application/json" }
-                            ]
-                        },
-                        "sendBody": true,
-                        "bodyParameters": {
-                            "parameters": [
-                                { "name": "platform", "value": platform },
-                                { "name": "content", "value": content },
-                                { "name": "schedule_time", "value": schedule_time }
-                            ]
-                        }
-                    }
-                });
-                nodes.push(node);
+                // RETIRED callback (kanban t_642b6894): this arm used to POST an app path
+                // that has never been served, so the run died at the node (`onError:
+                // stopWorkflow`). the /bridge command queue has no publish arm - its only consumer, the shipped Swift Market Intel extension, handles navigate/scrape/inject_script/notify/open_options. The step keeps
+                // its place in the graph as a pass-through that NAMES what is missing -
+                // the disposition the app's own engine applies to a step it cannot execute.
+                nodes.push(passthrough_node(
+                    &node_id,
+                    step_name,
+                    (x_pos, y_base),
+                    step_type,
+                    "the /bridge command queue has no publish arm - its only consumer, the shipped Swift Market Intel extension, handles navigate/scrape/inject_script/notify/open_options",
+                ));
             }
-
-            // ===== Loop: Repeat steps until condition =====
             "loop" => {
-                let max_iterations = config
-                    .get("max_iterations")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(5);
-                let condition_field = config
-                    .get("condition_field")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("$json");
-                let stop_value = config
-                    .get("stop_value")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-
-                // Loop is represented as an n8n Switch + Trigger combination
-                // First: an IF node to check loop continuation condition
-                // The actual iteration count management happens via WorkflowSwift callback
-                let node = json!({
-                    "id": node_id,
-                    "name": step_name,
-                    "type": "n8n-nodes-base.httpRequest",
-                    "typeVersion": 4.2,
-                    "position": [x_pos, y_base],
-                    "parameters": {
-                        "method": "POST",
-                        "url": callback_url(callback_base_url, "instances/loop-check"),
-                        "authentication": "none",
-                        "sendHeaders": true,
-                        "headerParameters": {
-                            "parameters": [
-                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
-                                { "name": "Content-Type", "value": "application/json" }
-                            ]
-                        },
-                        "sendBody": true,
-                        "bodyParameters": {
-                            "parameters": [
-                                { "name": "max_iterations", "value": max_iterations },
-                                { "name": "condition_field", "value": condition_field },
-                                { "name": "stop_value", "value": stop_value },
-                                { "name": "current_data", "value": "={{ $json }}" }
-                            ]
-                        }
-                    }
-                });
-                nodes.push(node);
+                // RETIRED callback (kanban t_642b6894): this arm used to POST an app path
+                // that has never been served, so the run died at the node (`onError:
+                // stopWorkflow`). the app owns no loop state and /instances/loop-check has never existed; the app's own engine (src/execution.rs, the loop arm) records the iteration count and continues. The step keeps
+                // its place in the graph as a pass-through that NAMES what is missing -
+                // the disposition the app's own engine applies to a step it cannot execute.
+                nodes.push(passthrough_node(
+                    &node_id,
+                    step_name,
+                    (x_pos, y_base),
+                    step_type,
+                    "the app owns no loop state and /instances/loop-check has never existed; the app's own engine (src/execution.rs, the loop arm) records the iteration count and continues",
+                ));
             }
 
             // ===== Condition: If/else routing =====
@@ -1694,94 +1328,27 @@ return output;
                 });
                 nodes.push(node);
 
-                // Also send a notification to the user that manual review is needed
-                let notify_id = format!("{}_notify", node_id);
-                let notify_node = json!({
-                    "id": notify_id,
-                    "name": format!("Notify: {}", step_name),
-                    "type": "n8n-nodes-base.httpRequest",
-                    "typeVersion": 4.2,
-                    "position": [x_pos + 200, y_base],
-                    "parameters": {
-                        "method": "POST",
-                        "url": callback_url(callback_base_url, "notifications/manual-review"),
-                        "authentication": "none",
-                        "sendHeaders": true,
-                        "headerParameters": {
-                            "parameters": [
-                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
-                                { "name": "Content-Type", "value": "application/json" }
-                            ]
-                        },
-                        "sendBody": true,
-                        "bodyParameters": {
-                            "parameters": [
-                                { "name": "type", "value": "manual_review" },
-                                { "name": "instructions", "value": instructions },
-                                { "name": "timeout_hours", "value": timeout_hours }
-                            ]
-                        }
-                    }
-                });
-                nodes.push(notify_node);
-
-                // Wire wait → notify
-                let mut conn = serde_json::Map::new();
-                conn.insert(
-                    "main".to_string(),
-                    json!([[{"node": notify_id, "type": "main", "index": 0}]]),
-                );
-                connections_map.insert(node_id.to_string(), Value::Object(conn));
-
-                step_last_node_id = Some(notify_id);
+                // RETIRED callback (kanban t_642b6894): this arm also POSTed
+                // `/api/v1/notifications/manual-review`, a route that has never existed. A
+                // mirror run creates no `workflow_instances` row, so the app's own approval
+                // route (POST /instances/{id}/steps/{step_id}/decision) can never settle it -
+                // a notification pointing at an approval that does not exist would be a lie.
+                // The Wait node above is the mirror's honest hold; the app's engine keeps the
+                // real gate (status `pending` until a decision arrives).
             }
-
-            // ===== Research: Data scraping/enrichment (Hexomatic, Google Places, Apollo) =====
             "research" => {
-                let provider = config
-                    .get("provider")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("hexomatic");
-                let query = config.get("query").and_then(|v| v.as_str()).unwrap_or("");
-                let research_type = config
-                    .get("research_type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("search");
-
-                let node = json!({
-                    "id": node_id,
-                    "name": step_name,
-                    "type": "n8n-nodes-base.httpRequest",
-                    "typeVersion": 4.2,
-                    "position": [x_pos, y_base],
-                    "parameters": {
-                        "method": "POST",
-                        "url": callback_url(
-                            callback_base_url,
-                            &format!("provider-keys/{}/research/{}", provider, research_type),
-                        ),
-                        "authentication": "none",
-                        "sendHeaders": true,
-                        "headerParameters": {
-                            "parameters": [
-                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
-                                { "name": "Content-Type", "value": "application/json" }
-                            ]
-                        },
-                        "sendBody": true,
-                        "bodyParameters": {
-                            "parameters": [
-                                { "name": "query", "value": query },
-                                { "name": "research_type", "value": research_type },
-                                { "name": "params", "value": "={{ $json }}" }
-                            ]
-                        },
-                        "options": {
-                            "timeout": 180000
-                        }
-                    }
-                });
-                nodes.push(node);
+                // RETIRED callback (kanban t_642b6894): this arm used to POST an app path
+                // that has never been served, so the run died at the node (`onError:
+                // stopWorkflow`). every search/enrich/research handler in this app returns hardcoded mock data (prospecting/brand_monitor/competitor_watch all say 'Mock ... in production this would call external APIs'), so there is no real route to call. The step keeps
+                // its place in the graph as a pass-through that NAMES what is missing -
+                // the disposition the app's own engine applies to a step it cannot execute.
+                nodes.push(passthrough_node(
+                    &node_id,
+                    step_name,
+                    (x_pos, y_base),
+                    step_type,
+                    "every search/enrich/research handler in this app returns hardcoded mock data (prospecting/brand_monitor/competitor_watch all say 'Mock ... in production this would call external APIs'), so there is no real route to call",
+                ));
             }
 
             _ => {
@@ -2145,5 +1712,229 @@ mod tests {
             "={{ $json.balance }}"
         );
         assert_eq!(field_expression(""), "={{ $json }}");
+    }
+
+    /// Every step_type `convert_user_steps` branches on, read out of this file's own source so the
+    /// census list cannot drift from the code. The top-level arms of `match step_type` sit at
+    /// twelve spaces of indentation; every `match` nested inside an arm is deeper, so it is
+    /// excluded (see `the_arm_scan_reads_top_level_step_types_only`).
+    fn converted_step_types() -> Vec<String> {
+        let src = include_str!("n8n_converter.rs");
+        let start = src
+            .find("fn convert_user_steps(")
+            .expect("the converter fn is in this file");
+        let end = src
+            .find("// Track this step's output node ID")
+            .expect("the end of the arm block is in this file");
+        let mut out: Vec<String> = Vec::new();
+        for line in src[start..end].lines() {
+            if !line.starts_with("            \"") || !line.contains("=>") {
+                continue;
+            }
+            for part in line.split('"').skip(1).step_by(2) {
+                let key = part.trim();
+                if !key.is_empty()
+                    && key
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c == '_' || c == '-')
+                {
+                    out.push(key.to_string());
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// The (step_type, config) matrix the census is driven with. The configs are declared; the URLs
+    /// are not — they come out of the converter. The channel/destination variants are here because
+    /// one step type can branch into several node shapes (`notify`, `export`).
+    fn census_probes() -> Vec<(String, Value)> {
+        let mut probes: Vec<(String, Value)> = Vec::new();
+        for st in converted_step_types() {
+            probes.push((st.clone(), json!({})));
+            match st.as_str() {
+                "notify" => {
+                    for ch in ["email", "slack", "telegram", "webhook", "sms"] {
+                        probes.push((
+                            st.clone(),
+                            json!({"channel": ch, "recipient": "ops@example.com"}),
+                        ));
+                    }
+                }
+                "export" => {
+                    for d in ["google_sheets", "csv", "resend", "coreswift"] {
+                        probes.push((st.clone(), json!({"destination": d})));
+                    }
+                }
+                _ => {}
+            }
+        }
+        probes
+    }
+
+    /// The acceptance for kanban t_642b6894: every callback URL the converter emits is generated
+    /// HERE, from the converter, and checked live against the running container by
+    /// `/opt/swift/audits/t_642b6894/10-callback-census.py` (evidence: `10-callback-census-*.txt`).
+    /// A step type the app cannot execute must emit NO app callback — that half of the fix is what
+    /// keeps the census green, and this test is where a new arm would break it first.
+    #[test]
+    fn app_callback_census_is_generated_from_the_converter() {
+        // Mounted for real; verdicts in `10-callback-census-post.txt`. A new arm that adds a path
+        // here has to add the route first.
+        const SERVED: [&str; 4] = [
+            "credits/balance",
+            "credits/deduct",
+            "dashboard/push-widget-data",
+            "renditions",
+        ];
+
+        let mut rows: Vec<Value> = Vec::new();
+        for (step_type, config) in census_probes() {
+            let step = json!({
+                "step_type": step_type,
+                "name": format!("Step {step_type}"),
+                "config": config,
+            });
+            let g = convert_steps_to_n8n(&[step], Uuid::new_v4(), Uuid::new_v4(), BASE);
+            for node in g.nodes.iter().filter(|n| is_app_callback(n)) {
+                rows.push(json!({
+                    "step_type": step_type,
+                    "node": node["name"],
+                    "method": node["parameters"]["method"].as_str().unwrap_or("GET"),
+                    "url": node["parameters"]["url"].as_str().unwrap_or(""),
+                }));
+            }
+        }
+        rows.sort_by_key(|r| r.to_string());
+        rows.dedup();
+
+        let out = std::env::var("WF_CALLBACK_CENSUS_OUT")
+            .unwrap_or_else(|_| "/tmp/wf-callback-census.json".to_string());
+        std::fs::write(&out, serde_json::to_string_pretty(&rows).unwrap())
+            .unwrap_or_else(|e| panic!("writing {out}: {e}"));
+        println!(
+            "app-callback census: {} rows from {} probes over {} step types -> {out}",
+            rows.len(),
+            census_probes().len(),
+            converted_step_types().len()
+        );
+
+        for row in &rows {
+            let url = row["url"].as_str().unwrap_or("");
+            let path = url
+                .split_once(&format!("{BASE}/api/v1/"))
+                .map(|(_, p)| p.to_string())
+                .unwrap_or_else(|| panic!("a callback left this app's origin: {row}"));
+            assert!(
+                SERVED.contains(&path.as_str()),
+                "the converter emits a callback to {path}, which the router does not serve: {row}"
+            );
+        }
+        assert_eq!(
+            rows.iter()
+                .map(|r| r["url"].as_str().unwrap_or(""))
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            SERVED.len(),
+            "expected exactly the {SERVED:?} callbacks: {rows:?}"
+        );
+    }
+
+    /// The arm scan must read the arm heads and nothing else. A nested `match channel` /
+    /// `match destination` inside an arm (`"email"`, `"csv"`, …) would otherwise be probed as a
+    /// step type of its own and quietly widen the census.
+    #[test]
+    fn the_arm_scan_reads_top_level_step_types_only() {
+        let types = converted_step_types();
+        for expected in [
+            "data-card",
+            "notify",
+            "condition",
+            "manual",
+            "research",
+            "loop",
+            "publish",
+            "render_video",
+        ] {
+            assert!(
+                types.contains(&expected.to_string()),
+                "{expected} missing from {types:?}"
+            );
+        }
+        for leak in [
+            "email",
+            "slack",
+            "telegram",
+            "csv",
+            "google_sheets",
+            "video",
+            "image",
+            "audio",
+        ] {
+            assert!(
+                !types.contains(&leak.to_string()),
+                "{leak} leaked out of a nested match: {types:?}"
+            );
+        }
+        assert!(
+            types.len() >= 20,
+            "expected every arm, saw {}: {types:?}",
+            types.len()
+        );
+    }
+
+    /// The retirement itself: a step type this app cannot execute must not put an HTTP node in the
+    /// graph pointing at an app path — that is the shape that killed every run reaching it.
+    /// It keeps a node, because the graph's wiring depends on one.
+    #[test]
+    fn retired_step_types_pass_through_instead_of_calling_a_missing_route() {
+        for st in [
+            "loop",
+            "generate",
+            "design",
+            "publish",
+            "research",
+            "alert",
+            "score",
+            "analyze",
+            "search",
+            "scrape",
+            "enrich",
+            "validation",
+            "config",
+            "init",
+            "register",
+            "test",
+            "log",
+        ] {
+            let step = json!({"step_type": st, "name": format!("Step {st}"), "config": {}});
+            let g = convert_steps_to_n8n(&[step], Uuid::new_v4(), Uuid::new_v4(), BASE);
+            let mine: Vec<&Value> = g
+                .nodes
+                .iter()
+                .filter(|n| {
+                    n["name"]
+                        .as_str()
+                        .unwrap_or("")
+                        .starts_with(&format!("Step {st}"))
+                })
+                .collect();
+            assert_eq!(
+                mine.len(),
+                1,
+                "{st}: expected exactly one node, got {mine:?}"
+            );
+            let node = mine[0];
+            assert!(
+                !is_app_callback(node),
+                "{st} still calls an app path the router does not serve: {node}"
+            );
+            assert!(
+                !node["notes"].as_str().unwrap_or("").is_empty(),
+                "{st}: the pass-through must name what is missing: {node}"
+            );
+        }
     }
 }
