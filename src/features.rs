@@ -88,6 +88,28 @@ fn other_column(_key: &str) -> Option<&'static str> {
     None
 }
 
+/// The WHOLE statement that reads a dedicated `plan_tiers` column — at COMPILE time.
+///
+/// Gate rule 5d (class 14): a query must not be BUILT at run time. This used to be
+/// `format!("SELECT {} FROM plan_tiers WHERE id = $1", col)`, so the text a request ran was decided
+/// by a run-time string and no reader of this file could see it. Same fix as ADASwift b2362eb: the
+/// match returns the complete literal.
+///
+/// The arm set is exactly the set `aliases()` can return a column for — its fallback,
+/// `other_column()`, is always `None` — so a call site cannot reach the `_` arm. That invariant is
+/// asserted by `every_reachable_column_has_a_literal_statement()` below.
+fn tier_column_sql(col: &str) -> Option<&'static str> {
+    match col {
+        "max_workflows" => Some("SELECT max_workflows FROM plan_tiers WHERE id = $1"),
+        "max_users" => Some("SELECT max_users FROM plan_tiers WHERE id = $1"),
+        "retention_days" => Some("SELECT retention_days FROM plan_tiers WHERE id = $1"),
+        "can_deploy_n8n" => Some("SELECT can_deploy_n8n FROM plan_tiers WHERE id = $1"),
+        "has_api_access" => Some("SELECT has_api_access FROM plan_tiers WHERE id = $1"),
+        "can_export" => Some("SELECT can_export FROM plan_tiers WHERE id = $1"),
+        _ => None,
+    }
+}
+
 /// Resolve the effective plan for an account. Never returns unlimited-by-omission:
 /// a plan-less account falls back to the free tier.
 pub async fn resolve_plan_id(db: &PgPool, aid: Uuid) -> Result<Option<Uuid>, AppError> {
@@ -154,14 +176,15 @@ pub async fn resolve_limit(
 
     // 2. dedicated column (legacy).
     if let Some(col) = column {
-        let v: Option<i32> =
-            sqlx::query_scalar(&format!("SELECT {} FROM plan_tiers WHERE id = $1", col))
+        if let Some(sql) = tier_column_sql(col) {
+            let v: Option<i32> = sqlx::query_scalar(sql)
                 .bind(pid)
                 .fetch_optional(db)
                 .await?
                 .flatten();
-        if let Some(n) = v {
-            return Ok(Some(n as i64));
+            if let Some(n) = v {
+                return Ok(Some(n as i64));
+            }
         }
     }
 
@@ -264,14 +287,15 @@ pub async fn plan_flag(db: &PgPool, aid: Uuid, feature_key: &str) -> Result<bool
     }
 
     if let Some(col) = column {
-        let v: Option<bool> =
-            sqlx::query_scalar(&format!("SELECT {} FROM plan_tiers WHERE id = $1", col))
+        if let Some(sql) = tier_column_sql(col) {
+            let v: Option<bool> = sqlx::query_scalar(sql)
                 .bind(pid)
                 .fetch_optional(db)
                 .await?
                 .flatten();
-        if let Some(b) = v {
-            return Ok(b);
+            if let Some(b) = v {
+                return Ok(b);
+            }
         }
     }
 
@@ -454,4 +478,64 @@ pub async fn configured_limits(db: &PgPool, aid: Uuid) -> Result<serde_json::Val
         }
     }
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Gate rule 5d (class 14) replaced `format!("SELECT {} FROM plan_tiers WHERE id = $1", col)`
+    /// with a compile-time literal per column. That is only safe while EVERY column `aliases()` can
+    /// return has an arm — this asserts the closed set, so a new dedicated column cannot silently
+    /// lose its query (the old code would have built one; the new code would skip to the next
+    /// resolution step).
+    #[test]
+    fn every_reachable_column_has_a_literal_statement() {
+        let keys = NUMERIC_LIMIT_KEYS.iter().chain(BOOLEAN_FLAG_KEYS.iter());
+        for &k in keys {
+            let (_, col) = aliases(k);
+            if let Some(c) = col {
+                assert!(
+                    tier_column_sql(c).is_some(),
+                    "aliases({k}) returns dedicated column {c} with no compile-time statement"
+                );
+            }
+        }
+        // The bare aliases the admin Plans UI sends for the dedicated columns.
+        for k in ["workflows", "users", "team_members"] {
+            let (_, col) = aliases(k);
+            assert!(col.is_some(), "expected {k} to map to a dedicated column");
+            assert!(
+                tier_column_sql(col.unwrap()).is_some(),
+                "{k} lost its statement"
+            );
+        }
+        // A key with NO dedicated column must fall through the resolution order, not query one.
+        assert!(aliases("max_templates").1.is_none());
+        assert!(tier_column_sql("max_templates").is_none());
+    }
+
+    /// The six statements are complete literals: table, column and the one bind, nothing assembled.
+    #[test]
+    fn statements_are_complete_literals() {
+        for col in [
+            "max_workflows",
+            "max_users",
+            "retention_days",
+            "can_deploy_n8n",
+            "has_api_access",
+            "can_export",
+        ] {
+            let sql = tier_column_sql(col).expect("column has a statement");
+            assert!(sql.starts_with("SELECT "), "{col}: no SELECT prefix");
+            assert!(
+                sql.ends_with(" FROM plan_tiers WHERE id = $1"),
+                "{col}: unexpected tail: {sql}"
+            );
+            assert!(
+                sql.contains(col),
+                "{col}: statement reads a different column: {sql}"
+            );
+        }
+    }
 }

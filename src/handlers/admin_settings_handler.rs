@@ -1316,11 +1316,19 @@ pub async fn admin_create_email_template(
     }
 
     let template_id = Uuid::new_v4();
+    // The system scope — a template owned by no account — is `aid = nil`. It is BOUND, not written
+    // into the query text: gate rule 5a (class 5) forbids a UUID literal inside SQL, and
+    // UUID-into-TEXT is how a hand-copied row id silently outlives the row it named. This is the
+    // same constant `email_templates_handler::create` binds and migrations/012 seeds the system
+    // templates with, and the partial unique index is on COALESCE(aid, nil), so the row this writes
+    // is byte-for-byte what it wrote before.
+    let aid = Uuid::nil();
     sqlx::query(
         r#"INSERT INTO email_templates (id, aid, name, subject, body, html_body, template_type, is_html, is_default)
-           VALUES ($1, '00000000-0000-0000-0000-000000000000'::uuid, $2, $3, $4, $5, $6, $7, $8)"#,
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#,
     )
     .bind(template_id)
+    .bind(aid)
     .bind(&name)
     .bind(subject)
     .bind(body)
