@@ -213,6 +213,10 @@ const closeModal = () => { S.modal = null; renderApp(); };
 // Team / plan / timeline state (kept out of the S literal above so the two lanes editing this
 // file do not collide on one very long line).
 Object.assign(S, { users:null, teamErr:null, invited:null, permsTarget:null, timeline:null, planCaps:null, rolloverMsg:null, timelineTried:false, planCapsTried:false, wsDash:null, wsDashTried:false, stats:null, statsTried:false });
+// Draft state for the auth + invite forms (kanban t_7e48aeb7) — the shared-object idiom guard
+// rule 5 wants, kept out of the long S literal so the lanes editing this file do not collide.
+Object.assign(S, { views: {} });
+const viewState = (name, defaults = {}) => { if (!S.views[name]) S.views[name] = Object.assign({}, defaults); return S.views[name]; };
 
 const statusBadge = (s) => {
   const m = { active:'b-green', pending:'b-amber', running:'b-blue', completed:'b-green', failed:'b-red', draft:'b-gray', deleted:'b-red', paused:'b-gray', won:'b-green', lost:'b-red', open:'b-blue', closed:'b-gray' };
@@ -223,38 +227,46 @@ const fmtAmt = (n) => n === undefined || n === null ? '—' : Number(n).toLocale
 
 // ---- Auth views ----
 const LoginView = () => {
-  let email='', password='';
-  const submit = async (e) => { e.preventDefault(); if(!email||!password) return; S.loading=true; S.error=null; renderApp();
-    try { const r = await API.login(email, password); API.setAuth(r.token || r.access_token, r.user || r); S.view='app'; }
+  // kanban t_7e48aeb7 — the login draft lives in the SHARED view object (S.views['login_form']), never a
+  // per-render local: the Sign In handler itself calls renderApp() (S.loading / S.error), so the old
+  // `let email='', password=''` was re-initialised on every attempt and a resubmit after a failure was
+  // a silent no-op (`if(!f.email||!f.password) return;` now read ''). value=${...} makes it visible.
+  const f = viewState('login_form', { email: '', password: '' });
+  const submit = async (e) => { e.preventDefault(); if(!f.email||!f.password) return; S.loading=true; S.error=null; renderApp();
+    try { const r = await API.login(f.email, f.password); API.setAuth(r.token || r.access_token, r.user || r); f.email=''; f.password=''; S.view='app'; }
     catch(err){ S.error=err.message; } S.loading=false; renderApp(); };
   return html`
     <div class="flex items-center justify-center min-h-screen px-4">
       <div class="card w-full max-w-md">
         <div class="text-center mb-8"><div class="text-4xl mb-3">⚡</div><h1 class="text-2xl font-extrabold text-gray-900">WorkflowSwift</h1><p class="text-sm text-gray-500 mt-2">Sign in to your workspace</p></div>
         <form onSubmit=${submit} class="space-y-5">
-          <div><label class="label">Email</label><input type="email" class="input" onInput=${e=>email=e.target.value} placeholder="you@company.com" autocomplete="email" required /></div>
-          <div><label class="label">Password</label><input type="password" class="input" onInput=${e=>password=e.target.value} placeholder="••••••••" autocomplete="current-password" required /></div>
+          <div><label class="label">Email</label><input type="email" class="input" value=${f.email} onInput=${e=>f.email=e.target.value} placeholder="you@company.com" autocomplete="email" required /></div>
+          <div><label class="label">Password</label><input type="password" class="input" value=${f.password} onInput=${e=>f.password=e.target.value} placeholder="••••••••" autocomplete="current-password" required /></div>
           ${S.error && html`<div class="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3 flex items-center gap-2"><span>⚠️</span> ${S.error}</div>`}
           <button type="submit" class="btn w-full" disabled=${S.loading}>${S.loading?'Signing in...':'Sign In'}</button>
         </form>
-        <button class="btn-outline w-full mt-4 text-sm" onClick=${()=>{S.showRegister=true;S.error=null;renderApp();}}>Create Free Account</button>
+        <button class="btn-outline w-full mt-4 text-sm" onClick=${()=>{S.formSeeded=false;S.showRegister=true;S.error=null;renderApp();}}>Create Free Account</button>
         <div class="mt-6 text-center text-xs text-gray-400"><p>WorkflowSwift v2.0</p></div>
       </div>
     </div>`;
 };
 const RegisterView = () => {
-  let name='', email='', password='';
-  const submit = async (e) => { e.preventDefault(); if(!name||!email||!password) return; S.loading=true; S.error=null; renderApp();
-    try { const r = await API.register(name, email, password); API.setAuth(r.token || r.access_token, r.user || r); S.view='pick'; S.pickingIndustry=true; }
+  // kanban t_7e48aeb7 — same class, create-only: the draft lives in the SHARED object and is seeded ON
+  // OPEN (the "Create Free Account" button clears S.formSeeded), so a renderApp() while the form is on
+  // screen cannot reset it to the literals; value=${...} makes the shared state visible.
+  const f = viewState('register_form', { name: '', email: '', password: '' });
+  if (!S.formSeeded) { f.name=''; f.email=''; f.password=''; S.formSeeded = true; }
+  const submit = async (e) => { e.preventDefault(); if(!f.name||!f.email||!f.password) return; S.loading=true; S.error=null; renderApp();
+    try { const r = await API.register(f.name, f.email, f.password); API.setAuth(r.token || r.access_token, r.user || r); f.name=''; f.email=''; f.password=''; S.view='pick'; S.pickingIndustry=true; }
     catch(err){ S.error=err.message; } S.loading=false; renderApp(); };
   return html`
     <div class="flex items-center justify-center min-h-screen px-4">
       <div class="card w-full max-w-md">
         <div class="text-center mb-8"><div class="text-4xl mb-3">🚀</div><h1 class="text-2xl font-extrabold text-gray-900">Create your account</h1><p class="text-sm text-gray-500 mt-2">Start automating with WorkflowSwift</p></div>
         <form onSubmit=${submit} class="space-y-5">
-          <div><label class="label">Full Name</label><input type="text" class="input" onInput=${e=>name=e.target.value} placeholder="Jane Doe" required /></div>
-          <div><label class="label">Email</label><input type="email" class="input" onInput=${e=>email=e.target.value} placeholder="you@company.com" required /></div>
-          <div><label class="label">Password</label><input type="password" class="input" onInput=${e=>password=e.target.value} placeholder="••••••••" minlength="6" autocomplete="new-password" required /></div>
+          <div><label class="label">Full Name</label><input type="text" class="input" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="Jane Doe" required /></div>
+          <div><label class="label">Email</label><input type="email" class="input" value=${f.email} onInput=${e=>f.email=e.target.value} placeholder="you@company.com" required /></div>
+          <div><label class="label">Password</label><input type="password" class="input" value=${f.password} onInput=${e=>f.password=e.target.value} placeholder="••••••••" minlength="6" autocomplete="new-password" required /></div>
           ${S.error && html`<div class="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3 flex items-center gap-2"><span>⚠️</span> ${S.error}</div>`}
           <button type="submit" class="btn w-full" disabled=${S.loading}>${S.loading?'Creating...':'Create Free Account'}</button>
         </form>
@@ -1108,7 +1120,7 @@ const TeamView = () => {
         <div><h1 class="text-xl font-extrabold text-gray-900">Team</h1><p class="text-sm text-gray-500 mt-1">Invite people to this account, scope what they can reach, and remove them.</p></div>
         <div class="flex gap-2">
           <button class="btn-outline text-sm" onClick=${loadUsers} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button>
-          ${teamAmAdmin() ? html`<button class="btn text-sm" onClick=${()=>{S.invited=null;S.teamErr=null;S.modal='invite';renderApp();}}>+ Invite Member</button>` : ''}
+          ${teamAmAdmin() ? html`<button class="btn text-sm" onClick=${()=>{S.formSeeded=false;S.invited=null;S.teamErr=null;S.modal='invite';renderApp();}}>+ Invite Member</button>` : ''}
         </div>
       </header>
       ${fresh ? html`<div class="card" style="border:2px solid #16a34a">
@@ -1158,23 +1170,27 @@ const removeTeamMember = async (u) => {
 };
 
 const InviteModal = () => {
-  let name='', email='', role='team_member';
+  // kanban t_7e48aeb7 — same class, modal form: the draft lives in the SHARED object and is seeded ON
+  // OPEN (the "+ Invite Member" button clears S.formSeeded), so the save's own renderApp() cannot reset
+  // it to the literals and a second attempt is not a silent no-op.
+  const f = viewState('invite_form', { name: '', email: '', role: 'team_member' });
+  if (!S.formSeeded) { f.name=''; f.email=''; f.role='team_member'; S.formSeeded = true; }
   const perms = {};
   const save = async () => {
-    if(!name || !email) return toast('Name and email are required','err');
+    if(!f.name || !f.email) return toast('Name and email are required','err');
     S.loading=true; S.modalErr=null; renderApp();
     try {
       const permissions = {}; TEAM_PERMS.forEach(k => { if(perms[k]) permissions[k]=true; });
-      const r = await API.inviteUser({ name, email, role, permissions });
+      const r = await API.inviteUser({ name: f.name, email: f.email, role: f.role, permissions });
       S.invited = r; S.users=null; closeModal(); toast('Team member invited');
     } catch(e){ S.modalErr = e.message || 'Could not invite that person'; toast(S.modalErr,'err'); }
     S.loading=false; renderApp();
   };
   return html`<${ModalShell} title="Invite Team Member" onClose=${closeModal}>
-    <div class="mb-4"><label class="label">Name</label><input class="input" onInput=${e=>name=e.target.value} placeholder="Jordan Smith" /></div>
-    <div class="mb-4"><label class="label">Email</label><input class="input" onInput=${e=>email=e.target.value} placeholder="jordan@company.com" /></div>
+    <div class="mb-4"><label class="label">Name</label><input class="input" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="Jordan Smith" /></div>
+    <div class="mb-4"><label class="label">Email</label><input class="input" value=${f.email} onInput=${e=>f.email=e.target.value} placeholder="jordan@company.com" /></div>
     <div class="mb-4"><label class="label">Role</label>
-      <select class="input" onChange=${e=>role=e.target.value}>
+      <select class="input" value=${f.role} onChange=${e=>f.role=e.target.value}>
         <option value="team_member">Member — only the permissions you tick below</option>
         <option value="company_admin">Admin — full workspace access, can manage the team</option>
       </select>
