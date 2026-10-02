@@ -173,6 +173,13 @@ keys) is argon2-hashed; `integration_targets.api_key` uses the same envelope (mi
 | `/api/v1/integrations/coreswift/push` | POST | Manual push of captured leads |
 | `/api/v1/user-keys` | GET/POST | Per-user integration keys (+ `/{id}` DELETE, `/health-check`) |
 
+The per-user `user_integrations` family (`GET`/`POST /api/v1/integrations`, `/native`,
+`/native/{provider}`, `DELETE /{provider}`, `/health-check`) and the console's "My Integrations"
+panel were RETIRED on 2026-10-02 (kanban t_cb839034): that store had 0 rows and no delivery path
+read it — every delivery path reads `provider_keys` — so those paths answer 404, and the table is
+dropped by migration `076`. `GET /api/v1/integrations/resolve` (the step-provider resolver) and the
+CoreSwift spoke above are unaffected.
+
 Inbound: `POST /api/v1/incoming` (internal key) is the single endpoint every Swift tool pushes
 to — WorkflowSwift matches the payload to an active workflow, creates an instance and steps
 through it, dispatching to integration targets and n8n. A workflow only dispatches to a target when
@@ -192,6 +199,15 @@ shipped writer, so it is provisioned server-side.
   /api/v1/integration-targets/{id}`). Each row carries `webhook_url`, a `provider_preset`,
   `allowed_domains` and `daily_limit`; `webhook_security::check_webhook_security` enforces the
   domain allowlist and the daily cap, counting rows in `delivery_log`.
+- **The URL source** is the target's `webhook_url` or, when that is blank, its `provider_preset` — a
+  key in `integration_provider_presets`, served by `GET /api/v1/provider-presets`
+  (8 rows). The console's **Integration Targets** panel offers the catalogue as a SELECT, the create
+  and update routes validate the key against it (an unknown key is a field-level 422, never a
+  23503), and both accept `provider_preset` — a string sets it, `null` clears it. `forward_dispatch`
+  appends the payload's `path` to the preset's `base_url`, and the dispatch security gate validates
+  that same effective URL, so a preset-routed target needs no webhook URL at all (kanban t_cb839034
+  wired this half of the routing contract: until then the read was live while 5/5 rows had no writer
+  for the column).
 - **The binding** is the column `workflow_steps.integration_target_id`.
   The executor reads it at `src/execution.rs` in the arm
   `"integration" | "integration_dispatch"`, i.e. **a step dispatches only if its `step_type` is

@@ -53,10 +53,23 @@ pub async fn dispatch_integration(
     let target_id = Uuid::parse_str(target_id_str)
         .map_err(|_| AppError::BadRequest("Invalid target_id".into()))?;
 
-    // Security check before dispatching
-    let (webhook_url, allowed_domains, daily_limit): (String, Vec<String>, i32) = sqlx::query_as::<_, (String, Vec<String>, i32)>(
-        "SELECT COALESCE(webhook_url, ''), COALESCE(allowed_domains, ARRAY[]::TEXT[])::text[], COALESCE(daily_limit, 1000)
-         FROM integration_targets WHERE id = $1 AND aid = $2 AND is_active = true"
+    // Security check before dispatching.
+    //
+    // The URL the gate is handed must be the URL the dispatch will ACTUALLY use (kanban t_cb839034):
+    // a literal `webhook_url`, or the provider preset's catalogue `base_url` when the target carries
+    // no literal URL (`forward_dispatch` builds the destination exactly that way, appending the
+    // payload's `path`). Passing the empty literal instead made every preset-routed target fail the
+    // gate with 403 "Invalid webhook URL ''" — a check that never saw the URL it was guarding.
+    let (webhook_url, allowed_domains, daily_limit, preset_base_url): (
+        String,
+        Vec<String>,
+        i32,
+        Option<String>,
+    ) = sqlx::query_as::<_, (String, Vec<String>, i32, Option<String>)>(
+        "SELECT COALESCE(it.webhook_url, ''), COALESCE(it.allowed_domains, ARRAY[]::TEXT[])::text[], COALESCE(it.daily_limit, 1000), pp.base_url
+         FROM integration_targets it
+         LEFT JOIN integration_provider_presets pp ON pp.key = it.provider_preset
+         WHERE it.id = $1 AND it.aid = $2 AND it.is_active = true"
     )
     .bind(target_id)
     .bind(aid)
@@ -65,10 +78,18 @@ pub async fn dispatch_integration(
     .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?
     .ok_or_else(|| AppError::NotFound("Integration target not found or inactive".into()))?;
 
+    let delivery_url: String = if !webhook_url.is_empty() {
+        webhook_url.clone()
+    } else {
+        preset_base_url
+            .filter(|b| !b.trim().is_empty())
+            .unwrap_or_default()
+    };
+
     webhook_security::check_webhook_security(
         &state.db,
         &target_id,
-        &webhook_url,
+        &delivery_url,
         &allowed_domains,
         daily_limit,
     )
@@ -85,7 +106,7 @@ pub async fn dispatch_integration(
                 &state.db,
                 &target_id,
                 &aid,
-                &webhook_url,
+                &delivery_url,
                 if status.is_some_and(|s| (200..300).contains(&s)) {
                     "success"
                 } else {
@@ -112,7 +133,7 @@ pub async fn dispatch_integration(
                 &state.db,
                 &target_id,
                 &aid,
-                &webhook_url,
+                &delivery_url,
                 "failed",
                 None,
                 Some(&e),
@@ -199,8 +220,13 @@ pub async fn forward_dispatch(
         _ => (String::new(), "none"),
     };
 
-    // Determine the actual URL to POST to
-    let effective_base_url = stored_base_url.or(preset_base_url);
+    // Determine the actual URL to POST to. An empty preset base_url (the `webhook` catalogue row
+    // ships one) is "no URL", not "the payload path on its own" — without the filter the outbound
+    // request would be built from a relative URL and fail with a transport error instead of the
+    // honest "no webhook_url or provider preset" refusal.
+    let effective_base_url = stored_base_url
+        .filter(|s| !s.trim().is_empty())
+        .or(preset_base_url.filter(|s| !s.trim().is_empty()));
     let target_url = if !webhook_url.is_empty() {
         webhook_url
     } else if let Some(ref base) = effective_base_url {

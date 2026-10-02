@@ -543,20 +543,15 @@ pub fn create_router(state: AppState) -> Router {
             get(handlers::integration_center_handler::get_destination_values),
         );
 
+    // The `user_integrations` CRUD family that used to be built here — GET/POST "/", GET "/native",
+    // POST "/native/{provider}", DELETE "/{provider}" and POST "/health-check" — is RETIRED (kanban
+    // t_cb839034). It wrote a BYOK store that no delivery path in this crate read (0 rows live;
+    // `forward_dispatch`, `src/ai_llm.rs` and `src/execution.rs` all read `provider_keys`, which the
+    // admin console's Provider Keys panel writes), and its only console reader was a dead panel
+    // whose Test/Remove buttons were bound to nothing. The table goes with it
+    // (migrations/076_retire_user_integrations.sql). What stays is the canonical CoreSwift spoke and
+    // the step-provider resolver below.
     let user_integration_routes = Router::new()
-        .route(
-            "/",
-            get(handlers::user_integration_handler::list_integrations)
-                .post(handlers::user_integration_handler::upsert_integration),
-        )
-        .route(
-            "/native",
-            get(handlers::user_integration_handler::list_native_integrations),
-        )
-        .route(
-            "/native/{provider}",
-            post(handlers::user_integration_handler::toggle_native_integration),
-        )
         // ── Canonical CoreSwift spoke (fleet standard paths) ──
         .route(
             "/coreswift/status",
@@ -571,16 +566,8 @@ pub fn create_router(state: AppState) -> Router {
             post(handlers::coreswift_integration_handler::coreswift_push),
         )
         .route(
-            "/{provider}",
-            delete(handlers::user_integration_handler::delete_integration),
-        )
-        .route(
             "/resolve",
             get(handlers::user_integration_handler::resolve_step_provider),
-        )
-        .route(
-            "/health-check",
-            post(handlers::user_integration_handler::check_integration_health),
         );
 
     let rendition_routes = Router::new()

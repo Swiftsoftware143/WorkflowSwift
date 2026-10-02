@@ -160,7 +160,7 @@ const tabs=[
   {id:'automation',label:'🤖 Automation',subs:['Automations','Agents','Workspaces']},
   {id:'crm',label:'👥 CRM',subs:['Leads']},
   {id:'tags',label:'🏷️ Tags & Labels',subs:['Tags','Tag Groups']},
-  {id:'integrations',label:'🔌 Integrations',subs:['My Integrations','Integration Targets','Destination Values','Provider Keys','API Keys','n8n Proxy','Bridge']},
+  {id:'integrations',label:'🔌 Integrations',subs:['Integration Targets','Destination Values','Provider Keys','API Keys','n8n Proxy','Bridge']},
   {id:'support',label:'🎫 Support',subs:['Tickets']},
   {id:'profile',label:'👤 Profile & Account',subs:['My Profile','Team','Plans & Credits','Invoices','Payments','Checkout Sessions']},
   {id:'comms',label:'📧 Communications',subs:['Webhooks']},
@@ -209,8 +209,7 @@ function content(){
     if(s==='tags')renderCRUD(c,'tags','Tag',['name','color'],'/tags',null,{label:'Unassign',fn:'unassignTag'});
     else if(s==='tag-groups')renderCRUD(c,'tag-groups','Tag Group',['name','description'],'/tag-groups',['name','description']);
   }else if(t==='integrations'){
-    if(s==='my-integrations')renderIntegrations(c);
-    else if(s==='integration-targets')renderCRUD(c,'integration-targets','Integration Target',['name','provider','is_active'],'/integration-targets');
+    if(s==='integration-targets')renderIntegrationTargets(c);
     else if(s==='destination-values')renderDestinationValues(c);
     else if(s==='provider-keys')renderProviderKeys(c);
     else if(s==='api-keys')renderApiKeys(c);
@@ -353,13 +352,85 @@ function renderDashboardOverview(c){
   }).catch(()=>c.querySelector('#stats').innerHTML='<p class="text-red-400">Failed.</p>');
 }
 
-function renderIntegrations(c){
-  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">My Integrations</h2><div id="idata"></div></div>';
-  api('/integrations').then(d=>{
-    const el=c.querySelector('#idata');
-    if(!d||!d.items||!d.items.length){el.innerHTML='<p class="text-gray-400 text-sm">No integrations configured.</p>';return}
-    el.innerHTML=d.items.map(i=>`<div class="flex justify-between items-center p-3 border-b"><div><strong>${i.provider||i.name}</strong><span class="text-xs text-gray-500 ml-2">${i.is_active?'Active':'Inactive'}</span></div><div class="flex gap-2"><button class="btn btn-sm btn-ghost">Test</button><button class="btn btn-sm btn-danger">Remove</button></div></div>`).join('');
-  });
+// --- Integration Targets (GET/POST/PUT/DELETE /integration-targets) --------------------------
+// Hand-written, NOT renderCRUD (kanban t_cb839034). A target's destination is EITHER a literal
+// `webhook_url` OR a `provider_preset` key from the catalogue, and that second choice has to be a
+// SELECT bound to GET /provider-presets. renderCRUD renders one plain-text input per
+// field name, so it could not express the choice — which is why the column `provider_preset` had
+// NO writer at all (5/5 live targets NULL) while
+// integration_dispatch_handler::forward_dispatch was already reading it to turn a target into a
+// URL, and why the 8-row catalogue the app serves had no caller anywhere in this console.
+function renderIntegrationTargets(c){
+  c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Integration Targets</h2><button class="btn btn-primary btn-sm" id="tgtAdd">+ Add</button></div>'
+    +'<p class="text-xs text-gray-400 mb-4">A target needs a URL source: a webhook URL, or a provider preset from the catalogue (GET /provider-presets) whose base_url the dispatch resolves and appends the step\'s path to. Targets are aid-scoped.</p>'
+    +'<div id="tgtList"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
+  const list=c.querySelector('#tgtList');
+  const load=async()=>{
+    const d=await api('/integration-targets');
+    if(d===null){list.innerHTML='<p class="text-red-400 text-sm">Could not load targets: '+escHtml(LAST_ERR||'request failed')+'</p>';return}
+    const items=(d&&d.integration_targets)||[];
+    if(!items.length){list.innerHTML='<p class="text-gray-400 text-sm">No targets yet.</p>';return}
+    list.innerHTML='<table class="table"><thead><tr><th>Name</th><th>Provider</th><th>Preset</th><th>Webhook URL</th><th>Active</th><th style="width:130px"></th></tr></thead><tbody>'
+      +items.map(t=>'<tr><td><strong>'+escHtml(t.name)+'</strong></td><td>'+escHtml(t.provider)+'</td>'
+        +'<td>'+(t.provider_preset?escHtml(t.provider_preset):'<span class="text-gray-400">none</span>')+'</td>'
+        +'<td class="text-xs">'+(t.webhook_url?escHtml(t.webhook_url):'<span class="text-gray-400">none</span>')+'</td>'
+        +'<td>'+(t.is_active?'Active':'Inactive')+'</td>'
+        +'<td class="text-right"><button class="btn btn-sm btn-ghost" data-edit="'+escHtml(t.id)+'">Edit</button>'
+        +'<button class="btn btn-sm btn-danger" data-del="'+escHtml(t.id)+'">Del</button></td></tr>').join('')
+      +'</tbody></table>';
+    list.querySelectorAll('[data-edit]').forEach(b=>b.onclick=()=>form(b.getAttribute('data-edit')));
+    list.querySelectorAll('[data-del]').forEach(b=>b.onclick=async()=>{
+      if(!confirm('Delete this target?'))return;
+      const id=b.getAttribute('data-del');
+      const r=await api('/integration-targets/'+encodeURIComponent(id),{method:'DELETE'});
+      showMsg(r?'Deleted':('Delete failed: '+(LAST_ERR||'request failed')),r?undefined:'error');
+      if(r)load();
+    });
+  };
+  const form=async(id)=>{
+    // The catalogue is the app's own routable-provider list; if it cannot be read, a literal-URL
+    // target is still perfectly creatable, so this degrades to "none" instead of blocking the form.
+    let presets=[];
+    const pd=await api('/provider-presets');
+    if(pd&&pd.providers)presets=pd.providers;
+    let item={};
+    if(id){const d=await api('/integration-targets');const it=((d&&d.integration_targets)||[]).find(x=>x.id===id);if(it)item=it}
+    const modal=h('div',{className:'modal-overlay',onclick:function(e){if(e.target===modal)modal.remove()}});
+    const box=h('div',{className:'modal-box'});
+    box.innerHTML='<h2 class="text-lg font-bold mb-4">'+(id?'Edit':'Add')+' Integration Target</h2>'
+      +'<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">Name</label><input class="input" id="tg_name" value="'+escHtml(item.name||'')+'"></div>'
+      +'<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">Provider label</label><input class="input" id="tg_provider" value="'+escHtml(item.provider||'webhook')+'"></div>'
+      +'<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">Provider preset</label>'
+      +'<select class="input" id="tg_preset"><option value="">none (route by webhook URL)</option>'
+      +presets.map(p=>'<option value="'+escHtml(p.key)+'"'+(item.provider_preset===p.key?' selected':'')+'>'+escHtml(p.name)+' ('+escHtml(p.key)+')'+(p.base_url?' — '+escHtml(p.base_url):'')+'</option>').join('')
+      +'</select></div>'
+      +'<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">Webhook URL</label>'
+      +'<input class="input" id="tg_url" value="'+escHtml(item.webhook_url||'')+'" placeholder="https://… (leave blank when a preset routes the target)"></div>'
+      +'<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">Active</label>'
+      +'<input type="checkbox" id="tg_active" '+(item.is_active===false?'':'checked')+'></div>'
+      +'<div id="tg_msg" class="text-sm mb-2"></div>'
+      +'<div class="flex justify-end gap-2"><button class="btn btn-ghost" id="tg_cancel">Cancel</button><button class="btn btn-primary" id="tg_save">Save</button></div>';
+    box.querySelector('#tg_cancel').onclick=()=>modal.remove();
+    box.querySelector('#tg_save').onclick=async()=>{
+      const preset=box.querySelector('#tg_preset').value;
+      const url=box.querySelector('#tg_url').value.trim();
+      const msg=box.querySelector('#tg_msg');
+      if(preset===''&&url===''){msg.className='text-sm mb-2 text-red-500';msg.textContent='A target needs a webhook URL or a provider preset.';return}
+      // provider_preset goes as null when "none" is chosen so the field can be CLEARED; the API reads
+      // an absent field as "leave alone" and an explicit null as "clear" (same contract as api_key).
+      const body={name:box.querySelector('#tg_name').value.trim()||'Target',
+                  provider:box.querySelector('#tg_provider').value.trim()||'webhook',
+                  provider_preset:preset===''?null:preset,
+                  webhook_url:url,
+                  is_active:box.querySelector('#tg_active').checked};
+      const r=await api(id?'/integration-targets/'+encodeURIComponent(id):'/integration-targets',{method:id?'PUT':'POST',body:JSON.stringify(body)});
+      if(r){showMsg('Saved!');modal.remove();load()}
+      else{msg.className='text-sm mb-2 text-red-500';msg.textContent='Error saving: '+(LAST_ERR||'request failed')}
+    };
+    modal.appendChild(box);document.body.appendChild(modal);
+  };
+  c.querySelector('#tgtAdd').onclick=()=>form(null);
+  load();
 }
 
 // The providers this platform actually uses, enumerated from the code:

@@ -1,0 +1,41 @@
+-- 076_retire_user_integrations.sql
+-- WorkflowSwift: DROP `user_integrations`, the legacy per-user BYOK store that NO delivery path read.
+-- Decision card t_cb839034 ("the integration config graph resolves to nothing on both sides").
+--
+-- WHY THIS IS RESIDUE AND NOT PLANNED SCHEMA (evidence /opt/swift/audits/t_cb839034/):
+--   1. NO READER ON ANY DELIVERY PATH.  Every delivery path in the crate reads `provider_keys`:
+--      `integration_dispatch_handler::forward_dispatch` (the account-scoped fallback credential),
+--      `src/ai_llm.rs` (the AI Action BYOK key) and `src/execution.rs`. This table's one and only
+--      reader outside its own CRUD handlers was
+--      `user_integration_handler::resolve_step_provider`, and kanban t_88082a4c moved that read onto
+--      `provider_keys`. A consumer census of src/ for `user_integrations` outside the handler that
+--      is deleted with this migration returns 0 hits.
+--   2. 0 ROWS, LIVE.  `SELECT count(*) FROM user_integrations` = 0 at the decision. The only
+--      console surface that could have created one ("My Integrations", www-admin/index.html
+--      renderIntegrations) rendered Test/Remove buttons bound to NO handler and no form, so it could
+--      never have produced a row either — measured live before the change.
+--   3. THE SURVIVING BYOK STORE IS `provider_keys`.  It has the writer (POST /api/v1/provider-keys,
+--      the admin console's Provider Keys panel), the readers (forward_dispatch's fallback, ai_llm,
+--      execution) and the resolver (GET /api/v1/integrations/resolve, t_88082a4c) — and it is the
+--      store GET /api/v1/available-providers pairs with. Two BYOK stores where only one is read IS
+--      the defect; the unread one, its six routes (GET/POST /api/v1/integrations, GET
+--      /api/v1/integrations/native, POST /api/v1/integrations/native/{provider}, DELETE
+--      /api/v1/integrations/{provider}, POST /api/v1/integrations/health-check), the dead panel and
+--      this table are all retired in the same change.
+--   4. NO INBOUND EDGE.  No table outside references it (pg_constraint.confrelid = 0 rows) and no
+--      view, routine or trigger of its own mentions it (pg_views/pg_proc = 0 rows); the six
+--      RI_ConstraintTrigger_c_* triggers on it are its OWN outgoing FKs and are dropped with it.
+--
+-- LIVE SAFETY
+--   * Idempotent: `DROP TABLE IF EXISTS`, a NO-OP on a fresh build that only ever ran 029's CREATE.
+--   * No BEGIN/COMMIT: the runner (src/db.rs) wraps each file in one transaction.
+--   * Recovery: the full column list is recorded in /opt/swift/audits/t_cb839034/20-db-PRE.txt, and
+--     the CREATE survives in 029_user_integrations.sql with the later ALTERs in 029a/034/063 — the
+--     empty table is three migrations away from returning.
+--
+-- ORDERING NOTE: deploy-app.sh runs the from-zero harness BEFORE the recreate, so that run reports
+-- this drop as drift against a live DB that still has the table (the same ordering artifact
+-- recorded for 067_drop_orphaned_step_integrations.sql, kanban t_fa169e94). Re-running the harness
+-- after the boot is PASS.
+
+DROP TABLE IF EXISTS user_integrations;
