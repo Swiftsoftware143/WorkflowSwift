@@ -53,8 +53,93 @@ fn mailgun_url_sends_as(api_url: &str, domain: &str) -> bool {
     !domain.is_empty() && api_url.to_ascii_lowercase().contains(domain)
 }
 
+/// Placeholder-shaped tokens that survived rendering — i.e. names no caller bound.
+///
+/// This module substitutes ONE vocabulary: `{{key}}` (double braces). A stored row written in the
+/// other dialect the fleet has shipped (`Hi {name}!`, single braces) is NOT substituted, so before
+/// this it reached the recipient as literal braces with **no log line at all** — the blind spot
+/// kanban t_c8df11e6 closed in IncentiveSwift's `template_render` (kanban t_f70ef1bb).
+///
+/// `{name}` and a surviving `{{name}}` are both reported as `name`, deduplicated, first-seen
+/// order. Nothing is evaluated or stripped: the copy is the admin's, only the REPORT is ours.
+fn unsubstituted(rendered: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut rest = rendered;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('}') else { break };
+        let name = after[..close].trim_matches('{').trim_matches('}').trim();
+        if !name.is_empty()
+            && name.len() < 64
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+            && !out.iter().any(|n| n.as_str() == name)
+        {
+            out.push(name.to_string());
+        }
+        rest = &after[close + 1..];
+    }
+    out
+}
+
+/// Every distinct mustache BLOCK MARKER still present in `rendered` — `{{#if x}}`, `{{/if}}`,
+/// `{{else}}`, `{{^x}}`, `{{!c}}`, `{{>p}}` — named IN FULL, deduplicated, first-seen order.
+///
+/// A marker holds no identifier, so `unsubstituted` cannot see it; without this arm a stored row
+/// that drifted into the handlebars vocabulary (`templates/*.html` really uses it; these email
+/// renderers do not) would mail raw markers and log nothing (kanban t_c8df11e6 / t_f70ef1bb).
+fn unprocessed_scaffolding(rendered: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while let Some(rel) = rendered[i..].find("{{") {
+        let start = i + rel;
+        let Some(endrel) = rendered[start + 2..].find("}}") else {
+            break;
+        };
+        let end = start + 2 + endrel + 2;
+        let inner = &rendered[start + 2..end - 2];
+        let is_marker = inner == "else"
+            || matches!(
+                inner.chars().next(),
+                Some('#') | Some('/') | Some('^') | Some('!') | Some('>')
+            );
+        if is_marker {
+            let token = rendered[start..end].to_string();
+            if !out.contains(&token) {
+                out.push(token);
+            }
+        }
+        i = end;
+    }
+    out
+}
+
+/// Report — at `warn!`, naming every token — whatever a render left unprocessed, then return the
+/// placeholder NAMES so a caller (or a probe) can assert on them.
+///
+/// This is the loud half of the fix: a token neither substituted nor reported is a defect the
+/// recipient receives as literal braces, indistinguishable from deliberate copy. The context names
+/// which part of the mail (subject / html_body / text_body) carried it.
+fn warn_unsubstituted(rendered: &str, context: &str) -> Vec<String> {
+    let left = unsubstituted(rendered);
+    let scaffolding = unprocessed_scaffolding(rendered);
+    if !left.is_empty() || !scaffolding.is_empty() {
+        tracing::warn!(
+            context = %context,
+            placeholders = ?left,
+            scaffolding = ?scaffolding,
+            "email template markup was NOT processed - the recipient receives it verbatim; use the \
+             double-brace vocabulary ({{key}}) and no mustache conditionals (this renderer \
+             implements none)"
+        );
+    }
+    left
+}
+
 /// Render a template string by replacing {{key}} placeholders with values from `vars`.
-fn render_template(template: &str, vars: &serde_json::Value) -> String {
+/// Anything left over is reported by [`warn_unsubstituted`] instead of being mailed silently.
+fn render_template(template: &str, vars: &serde_json::Value, context: &str) -> String {
     let mut result = template.to_string();
 
     // Replace {{key}} with JSON string values
@@ -65,6 +150,8 @@ fn render_template(template: &str, vars: &serde_json::Value) -> String {
             result = result.replace(&placeholder, replacement);
         }
     }
+
+    warn_unsubstituted(&result, context);
 
     result
 }
@@ -118,15 +205,16 @@ async fn send_email_inner(
                     _ => "WorkflowSwift Notification".into(),
                 }),
                 vars,
+                "subject",
             );
 
             let html_body = t
                 .html_body
                 .as_ref()
-                .map(|h| render_template(h, vars))
+                .map(|h| render_template(h, vars, "html_body"))
                 .unwrap_or_default();
 
-            let text_body = render_template(&t.body.unwrap_or_default(), vars);
+            let text_body = render_template(&t.body.unwrap_or_default(), vars, "text_body");
 
             let use_html = t.is_html.unwrap_or(true);
 
@@ -916,5 +1004,80 @@ mod tests {
     fn default_from_is_aligned_with_the_mailgun_sending_domain() {
         let url = "https://api.mailgun.net/v3/mail.workflowswift.com/messages";
         assert!(mailgun_url_sends_as(url, &org_domain(DEFAULT_EMAIL_FROM)));
+    }
+
+    #[test]
+    fn names_a_single_brace_placeholder_the_renderer_cannot_substitute() {
+        // The dialect that used to mail silently: `{{key}}` is the ONLY vocabulary
+        // `render_template` substitutes, so a stored row written `Hi {name}!` went out as literal
+        // braces. First half of the proof — the detector must NAME `name` (kanban t_f70ef1bb).
+        assert_eq!(
+            unsubstituted("Hi {name}!"),
+            vec!["name"],
+            "a single-brace token is a leftover even though the renderer never bound it"
+        );
+        assert_eq!(
+            unsubstituted("Welcome to {app_name}, {email} ({name})"),
+            vec!["app_name", "email", "name"]
+        );
+        // A surviving double-brace token (no caller bound `password`) is just as unsubstituted.
+        assert_eq!(
+            unsubstituted("{{name}} / {{password}}"),
+            vec!["name", "password"]
+        );
+        // Deduplicated, in first-seen order.
+        assert_eq!(unsubstituted("{x} {x} {y}"), vec!["x", "y"]);
+    }
+
+    #[test]
+    fn stays_quiet_on_a_clean_double_brace_body() {
+        // Second half of the proof: when every `{{key}}` is bound, `render_template` reports
+        // nothing — no false positive on the vocabulary this app speaks, nor on braces CSS/HTML
+        // legitimately carries.
+        let vars = json!({
+            "name": "Dana",
+            "email": "dana@example.com",
+            "app_name": "WorkflowSwift",
+        });
+        let out = render_template(
+            "Hi {{name}}, welcome to {{app_name}} ({{email}})!",
+            &vars,
+            "test",
+        );
+        assert_eq!(out, "Hi Dana, welcome to WorkflowSwift (dana@example.com)!");
+        assert!(
+            unsubstituted(&out).is_empty(),
+            "clean render reports nothing"
+        );
+        assert!(unprocessed_scaffolding(&out).is_empty());
+        for clean in [
+            "a { color: red; }",
+            r#"{"a": {"b": 1}}"#,
+            "<p style='font-size:14px'>Hi</p>",
+            "",
+        ] {
+            assert!(
+                unsubstituted(clean).is_empty(),
+                "must stay silent on {clean:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn names_mustache_markers_the_renderer_cannot_process() {
+        // The other half of the same blind spot: a block marker holds no identifier, so
+        // `unsubstituted` cannot see it — it is named IN FULL by its own arm.
+        assert_eq!(
+            unprocessed_scaffolding("{{#if prize_name}}x{{/if}}"),
+            vec!["{{#if prize_name}}", "{{/if}}"]
+        );
+        assert_eq!(
+            unprocessed_scaffolding("{{#each xs}}{{x}}{{else}}none{{/each}}"),
+            vec!["{{#each xs}}", "{{else}}", "{{/each}}"]
+        );
+        assert!(
+            unprocessed_scaffolding("Welcome, {{name}}!").is_empty(),
+            "the vocabulary this app speaks is never reported as markup"
+        );
     }
 }
