@@ -108,12 +108,24 @@ fn rate_limited_response() -> Response {
         })
 }
 
-/// Client identity for the pre-auth limiter, read from headers the fronting proxy sets:
-/// Cloudflare's `CF-Connecting-IP`, then nginx's `X-Real-IP` (`proxy_set_header X-Real-IP
-/// $remote_addr`, which replaces any client-supplied value), then the rightmost
-/// `X-Forwarded-For` hop — the one nginx appended, not the spoofable left-hand entries.
-/// A caller presenting none of them shares the `unknown` bucket, so omitting the address
-/// is not a way around the limiter.
+/// Client identity for the pre-auth limiter, read from the headers the fronting proxy sets.
+///
+/// The order is the ORDER OF TRUST. nginx REPLACES a header it sets (`proxy_set_header`
+/// overwrites any client-supplied value of the same name), and passes every header it does not
+/// set through to the upstream untouched. So:
+///   1. `X-Real-IP` — set to `$remote_addr` in every `location` of every WorkflowSwift vhost, and
+///      nginx.conf's `real_ip` block makes `$remote_addr` the VISITOR for Cloudflare peers and the
+///      true peer for anything reaching this world-open :443 directly. Never client-chosen.
+///   2. `CF-Connecting-IP` — read second, for a deployment where Cloudflare fronts the app itself.
+///      It is trustworthy only because the vhosts now also `proxy_set_header CF-Connecting-IP
+///      $remote_addr`. Until kanban t_da8a579a this arm was FIRST and was NOT overwritten, so a
+///      caller could rotate the header per request and never bind the limiter, or hand-set a
+///      chosen victim's address and burn that victim's bucket (measured live before the fix: 800
+///      requests with 800 distinct hand-set headers -> 800x401, 0x429).
+///   3. the rightmost `X-Forwarded-For` hop — the one nginx appended, not the spoofable left-hand
+///      entries.
+/// A caller presenting none of them shares the `unknown` bucket, so omitting the address is not
+/// a way around the limiter.
 fn client_identity(headers: &axum::http::HeaderMap) -> String {
     let read = |name: &str| {
         headers
@@ -123,10 +135,10 @@ fn client_identity(headers: &axum::http::HeaderMap) -> String {
             .filter(|v| !v.is_empty())
     };
 
-    if let Some(ip) = read("cf-connecting-ip") {
+    if let Some(ip) = read("x-real-ip") {
         return ip;
     }
-    if let Some(ip) = read("x-real-ip") {
+    if let Some(ip) = read("cf-connecting-ip") {
         return ip;
     }
     if let Some(xff) = read("x-forwarded-for") {

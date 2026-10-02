@@ -206,6 +206,15 @@ credits per call.
 Protected endpoints pass through `rate_limit` middleware keyed on the account. Exceeding it
 returns `429` with a `Retry-After` header.
 
+A second, `pre_auth_rate_limit` guard runs **before** any credential is verified, for requests
+that present an API key (`workflowswift_...`): it exists so a flood of requests that merely look
+like a key cannot drive the expensive Argon2 hash check, and its `429` arrives without the key
+ever being looked up (kanban t_da8a579a). It is keyed on the client address the PROXY vetted —
+nginx's `X-Real-IP` (`$remote_addr`: the real visitor behind Cloudflare, the true peer for a
+caller that reaches the origin directly) — never on a header the caller can hand-set. A request
+with no address header at all shares one `unknown` bucket, so omitting the header is not a way
+around the limit.
+
 ## Operational notes
 
 - The container runs with `network_mode: host` and publishes nothing — the API binds
