@@ -47,6 +47,15 @@ Base API: `https://workflowswift.com/api/v1` — all non-public endpoints need
   step was **recorded as completed having exported nothing**. The API refuses the type now, the
   Builder no longer offers it, and an old Export step is skipped with a warning that says so. To get
   data out, use an **HTTP Request** step pointing at an endpoint you own.
+- **Custom-code steps are retired** (2026-10-02): the **`transform`** and **`code`** step types
+  accepted a block of JavaScript, and the `format` step described a transformation, but the only
+  real behaviour any of them had was a JavaScript node inside n8n carrying your code verbatim. That
+  node **cannot run on this install** (n8n here has no JavaScript task runner configured, and its
+  own Code node fails), and turning the runner on would mean running your code inside the service
+  that holds n8n's own credentials. **Nothing here executes tenant code**, so the API refuses all
+  three types, the Builder never offered them, and an old step of one of those types is skipped with
+  a warning that names the gap — it is never reported as having transformed anything. If you need
+  custom logic, use an **HTTP Request** step to call a service you own that runs your code.
 - **AI Action is not live yet**: the Builder offers the step and the app stores your provider key,
   but no code in this app calls an LLM provider. A run reports the step as **skipped** and names the
   gap in the run history — it does not claim a generation.

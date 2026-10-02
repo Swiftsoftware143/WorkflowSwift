@@ -16,7 +16,7 @@
 //!   - "delay"        → n8n Wait node
 //!   - "fork"         → n8n Switch node (parallel branches)
 //!   - "action"       → Generic API call
-//!   - "transform"    → n8n Code / Set node
+//!   - "transform"    → RETIRED (kanban t_81602ca1): was an n8n Code node carrying the tenant's `config.code` verbatim — same for "code" and "format"; now a pass-through that names the gap, and the write path refuses all three
 //!   - "openclaw"     → OpenClaw reasoning step
 //!
 //! Callbacks into THIS app exist only for routes the app actually serves — `credits/balance`,
@@ -1104,23 +1104,30 @@ fn convert_user_steps(
             }
 
             "transform" | "code" => {
-                let code = config
-                    .get("code")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("return $json;");
-                let node = json!({
-                    "id": node_id,
-                    "name": step_name,
-                    "type": "n8n-nodes-base.code",
-                    "typeVersion": 2,
-                    "position": [x_pos, y_base],
-                    "parameters": {
-                        "language": "javaScript",
-                        "code": code,
-                        "mode": "runOnceForAllItems"
-                    }
-                });
-                nodes.push(node);
+                // RETIRED (kanban t_81602ca1): this arm used to emit a real `n8n-nodes-base.code`
+                // node carrying the tenant's `config.code` VERBATIM, i.e. the app handed n8n
+                // arbitrary tenant JavaScript to run. Measured on this install (n8n 2.34.6 in
+                // `swift-n8n`, 2026-10-02): the node CANNOT run — no task runner is configured
+                // (`N8N_RUNNERS_*` absent) and n8n's Code node throws its opaque `Unknown error`
+                // (`ERR_ASSERTION`), identically for a converter-built graph and for a hand-made
+                // bare `webhook → Code` graph, so it is the install and not the node shape. That is
+                // unavailable, NOT safe: enabling the runner would run tenant JavaScript inside the
+                // container that holds n8n's encryption key and every stored credential, with no
+                // resource or egress boundary — and the destination gate of t_2741ac13 cannot see
+                // it, because the code is not a URL. The step keeps its place in the graph as a
+                // pass-through that NAMES the gap, and the engine's own arm for these types is
+                // retired too (they are `RETIRED_STEP_TYPES`), so neither side claims the step did
+                // anything.
+                nodes.push(passthrough_node(
+                    &node_id,
+                    step_name,
+                    (x_pos, y_base),
+                    step_type,
+                    "this app does not execute tenant JavaScript and the n8n Code node cannot run on \
+                     this install (no task runner configured; n8n's Code node fails with its own \
+                     `Unknown error`), so the step's code was NOT run anywhere. The step type is \
+                     retired.",
+                ));
             }
 
             "render_video" | "render_media" | "render_image" | "render_audio" => {
@@ -1324,52 +1331,23 @@ fn convert_user_steps(
 
             // ===== Format: Transform content for a specific platform =====
             "format" => {
-                let platform = config
-                    .get("platform")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("web");
-                let content = config
-                    .get("input_content")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("={{ $json }}");
-                let format_type = config
-                    .get("format_type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("auto");
-
-                // Use n8n Code node for formatting transformations
-                let node = json!({
-                    "id": node_id,
-                    "name": step_name,
-                    "type": "n8n-nodes-base.code",
-                    "typeVersion": 2,
-                    "position": [x_pos, y_base],
-                    "parameters": {
-                        "language": "javaScript",
-                        "code": format!(r#"// Format step: {} platform
-// Config format_type: {}
-const input = $json;
-const content = {};
-
-// Apply platform-specific formatting
-const output = {{
-  original: content,
-  platform: "{}",
-  formatted: String(content),
-  format_type: "{}",
-  timestamp: new Date().toISOString(),
-  metadata: {{
-    char_count: String(content).length,
-    platform: "{}"
-  }}
-}};
-
-return output;
-"#, step_name, format_type, content, platform, format_type, platform),
-                        "mode": "runOnceForAllItems"
-                    }
-                });
-                nodes.push(node);
+                // RETIRED (kanban t_81602ca1): this arm used to build a `n8n-nodes-base.code` node
+                // by INTERPOLATING the tenant's `config.input_content` straight into generated
+                // JavaScript (`const content = {};`), i.e. tenant-supplied text became executable
+                // code in n8n. It is the same node that cannot run on this install (no task runner;
+                // n8n's Code node fails with its own `Unknown error`), and the same argument applies:
+                // the step's only declared behaviour was tenant code on the n8n side, so the step
+                // type is retired rather than handed over. The step keeps its place in the graph as a
+                // pass-through that NAMES the gap.
+                nodes.push(passthrough_node(
+                    &node_id,
+                    step_name,
+                    (x_pos, y_base),
+                    step_type,
+                    "no formatter exists in this app and the step's only behaviour was a JavaScript \
+                     node interpolating its input in n8n, which cannot run here and would execute \
+                     tenant text as code if it could. The step type is retired.",
+                ));
             }
             "design" => {
                 // RETIRED callback (kanban t_642b6894): this arm used to POST an app path
@@ -2158,6 +2136,59 @@ mod tests {
         );
     }
 
+    /// The acceptance for kanban t_81602ca1: no graph this converter builds may contain a node that
+    /// executes TENANT code. `transform`/`code` carried the tenant's `config.code` verbatim and
+    /// `format` interpolated `config.input_content` into generated JavaScript; all three now emit a
+    /// pass-through, and the assertion is on the NODE TYPE, so a future arm that brings the Code
+    /// node back for any of them fails here first — with the tenant's own code in the config, which
+    /// is what made the old shape dangerous.
+    #[test]
+    fn no_tenant_code_executing_node_is_emitted() {
+        for (st, cfg) in [
+            (
+                "transform",
+                json!({"code": "return [{json:{marker:'TENANT_JS'}}]"}),
+            ),
+            (
+                "code",
+                json!({"code": "return [{json:{marker:'TENANT_JS'}}]"}),
+            ),
+            (
+                "format",
+                json!({"input_content": "TENANT_TEXT", "format_type": "auto"}),
+            ),
+        ] {
+            let step = json!({"step_type": st, "name": format!("Step {st}"), "config": cfg});
+            let g = convert_steps_to_n8n(&[step], Uuid::new_v4(), Uuid::new_v4(), BASE, KEY);
+            let mine: Vec<&Value> = g
+                .nodes
+                .iter()
+                .filter(|n| {
+                    n["name"]
+                        .as_str()
+                        .unwrap_or("")
+                        .starts_with(&format!("Step {st}"))
+                })
+                .collect();
+            assert_eq!(
+                mine.len(),
+                1,
+                "{st}: expected exactly one node, got {mine:?}"
+            );
+            assert_ne!(
+                mine[0]["type"].as_str().unwrap_or(""),
+                "n8n-nodes-base.code",
+                "{st} still hands tenant code to n8n: {mine:?}"
+            );
+            assert!(
+                !serde_json::to_string(&g.nodes)
+                    .unwrap_or_default()
+                    .contains("TENANT_JS"),
+                "{st}: the tenant's own code still reaches the generated graph"
+            );
+        }
+    }
+
     /// The retirement itself: a step type this app cannot execute must not put an HTTP node in the
     /// graph pointing at an app path — that is the shape that killed every run reaching it.
     /// It keeps a node, because the graph's wiring depends on one.
@@ -2181,6 +2212,11 @@ mod tests {
             "register",
             "test",
             "log",
+            // kanban t_81602ca1: the tenant-JavaScript family — these used to get a real
+            // `n8n-nodes-base.code` node carrying the tenant's own code.
+            "transform",
+            "code",
+            "format",
         ] {
             let step = json!({"step_type": st, "name": format!("Step {st}"), "config": {}});
             let g = convert_steps_to_n8n(&[step], Uuid::new_v4(), Uuid::new_v4(), BASE, KEY);

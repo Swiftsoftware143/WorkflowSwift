@@ -1380,7 +1380,6 @@ pub async fn validate_workflow_steps(
         ("design", vec!["prompt"]),
         ("condition", vec!["field"]),
         ("webhook", vec!["url"]),
-        ("format", vec!["input_content"]),
         ("render_video", vec!["provider", "endpoint"]),
         ("render_image", vec!["provider", "endpoint"]),
         ("render_audio", vec!["provider", "endpoint"]),

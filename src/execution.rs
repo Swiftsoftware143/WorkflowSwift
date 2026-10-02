@@ -97,15 +97,12 @@ pub const EXECUTABLE_STEP_TYPES: &[&str] = &[
     "notify",
     "delay",
     "wait",
-    "transform",
-    "code",
     "fork",
     "branch",
     "render_video",
     "render_media",
     "render_image",
     "render_audio",
-    "format",
     "design",
     "loop",
     "condition",
@@ -134,7 +131,36 @@ pub const EXECUTABLE_STEP_TYPES: &[&str] = &[
 ///   step types at all.
 /// * `research` / `openclaw` — retired before this list existed (kanban t_fe60cdf5; nothing in this
 ///   app performs either), and named here so the write path's refusal says "retired" for them too.
-pub const RETIRED_STEP_TYPES: &[&str] = &["export", "publish", "generate", "research", "openclaw"];
+/// * `transform` / `code` / `format` — the TENANT-JAVASCRIPT family (kanban t_81602ca1). All three
+///   were accepted by the write path and had an engine arm that ran NO code: it read `format`/`tone`
+///   and answered `status: "completed"` with the note "Formatting queued — will transform content
+///   for selected platform" (measured live 2026-10-02: a workflow with `transform`, `code` and
+///   `format` steps ran and the console recorded THREE completed `type: "format"` steps, none of
+///   which transformed anything). The step's only real behaviour was on the other side: the n8n
+///   mirror emitted a real `n8n-nodes-base.code` node carrying the tenant's `config.code` VERBATIM
+///   (`transform`/`code`) or interpolating the tenant's `config.input_content` straight into
+///   generated JavaScript (`format`). That node cannot run on this install at all — n8n 2.34.6 in
+///   `swift-n8n` has no task runner configured (`N8N_RUNNERS_*` absent) and n8n's own Code node
+///   throws its opaque `Unknown error` (`ERR_ASSERTION`), measured end to end AND on a hand-made
+///   bare `webhook → Code` graph, so it is the INSTALL and not the converter's node shape. That is
+///   "unavailable", NOT "proven safe": enabling the runner would execute tenant-supplied JavaScript
+///   inside the container that holds n8n's encryption key and every stored credential (2 encrypted
+///   credentials — `postgres`, `telegramApi` — 1 user, 40 workflows, measured 2026-10-02), and the
+///   destination gate the mirror added for t_2741ac13 cannot see it because the code is not a URL.
+///   The card DECIDED to fail closed rather than enable it: no tenant code runs here, so no step
+///   type may promise it. Same disposition as `export`/`publish`/`generate` — a step type nothing
+///   can deliver is not a step type.
+pub const RETIRED_STEP_TYPES: &[&str] = &[
+    "export",
+    "publish",
+    "generate",
+    "research",
+    "openclaw",
+    // kanban t_81602ca1: the tenant-JavaScript family.
+    "transform",
+    "code",
+    "format",
+];
 
 /// Is this a step type the engine can execute? The write path's and the validator's one rule.
 pub fn is_executable_step_type(step_type: &str) -> bool {
@@ -1305,28 +1331,17 @@ async fn walk(
                     AI_ACTION_NO_LLM_PATH
                 ))
             }
-            "format" | "transform" | "code" => {
-                let format_type = step_config
-                    .get("format")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("twitter-thread");
-                let tone = step_config
-                    .get("tone")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("professional");
-
-                // Format via n8n or mark as config-based transformation
-                let _n8n_payload = json!({
-                    "action": "format",
-                    "format": format_type,
-                    "tone": tone,
-                    "context": context,
-                    "contact": contact,
-                    "data": data,
-                });
-
-                json!({"step": i, "type": "format", "status": "completed", "format": format_type, "tone": tone, "note": "Formatting queued — will transform content for selected platform"})
-            }
+            // `transform`, `code` and `format` used to have an arm here, and it was the app's half of
+            // the divergence kanban t_81602ca1 settled. It ran NO JavaScript: it read `format` /
+            // `tone`, built a payload it dropped on the floor and answered `status: "completed"`
+            // with the note "Formatting queued — will transform content for selected platform", so
+            // the console recorded a transformation that never happened while the n8n mirror's own
+            // `n8n-nodes-base.code` node (carrying the tenant's `config.code` verbatim) failed on
+            // this install. Nothing in this app executes tenant JavaScript, so the three types are
+            // RETIRED (see `RETIRED_STEP_TYPES`): the write path refuses them, and a row written
+            // straight into the database falls through to `unexecutable_step_result` below — a
+            // `skipped` step with a reason that reaches the run's `warnings[]`. Re-adding any of
+            // them means shipping an executor for it, in THIS app, first.
             "design" => {
                 let style = step_config
                     .get("style")
@@ -1876,9 +1891,17 @@ mod tests {
         }
         // The retired names must not be accepted: nothing in this app executes either.
         for retired in [
-            "research", "openclaw",
+            "research",
+            "openclaw",
             // kanban t_02519738: offered/accepted once, delivered nothing.
-            "export", "publish", "generate",
+            "export",
+            "publish",
+            "generate",
+            // kanban t_81602ca1: the tenant-JavaScript family — the engine's arm ran no code at all
+            // and answered `completed`, while the n8n mirror's Code node failed on this install.
+            "transform",
+            "code",
+            "format",
         ] {
             assert!(
                 !is_executable_step_type(retired),
@@ -1956,7 +1979,15 @@ mod tests {
         // And a retirement may only RE-CLASSIFY a type the app really accepted: the three this card
         // retired are in the snapshot (073 and the steps API accepted all three). `research` and
         // `openclaw` were retired BEFORE 073 was written and were never in its list.
-        for r in ["export", "publish", "generate"] {
+        for r in [
+            "export",
+            "publish",
+            "generate",
+            // kanban t_81602ca1: all three are named in 073's snapshot.
+            "transform",
+            "code",
+            "format",
+        ] {
             assert!(
                 declared.iter().any(|d| d == r),
                 "'{r}' is retired but migration 073's vocabulary snapshot never named it, so it was \
