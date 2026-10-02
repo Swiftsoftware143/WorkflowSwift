@@ -223,173 +223,16 @@ pub async fn advance_instance(
         .and_then(|v| v.as_i64())
         .map(|n| n as i32)
         .unwrap_or(0);
-
-    // Check if there's an integration target bound to this step
-    // Also fetch security fields: allowed_domains and daily_limit
-    let integration_rows = sqlx::query(
-        "SELECT wsi.integration_target_id::text, it.provider_preset, it.webhook_url, it.api_key,
-                COALESCE(it.allowed_domains, ARRAY[]::TEXT[])::text[] as allowed_domains,
-                COALESCE(it.daily_limit, 1000)::int as daily_limit,
-                it.id as raw_id
-         FROM workflow_step_integrations wsi
-         JOIN integration_targets it ON it.id = wsi.integration_target_id AND it.is_active = true
-         WHERE wsi.step_id IN (
-             SELECT ws.id FROM workflow_steps ws
-             WHERE ws.workflow_id = $1 AND ws.sort_order = $2
-         )
-         AND it.aid = $3
-         ORDER BY wsi.sort_order",
-    )
-    .bind(instance.workflow_id)
-    .bind(current_order)
-    .bind(aid)
-    .fetch_all(&state.db)
-    .await?;
-
-    // If there are bound integrations, dispatch through each
-    let mut dispatch_results: Vec<serde_json::Value> = Vec::new();
-
-    for row in integration_rows {
-        let target_id: String = row.try_get("integration_target_id").unwrap_or_default();
-        let provider_preset: Option<String> = row.try_get("provider_preset").unwrap_or(None);
-        let webhook_url: Option<String> = row.try_get("webhook_url").unwrap_or(None);
-        // The column holds ciphertext at rest ('enc:v1:' + base64: migrations/053,
-        // src/security/provider_key_crypto.rs). This is the ONE read-for-use site for it — the
-        // value goes on the wire as the target's bearer credential — so it MUST be decrypted here
-        // and never forwarded in its stored form. A value we cannot decrypt is treated as "no key"
-        // rather than sent on as garbage ciphertext (same rule get_provider_key follows).
-        let stored_key: Option<String> = row.try_get("api_key").unwrap_or(None);
-        let api_key: Option<String> = match stored_key {
-            Some(s) if !s.is_empty() => {
-                match crate::security::provider_key_crypto::decrypt_from_storage(&state.db, &s)
-                    .await
-                {
-                    Ok(v) => Some(v),
-                    Err(e) => {
-                        tracing::error!(
-                            error = %e,
-                            "stored integration target key could not be decrypted — sending no credential"
-                        );
-                        None
-                    }
-                }
-            }
-            _ => None,
-        };
-        let allowed_domains: Vec<String> = row.try_get("allowed_domains").unwrap_or_default();
-        let daily_limit: i32 = row.try_get("daily_limit").unwrap_or(1000);
-        let raw_target_id: uuid::Uuid = row.try_get("raw_id").unwrap_or(uuid::Uuid::nil());
-
-        // Security check: domain allowlist + daily rate limit before firing
-        if let Some(ref url) = webhook_url {
-            if !url.is_empty() {
-                if let Err(e) = crate::security::webhook_security::check_webhook_security(
-                    &state.db,
-                    &raw_target_id,
-                    url,
-                    &allowed_domains,
-                    daily_limit,
-                )
-                .await
-                {
-                    dispatch_results.push(json!({
-                        "target_id": target_id,
-                        "status": "blocked",
-                        "error": format!("Blocked by security policy: {}", e),
-                    }));
-                    continue;
-                }
-            } else {
-                continue;
-            }
-        } else {
-            continue;
-        }
-
-        // Build the target URL from webhook_url or provider preset base_url
-        let target_url = if let Some(ref url) = webhook_url {
-            url.clone()
-        } else {
-            // Try to look up the preset base URL
-            let base: Option<String> = if let Some(ref preset) = provider_preset {
-                sqlx::query_scalar(
-                    "SELECT base_url FROM integration_provider_presets WHERE key = $1",
-                )
-                .bind(preset)
-                .fetch_optional(&state.db)
-                .await?
-                .unwrap_or_default()
-            } else {
-                None
-            };
-            if let Some(b) = base {
-                b
-            } else {
-                continue;
-            }
-        };
-
-        // Dispatch
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(15))
-            .build()
-            .map_err(|e| AppError::Internal(format!("HTTP client error: {}", e)))?;
-
-        let mut dispatch_req = client.post(&target_url).json(&json!({
-            "workflow_instance_id": id.to_string(),
-            "step_order": current_order,
-            "payload": req.get("payload")
-        }));
-
-        if let Some(ref key) = api_key {
-            dispatch_req = dispatch_req.header("Authorization", format!("Bearer {}", key));
-            dispatch_req = dispatch_req.header("x-api-key", key);
-        }
-
-        match dispatch_req.send().await {
-            Ok(resp) => {
-                let status = resp.status().as_u16();
-                let body: serde_json::Value = resp.json().await.unwrap_or(json!({"status": "ok"}));
-                crate::security::webhook_security::record_delivery(
-                    &state.db,
-                    &raw_target_id,
-                    &aid,
-                    &target_url,
-                    if (200..300).contains(&status) {
-                        "success"
-                    } else {
-                        "rejected"
-                    },
-                    Some(status as i32),
-                    None,
-                )
-                .await;
-                dispatch_results.push(json!({
-                    "target_id": target_id,
-                    "status": status,
-                    "response": body
-                }));
-            }
-            Err(e) => {
-                crate::security::webhook_security::record_delivery(
-                    &state.db,
-                    &raw_target_id,
-                    &aid,
-                    &target_url,
-                    "failed",
-                    None,
-                    Some(&e.to_string()),
-                )
-                .await;
-                dispatch_results.push(json!({
-                    "target_id": target_id,
-                    "status": "error",
-                    "error": e.to_string()
-                }));
-            }
-        }
-    }
-
+    // NOTE (kanban t_fa169e94): this handler used to fan out to every row of
+    // `workflow_step_integrations` bound to the step at `current_order` and dispatch one HTTP
+    // request per row. That table was retired in the same change. It had carried ZERO rows since
+    // migration 018 (its only writer, POST /api/v1/step-integrations, had no caller in any served
+    // root), and this read was the SECOND source of truth for "where does a step dispatch to",
+    // duplicating the mechanism the engine actually uses: a step dispatches through its own
+    // `workflow_steps.integration_target_id` column, read by the executor (src/execution.rs, the
+    // `integration_dispatch` / `integration` arm) and by POST /api/v1/integration-dispatch. The
+    // read is removed rather than left returning [] forever, so there is exactly one mechanism.
+    // See migrations/067_drop_orphaned_step_integrations.sql for the census.
     // Update the instance's current step
     if current_order > 0 {
         sqlx::query(
@@ -416,8 +259,7 @@ pub async fn advance_instance(
     }
 
     Ok(Json(json!({
-        "message": "Instance advanced",
-        "dispatch_results": dispatch_results
+        "message": "Instance advanced"
     })))
 }
 

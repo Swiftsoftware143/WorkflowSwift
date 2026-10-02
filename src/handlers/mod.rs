@@ -38,7 +38,6 @@ pub mod prospecting_handler;
 pub mod provider_keys_handler;
 pub mod rendition_handler;
 pub mod site_handler;
-pub mod step_integration_handler;
 pub mod surfaces_handler;
 pub mod tag_groups_handler;
 pub mod tickets_handler;

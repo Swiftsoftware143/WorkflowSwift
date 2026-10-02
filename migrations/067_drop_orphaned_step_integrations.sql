@@ -1,0 +1,41 @@
+-- 067_drop_orphaned_step_integrations.sql
+-- WorkflowSwift: DROP `workflow_step_integrations`, the per-step fan-out binding table 018 created.
+-- Decision card t_fa169e94 (the /step-integrations family had 0 callers while the SERVED user guide
+-- documented it). DECISION: RETIRE the family, and the table its only writer wrote.
+--
+-- WHY THIS IS RESIDUE AND NOT PLANNED SCHEMA (evidence /opt/swift/audits/t_fa169e94/):
+--   1. 0 ROWS, EVER. `SELECT count(*) FROM workflow_step_integrations` = 0 at HEAD. The only INSERT
+--      in the crate was handlers::step_integration_handler::create_step_integration, so no binding
+--      has ever existed and this table has never carried a dispatch.
+--   2. NO WRITER AT HEAD.  The four routes that fed it (GET/POST /api/v1/step-integrations,
+--      DELETE /api/v1/step-integrations/{id}, GET /api/v1/available-integrations) had 0 call sites
+--      in every served root — www/, www-app/, www-admin/, extensions/ AND the deployed
+--      /opt/swift/nginx/www*/workflowswift roots. The single grep hit anywhere was the DOC row
+--      www/docs/user-guide.md:142, i.e. the documented-but-unbuilt state, not a caller. That doc
+--      row is corrected in the same change; the routes and the handler are gone with it.
+--   3. NO READER AT HEAD EITHER.  The only reader was instance_handler::advance_instance (behind the
+--      Instances page's "Advance" button), and it could not be reached from the served shell at all:
+--      the SPA posts no body while the handler took a required `Json<serde_json::Value>`, so the
+--      served call answered `400 Failed to parse the request body as JSON` and the handler body
+--      never ran. Measured live, both arms, in 08-probe-PRE.txt. That read is removed in the same
+--      change rather than left returning [] forever.
+--   4. THE SURVIVING MECHANISM IS THE COLUMN.  A step dispatches through its own
+--      `workflow_steps.integration_target_id` — read by the executor (src/execution.rs, the
+--      `integration_dispatch` / `integration` arm) and by POST /api/v1/integration-dispatch — which
+--      is where the app's real dispatch config lives today: 1 `integration` step wired through the
+--      column, 5 integration_targets configured, and that route family is served and live. The
+--      guide now names that column instead of /step-integrations.
+--   5. NO INBOUND EDGE.  All three FKs on this table point OUT (workflow_steps,
+--      workflow_template_steps, integration_targets); no table outside references it and no view,
+--      routine, trigger or default in the database mentions it (pg_depend), so a plain non-CASCADE
+--      drop removes nothing else.
+--
+-- LIVE SAFETY
+--   * Idempotent: `DROP TABLE IF EXISTS`, a NO-OP on a fresh build that only ever ran 018's CREATE.
+--   * No BEGIN/COMMIT: the runner (src/db.rs) wraps each file in one transaction.
+--   * Recovery path: the exact live DDL (\d) and the FK constraints are dumped to
+--     /opt/swift/audits/t_fa169e94/23-table-DDL-PRE.txt, and the CREATE survives in
+--     018_step_integrations.sql with the two later ALTERs in 063_production_schema_columns.sql —
+--     so the empty table is two migrations away from returning.
+
+DROP TABLE IF EXISTS workflow_step_integrations;

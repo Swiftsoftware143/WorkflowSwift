@@ -372,22 +372,6 @@ pub fn create_router(state: AppState) -> Router {
         post(handlers::integration_dispatch_handler::dispatch_integration),
     );
 
-    let step_integration_routes = Router::new()
-        .route(
-            "/",
-            get(handlers::step_integration_handler::list_step_integrations)
-                .post(handlers::step_integration_handler::create_step_integration),
-        )
-        .route(
-            "/{id}",
-            delete(handlers::step_integration_handler::delete_step_integration),
-        );
-
-    let available_integration_routes = Router::new().route(
-        "/",
-        get(handlers::step_integration_handler::list_available_integrations),
-    );
-
     let invoice_routes = Router::new()
         .route("/", get(handlers::invoice_handler::list_invoices))
         .route("/{id}", get(handlers::invoice_handler::get_invoice));
@@ -769,8 +753,12 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/portfolio-companies", portfolio_routes)
         .nest("/integration-targets", integration_routes)
         .nest("/integration-dispatch", dispatch_routes)
-        .nest("/step-integrations", step_integration_routes)
-        .nest("/available-integrations", available_integration_routes)
+        // REMOVED (kanban t_fa169e94): `.nest("/step-integrations", step_integration_routes)` and
+        // `.nest("/available-integrations", available_integration_routes)` are gone with
+        // `handlers::step_integration_handler`. A step dispatches through its own
+        // `workflow_steps.integration_target_id` column — read by src/execution.rs and by
+        // POST /integration-dispatch above — which is the mechanism that carries the app's real
+        // dispatch config. See migrations/067_drop_orphaned_step_integrations.sql.
         .nest("/invoices", invoice_routes)
         .nest("/leads", leads_routes)
         .nest("/tag-groups", tag_groups_routes)
