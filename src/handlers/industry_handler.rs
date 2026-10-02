@@ -852,6 +852,38 @@ pub async fn get_dashboard_widgets(
 // its own key rule is exactly the drift that produced this class of defect; the single canonical
 // reader is `latest_widget_metric`, used by the widgets endpoint and by the executor's data-card step.
 
+/// Create a dashboard row for `aid` and return its id — the ONE auto-create path in this handler.
+///
+/// Both arms of `push_widget_data` used to write this as
+/// `let _ = sqlx::query(…).execute(&state.db);`. `execute` returns a future and nothing awaited
+/// it, so the INSERT never ran at all; the caller still got a freshly minted (phantom) id, and the
+/// very next statement — the `dashboard_data` INSERT — died on
+/// `dashboard_data_dashboard_id_fkey` (23503) and surfaced as `500 {"message":"Database error"}`
+/// with nothing in the response to explain it. Measured live 2026-10-02: a fresh tenant with no
+/// `dashboards` row got 500 on its FIRST widget push — i.e. the response-card arm of every
+/// generated n8n workflow — and a BEFORE-leg audit trigger on `dashboards` counted **0** executions
+/// of the auto-create, proving the statement never ran (kanban t_a9be6a86).
+///
+/// The `?` here fixes both halves of the acceptance: the insert is awaited (so it really happens)
+/// and its error is propagated (so a genuine failure is logged and answered as itself, instead of
+/// being blamed on the next statement's foreign key).
+async fn create_dashboard(
+    state: &AppState,
+    aid: Uuid,
+    name: &str,
+    description: &str,
+) -> ApiResult<Uuid> {
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO dashboards (id, aid, name, description) VALUES ($1, $2, $3, $4)")
+        .bind(id)
+        .bind(aid)
+        .bind(name)
+        .bind(description)
+        .execute(&state.db)
+        .await?;
+    Ok(id)
+}
+
 /// POST /api/v1/dashboard/push-widget-data — push data for a specific widget
 /// This is the universal endpoint used by n8n workflows, external API calls,
 /// and browser automation scripts to push KPI data to the dashboard.
@@ -896,41 +928,30 @@ pub async fn push_widget_data(
                 .unwrap_or_else(|| industry_slug.to_string());
 
         let name = format!("{} Dashboard", industry_name);
-        sqlx::query_scalar("SELECT id FROM dashboards WHERE aid = $1 AND name = $2 LIMIT 1")
+        match sqlx::query_scalar("SELECT id FROM dashboards WHERE aid = $1 AND name = $2 LIMIT 1")
             .bind(aid)
             .bind(&name)
             .fetch_optional(&state.db)
             .await?
-            .unwrap_or_else(|| {
-                // Auto-create if it doesn't exist
-                let id = Uuid::new_v4();
-                let _ = sqlx::query(
-                r#"INSERT INTO dashboards (id, aid, name, description) VALUES ($1, $2, $3, $4)"#
-            )
-            .bind(id)
-            .bind(aid)
-            .bind(&name)
-            .bind(format!("Your {} dashboard", industry_name))
-            .execute(&state.db);
-                id
-            })
+        {
+            Some(id) => id,
+            // Auto-create if it doesn't exist
+            None => {
+                let description = format!("Your {} dashboard", industry_name);
+                create_dashboard(&state, aid, &name, &description).await?
+            }
+        }
     } else {
-        sqlx::query_scalar(
-            "SELECT id FROM dashboards WHERE aid = $1 ORDER BY created_at DESC LIMIT 1"
+        match sqlx::query_scalar(
+            "SELECT id FROM dashboards WHERE aid = $1 ORDER BY created_at DESC LIMIT 1",
         )
         .bind(aid)
         .fetch_optional(&state.db)
         .await?
-        .unwrap_or_else(|| {
-            let id = Uuid::new_v4();
-            let _ = sqlx::query(
-                r#"INSERT INTO dashboards (id, aid, name, description) VALUES ($1, $2, 'Default', 'Auto-created')"#
-            )
-            .bind(id)
-            .bind(aid)
-            .execute(&state.db);
-            id
-        })
+        {
+            Some(id) => id,
+            None => create_dashboard(&state, aid, "Default", "Auto-created").await?,
+        }
     };
 
     let data_id = Uuid::new_v4();
