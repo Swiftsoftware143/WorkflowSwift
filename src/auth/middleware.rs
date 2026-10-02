@@ -3,45 +3,27 @@ use axum::{
     middleware::Next,
     response::Response,
 };
-use std::sync::OnceLock;
 
 use super::models::Claims;
 use crate::error::AppError;
 use crate::AppState;
 
-static PUBLIC_PATHS: OnceLock<Vec<String>> = OnceLock::new();
-
-fn is_public_path(path: &str) -> bool {
-    let paths = PUBLIC_PATHS.get_or_init(|| {
-        vec![
-            "/api/v1/auth/login".to_string(),
-            "/api/v1/auth/register".to_string(),
-            "/api/v1/industries".to_string(),
-            "/api/v1/auth/forgot-password".to_string(),
-            "/api/v1/auth/reset-password".to_string(),
-            "/api/v1/health".to_string(),
-            // The admin-sync name is deliberately NOT here (kanban t_b551a9a5): WorkflowSwift
-            // registers no such route — the app's only portfolio-sync is the internal,
-            // x-internal-key guarded POST /api/v1/internal/portfolio-sync (src/routes.rs) — and
-            // no caller asks for an admin one (CoreSwift's hub posts to the internal variant; the
-            // admin console's Portfolio Companies panel calls /admin/portfolio-companies; 0 n8n
-            // workflows, 0 scripts, 0 served shells). A PUBLIC_PATHS entry is an auth SKIP, so an
-            // unused one is a trap, not a placeholder.
-            "/api/v1/plans".to_string(),
-            "/api/v1/plans/".to_string(),
-        ]
-    });
-
-    if paths.contains(&path.to_string()) {
-        return true;
-    }
-
-    if path.starts_with("/api/v1/industries/") && path.ends_with("/templates") {
-        return true;
-    }
-
-    false
-}
+// There is deliberately NO path allowlist in this module (kanban t_73f6724d).
+//
+// `auth_middleware` is layered on the `/api/v1`-nested protected router, so axum has already
+// stripped the nest prefix from `req.uri().path()` before this layer runs: a live request to
+// `/api/v1/plans` is handed `path=/plans` (measured 2026-10-02 — the AUTH_MIDDLEWARE log line).
+// An earlier revision carried a list of `/api/v1/...` "public" paths plus an
+// `industries/…/templates` prefix rule; every entry was unreachable, so the skip branch was dead
+// code that nonetheless READ as a security control. Two ways that hurt: a future lane can add an
+// entry believing it opens a route, or "fix" the comparison to be prefix-aware and silently flip
+// `/api/v1/plans` from 401-anon to public.
+//
+// Deleted rather than repaired, because the deletion is behaviour-neutral (the list provably never
+// matched anything the middleware is handed) while the repair is not. The app's one public surface
+// is the `public_routes` sub-router in `src/routes.rs`, which carries no auth layer at all: a route
+// is public by being registered THERE, never by appearing in a list here. The pin test below fails
+// if an auth-skip list is added back.
 
 pub async fn auth_middleware(
     State(state): State<AppState>,
@@ -51,10 +33,6 @@ pub async fn auth_middleware(
     let path = req.uri().path().to_string();
 
     tracing::info!("AUTH_MIDDLEWARE: path={}", path);
-
-    if is_public_path(&path) {
-        return Ok(next.run(req).await);
-    }
 
     tracing::debug!(
         "auth_middleware: checking Authorization header for {}",
@@ -142,47 +120,28 @@ pub fn create_token(claims: &Claims, secret: &str) -> Result<String, AppError> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_public_path;
-
-    /// The list as declared, plus its one prefix rule: the paths the middleware is *written* to
-    /// treat as public.
+    /// No path allowlist may live in this module (kanban t_73f6724d).
+    ///
+    /// MEASURED 2026-10-02, live: axum strips the `/api/v1` nest prefix before this layer's router
+    /// runs, so the middleware is handed `/plans`, never `/api/v1/plans` (the live AUTH_MIDDLEWARE
+    /// log line for a request to /api/v1/plans reads `path=/plans`), and that route answers 401 anon
+    /// yet 200 with a token. A prefix-qualified "public path" list here is therefore unreachable —
+    /// one existed and was deleted as dead code that read as a security control. The app's only
+    /// public surface is the `public_routes` sub-router (src/routes.rs), which carries no auth layer.
+    /// Adding an auth-skip list back here must be a test failure, not a silent auth widening.
     #[test]
-    fn declared_public_paths_and_prefix_rule_match() {
-        assert!(is_public_path("/api/v1/auth/login"));
-        assert!(is_public_path("/api/v1/auth/register"));
-        assert!(is_public_path("/api/v1/auth/forgot-password"));
-        assert!(is_public_path("/api/v1/auth/reset-password"));
-        assert!(is_public_path("/api/v1/industries"));
-        assert!(is_public_path("/api/v1/health"));
-        assert!(is_public_path("/api/v1/plans"));
-        assert!(is_public_path("/api/v1/industries/abc/templates"));
-    }
-
-    /// Tenant surfaces, and the dead admin-sync name this card removed, stay behind the
-    /// credential check — in both spellings, because `is_public_path` is asked about whatever
-    /// the router sees (kanban t_b551a9a5).
-    #[test]
-    fn tenant_surfaces_are_not_public() {
-        assert!(!is_public_path("/api/v1/workflows"));
-        assert!(!is_public_path("/api/v1/instances"));
-        assert!(!is_public_path("/api/v1/admin/portfolio-companies"));
-        assert!(!is_public_path("/api/v1/n8n/ai-action"));
-        assert!(!is_public_path("/api/v1/admin/portfolio-sync"));
-        assert!(!is_public_path("/admin/portfolio-sync"));
-    }
-
-    /// MEASURED GAP (kanban t_b551a9a5, 2026-10-02). axum strips the `/api/v1` nest prefix
-    /// before the router's layers run, so this middleware is handed `/plans`, never
-    /// `/api/v1/plans`: live, the AUTH_MIDDLEWARE log line for a request to /api/v1/plans reads
-    /// `path=/plans`, and that route answers 401 anon yet 200 with a token. Every
-    /// prefix-qualified entry above — and the `/api/v1/industries/…/templates` rule — is
-    /// therefore unreachable, and the app's real public surface is the `public_routes`
-    /// sub-router in src/routes.rs. Pinned here so the next lane fixes the list deliberately
-    /// (its own card) instead of re-adding dead entries.
-    #[test]
-    fn prefixed_entries_never_match_what_the_middleware_is_handed() {
-        assert!(!is_public_path("/plans"));
-        assert!(!is_public_path("/industries"));
-        assert!(!is_public_path("/health"));
+    fn no_path_allowlist_in_the_auth_middleware() {
+        let src = include_str!("middleware.rs");
+        // Built at run time so neither needle can match its own source text.
+        let allowlist = concat!("PUBLIC", "_PATHS");
+        let skip_branch = concat!("fn ", "is_public_path");
+        assert!(
+            !src.contains(allowlist),
+            "an auth-skip allowlist is back in the middleware"
+        );
+        assert!(
+            !src.contains(skip_branch),
+            "an auth-skip branch is back in the middleware"
+        );
     }
 }
