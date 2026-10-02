@@ -414,18 +414,18 @@ pub fn create_router(state: AppState) -> Router {
                 .delete(handlers::tickets_handler::delete),
         );
 
-    let email_templates_routes = Router::new()
-        .route(
-            "/",
-            get(handlers::email_templates_handler::list)
-                .post(handlers::email_templates_handler::create),
-        )
-        .route(
-            "/{id}",
-            get(handlers::email_templates_handler::get)
-                .put(handlers::email_templates_handler::update)
-                .delete(handlers::email_templates_handler::delete),
-        );
+    // REMOVED (kanban t_00e7b709): the `/api/v1/email-templates` family
+    // (`handlers::email_templates_handler`) had no working arm. Its INSERT omitted the NOT NULL
+    // `template_type`/`subject`, so every authenticated caller got `500 Database error` and no row
+    // (rehearsed rolled back on the live DB: `23502`). Its reads decoded `aid` as Uuid while
+    // migration 070 made the system scope `aid IS NULL`, so list answered `200 {"items":[]}` over a
+    // table with rows and get/put answered 500; its DELETE was unguarded and removed a system-wide
+    // template for ANY authenticated user. `src/email.rs` resolves templates globally
+    // (`template_type = $1 AND (is_default = true OR is_default IS NULL)`), so there is no
+    // per-account email-template feature to serve — the one create path is the super-admin-gated
+    // `/api/v1/admin/email-templates` family in `handlers::admin_settings_handler`, which is what
+    // the served admin guide documents (the console's Communications -> Email Templates panel that
+    // called this family was removed in the same change).
 
     let webhooks_routes = Router::new()
         .route(
@@ -763,7 +763,6 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/leads", leads_routes)
         .nest("/tag-groups", tag_groups_routes)
         .nest("/tickets", tickets_routes)
-        .nest("/email-templates", email_templates_routes)
         .nest("/webhooks", webhooks_routes)
         .nest("/surfaces", surfaces_routes)
         .nest("/brand-monitors", brand_monitor_routes)

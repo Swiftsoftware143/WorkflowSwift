@@ -223,6 +223,16 @@ credits per call.
   `tag_groups`, migration 054) and `/api/v1/webhooks` (Communications -> Webhooks, `webhooks`,
   migration 055). The `webhooks` table is the tenant's own endpoint registry — it is not the
   inbound `stripe`/`paypal` receivers above, whose event log is `payment_webhook_events`.
+- Email templates are **platform-wide, not per-account**: the only create/read/update/delete path is
+  `/api/v1/admin/email-templates` (Admin -> Email Templates, super-admin only — the token must carry
+  `perm_is_super_admin`), and `src/email.rs` resolves a template with no `aid` filter
+  (`template_type = $1 AND (is_default = true OR is_default IS NULL)`). The tenant-scoped
+  `/api/v1/email-templates` family and its Communications -> Email Templates panel were **deleted**
+  (kanban t_00e7b709): every arm was dead — its INSERT omitted the NOT NULL
+  `template_type`/`subject`, so it answered `500 Database error` for every authenticated caller and
+  wrote no row; its reads decoded the NULL system `aid` as a UUID, so list answered
+  `200 {"items":[],"count":0}` over a table with rows and get/put answered 500; and its DELETE
+  removed a system-wide template for any authenticated caller. Do not re-add a second create path.
 - Invoices: `/api/v1/invoices` and `/api/v1/invoices/{id}` read `invoices`; `amount` is
   `NUMERIC(10,2)` and is returned as a decimal **string** (`amount::text`), like `plan_tiers`
   prices — sqlx cannot decode NUMERIC into a JSON value.

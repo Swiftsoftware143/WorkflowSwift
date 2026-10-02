@@ -161,7 +161,7 @@ const tabs=[
   {id:'integrations',label:'🔌 Integrations',subs:['My Integrations','Integration Targets','Destination Values','Provider Keys','API Keys','n8n Proxy','Bridge']},
   {id:'support',label:'🎫 Support',subs:['Tickets']},
   {id:'profile',label:'👤 Profile & Account',subs:['My Profile','Team','Plans & Credits','Invoices','Payments','Checkout Sessions']},
-  {id:'comms',label:'📧 Communications',subs:['Email Templates','Webhooks']},
+  {id:'comms',label:'📧 Communications',subs:['Webhooks']},
   {id:'admin',label:'🛠️ Admin',subs:['Usage','Settings','Users','Portfolio Companies','Plans','Surfaces','Email Templates','Industry Sources','Site Config']},
 ];
 
@@ -224,8 +224,14 @@ function content(){
     else if(s==='payments')renderCRUD(c,'payments','Payment Provider',['provider_type','is_active'],'/payment-providers');
     else if(s==='checkout-sessions')renderCheckoutSessions(c);
   }else if(t==='comms'){
-    if(s==='email-templates')renderCRUD(c,'email-templates','Email Template',['name','subject','template_type'],'/email-templates');
-    else if(s==='webhooks')renderCRUD(c,'webhooks','Webhook',['name','url','is_active'],'/webhooks',['name','url','is_active']);
+    // The Communications -> Email Templates panel is GONE (kanban t_00e7b709). It called the
+    // tenant-scoped `/email-templates` family, and every arm of that family was dead: create
+    // answered 500 (its INSERT omitted the NOT NULL template_type), list answered
+    // {"items":[],"count":0} over a table with rows, get/put answered 500, and its DELETE removed a
+    // system-wide template for ANY authenticated caller. Templates are platform-wide, not
+    // per-account (src/email.rs resolves them with no `aid` filter), and the super-admin-gated
+    // Admin -> Email Templates panel (`/admin/email-templates`) is the one surface for them.
+    if(s==='webhooks')renderCRUD(c,'webhooks','Webhook',['name','url','is_active'],'/webhooks',['name','url','is_active']);
   }else if(t==='admin'){
     if(s==='usage')renderAdminUsage(c);
     else if(s==='settings')renderAdminSettings(c);

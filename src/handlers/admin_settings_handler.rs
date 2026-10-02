@@ -1346,7 +1346,9 @@ pub async fn admin_create_email_template(
     // `email_templates_aid_fkey` (ON DELETE CASCADE), so a nil-UUID bind would now raise 23503 and
     // NULL is the value the column is meant to hold. The row this writes sits in the same place the
     // partial unique index always put it: COALESCE(aid, nil-uuid) over `aid IS NULL AND is_default`.
-    // `email_templates_handler::create` binds the same value.
+    // The sibling `email_templates_handler::create` that bound the same value is GONE (kanban
+    // t_00e7b709): its INSERT omitted `template_type`/`subject`, so it never wrote a row, and this
+    // super-admin-gated family is now the app's ONLY email-template create path.
     let aid = None::<Uuid>;
     sqlx::query(
         r#"INSERT INTO email_templates (id, aid, name, subject, body, html_body, template_type, is_html, is_default)
