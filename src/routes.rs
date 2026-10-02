@@ -867,6 +867,13 @@ pub fn create_router(state: AppState) -> Router {
             "/internal/portfolio-companies",
             post(handlers::portfolio_handler::internal_create_portfolio_company),
         )
+        // The mirror's own failure report (kanban t_07c33d98). Self-authenticating with
+        // X-Internal-Key, exactly like the routes around it: a failed graph run has no user
+        // token to present. Reads a body, so it belongs in THIS sub-router.
+        .route(
+            "/n8n/run-outcome",
+            post(handlers::instance_handler::n8n_run_outcome),
+        )
         .route(
             "/internal/portfolio-sync",
             post(handlers::portfolio_sync_handler::portfolio_sync_internal),

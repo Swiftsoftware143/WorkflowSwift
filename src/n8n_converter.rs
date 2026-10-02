@@ -25,6 +25,15 @@
 //! `passthrough_node` whose notes name the capability the app does not have. The live census that
 //! proves the remaining set is served lives in `/opt/swift/audits/t_642b6894/`, and
 //! `app_callback_census_is_generated_from_the_converter` regenerates its input from this file.
+//!
+//! Every graph also carries a FAILURE ARM (kanban t_07c33d98, arm (b)): an `Error Trigger` node
+//! wired to a `Report Failure` HTTP node. n8n re-runs the same workflow in `mode: "error"` when
+//! any node fails, so a failed external run of a mirrored workflow POSTs its own failure to
+//! `POST /api/v1/n8n/run-outcome` and the app records a `failed` row where the tenant console
+//! already lists runs. The trigger stays async — `responseMode` is deliberately NOT
+//! `responseNode`: a graph containing a `wait`/`delay`/`manual` step would park the caller for
+//! up to the wait's `maxTime`. The evidence for both the mechanism and that trade-off is in
+//! `/opt/swift/audits/t_07c33d98/`.
 
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -235,6 +244,13 @@ fn harden_callback_nodes(nodes: &mut [Value], callback_base_url: &str) {
         if !is_callback {
             continue;
         }
+        // The failure arm authenticates with the machine key, not the caller's bearer: its run
+        // starts at the Error Trigger, so `$('Webhook')` was never executed and CALLBACK_AUTH_EXPR
+        // would throw on exactly the path that exists to report a failure. Leave its own headers
+        // (X-Internal-Key) alone — `failure_arm_nodes` already set authentication: none.
+        if carries_internal_key(node) {
+            continue;
+        }
         if let Some(obj) = node.as_object_mut() {
             obj.insert("onError".to_string(), json!("stopWorkflow"));
         }
@@ -268,11 +284,111 @@ fn harden_callback_nodes(nodes: &mut [Value], callback_base_url: &str) {
     }
 }
 
+/// The name of the one node in a generated graph that reports a FAILED run back to this app
+/// (kanban t_07c33d98, arm (b)).
+pub const FAILURE_REPORT_NODE: &str = "Report Failure";
+
+/// The error-arm trigger's node name. n8n runs a workflow's Error Trigger nodes — and the rest
+/// of that workflow — when an execution fails (measured, see `failure_arm_nodes`).
+pub const ERROR_TRIGGER_NODE: &str = "Error Trigger";
+
+/// The header the failure-report node presents: this app's machine credential, NOT the caller's
+/// bearer. On the failure arm the run starts at the Error Trigger, so `$('Webhook')` was never
+/// executed and `CALLBACK_AUTH_EXPR` would throw on exactly the path it exists for.
+pub const INTERNAL_KEY_HEADER: &str = "X-Internal-Key";
+
+/// Does this node carry the machine key? Used by `harden_callback_nodes` to leave the failure
+/// report's own headers alone — and by the unit tests, so the marker cannot drift.
+fn carries_internal_key(node: &Value) -> bool {
+    node.get("parameters")
+        .and_then(|p| p.get("headerParameters"))
+        .and_then(|h| h.get("parameters"))
+        .and_then(|p| p.as_array())
+        .map(|hs| {
+            hs.iter()
+                .any(|h| h.get("name").and_then(|n| n.as_str()) == Some(INTERNAL_KEY_HEADER))
+        })
+        .unwrap_or(false)
+}
+
+/// The failure arm: `Error Trigger → Report Failure`, wired to each other and to nothing else.
+///
+/// Measured on the fleet's n8n 2.34.6 before this was written
+/// (`/opt/swift/audits/t_07c33d98/10-error-workflow-mechanism.txt`): a failed execution whose
+/// workflow contains an `n8n-nodes-base.errorTrigger` node is re-run by n8n itself in
+/// `mode: "error"` starting at that node, and its output IS n8n's `workflowErrorData`:
+///
+/// ```text
+/// {"execution":{"id":"52","url":"…/executions/52",
+///               "error":{"message":"The service refused the connection - perhaps it is offline",
+///                        "httpCode":"ECONNREFUSED","node":{"name":"Boom"},…},
+///               "lastNodeExecuted":"Boom","mode":"webhook","executionContext":{…}},
+///  "workflow":{"id":"<n8n id>","name":"WFS <uuid>"}}
+/// ```
+///
+/// That is deliberately preferred over the two other shapes:
+///  * a separate error workflow (`settings.errorWorkflow`) — n8n refuses it unless that second
+///    workflow is ACTIVE (`Workflow "<id>" is not active and cannot be executed`, read out of
+///    the container's own log) and it needs one shared workflow provisioned out-of-band, so the
+///    report would not travel with the graph it describes;
+///  * `responseMode: "responseNode"` — it would make the CALLER wait for the whole run, and a
+///    graph containing `wait`/`delay`/`manual` parks it for up to the wait's `maxTime`.
+///
+/// `onError: "continueRegularOutput"` on the report node keeps a broken report from ever
+/// cascading: the run already failed, and this node IS the delivery of that fact.
+fn failure_arm_nodes(
+    callback_base_url: &str,
+    internal_sync_key: &str,
+    y: i32,
+) -> (Vec<Value>, Vec<(String, Value)>) {
+    let trigger = json!({
+        "id": "error_trigger",
+        "name": ERROR_TRIGGER_NODE,
+        "type": "n8n-nodes-base.errorTrigger",
+        "typeVersion": 1,
+        "position": [250, y],
+        "parameters": {}
+    });
+    let report = json!({
+        "id": "failure_report",
+        "name": FAILURE_REPORT_NODE,
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [450, y],
+        "onError": "continueRegularOutput",
+        "parameters": {
+            "method": "POST",
+            "url": callback_url(callback_base_url, "n8n/run-outcome"),
+            "sendBody": true,
+            "specifyBody": "json",
+            "jsonBody": "={{ JSON.stringify($json) }}",
+            "authentication": "none",
+            "sendHeaders": true,
+            "headerParameters": {
+                "parameters": [
+                    { "name": INTERNAL_KEY_HEADER, "value": internal_sync_key }
+                ]
+            },
+            "options": { "timeout": 10000 }
+        }
+    });
+    let mut conn = serde_json::Map::new();
+    conn.insert(
+        "main".to_string(),
+        json!([[{ "node": "failure_report", "type": "main", "index": 0 }]]),
+    );
+    (
+        vec![trigger, report],
+        vec![("error_trigger".to_string(), Value::Object(conn))],
+    )
+}
+
 pub fn convert_steps_to_n8n(
     steps: &[Value],
     aid: Uuid,
     workflow_id: Uuid,
     callback_base_url: &str,
+    internal_sync_key: &str,
 ) -> N8nWorkflow {
     let mut nodes: Vec<Value> = Vec::new();
     let mut connections_map = serde_json::Map::new();
@@ -474,6 +590,16 @@ pub fn convert_steps_to_n8n(
         }
     });
     nodes.push(respond_node);
+
+    // ===== Failure arm: Error Trigger → Report Failure =====
+    // Separate row below the main chain, so a failed run reports itself where the tenant
+    // console already lists runs. See `failure_arm_nodes`.
+    let (failure_nodes, failure_conns) =
+        failure_arm_nodes(callback_base_url, internal_sync_key, 900);
+    nodes.extend(failure_nodes);
+    for (src_id, conn) in failure_conns {
+        connections_map.insert(src_id, conn);
+    }
 
     // Collect all nodes from user steps
     nodes.extend(step_nodes);
@@ -1401,6 +1527,9 @@ mod tests {
 
     const BASE: &str = "https://app.example.com";
 
+    /// Stands in for INTERNAL_SYNC_KEY: the machine credential the failure arm presents.
+    const KEY: &str = "internal-sync-key-for-tests";
+
     fn steps() -> Vec<Value> {
         // One step of every arm that builds an IF node, a callback node or a tenant-URL node.
         vec![
@@ -1423,7 +1552,7 @@ mod tests {
         // hardcoded UUID literals anywhere in src/ (the fleet has been burned by scripts that
         // hardcode a tenant id), and the converter's output does not depend on WHICH uuid it is
         // given — every assertion below is about node shape.
-        convert_steps_to_n8n(&steps(), Uuid::new_v4(), Uuid::new_v4(), BASE)
+        convert_steps_to_n8n(&steps(), Uuid::new_v4(), Uuid::new_v4(), BASE, KEY)
     }
 
     fn is_app_callback(node: &Value) -> bool {
@@ -1491,7 +1620,9 @@ mod tests {
         for node in &g
             .nodes
             .iter()
-            .filter(|n| is_app_callback(n))
+            // The failure-report arm is the one deliberate exception: it presents the machine
+            // key, not the caller's bearer (see the failure-arm tests below).
+            .filter(|n| is_app_callback(n) && !carries_internal_key(n))
             .collect::<Vec<_>>()
         {
             assert_eq!(
@@ -1783,11 +1914,14 @@ mod tests {
     fn app_callback_census_is_generated_from_the_converter() {
         // Mounted for real; verdicts in `10-callback-census-post.txt`. A new arm that adds a path
         // here has to add the route first.
-        const SERVED: [&str; 4] = [
+        const SERVED: [&str; 5] = [
             "credits/balance",
             "credits/deduct",
             "dashboard/push-widget-data",
             "renditions",
+            // The failure arm's report route (kanban t_07c33d98): route and converter land
+            // together, and this row is what would notice if either side moved alone.
+            "n8n/run-outcome",
         ];
 
         let mut rows: Vec<Value> = Vec::new();
@@ -1797,7 +1931,7 @@ mod tests {
                 "name": format!("Step {step_type}"),
                 "config": config,
             });
-            let g = convert_steps_to_n8n(&[step], Uuid::new_v4(), Uuid::new_v4(), BASE);
+            let g = convert_steps_to_n8n(&[step], Uuid::new_v4(), Uuid::new_v4(), BASE, KEY);
             for node in g.nodes.iter().filter(|n| is_app_callback(n)) {
                 rows.push(json!({
                     "step_type": step_type,
@@ -1910,7 +2044,7 @@ mod tests {
             "log",
         ] {
             let step = json!({"step_type": st, "name": format!("Step {st}"), "config": {}});
-            let g = convert_steps_to_n8n(&[step], Uuid::new_v4(), Uuid::new_v4(), BASE);
+            let g = convert_steps_to_n8n(&[step], Uuid::new_v4(), Uuid::new_v4(), BASE, KEY);
             let mine: Vec<&Value> = g
                 .nodes
                 .iter()
@@ -1936,5 +2070,89 @@ mod tests {
                 "{st}: the pass-through must name what is missing: {node}"
             );
         }
+    }
+
+    /// The failure arm (kanban t_07c33d98, arm (b)): every generated graph reports its OWN
+    /// failure, and it presents the MACHINE credential — never the caller's bearer, which
+    /// `harden_callback_nodes` adds to every node under this app's origin. On the error re-run
+    /// the run STARTS at the Error Trigger, so `$('Webhook')` was never executed and that
+    /// expression is precisely what would throw on the one path that has to work.
+    #[test]
+    fn the_failure_arm_reports_with_the_machine_key_not_the_callers_bearer() {
+        let g = graph();
+        let url = format!("{BASE}/api/v1/n8n/run-outcome");
+        let reports: Vec<&Value> = g
+            .nodes
+            .iter()
+            .filter(|n| n["parameters"]["url"].as_str().unwrap_or("") == url)
+            .collect();
+        assert_eq!(
+            reports.len(),
+            1,
+            "exactly one failure report per graph: {reports:?}"
+        );
+        let report = reports[0];
+        assert_eq!(report["name"], FAILURE_REPORT_NODE);
+        assert_eq!(report["type"], "n8n-nodes-base.httpRequest");
+        assert_eq!(report["parameters"]["method"], "POST");
+        assert_eq!(report["parameters"]["authentication"], "none");
+        // A broken report must never cascade: the run already failed, and this node IS the
+        // delivery of that fact. `onError` is a NODE property in n8n, not a parameter.
+        assert_eq!(report["onError"], "continueRegularOutput");
+        assert_eq!(header_names(report), vec![INTERNAL_KEY_HEADER.to_string()]);
+        let sent = report["parameters"]["headerParameters"]["parameters"][0]["value"]
+            .as_str()
+            .unwrap_or("");
+        assert_eq!(sent, KEY, "the machine key, verbatim");
+        let serialized = report.to_string();
+        assert!(
+            !serialized.contains("$('Webhook')"),
+            "the failure arm must not read the Webhook item — it was never executed: {report}"
+        );
+        // n8n's own workflowErrorData, forwarded verbatim: that IS the error and the node.
+        assert_eq!(
+            report["parameters"]["jsonBody"],
+            "={{ JSON.stringify($json) }}"
+        );
+    }
+
+    /// The failure arm is wired to itself and to nothing else, and the caller contract stays
+    /// ASYNC — `responseMode: responseNode` is the arm this card rejected (a graph containing a
+    /// `wait`/`delay`/`manual` step would park the caller for up to the wait's `maxTime`).
+    #[test]
+    fn the_error_trigger_drives_only_the_failure_report_and_the_trigger_stays_async() {
+        let g = graph();
+        let triggers: Vec<&Value> = g
+            .nodes
+            .iter()
+            .filter(|n| n["type"] == "n8n-nodes-base.errorTrigger")
+            .collect();
+        assert_eq!(triggers.len(), 1, "one Error Trigger per graph");
+        assert_eq!(triggers[0]["name"], ERROR_TRIGGER_NODE);
+
+        let conns = g.connections.as_object().expect("connections object");
+        let driven = conns
+            .get(ERROR_TRIGGER_NODE)
+            .expect("the Error Trigger drives the report node");
+        assert_eq!(driven["main"][0][0]["node"], FAILURE_REPORT_NODE);
+        assert_eq!(driven["main"].as_array().unwrap().len(), 1);
+        assert!(
+            !conns.contains_key(FAILURE_REPORT_NODE),
+            "the report node is a leaf: {conns:?}"
+        );
+
+        let webhook = g
+            .nodes
+            .iter()
+            .find(|n| n["type"] == "n8n-nodes-base.webhook")
+            .expect("webhook trigger");
+        assert_ne!(
+            webhook["parameters"]["responseMode"], "responseNode",
+            "the caller contract must stay async (t_07c33d98 decision)"
+        );
+        assert!(
+            webhook["parameters"]["responseMode"].is_null(),
+            "no responseMode at all: n8n's onReceived default answers 200 immediately"
+        );
     }
 }

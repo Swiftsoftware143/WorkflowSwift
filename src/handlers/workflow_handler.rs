@@ -403,8 +403,13 @@ async fn mirror_to_n8n(
 
     let callback_base_url = std::env::var("CALLBACK_BASE_URL")
         .unwrap_or_else(|_| "http://workflowswift:8085".to_string());
-    let n8n_wf =
-        n8n_converter::convert_steps_to_n8n(&step_values, aid, workflow.id, &callback_base_url);
+    let n8n_wf = n8n_converter::convert_steps_to_n8n(
+        &step_values,
+        aid,
+        workflow.id,
+        &callback_base_url,
+        state.config.internal_sync_key.as_str(),
+    );
     let n8n_json = n8n_converter::to_n8n_json(&n8n_wf);
 
     // n8n's public REST API (the one an API key works against). The mirror is an

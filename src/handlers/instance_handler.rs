@@ -454,3 +454,239 @@ pub async fn decide_instance_step(
         "warnings": warnings,
     })))
 }
+
+/// POST /api/v1/n8n/run-outcome
+///
+/// The MIRROR's own failure report (kanban t_07c33d98, arm (b)).
+///
+/// A generated `WFS …` graph is triggered by whoever the tenant pointed at its webhook, so the
+/// caller is not this app and no tenant token exists on the failure path. n8n's webhook trigger
+/// answers `200 {"message":"Workflow was started"}` in `onReceived` mode, and the app wrote
+/// nothing — a failed run of a mirrored workflow was visible only inside n8n. The graph now
+/// carries an `Error Trigger → Report Failure` arm (`n8n_converter::failure_arm_nodes`); n8n
+/// re-runs that same workflow in `mode: "error"` on any failure and this route is what the
+/// report node calls, so the failure lands as a row in `workflow_instances` — the list
+/// `GET /api/v1/instances` serves and the console's Instances view renders.
+///
+/// AUTH: machine caller only — `X-Internal-Key: <INTERNAL_SYNC_KEY>`, the same header
+/// `POST /api/v1/incoming` and the `internal/*` routes use. Deliberately NOT a JWT: the run was
+/// triggered externally, so there is no user token to present. An unset key refuses every
+/// caller (fail closed) rather than accepting an empty header.
+///
+/// Body — n8n's own `workflowErrorData`, forwarded verbatim by the report node:
+/// ```json
+/// { "execution": { "id": "52", "url": "…",
+///                  "error": { "message": "…", "httpCode": "ECONNREFUSED",
+///                             "node": { "name": "Deduct Credit" } },
+///                  "lastNodeExecuted": "Deduct Credit", "mode": "webhook" },
+///   "workflow": { "id": "<n8n workflow id>", "name": "WFS <workflow uuid>" } }
+/// ```
+///
+/// Idempotent per (workflow, n8n execution id): n8n can deliver the same failure twice (a retry,
+/// or a re-run of the error arm), and a second delivery must not add a second run row.
+pub async fn n8n_run_outcome(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> ApiResult<impl IntoResponse> {
+    let presented = headers
+        .get("x-internal-key")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if state.config.internal_sync_key.is_empty() || presented != state.config.internal_sync_key {
+        return Err(AppError::Unauthorized);
+    }
+
+    let n8n_workflow_id = body
+        .pointer("/workflow/id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let n8n_name = body
+        .pointer("/workflow/name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let execution_id = body
+        .pointer("/execution/id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let execution_url = body
+        .pointer("/execution/url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let failing_node = body
+        .pointer("/execution/error/node/name")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            body.pointer("/execution/lastNodeExecuted")
+                .and_then(|v| v.as_str())
+        })
+        .unwrap_or("")
+        .to_string();
+    let mode = body
+        .pointer("/execution/mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    // n8n's NodeApiError carries TWO sentences: its own `message` ("Bad request - please check
+    // your parameters") and `description`, which is what the failing node's HTTP response body
+    // actually said. The tenant needs the second one — measured live: the failing
+    // `/credits/deduct` answered `Insufficient credits. Need 2, have 1. Purchase more credits.`
+    // into `description` while `message` stayed generic.
+    let message = body
+        .pointer("/execution/error/description")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            body.pointer("/execution/error/message")
+                .and_then(|v| v.as_str())
+        })
+        .unwrap_or("n8n reported a failed run without a message")
+        .to_string();
+    let n8n_message = body
+        .pointer("/execution/error/message")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let http_code = body
+        .pointer("/execution/error/httpCode")
+        .map(|v| {
+            v.as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| v.to_string())
+        })
+        .unwrap_or_default();
+
+    // The mirror names its copy `WFS <workflow uuid>` (n8n has no natural key for an import),
+    // so the uuid in the name is the app's own workflow id. A name that does not parse is a
+    // graph the app did not generate in its current shape — record nothing rather than guess.
+    let wf_id = n8n_name
+        .strip_prefix("WFS ")
+        .and_then(|s| Uuid::parse_str(s.trim()).ok())
+        .ok_or_else(|| {
+            AppError::NotFound(format!(
+                "no WorkflowSwift workflow is named by this n8n run ({})",
+                n8n_name
+            ))
+        })?;
+
+    let workflow: Option<(Uuid, String, Uuid)> =
+        sqlx::query_as("SELECT id, name, aid FROM workflows WHERE id = $1")
+            .bind(wf_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let (workflow_id, workflow_name, aid) = workflow.ok_or_else(|| {
+        AppError::NotFound(format!(
+            "workflow {} has no row in this app (the n8n mirror outlived its source)",
+            wf_id
+        ))
+    })?;
+
+    // Idempotence: n8n can deliver the same failure more than once.
+    if !execution_id.is_empty() {
+        let existing: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM workflow_instances WHERE workflow_id = $1 AND n8n_execution_id = $2",
+        )
+        .bind(workflow_id)
+        .bind(&execution_id)
+        .fetch_optional(&state.db)
+        .await?;
+        if let Some(instance_id) = existing {
+            return Ok(Json(json!({
+                "recorded": false,
+                "already_recorded": true,
+                "instance_id": instance_id.to_string(),
+                "status": "failed"
+            })));
+        }
+    }
+
+    // `client_id` is NOT NULL with an FK to `clients`, and a webhook-triggered run has no
+    // client. Reuse the same system-client pattern the in-process path uses
+    // (`find_or_create_system_client`) with source "n8n".
+    let client_id = crate::execution::find_or_create_system_client(&state.db, aid, "n8n").await?;
+
+    let instance_id = Uuid::new_v4();
+    let label = if execution_id.is_empty() {
+        format!("{} (n8n)", workflow_name)
+    } else {
+        format!("{} (n8n run {})", workflow_name, execution_id)
+    };
+    let label: String = label.chars().take(255).collect();
+    let error_text = if failing_node.is_empty() {
+        message.clone()
+    } else {
+        format!("{} (node: {})", message, failing_node)
+    };
+    let detail = trim_workflow_error(&body);
+    let context = json!({
+        "runner": "n8n",
+        "trigger": "external webhook",
+        "n8n_workflow_id": n8n_workflow_id,
+        "n8n_execution_id": execution_id,
+    });
+
+    sqlx::query(
+        r#"INSERT INTO workflow_instances
+             (id, workflow_id, client_id, aid, name, status, current_step_order,
+              started_at, completed_at, result, error_text, n8n_execution_id, context)
+           VALUES ($1, $2, $3, $4, $5, 'failed', 0, NOW(), NOW(), $6::jsonb, $7, $8, $9::jsonb)"#,
+    )
+    .bind(instance_id)
+    .bind(workflow_id)
+    .bind(client_id)
+    .bind(aid)
+    .bind(&label)
+    .bind(json!({
+        "runner": "n8n",
+        "outcome": "failed",
+        "n8n_workflow_id": n8n_workflow_id,
+        "n8n_execution_id": execution_id,
+        "n8n_execution_url": execution_url,
+        "failing_node": failing_node,
+        "mode": mode,
+        "http_code": http_code,
+        "error": message,
+        "n8n_message": n8n_message,
+        "reported": detail,
+    }))
+    .bind(&error_text)
+    .bind(&execution_id)
+    .bind(&context)
+    .execute(&state.db)
+    .await?;
+
+    tracing::warn!(
+        aid = %aid, workflow_id = %workflow_id, instance_id = %instance_id,
+        n8n_workflow_id = %n8n_workflow_id, n8n_execution_id = %execution_id,
+        failing_node = %failing_node, "n8n mirror reported a failed run; instance recorded"
+    );
+
+    Ok(Json(json!({
+        "recorded": true,
+        "instance_id": instance_id.to_string(),
+        "workflow_id": workflow_id.to_string(),
+        "status": "failed",
+        "failing_node": failing_node,
+        "error": message,
+    })))
+}
+
+/// n8n's error object carries a `stack` and the failed request's `headers` (including the
+/// caller's `authorization`). Neither belongs in the tenant's run row, and the stack is large;
+/// keep the message, the code and the failing node.
+fn trim_workflow_error(body: &serde_json::Value) -> serde_json::Value {
+    let mut v = body.clone();
+    if let Some(err) = v
+        .pointer_mut("/execution/error")
+        .and_then(|e| e.as_object_mut())
+    {
+        err.remove("stack");
+        err.remove("context");
+    }
+    if let Some(exec) = v.get_mut("execution").and_then(|e| e.as_object_mut()) {
+        exec.remove("executionContext");
+    }
+    v
+}
