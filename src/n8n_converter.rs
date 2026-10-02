@@ -38,6 +38,22 @@ pub struct N8nWorkflow {
 /// `workflow_id` is the UUID of the WorkflowSwift workflow.
 /// `workflow_name` is used as the n8n workflow title.
 /// `callback_base_url` is the base URL for callbacks (e.g. "http://workflowswift:8085").
+/// Build a callback URL into this crate's OWN router.
+///
+/// The entire API is mounted under `/api/v1` (src/routes.rs) while `CALLBACK_BASE_URL` is the
+/// bare origin (`http://workflowswift:8085`). Appending `/api/...` by hand here produced
+/// `.../api/credits/balance` and `.../api/dashboard/push-widget-data`, which 404 on every
+/// generated workflow (kanban t_d81efc3c). Every callback URL in this file goes through this one
+/// function, so the prefix can only ever be added exactly once — whatever `CALLBACK_BASE_URL`
+/// is set to.
+fn callback_url(base: &str, path: &str) -> String {
+    format!(
+        "{}/api/v1/{}",
+        base.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    )
+}
+
 pub fn convert_steps_to_n8n(
     steps: &[Value],
     aid: Uuid,
@@ -76,7 +92,7 @@ pub fn convert_steps_to_n8n(
         "position": [450, 300],
         "parameters": {
             "method": "GET",
-            "url": format!("{}/api/credits/balance", callback_base_url.trim_end_matches('/')),
+            "url": callback_url(callback_base_url, "credits/balance"),
             "authentication": "genericCredentialType",
             "genericAuthType": "httpHeaderAuth",
             "sendHeaders": true,
@@ -134,7 +150,7 @@ pub fn convert_steps_to_n8n(
         "position": [850, 200],
         "parameters": {
             "method": "POST",
-            "url": format!("{}/api/credits/deduct", callback_base_url.trim_end_matches('/')),
+            "url": callback_url(callback_base_url, "credits/deduct"),
             "authentication": "genericCredentialType",
             "genericAuthType": "httpHeaderAuth",
             "sendHeaders": true,
@@ -481,7 +497,7 @@ fn convert_user_steps(
                     "position": [x_pos, y_base],
                     "parameters": {
                         "method": "POST",
-                        "url": format!("{}/api/dashboard/push-widget-data", callback_base_url.trim_end_matches('/')),
+                        "url": callback_url(callback_base_url, "dashboard/push-widget-data"),
                         "authentication": "genericCredentialType",
                         "genericAuthType": "httpHeaderAuth",
                         "sendHeaders": true,
@@ -545,7 +561,7 @@ fn convert_user_steps(
                             "position": [x_pos, y_base],
                             "parameters": {
                                 "method": "POST",
-                                "url": format!("{}/api/notifications/{}", callback_base_url.trim_end_matches('/'), channel),
+                                "url": callback_url(callback_base_url, &format!("notifications/{}", channel)),
                                 "authentication": "genericCredentialType",
                                 "genericAuthType": "httpHeaderAuth",
                                 "sendHeaders": true,
@@ -753,7 +769,7 @@ fn convert_user_steps(
                     "position": [x_pos + 200, y_base],
                     "parameters": {
                         "method": "POST",
-                        "url": format!("{}/api/v1/renditions", callback_base_url.trim_end_matches('/')),
+                        "url": callback_url(callback_base_url, "renditions"),
                         "authentication": "genericCredentialType",
                         "genericAuthType": "httpHeaderAuth",
                         "sendHeaders": true,
@@ -823,7 +839,7 @@ fn convert_user_steps(
                     "position": [x_pos, y_base],
                     "parameters": {
                         "method": "POST",
-                        "url": format!("{}/api/v1/research/{}", callback_base_url.trim_end_matches('/'), source),
+                        "url": callback_url(callback_base_url, &format!("research/{}", source)),
                         "authentication": "genericCredentialType",
                         "genericAuthType": "httpHeaderAuth",
                         "sendHeaders": true,
@@ -861,7 +877,7 @@ fn convert_user_steps(
                     "position": [x_pos, y_base],
                     "parameters": {
                         "method": "POST",
-                        "url": format!("{}/api/v1/enrich/{}", callback_base_url.trim_end_matches('/'), provider),
+                        "url": callback_url(callback_base_url, &format!("enrich/{}", provider)),
                         "authentication": "genericCredentialType",
                         "genericAuthType": "httpHeaderAuth",
                         "sendHeaders": true,
@@ -905,7 +921,7 @@ fn convert_user_steps(
                     "position": [x_pos, y_base],
                     "parameters": {
                         "method": "POST",
-                        "url": format!("{}/api/v1/analyze", callback_base_url.trim_end_matches('/')),
+                        "url": callback_url(callback_base_url, "analyze"),
                         "authentication": "genericCredentialType",
                         "genericAuthType": "httpHeaderAuth",
                         "sendHeaders": true,
@@ -945,7 +961,7 @@ fn convert_user_steps(
                     "position": [x_pos, y_base],
                     "parameters": {
                         "method": "POST",
-                        "url": format!("{}/api/dashboard/push-widget-data", callback_base_url.trim_end_matches('/')),
+                        "url": callback_url(callback_base_url, "dashboard/push-widget-data"),
                         "authentication": "genericCredentialType",
                         "genericAuthType": "httpHeaderAuth",
                         "sendHeaders": true,
@@ -994,7 +1010,7 @@ fn convert_user_steps(
                     "position": [x_pos, y_base],
                     "parameters": {
                         "method": "POST",
-                        "url": format!("{}/api/notifications/{}", callback_base_url.trim_end_matches('/'), channel),
+                        "url": callback_url(callback_base_url, &format!("notifications/{}", channel)),
                         "authentication": "genericCredentialType",
                         "genericAuthType": "httpHeaderAuth",
                         "sendHeaders": true,
@@ -1032,7 +1048,7 @@ fn convert_user_steps(
                     "position": [x_pos, y_base],
                     "parameters": {
                         "method": "POST",
-                        "url": format!("{}/api/v1/workflows/validate-config", callback_base_url.trim_end_matches('/')),
+                        "url": callback_url(callback_base_url, "workflows/validate-config"),
                         "authentication": "genericCredentialType",
                         "genericAuthType": "httpHeaderAuth",
                         "sendHeaders": true,
@@ -1057,11 +1073,11 @@ fn convert_user_steps(
             "init" | "register" | "test" | "log" => {
                 // System steps: generally call back to WorkflowSwift internal API
                 let endpoint = match step_type {
-                    "init" => "/api/v1/engine/init",
-                    "register" => "/api/v1/engine/register",
-                    "test" => "/api/v1/engine/test",
-                    "log" => "/api/v1/engine/log",
-                    _ => "/api/v1/engine/action",
+                    "init" => "engine/init",
+                    "register" => "engine/register",
+                    "test" => "engine/test",
+                    "log" => "engine/log",
+                    _ => "engine/action",
                 };
 
                 let node = json!({
@@ -1072,7 +1088,7 @@ fn convert_user_steps(
                     "position": [x_pos, y_base],
                     "parameters": {
                         "method": "POST",
-                        "url": format!("{}{}", callback_base_url.trim_end_matches('/'), endpoint),
+                        "url": callback_url(callback_base_url, endpoint),
                         "authentication": "genericCredentialType",
                         "genericAuthType": "httpHeaderAuth",
                         "sendHeaders": true,
@@ -1171,8 +1187,7 @@ fn convert_user_steps(
                     "position": [x_pos, y_base],
                     "parameters": {
                         "method": "POST",
-                        "url": format!("{}/api/v1/provider-keys/{}/generate",
-                            callback_base_url.trim_end_matches('/'), provider),
+                        "url": callback_url(callback_base_url, &format!("provider-keys/{}/generate", provider)),
                         "authentication": "genericCredentialType",
                         "genericAuthType": "httpHeaderAuth",
                         "sendHeaders": true,
@@ -1268,8 +1283,10 @@ return output;
                     "position": [x_pos, y_base],
                     "parameters": {
                         "method": "POST",
-                        "url": format!("{}/api/v1/provider-keys/{}/design/{}",
-                            callback_base_url.trim_end_matches('/'), provider, design_type),
+                        "url": callback_url(
+                            callback_base_url,
+                            &format!("provider-keys/{}/design/{}", provider, design_type),
+                        ),
                         "authentication": "genericCredentialType",
                         "genericAuthType": "httpHeaderAuth",
                         "sendHeaders": true,
@@ -1320,8 +1337,7 @@ return output;
                     "position": [x_pos, y_base],
                     "parameters": {
                         "method": "POST",
-                        "url": format!("{}/api/v1/bridge/commands/publish",
-                            callback_base_url.trim_end_matches('/')),
+                        "url": callback_url(callback_base_url, "bridge/commands/publish"),
                         "authentication": "genericCredentialType",
                         "genericAuthType": "httpHeaderAuth",
                         "sendHeaders": true,
@@ -1370,8 +1386,7 @@ return output;
                     "position": [x_pos, y_base],
                     "parameters": {
                         "method": "POST",
-                        "url": format!("{}/api/v1/instances/loop-check",
-                            callback_base_url.trim_end_matches('/')),
+                        "url": callback_url(callback_base_url, "instances/loop-check"),
                         "authentication": "genericCredentialType",
                         "genericAuthType": "httpHeaderAuth",
                         "sendHeaders": true,
@@ -1481,8 +1496,7 @@ return output;
                     "position": [x_pos + 200, y_base],
                     "parameters": {
                         "method": "POST",
-                        "url": format!("{}/api/v1/notifications/manual-review",
-                            callback_base_url.trim_end_matches('/')),
+                        "url": callback_url(callback_base_url, "notifications/manual-review"),
                         "authentication": "genericCredentialType",
                         "genericAuthType": "httpHeaderAuth",
                         "sendHeaders": true,
@@ -1535,8 +1549,10 @@ return output;
                     "position": [x_pos, y_base],
                     "parameters": {
                         "method": "POST",
-                        "url": format!("{}/api/v1/provider-keys/{}/research/{}",
-                            callback_base_url.trim_end_matches('/'), provider, research_type),
+                        "url": callback_url(
+                            callback_base_url,
+                            &format!("provider-keys/{}/research/{}", provider, research_type),
+                        ),
                         "authentication": "genericCredentialType",
                         "genericAuthType": "httpHeaderAuth",
                         "sendHeaders": true,
