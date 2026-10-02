@@ -56,6 +56,14 @@ Base API: `https://workflowswift.com/api/v1` — all non-public endpoints need
   three types, the Builder never offered them, and an old step of one of those types is skipped with
   a warning that names the gap — it is never reported as having transformed anything. If you need
   custom logic, use an **HTTP Request** step to call a service you own that runs your code.
+- **Design is retired** (2026-10-02): the **`design`** step type said it would "generate visual
+  assets via configured provider", but nothing in this app renders one — no provider, no route and
+  no stored asset. A run recorded the step as **completed** while nothing was designed, and the run
+  carried no warning at all. Nothing collected the step's `style` / `dimensions` either: the Builder
+  never offered `design`. The API refuses the type now, and an old Design step is skipped with a
+  warning that names the gap — it is never reported as having produced a design. To generate an
+  asset, use a **Render Image/Video/Audio** step pointed at a provider endpoint you own, or an
+  **HTTP Request** step to a service that renders it.
 - **AI Action runs on your own provider key** (2026-10-02). In the Builder, pick AI Action, choose
   the provider — **OpenAI, Anthropic, DeepSeek or Gemini** — and write the prompt; connect that
   provider's key once under **Provider Keys**. The step sends your prompt straight to that provider

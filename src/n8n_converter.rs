@@ -1339,17 +1339,18 @@ fn convert_user_steps(
                 ));
             }
             "design" => {
-                // RETIRED callback (kanban t_642b6894): this arm used to POST an app path
-                // that has never been served, so the run died at the node (`onError:
-                // stopWorkflow`). no design route exists in WorkflowSwift; the engine's design arm (src/execution.rs) returns a note and calls nothing. The step keeps
-                // its place in the graph as a pass-through that NAMES what is missing -
-                // the disposition the app's own engine applies to a step it cannot execute.
+                // RETIRED callback (kanban t_642b6894) and RETIRED as a step type (kanban
+                // t_f10ada7a): this arm used to POST an app path that has never been served, so the
+                // run died at the node (`onError: stopWorkflow`). No design route exists in
+                // WorkflowSwift and nothing in the app renders a design, so the engine now records
+                // the step as `skipped` (it is in `execution::RETIRED_STEP_TYPES`). The step keeps
+                // its place in the graph as a pass-through that NAMES what is missing.
                 nodes.push(passthrough_node(
                     &node_id,
                     step_name,
                     (x_pos, y_base),
                     step_type,
-                    "no design route exists in WorkflowSwift; the engine's design arm (src/execution.rs) returns a note and calls nothing",
+                    "no design route exists in WorkflowSwift and the step type is retired — the engine records it as skipped; nothing in this app generates a design",
                 ));
             }
             "publish" => {

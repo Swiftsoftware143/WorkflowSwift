@@ -1421,7 +1421,6 @@ pub async fn validate_workflow_steps(
         ("ai-action", vec!["prompt", "provider"]),
         ("notify", vec!["channel", "recipient"]),
         ("data-card", vec!["metric_key"]),
-        ("design", vec!["prompt"]),
         ("condition", vec!["field"]),
         ("webhook", vec!["url"]),
         ("render_video", vec!["provider", "endpoint"]),

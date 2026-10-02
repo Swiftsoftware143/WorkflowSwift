@@ -103,7 +103,6 @@ pub const EXECUTABLE_STEP_TYPES: &[&str] = &[
     "render_media",
     "render_image",
     "render_audio",
-    "design",
     "loop",
     "condition",
     "manual",
@@ -150,6 +149,19 @@ pub const EXECUTABLE_STEP_TYPES: &[&str] = &[
 ///   The card DECIDED to fail closed rather than enable it: no tenant code runs here, so no step
 ///   type may promise it. Same disposition as `export`/`publish`/`generate` — a step type nothing
 ///   can deliver is not a step type.
+/// * `design` — the engine's arm read `style`/`dimensions`, generated nothing (no provider, no
+///   route, no row writer) and answered `status: "completed"` with the note "Design queued — will
+///   generate visual assets via configured provider" (kanban t_f10ada7a, measured live
+///   2026-10-02: a `design` step ran and the run reported `completed` with an EMPTY `warnings[]`
+///   while nothing was designed). The n8n mirror has been honest about this since kanban
+///   t_642b6894 — its `design` node is a pass-through whose notes say "no design route exists in
+///   WorkflowSwift" — and the console NEVER offered `design` in its Builder picker, so the two
+///   executors disagreed about a type no tenant could pick. 0 rows fleet-wide
+///   (`workflow_steps` 3: n8n/data-card/integration; `workflow_template_steps` 10: data-card 1,
+///   manual 9), so retiring it strands nothing. Implementing it (which provider, which key, what
+///   it costs, and the `style`/`dimensions` field set the console does not collect) is a product
+///   call, not this card's; until that exists no step type may claim `completed` for a design
+///   nobody generated.
 pub const RETIRED_STEP_TYPES: &[&str] = &[
     "export",
     "publish",
@@ -160,6 +172,8 @@ pub const RETIRED_STEP_TYPES: &[&str] = &[
     "transform",
     "code",
     "format",
+    // kanban t_f10ada7a: `design` advertised generated visual assets and generated nothing.
+    "design",
 ];
 
 /// Is this a step type the engine can execute? The write path's and the validator's one rule.
@@ -1503,18 +1517,17 @@ async fn walk(
             // straight into the database falls through to `unexecutable_step_result` below — a
             // `skipped` step with a reason that reaches the run's `warnings[]`. Re-adding any of
             // them means shipping an executor for it, in THIS app, first.
-            "design" => {
-                let style = step_config
-                    .get("style")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("modern");
-                let dimensions = step_config
-                    .get("dimensions")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("1024x1024");
-
-                json!({"step": i, "type": "design", "status": "completed", "style": style, "dimensions": dimensions, "note": "Design queued — will generate visual assets via configured provider"})
-            }
+            // `design` used to have an arm here, and it was the app's half of the divergence kanban
+            // t_f10ada7a settled. It read `style` / `dimensions`, generated nothing at all — no
+            // provider, no route, no row writer — and answered `status: "completed"` with the note
+            // "Design queued — will generate visual assets via configured provider", so the console
+            // recorded a Design step as done and the run came back `completed` with an EMPTY
+            // `warnings[]` (measured live 2026-10-02). Nothing in this app renders a design, and
+            // `design` was never offered by the console picker, so it is RETIRED (see
+            // `RETIRED_STEP_TYPES`): the write path refuses it, and a row written straight into the
+            // database falls through to `unexecutable_step_result` below — a `skipped` step with a
+            // reason that reaches the run's `warnings[]`. Re-adding it means shipping a design
+            // executor (which provider, which key, what it costs) in THIS app, first.
             // `publish` and `export` used to have arms here. Both POSTed a platform-shaped body to
             // a webhook that is not registered — `{N8N_WEBHOOK_URL}/webhook/workflowswift-publish`
             // and `…/webhook/workflowswift-export` — and `export` (the CONSOLE-offered one)
@@ -2124,6 +2137,8 @@ mod tests {
             "transform",
             "code",
             "format",
+            // kanban t_f10ada7a: the engine's arm answered `completed` for a design it never made.
+            "design",
         ] {
             assert!(
                 !is_executable_step_type(retired),
@@ -2143,6 +2158,12 @@ mod tests {
         assert!(
             !include_str!("../www-app/index.html").contains("{ k:'export'"),
             "the console must not offer the retired export step"
+        );
+        // `design` was retired without ever having been offered by the picker (kanban t_f10ada7a);
+        // pin that so a future entry cannot advertise a type the write path now refuses.
+        assert!(
+            !include_str!("../www-app/index.html").contains("k:'design'"),
+            "the console must not offer the retired design step"
         );
     }
 
