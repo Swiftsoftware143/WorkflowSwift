@@ -12,7 +12,7 @@
 //!   - "http-request" → n8n HTTP Request node
 //!   - "data-card"    → dashboard push node
 //!   - "export"       → Google Sheets / SendGrid / CSV
-//!   - "notify"       → Email (n8n emailSend) / generic webhook
+//!   - "notify"       → Webhook callback (n8n httpRequest, POST {message}); email | sms are named no-ops (no sender exists — see the arm, kanban t_70baf9b0)
 //!   - "delay"        → n8n Wait node
 //!   - "fork"         → n8n Switch node (parallel branches)
 //!   - "action"       → Generic API call
@@ -914,29 +914,90 @@ fn convert_user_steps(
                     .get("recipient")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let subject = config
-                    .get("subject")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("WorkflowSwift Notification");
                 let message = config.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                // The step also carries `subject` (draftConfig, www-app/index.html). The n8n mirror
+                // no longer consumes it: the only node that could (a mail node) is retired below,
+                // and the webhook arm posts the message body. The in-process engine still reads it
+                // (src/execution.rs, the "notify" arm).
 
                 match channel {
-                    "email" => {
+                    // The tenant's `webhook` channel is an OUTBOUND call to a URL the tenant owns,
+                    // so the node is `httpRequest` — the same shape the `http-request`/`export`
+                    // arms emit. It used to emit an `n8n-nodes-base.webhook`, which is a TRIGGER:
+                    // the emitted `method`/`url`/`sendBody`/`bodyParameters` are not Webhook-node
+                    // parameters, so n8n registered the node as a stray GET webhook at a random
+                    // UUID path, ran it with `executionStatus=success`, and posted NOTHING to the
+                    // tenant's URL (measured on n8n 2.34.6, kanban t_70baf9b0).
+                    "webhook" => {
                         let node = json!({
                             "id": node_id,
                             "name": step_name,
-                            "type": "n8n-nodes-base.emailSend",
-                            "typeVersion": 1,
+                            "type": "n8n-nodes-base.httpRequest",
+                            "typeVersion": 4.2,
                             "position": [x_pos, y_base],
                             "parameters": {
-                                "fromEmail": "swiftsoftware143@yahoo.com",
-                                "toEmail": recipient,
-                                "subject": subject,
-                                "text": message,
-                                "options": {}
+                                "method": "POST",
+                                "url": recipient,
+                                "sendBody": true,
+                                // The two fields the app's OWN notify arm puts on the wire
+                                // (src/execution.rs: `message` from the step and `data`, the
+                                // workflow's current item). The console's Notify step has no
+                                // message field (channel | recipient | subject), so `message` is
+                                // usually empty — `data` is what carries the run's payload, and
+                                // without it this node posted `{"message":""}` to the tenant's
+                                // endpoint, which is a notification that notifies nothing.
+                                "bodyParameters": {
+                                    "parameters": [
+                                        { "name": "message", "value": message },
+                                        { "name": "data", "value": "={{ $json }}" }
+                                    ]
+                                }
                             }
                         });
                         nodes.push(node);
+                    }
+                    // RETIRED ARMS (kanban t_70baf9b0): `email` and `sms` are offered by the tenant
+                    // console's Notify step (www-app/index.html, Channel = email | webhook | sms)
+                    // but this app serves no sender for either, so the arm keeps the step's place
+                    // in the graph as an honest no-op that NAMES the gap (the same disposition
+                    // src/execution.rs applies to a step it cannot execute).
+                    //
+                    // `email` used to emit `n8n-nodes-base.emailSend` with a hardcoded
+                    // `fromEmail: swiftsoftware143@yahoo.com` and NO credential. The node type
+                    // declares the `smtp` credential as REQUIRED, n8n holds no smtp credential at
+                    // all, and the runtime activation path refuses the whole workflow:
+                    // `Cannot publish workflow: 1 node have configuration issues: Node "<step>":
+                    // Missing required credential: smtp` — measured, so ONE email Notify step
+                    // makes the tenant's ENTIRE generated workflow un-activatable.
+                    //
+                    // The app DOES own a mail path (`email::send_email`, behind Admin > Settings >
+                    // Email Provider), but it is template-based, it is not reachable from n8n, and
+                    // "which recipient may a tenant email through the platform's provider?" is a
+                    // product/security decision, not a spelling. Until that is decided the node is
+                    // a no-op with a note (see the card's follow-up).
+                    "email" => {
+                        nodes.push(passthrough_node(
+                            &node_id,
+                            step_name,
+                            (x_pos, y_base),
+                            step_type,
+                            "WorkflowSwift has no tenant-triggered mail sender: the platform's mail \
+                             provider lives in the app (Admin > Settings > Email Provider) and no \
+                             route relays a step's mail, so this Notify step sends nothing. The \
+                             console still offers the Email channel - whether a tenant may email a \
+                             recipient through the platform's provider is an open decision.",
+                        ));
+                    }
+                    "sms" => {
+                        nodes.push(passthrough_node(
+                            &node_id,
+                            step_name,
+                            (x_pos, y_base),
+                            step_type,
+                            "WorkflowSwift has no SMS provider: no sender in the app and no sms \
+                             credential in n8n, so this Notify step sends nothing. (n8n does hold a \
+                             telegramApi credential, but the console offers no telegram channel.)",
+                        ));
                     }
                     // RETIRED callback (kanban t_642b6894): `slack` and `telegram` are not
                     // offered by the tenant console's Notify step (its Channel select is
@@ -953,25 +1014,15 @@ fn convert_user_steps(
                         ));
                     }
                     _ => {
-                        // Generic webhook notification
-                        let node = json!({
-                            "id": node_id,
-                            "name": step_name,
-                            "type": "n8n-nodes-base.webhook",
-                            "typeVersion": 1,
-                            "position": [x_pos, y_base],
-                            "parameters": {
-                                "method": "POST",
-                                "url": recipient,
-                                "sendBody": true,
-                                "bodyParameters": {
-                                    "parameters": [
-                                        { "name": "message", "value": message }
-                                    ]
-                                }
-                            }
-                        });
-                        nodes.push(node);
+                        // An unknown channel used to emit a Webhook TRIGGER node, i.e. a stray
+                        // unauthenticated GET endpoint that posted nothing. Name it instead.
+                        nodes.push(passthrough_node(
+                            &node_id,
+                            step_name,
+                            (x_pos, y_base),
+                            step_type,
+                            &format!("unknown notify channel '{}' (the console offers email | webhook | sms)", channel),
+                        ));
                     }
                 }
             }
@@ -2153,6 +2204,111 @@ mod tests {
         assert!(
             webhook["parameters"]["responseMode"].is_null(),
             "no responseMode at all: n8n's onReceived default answers 200 immediately"
+        );
+    }
+
+    /// kanban t_70baf9b0 — the Notify step's n8n nodes, pinned to the shapes measured live on
+    /// n8n 2.34.6 (audits/t_70baf9b0/):
+    ///
+    /// * `email` emitted `n8n-nodes-base.emailSend` (hardcoded `fromEmail`, NO credential). The
+    ///   node type declares `smtp` as a REQUIRED credential and n8n holds none, so the runtime
+    ///   activation path refused the WHOLE workflow: `Cannot publish workflow: 1 node have
+    ///   configuration issues: Node "<step>": Missing required credential: smtp`. One Email
+    ///   Notify step therefore made a tenant's entire generated workflow un-activatable.
+    /// * `webhook`/`sms`/unknown emitted `n8n-nodes-base.webhook` — a TRIGGER. n8n activated the
+    ///   graph anyway, reported `executionStatus=success`, posted NOTHING to the declared URL,
+    ///   and registered a stray unauthenticated GET webhook at a random UUID path.
+    ///
+    /// The webhook channel is a real outbound call (httpRequest); email and sms have no sender in
+    /// this product, so they are honest no-ops that NAME the gap.
+    #[test]
+    fn notify_channels_emit_nodes_that_can_actually_run() {
+        let steps = vec![
+            json!({"step_type": "notify", "name": "Notify Email",
+                   "config": {"channel": "email", "recipient": "ops@example.com", "subject": "s"}}),
+            json!({"step_type": "notify", "name": "Notify Webhook",
+                   "config": {"channel": "webhook", "recipient": "https://hooks.tenant.example/incoming"}}),
+            json!({"step_type": "notify", "name": "Notify SMS",
+                   "config": {"channel": "sms", "recipient": "+15551234567"}}),
+            json!({"step_type": "notify", "name": "Notify Unknown",
+                   "config": {"channel": "carrier-pigeon", "recipient": "x"}}),
+        ];
+        let g = convert_steps_to_n8n(&steps, Uuid::new_v4(), Uuid::new_v4(), BASE, KEY);
+        let by_name = |n: &str| {
+            g.nodes
+                .iter()
+                .find(|x| x["name"] == n)
+                .unwrap_or_else(|| panic!("no node named {n}"))
+        };
+
+        // Nothing in the graph may require a credential this n8n does not hold (it holds exactly
+        // telegramApi and postgres): that is what made the whole graph un-activatable.
+        for node in &g.nodes {
+            assert_ne!(
+                node["type"],
+                json!("n8n-nodes-base.emailSend"),
+                "{}",
+                node["name"]
+            );
+            assert!(node.get("credentials").is_none(), "{}", node["name"]);
+        }
+        assert!(
+            !serde_json::to_string(&g.nodes)
+                .unwrap()
+                .contains("swiftsoftware143"),
+            "the hardcoded fromEmail is gone with the mail node"
+        );
+
+        // webhook → the OUTBOUND node, POSTing the message body to the tenant's own URL, and
+        // never this app's bearer (the tenant URL is not an app callback).
+        let hook = by_name("Notify Webhook");
+        assert_eq!(hook["type"], json!("n8n-nodes-base.httpRequest"));
+        assert_eq!(hook["parameters"]["method"], json!("POST"));
+        assert_eq!(
+            hook["parameters"]["url"],
+            json!("https://hooks.tenant.example/incoming")
+        );
+        assert_eq!(hook["parameters"]["sendBody"], json!(true));
+        assert_eq!(
+            hook["parameters"]["bodyParameters"]["parameters"][0]["name"],
+            json!("message")
+        );
+        assert_eq!(
+            hook["parameters"]["bodyParameters"]["parameters"][1],
+            json!({"name": "data", "value": "={{ $json }}"}),
+            "the tenant's endpoint must receive the run's data, not only an empty message"
+        );
+        assert!(
+            auth_header_value(hook).is_none(),
+            "the tenant's own URL must not receive this app's bearer"
+        );
+        assert!(!is_app_callback(hook));
+
+        // email | sms | unknown channel → an honest no-op that NAMES the missing capability.
+        for (name, needle) in [
+            ("Notify Email", "no tenant-triggered mail sender"),
+            ("Notify SMS", "no SMS provider"),
+            ("Notify Unknown", "unknown notify channel"),
+        ] {
+            let n = by_name(name);
+            assert_eq!(n["type"], json!("n8n-nodes-base.noOp"), "{name}");
+            assert!(
+                n["notes"].as_str().unwrap_or("").contains(needle),
+                "{name} must name the gap, got {}",
+                n["notes"]
+            );
+        }
+
+        // Exactly ONE Webhook node — the graph's own trigger. A second one is a stray
+        // unauthenticated endpoint that does the step's work nowhere.
+        let webhooks = g
+            .nodes
+            .iter()
+            .filter(|n| n["type"] == json!("n8n-nodes-base.webhook"))
+            .count();
+        assert_eq!(
+            webhooks, 1,
+            "only the graph's own trigger may be a Webhook node"
         );
     }
 }
