@@ -863,6 +863,22 @@ pub async fn admin_delete_account(
         return Err(AppError::NotFound("Account not found".to_string()));
     }
 
+    // HARD delete, so the n8n mirrors have to be retired FIRST. `workflows.aid -> accounts(id)` is
+    // ON DELETE CASCADE, so `DELETE FROM accounts` below takes every `workflows` row with it; the
+    // app mirrors each of those rows into n8n under the name `WFS <workflow_id>`
+    // (src/n8n_converter.rs), and nothing else ever removes the mirror. Deleting the account first
+    // is exactly how a `WFS <uuid>` orphan is born (kanban t_a965cf32). Refuse the whole wipe when
+    // the mirrors cannot be retired — an orphaned mirror is a silent, permanent leak, while a 502
+    // on an admin route is loud and retryable.
+    let retired = crate::handlers::workflow_handler::retire_account_n8n_mirrors(&state, id)
+        .await
+        .map_err(|e| {
+            AppError::Upstream(format!(
+                "refusing to delete account {}: its n8n `WFS <uuid>` mirrors must be retired first and could not be ({})",
+                id, e
+            ))
+        })?;
+
     sqlx::query("DELETE FROM n8n_account_config WHERE aid = $1")
         .bind(id)
         .execute(&state.db)
@@ -874,7 +890,7 @@ pub async fn admin_delete_account(
         .execute(&state.db)
         .await?;
 
-    tracing::info!(%id, "Account and all associated data deleted");
+    tracing::info!(%id, mirrors_retired = retired, "Account and all associated data deleted");
     Ok(Json(
         json!({"status": "deleted", "account_id": id.to_string()}),
     ))

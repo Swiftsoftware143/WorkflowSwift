@@ -652,6 +652,90 @@ async fn find_n8n_mirror(
     Ok((Some(newest), rows.into_iter().map(|(id, _)| id).collect()))
 }
 
+/// The name WorkflowSwift gives every n8n copy of `workflow_id`.
+///
+/// `src/n8n_converter.rs` builds the same string (`name: format!("WFS {}", workflow_id)`), so a
+/// mirror carrying this name is THIS row's copy and nobody else's.
+pub fn mirror_name(workflow_id: Uuid) -> String {
+    format!("WFS {}", workflow_id)
+}
+
+/// Retire (delete) the n8n mirror of every id in `ids`, using an already-built client.
+///
+/// DB-free on purpose: this is the one piece of the "a hard delete must not leave the mirror
+/// behind" rule that can be tested against a stub n8n.
+///
+/// * `Ok(n)` — n mirrors were retired. A mirror that is already absent in n8n counts, because the
+///   caller's question is "does a `WFS <id>` copy still exist?", and the answer is no either way.
+/// * `Err(_)` — at least one mirror could NOT be retired (n8n unreachable, refused the delete, or
+///   the lookup itself failed). The caller MUST NOT delete the rows then: doing exactly that is
+///   what leaves a `WFS <uuid>` orphan behind (kanban t_a965cf32).
+pub async fn retire_mirrors_with(
+    client: &reqwest::Client,
+    base: &str,
+    api_key: &str,
+    ids: &[Uuid],
+) -> Result<usize, String> {
+    let mut retired = 0usize;
+    for id in ids {
+        let name = mirror_name(*id);
+        let (newest, older) = find_n8n_mirror(client, base, api_key, &name).await?;
+        for mirror in newest.into_iter().chain(older) {
+            let resp = client
+                .delete(format!("{}/api/v1/workflows/{}", base, mirror))
+                .header("X-N8N-API-KEY", api_key)
+                .send()
+                .await
+                .map_err(|e| format!("n8n delete of mirror {} failed: {}", mirror, e))?;
+            let status = resp.status();
+            if status.is_success() || status == reqwest::StatusCode::NOT_FOUND {
+                retired += 1;
+            } else {
+                return Err(format!(
+                    "n8n refused deleting mirror {} ({})",
+                    mirror, status
+                ));
+            }
+        }
+    }
+    Ok(retired)
+}
+
+/// Retire every `WFS <uuid>` mirror belonging to `aid`'s workflows, BEFORE those rows are
+/// hard-deleted by their owner (`ON DELETE CASCADE` from `accounts`).
+///
+/// The app's own delete path soft-deletes (`delete_workflow` sets `is_active = false`), so a
+/// `workflows` row normally keeps its source and its mirror is never orphaned. The admin account
+/// wipe was the one PRODUCT path that hard-deleted the rows: `workflows.aid -> accounts(id)` is
+/// `ON DELETE CASCADE`, so `DELETE FROM accounts` took every `workflows` row with it and left each
+/// mirror in n8n with nothing to point at (kanban t_a965cf32).
+///
+/// Fails closed: if the account still has workflow rows and their mirrors cannot be retired, the
+/// caller must refuse the delete rather than perform it.
+pub async fn retire_account_n8n_mirrors(state: &AppState, aid: Uuid) -> Result<usize, String> {
+    let ids: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM workflows WHERE aid = $1")
+        .bind(aid)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| format!("reading the account's workflows failed: {}", e))?;
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let api_key = state.config.n8n_api_key.trim().to_string();
+    if api_key.is_empty() {
+        return Err(format!(
+            "{} workflow row(s) would be deleted but no n8n API key is provisioned, so their `WFS <id>` mirrors cannot be retired",
+            ids.len()
+        ));
+    }
+    let base = state.config.n8n_url.trim_end_matches('/').to_string();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("HTTP client: {}", e))?;
+    retire_mirrors_with(&client, &base, &api_key, &ids).await
+}
+
 /// POST /api/v1/workflows/{id}/start — start a workflow now (optional body).
 pub async fn start_workflow(
     State(state): State<AppState>,
@@ -1373,5 +1457,152 @@ mod data_card_first_tests {
             assert_data_card_first(&current, &projected).is_ok(),
             "a workflow that already breaks the rule must not become uneditable"
         );
+    }
+}
+
+/// Regression tests for kanban t_a965cf32 — no hard delete of a `workflows` row may leave its
+/// `WFS <uuid>` n8n mirror behind.
+///
+/// These drive the real `retire_mirrors_with` against a stub n8n on an ephemeral port, so the
+/// "the operation retires the mirror" and "the operation REFUSES when it cannot" halves are both
+/// asserted without a database or a live n8n.
+#[cfg(test)]
+mod mirror_retirement_tests {
+    use super::*;
+    use axum::routing::{delete as axum_delete, get as axum_get};
+    use axum::Router;
+    use std::sync::{Arc, Mutex};
+
+    /// The stub answers n8n's `GET /api/v1/workflows` (the mirror lookup, list-shaped, filtered
+    /// client-side by exact name exactly as the real one is) and accepts
+    /// `DELETE /api/v1/workflows/{id}`, recording every id it was asked to delete.
+    async fn stub_n8n(
+        mirrors: Vec<(&'static str, String)>,
+        lookup_status: u16,
+        delete_status: u16,
+    ) -> (String, Arc<Mutex<Vec<String>>>) {
+        let deleted: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let rows: Vec<serde_json::Value> = mirrors
+            .iter()
+            .map(|(id, name)| {
+                json!({"id": id, "name": name, "createdAt": "2026-01-01T00:00:00.000Z"})
+            })
+            .collect();
+
+        let app = Router::new()
+            .route(
+                "/api/v1/workflows",
+                axum_get(move || {
+                    let rows = rows.clone();
+                    async move {
+                        (
+                            StatusCode::from_u16(lookup_status).unwrap(),
+                            Json(json!({"data": rows})),
+                        )
+                    }
+                }),
+            )
+            .route(
+                "/api/v1/workflows/{id}",
+                axum_delete({
+                    let deleted = deleted.clone();
+                    move |Path(id): Path<String>| {
+                        let deleted = deleted.clone();
+                        async move {
+                            deleted.lock().unwrap().push(id);
+                            StatusCode::from_u16(delete_status).unwrap()
+                        }
+                    }
+                }),
+            );
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("stub listener");
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (base, deleted)
+    }
+
+    /// The name must be the converter's (`src/n8n_converter.rs`): a mirror under any other name is
+    /// not this row's copy, and the census/guard reads the same string.
+    #[test]
+    fn mirror_name_is_the_converter_name() {
+        let id = Uuid::new_v4();
+        let name = mirror_name(id);
+        let suffix = name.strip_prefix("WFS ").expect("`WFS ` prefix");
+        assert_eq!(Uuid::parse_str(suffix).expect("uuid suffix"), id);
+        assert_eq!(name, format!("WFS {}", id));
+    }
+
+    /// The whole point of the card: the operation deletes the mirror — and only that workflow's.
+    #[tokio::test]
+    async fn retires_the_mirror_and_leaves_another_workflows_mirror_alone() {
+        let target = Uuid::new_v4();
+        let unrelated = Uuid::new_v4();
+        let (base, deleted) = stub_n8n(
+            vec![
+                ("n8n-target", mirror_name(target)),
+                ("n8n-other", mirror_name(unrelated)),
+            ],
+            200,
+            204,
+        )
+        .await;
+
+        let n = retire_mirrors_with(&reqwest::Client::new(), &base, "k", &[target])
+            .await
+            .expect("the mirror must be retirable");
+
+        assert_eq!(n, 1, "one mirror retired");
+        assert_eq!(*deleted.lock().unwrap(), vec!["n8n-target".to_string()]);
+    }
+
+    /// A hard delete must be REFUSED while a mirror may survive, so a lookup that fails is an
+    /// error — never a silent pass that orphans the mirror.
+    #[tokio::test]
+    async fn refuses_when_the_lookup_fails() {
+        let id = Uuid::new_v4();
+        let (base, deleted) = stub_n8n(vec![("n8n-target", mirror_name(id))], 500, 204).await;
+
+        let err = retire_mirrors_with(&reqwest::Client::new(), &base, "k", &[id])
+            .await
+            .expect_err("a lookup failure must refuse the retire");
+
+        assert!(err.contains("lookup"), "unexpected error: {}", err);
+        assert!(deleted.lock().unwrap().is_empty(), "nothing may be deleted");
+    }
+
+    /// n8n answering the lookup but refusing the delete is a refusal too.
+    #[tokio::test]
+    async fn refuses_when_n8n_refuses_the_delete() {
+        let id = Uuid::new_v4();
+        let (base, deleted) = stub_n8n(vec![("n8n-target", mirror_name(id))], 200, 500).await;
+
+        let err = retire_mirrors_with(&reqwest::Client::new(), &base, "k", &[id])
+            .await
+            .expect_err("a refused delete must refuse the retire");
+
+        assert!(
+            err.contains("refused deleting"),
+            "unexpected error: {}",
+            err
+        );
+        assert_eq!(*deleted.lock().unwrap(), vec!["n8n-target".to_string()]);
+    }
+
+    /// A workflow with no mirror is already safe: zero retired, zero deletes, no error.
+    #[tokio::test]
+    async fn no_mirror_is_not_a_failure() {
+        let id = Uuid::new_v4();
+        let (base, deleted) = stub_n8n(vec![], 200, 204).await;
+
+        let n = retire_mirrors_with(&reqwest::Client::new(), &base, "k", &[id])
+            .await
+            .expect("an unmapped workflow is already safe");
+        assert_eq!(n, 0);
+        assert!(deleted.lock().unwrap().is_empty());
     }
 }
