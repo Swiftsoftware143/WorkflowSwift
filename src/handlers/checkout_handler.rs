@@ -112,24 +112,26 @@ pub async fn upsert_payment_provider(
             .await?;
 
     if let Some(provider_id) = existing {
-        // Update — only overwrite api_key/webhook_secret if provided
-        let mut query = String::from(
-            "UPDATE payment_providers SET label = $1, is_active = $2, is_test_mode = $3, \
-             publishable_key = $4, config = $5, updated_at = NOW()",
-        );
-        let mut param_idx = 6u8;
+        // Update — only overwrite api_key/webhook_secret if provided.
+        //
+        // Gate rule 5d / class 14 (kanban t_15a04e9d): the statement used to be BUILT at run time
+        // ("UPDATE … SET …" + a push_str per optional field + " WHERE id = $" + index), so no
+        // complete query was visible at the site and the text was a function of the request. Two
+        // optional fields produced exactly four texts; they are the four compile-time literals
+        // below, byte-identical to what the builder emitted (the same bind order, the same
+        // parameter indices). Nothing but the CHOICE of literal is decided at run time.
+        const UPD_BOTH: &str = "UPDATE payment_providers SET label = $1, is_active = $2, is_test_mode = $3, publishable_key = $4, config = $5, updated_at = NOW(), api_key_encrypted = $6, webhook_secret_encrypted = $7 WHERE id = $8";
+        const UPD_KEY: &str = "UPDATE payment_providers SET label = $1, is_active = $2, is_test_mode = $3, publishable_key = $4, config = $5, updated_at = NOW(), api_key_encrypted = $6 WHERE id = $7";
+        const UPD_SECRET: &str = "UPDATE payment_providers SET label = $1, is_active = $2, is_test_mode = $3, publishable_key = $4, config = $5, updated_at = NOW(), webhook_secret_encrypted = $6 WHERE id = $7";
+        const UPD_NONE: &str = "UPDATE payment_providers SET label = $1, is_active = $2, is_test_mode = $3, publishable_key = $4, config = $5, updated_at = NOW() WHERE id = $6";
+        let query = match (api_key.is_empty(), webhook_secret.is_empty()) {
+            (false, false) => UPD_BOTH,
+            (false, true) => UPD_KEY,
+            (true, false) => UPD_SECRET,
+            (true, true) => UPD_NONE,
+        };
 
-        if !api_key.is_empty() {
-            query.push_str(&format!(", api_key_encrypted = ${}", param_idx));
-            param_idx += 1;
-        }
-        if !webhook_secret.is_empty() {
-            query.push_str(&format!(", webhook_secret_encrypted = ${}", param_idx));
-            param_idx += 1;
-        }
-        query.push_str(&format!(" WHERE id = ${}", param_idx));
-
-        let mut q = sqlx::query(&query)
+        let mut q = sqlx::query(query)
             .bind(label)
             .bind(is_active)
             .bind(is_test_mode)

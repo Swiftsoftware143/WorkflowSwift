@@ -35,7 +35,18 @@ pub struct Webhook {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-const COLS: &str = "SELECT id, aid, name, url, is_active, created_at, updated_at FROM webhooks";
+// Gate rule 5d / class 14 (kanban t_15a04e9d): the statement must be a COMPLETE compile-time
+// literal, visible at the site. A `const` ident cannot be joined by `concat!`, but a `macro_rules!`
+// that expands to a literal can — so the select list stays written ONCE here and every statement is
+// still one literal at compile time.
+macro_rules! cols {
+    () => {
+        "SELECT id, aid, name, url, is_active, created_at, updated_at FROM webhooks"
+    };
+}
+
+const BY_AID_NAME: &str = concat!(cols!(), " WHERE aid = $1 ORDER BY name ASC");
+const BY_ID_AID: &str = concat!(cols!(), " WHERE id = $1 AND aid = $2");
 
 /// The admin shell posts every form field as a plain string (an empty field is omitted), so accept
 /// a string and ignore anything else rather than 422-ing the whole request.
@@ -75,7 +86,7 @@ pub async fn list(
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = account_id(&claims)?;
-    let rows = sqlx::query_as::<_, Webhook>(&format!("{COLS} WHERE aid = $1 ORDER BY name ASC"))
+    let rows = sqlx::query_as::<_, Webhook>(BY_AID_NAME)
         .bind(aid)
         .fetch_all(&state.db)
         .await?;
@@ -108,7 +119,7 @@ pub async fn create(
         .bind(is_active)
         .execute(&state.db)
         .await?;
-    let row = sqlx::query_as::<_, Webhook>(&format!("{COLS} WHERE id = $1 AND aid = $2"))
+    let row = sqlx::query_as::<_, Webhook>(BY_ID_AID)
         .bind(id)
         .bind(aid)
         .fetch_one(&state.db)
@@ -122,7 +133,7 @@ pub async fn get(
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = account_id(&claims)?;
-    let row = sqlx::query_as::<_, Webhook>(&format!("{COLS} WHERE id = $1 AND aid = $2"))
+    let row = sqlx::query_as::<_, Webhook>(BY_ID_AID)
         .bind(id)
         .bind(aid)
         .fetch_optional(&state.db)
@@ -138,7 +149,7 @@ pub async fn update(
     Json(body): Json<Value>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = account_id(&claims)?;
-    let existing = sqlx::query_as::<_, Webhook>(&format!("{COLS} WHERE id = $1 AND aid = $2"))
+    let existing = sqlx::query_as::<_, Webhook>(BY_ID_AID)
         .bind(id)
         .bind(aid)
         .fetch_optional(&state.db)
@@ -167,7 +178,7 @@ pub async fn update(
     .bind(aid)
     .execute(&state.db)
     .await?;
-    let row = sqlx::query_as::<_, Webhook>(&format!("{COLS} WHERE id = $1 AND aid = $2"))
+    let row = sqlx::query_as::<_, Webhook>(BY_ID_AID)
         .bind(id)
         .bind(aid)
         .fetch_one(&state.db)

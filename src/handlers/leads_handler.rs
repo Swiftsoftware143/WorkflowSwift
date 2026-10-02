@@ -64,7 +64,18 @@ pub struct UpdateInput {
     pub notes: Option<String>,
 }
 
-const COLS: &str = "SELECT id, aid, name, email, phone, company, status, source, surface_id, workflow_id, notes, created_at, updated_at FROM leads";
+// Gate rule 5d / class 14 (kanban t_15a04e9d): the statement must be a COMPLETE compile-time
+// literal, visible at the site. A `const` ident cannot be joined by `concat!`, but a `macro_rules!`
+// that expands to a literal can — so the select list stays written ONCE here and every statement is
+// still one literal at compile time.
+macro_rules! cols {
+    () => {
+        "SELECT id, aid, name, email, phone, company, status, source, surface_id, workflow_id, notes, created_at, updated_at FROM leads"
+    };
+}
+
+const BY_ID: &str = concat!(cols!(), " WHERE id = $1");
+const BY_ID_AID: &str = concat!(cols!(), " WHERE id = $1 AND aid = $2");
 const UPD: &str = "UPDATE leads SET name=COALESCE($2,name), email=COALESCE($3,email), phone=COALESCE($4,phone), company=COALESCE($5,company), status=COALESCE($6,status), source=COALESCE($7,source), surface_id=COALESCE($8,surface_id), workflow_id=COALESCE($9,workflow_id), notes=COALESCE($10,notes), updated_at=NOW() WHERE id=$1 AND aid=$11";
 
 pub async fn list(
@@ -112,7 +123,7 @@ pub async fn create(
         .bind(id).bind(aid).bind(&b.name).bind(&b.email).bind(&b.phone).bind(&b.company)
         .bind(&b.status).bind(&b.source).bind(b.surface_id).bind(b.workflow_id).bind(&b.notes)
         .execute(&state.db).await?;
-    let row = sqlx::query_as::<_, Lead>(&format!("{COLS} WHERE id = $1"))
+    let row = sqlx::query_as::<_, Lead>(BY_ID)
         .bind(id)
         .fetch_one(&state.db)
         .await?;
@@ -146,7 +157,7 @@ pub async fn get(
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let row = sqlx::query_as::<_, Lead>(&format!("{COLS} WHERE id = $1 AND aid = $2"))
+    let row = sqlx::query_as::<_, Lead>(BY_ID_AID)
         .bind(id)
         .bind(aid)
         .fetch_optional(&state.db)
@@ -161,7 +172,7 @@ pub async fn update(
     Json(b): Json<UpdateInput>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let c = sqlx::query_as::<_, Lead>(&format!("{COLS} WHERE id = $1 AND aid = $2"))
+    let c = sqlx::query_as::<_, Lead>(BY_ID_AID)
         .bind(id)
         .bind(aid)
         .fetch_optional(&state.db)
@@ -181,7 +192,7 @@ pub async fn update(
         .bind(aid)
         .execute(&state.db)
         .await?;
-    let row = sqlx::query_as::<_, Lead>(&format!("{COLS} WHERE id = $1"))
+    let row = sqlx::query_as::<_, Lead>(BY_ID)
         .bind(id)
         .fetch_one(&state.db)
         .await?;

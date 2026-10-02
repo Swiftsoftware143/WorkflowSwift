@@ -55,8 +55,18 @@ pub struct UpdateInput {
     pub is_active: Option<bool>,
 }
 
-const COLS: &str =
-    "SELECT id, aid, name, slug, description, is_active, created_at, updated_at FROM surfaces";
+// Gate rule 5d / class 14 (kanban t_15a04e9d): the statement must be a COMPLETE compile-time
+// literal, visible at the site. A `const` ident cannot be joined by `concat!`, but a `macro_rules!`
+// that expands to a literal can — so the select list stays written ONCE here and every statement is
+// still one literal at compile time.
+macro_rules! cols {
+    () => {
+        "SELECT id, aid, name, slug, description, is_active, created_at, updated_at FROM surfaces"
+    };
+}
+
+const BY_ID: &str = concat!(cols!(), " WHERE id = $1");
+const BY_ID_AID: &str = concat!(cols!(), " WHERE id = $1 AND aid = $2");
 
 fn slugify(s: &str) -> String {
     s.to_lowercase()
@@ -118,7 +128,7 @@ pub async fn create(
     }
     sqlx::query("INSERT INTO surfaces (id, aid, name, slug, description, is_active) VALUES ($1,$2,$3,$4,$5,$6)")
         .bind(id).bind(aid).bind(&b.name).bind(&slug).bind(&b.description).bind(b.is_active.unwrap_or(true)).execute(&state.db).await?;
-    let row = sqlx::query_as::<_, Surface>(&format!("{COLS} WHERE id = $1"))
+    let row = sqlx::query_as::<_, Surface>(BY_ID)
         .bind(id)
         .fetch_one(&state.db)
         .await?;
@@ -130,7 +140,7 @@ pub async fn get(
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let row = sqlx::query_as::<_, Surface>(&format!("{COLS} WHERE id = $1 AND aid = $2"))
+    let row = sqlx::query_as::<_, Surface>(BY_ID_AID)
         .bind(id)
         .bind(aid)
         .fetch_optional(&state.db)
@@ -146,7 +156,7 @@ pub async fn update(
 ) -> ApiResult<impl IntoResponse> {
     require_admin(&claims)?;
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let c = sqlx::query_as::<_, Surface>(&format!("{COLS} WHERE id = $1 AND aid = $2"))
+    let c = sqlx::query_as::<_, Surface>(BY_ID_AID)
         .bind(id)
         .bind(aid)
         .fetch_optional(&state.db)
@@ -163,7 +173,7 @@ pub async fn update(
         .bind(new_slug)
         .bind(b.description.as_ref().or(c.description.as_ref()))
         .bind(b.is_active.or(c.is_active)).execute(&state.db).await?;
-    let row = sqlx::query_as::<_, Surface>(&format!("{COLS} WHERE id = $1"))
+    let row = sqlx::query_as::<_, Surface>(BY_ID)
         .bind(id)
         .fetch_one(&state.db)
         .await?;

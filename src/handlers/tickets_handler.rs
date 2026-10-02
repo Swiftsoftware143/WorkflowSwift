@@ -54,7 +54,18 @@ pub struct UpdateInput {
     pub priority: Option<String>,
 }
 
-const COLS: &str = "SELECT id, aid, subject, description, status, priority, source, created_at, updated_at FROM tickets";
+// Gate rule 5d / class 14 (kanban t_15a04e9d): the statement must be a COMPLETE compile-time
+// literal, visible at the site. A `const` ident cannot be joined by `concat!`, but a `macro_rules!`
+// that expands to a literal can — so the select list stays written ONCE here and every statement is
+// still one literal at compile time.
+macro_rules! cols {
+    () => {
+        "SELECT id, aid, subject, description, status, priority, source, created_at, updated_at FROM tickets"
+    };
+}
+
+const BY_ID: &str = concat!(cols!(), " WHERE id = $1");
+const BY_ID_AID: &str = concat!(cols!(), " WHERE id = $1 AND aid = $2");
 
 pub async fn list(
     State(state): State<AppState>,
@@ -105,7 +116,7 @@ pub async fn create(
     sqlx::query("INSERT INTO tickets (id, aid, subject, description, status, priority, source) VALUES ($1,$2,$3,$4,$5,$6,$7)")
         .bind(id).bind(aid).bind(&b.subject).bind(&b.description).bind(&status).bind(&priority).bind(&source)
         .execute(&state.db).await?;
-    let row = sqlx::query_as::<_, Ticket>(&format!("{COLS} WHERE id = $1"))
+    let row = sqlx::query_as::<_, Ticket>(BY_ID)
         .bind(id)
         .fetch_one(&state.db)
         .await?;
@@ -118,7 +129,7 @@ pub async fn get(
     Path(id): Path<Uuid>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let row = sqlx::query_as::<_, Ticket>(&format!("{COLS} WHERE id = $1 AND aid = $2"))
+    let row = sqlx::query_as::<_, Ticket>(BY_ID_AID)
         .bind(id)
         .bind(aid)
         .fetch_optional(&state.db)
@@ -134,7 +145,7 @@ pub async fn update(
     Json(b): Json<UpdateInput>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let cur = sqlx::query_as::<_, Ticket>(&format!("{COLS} WHERE id = $1 AND aid = $2"))
+    let cur = sqlx::query_as::<_, Ticket>(BY_ID_AID)
         .bind(id)
         .bind(aid)
         .fetch_optional(&state.db)
@@ -148,7 +159,7 @@ pub async fn update(
         .bind(b.priority.as_ref().or(cur.priority.as_ref()))
         .bind(aid)
         .execute(&state.db).await?;
-    let row = sqlx::query_as::<_, Ticket>(&format!("{COLS} WHERE id = $1"))
+    let row = sqlx::query_as::<_, Ticket>(BY_ID)
         .bind(id)
         .fetch_one(&state.db)
         .await?;

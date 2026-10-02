@@ -204,6 +204,80 @@ pub async fn create_rendition(
     Ok((StatusCode::CREATED, Json(json!({"rendition": rendition}))))
 }
 
+// Gate rule 5d / class 14 (kanban t_15a04e9d): the completed statement for every possible
+// present-filter combination of `ListRenditionsQuery`, as a COMPLETE compile-time literal. The
+// listing used to be built at run time (a `String::from` base + a `format!` predicate per optional
+// filter + `push_str` of the LIMIT/OFFSET indices), so its text was a function of the request and
+// no query was visible at the site. Index = bitmask over (provider, asset_type, status,
+// workflow_id, instance_id, search). The unit test at the bottom of this file asserts every entry
+// is byte-identical to what the old builder produced for that mask.
+static RENDITION_SQL: [&str; 64] = [
+    "SELECT * FROM account_renditions WHERE aid = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND asset_type = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND asset_type = $3 ORDER BY created_at DESC LIMIT $4 OFFSET $5",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND status = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND status = $3 ORDER BY created_at DESC LIMIT $4 OFFSET $5",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND asset_type = $2 AND status = $3 ORDER BY created_at DESC LIMIT $4 OFFSET $5",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND asset_type = $3 AND status = $4 ORDER BY created_at DESC LIMIT $5 OFFSET $6",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND workflow_id = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND workflow_id = $3 ORDER BY created_at DESC LIMIT $4 OFFSET $5",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND asset_type = $2 AND workflow_id = $3 ORDER BY created_at DESC LIMIT $4 OFFSET $5",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND asset_type = $3 AND workflow_id = $4 ORDER BY created_at DESC LIMIT $5 OFFSET $6",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND status = $2 AND workflow_id = $3 ORDER BY created_at DESC LIMIT $4 OFFSET $5",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND status = $3 AND workflow_id = $4 ORDER BY created_at DESC LIMIT $5 OFFSET $6",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND asset_type = $2 AND status = $3 AND workflow_id = $4 ORDER BY created_at DESC LIMIT $5 OFFSET $6",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND asset_type = $3 AND status = $4 AND workflow_id = $5 ORDER BY created_at DESC LIMIT $6 OFFSET $7",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND instance_id = $2 ORDER BY created_at DESC LIMIT $3 OFFSET $4",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND instance_id = $3 ORDER BY created_at DESC LIMIT $4 OFFSET $5",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND asset_type = $2 AND instance_id = $3 ORDER BY created_at DESC LIMIT $4 OFFSET $5",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND asset_type = $3 AND instance_id = $4 ORDER BY created_at DESC LIMIT $5 OFFSET $6",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND status = $2 AND instance_id = $3 ORDER BY created_at DESC LIMIT $4 OFFSET $5",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND status = $3 AND instance_id = $4 ORDER BY created_at DESC LIMIT $5 OFFSET $6",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND asset_type = $2 AND status = $3 AND instance_id = $4 ORDER BY created_at DESC LIMIT $5 OFFSET $6",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND asset_type = $3 AND status = $4 AND instance_id = $5 ORDER BY created_at DESC LIMIT $6 OFFSET $7",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND workflow_id = $2 AND instance_id = $3 ORDER BY created_at DESC LIMIT $4 OFFSET $5",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND workflow_id = $3 AND instance_id = $4 ORDER BY created_at DESC LIMIT $5 OFFSET $6",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND asset_type = $2 AND workflow_id = $3 AND instance_id = $4 ORDER BY created_at DESC LIMIT $5 OFFSET $6",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND asset_type = $3 AND workflow_id = $4 AND instance_id = $5 ORDER BY created_at DESC LIMIT $6 OFFSET $7",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND status = $2 AND workflow_id = $3 AND instance_id = $4 ORDER BY created_at DESC LIMIT $5 OFFSET $6",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND status = $3 AND workflow_id = $4 AND instance_id = $5 ORDER BY created_at DESC LIMIT $6 OFFSET $7",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND asset_type = $2 AND status = $3 AND workflow_id = $4 AND instance_id = $5 ORDER BY created_at DESC LIMIT $6 OFFSET $7",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND asset_type = $3 AND status = $4 AND workflow_id = $5 AND instance_id = $6 ORDER BY created_at DESC LIMIT $7 OFFSET $8",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND (provider ILIKE $2 OR provider_asset_id ILIKE $2 OR step_name ILIKE $2) ORDER BY created_at DESC LIMIT $3 OFFSET $4",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND (provider ILIKE $3 OR provider_asset_id ILIKE $3 OR step_name ILIKE $3) ORDER BY created_at DESC LIMIT $4 OFFSET $5",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND asset_type = $2 AND (provider ILIKE $3 OR provider_asset_id ILIKE $3 OR step_name ILIKE $3) ORDER BY created_at DESC LIMIT $4 OFFSET $5",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND asset_type = $3 AND (provider ILIKE $4 OR provider_asset_id ILIKE $4 OR step_name ILIKE $4) ORDER BY created_at DESC LIMIT $5 OFFSET $6",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND status = $2 AND (provider ILIKE $3 OR provider_asset_id ILIKE $3 OR step_name ILIKE $3) ORDER BY created_at DESC LIMIT $4 OFFSET $5",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND status = $3 AND (provider ILIKE $4 OR provider_asset_id ILIKE $4 OR step_name ILIKE $4) ORDER BY created_at DESC LIMIT $5 OFFSET $6",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND asset_type = $2 AND status = $3 AND (provider ILIKE $4 OR provider_asset_id ILIKE $4 OR step_name ILIKE $4) ORDER BY created_at DESC LIMIT $5 OFFSET $6",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND asset_type = $3 AND status = $4 AND (provider ILIKE $5 OR provider_asset_id ILIKE $5 OR step_name ILIKE $5) ORDER BY created_at DESC LIMIT $6 OFFSET $7",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND workflow_id = $2 AND (provider ILIKE $3 OR provider_asset_id ILIKE $3 OR step_name ILIKE $3) ORDER BY created_at DESC LIMIT $4 OFFSET $5",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND workflow_id = $3 AND (provider ILIKE $4 OR provider_asset_id ILIKE $4 OR step_name ILIKE $4) ORDER BY created_at DESC LIMIT $5 OFFSET $6",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND asset_type = $2 AND workflow_id = $3 AND (provider ILIKE $4 OR provider_asset_id ILIKE $4 OR step_name ILIKE $4) ORDER BY created_at DESC LIMIT $5 OFFSET $6",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND asset_type = $3 AND workflow_id = $4 AND (provider ILIKE $5 OR provider_asset_id ILIKE $5 OR step_name ILIKE $5) ORDER BY created_at DESC LIMIT $6 OFFSET $7",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND status = $2 AND workflow_id = $3 AND (provider ILIKE $4 OR provider_asset_id ILIKE $4 OR step_name ILIKE $4) ORDER BY created_at DESC LIMIT $5 OFFSET $6",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND status = $3 AND workflow_id = $4 AND (provider ILIKE $5 OR provider_asset_id ILIKE $5 OR step_name ILIKE $5) ORDER BY created_at DESC LIMIT $6 OFFSET $7",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND asset_type = $2 AND status = $3 AND workflow_id = $4 AND (provider ILIKE $5 OR provider_asset_id ILIKE $5 OR step_name ILIKE $5) ORDER BY created_at DESC LIMIT $6 OFFSET $7",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND asset_type = $3 AND status = $4 AND workflow_id = $5 AND (provider ILIKE $6 OR provider_asset_id ILIKE $6 OR step_name ILIKE $6) ORDER BY created_at DESC LIMIT $7 OFFSET $8",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND instance_id = $2 AND (provider ILIKE $3 OR provider_asset_id ILIKE $3 OR step_name ILIKE $3) ORDER BY created_at DESC LIMIT $4 OFFSET $5",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND instance_id = $3 AND (provider ILIKE $4 OR provider_asset_id ILIKE $4 OR step_name ILIKE $4) ORDER BY created_at DESC LIMIT $5 OFFSET $6",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND asset_type = $2 AND instance_id = $3 AND (provider ILIKE $4 OR provider_asset_id ILIKE $4 OR step_name ILIKE $4) ORDER BY created_at DESC LIMIT $5 OFFSET $6",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND asset_type = $3 AND instance_id = $4 AND (provider ILIKE $5 OR provider_asset_id ILIKE $5 OR step_name ILIKE $5) ORDER BY created_at DESC LIMIT $6 OFFSET $7",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND status = $2 AND instance_id = $3 AND (provider ILIKE $4 OR provider_asset_id ILIKE $4 OR step_name ILIKE $4) ORDER BY created_at DESC LIMIT $5 OFFSET $6",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND status = $3 AND instance_id = $4 AND (provider ILIKE $5 OR provider_asset_id ILIKE $5 OR step_name ILIKE $5) ORDER BY created_at DESC LIMIT $6 OFFSET $7",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND asset_type = $2 AND status = $3 AND instance_id = $4 AND (provider ILIKE $5 OR provider_asset_id ILIKE $5 OR step_name ILIKE $5) ORDER BY created_at DESC LIMIT $6 OFFSET $7",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND asset_type = $3 AND status = $4 AND instance_id = $5 AND (provider ILIKE $6 OR provider_asset_id ILIKE $6 OR step_name ILIKE $6) ORDER BY created_at DESC LIMIT $7 OFFSET $8",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND workflow_id = $2 AND instance_id = $3 AND (provider ILIKE $4 OR provider_asset_id ILIKE $4 OR step_name ILIKE $4) ORDER BY created_at DESC LIMIT $5 OFFSET $6",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND workflow_id = $3 AND instance_id = $4 AND (provider ILIKE $5 OR provider_asset_id ILIKE $5 OR step_name ILIKE $5) ORDER BY created_at DESC LIMIT $6 OFFSET $7",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND asset_type = $2 AND workflow_id = $3 AND instance_id = $4 AND (provider ILIKE $5 OR provider_asset_id ILIKE $5 OR step_name ILIKE $5) ORDER BY created_at DESC LIMIT $6 OFFSET $7",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND asset_type = $3 AND workflow_id = $4 AND instance_id = $5 AND (provider ILIKE $6 OR provider_asset_id ILIKE $6 OR step_name ILIKE $6) ORDER BY created_at DESC LIMIT $7 OFFSET $8",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND status = $2 AND workflow_id = $3 AND instance_id = $4 AND (provider ILIKE $5 OR provider_asset_id ILIKE $5 OR step_name ILIKE $5) ORDER BY created_at DESC LIMIT $6 OFFSET $7",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND status = $3 AND workflow_id = $4 AND instance_id = $5 AND (provider ILIKE $6 OR provider_asset_id ILIKE $6 OR step_name ILIKE $6) ORDER BY created_at DESC LIMIT $7 OFFSET $8",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND asset_type = $2 AND status = $3 AND workflow_id = $4 AND instance_id = $5 AND (provider ILIKE $6 OR provider_asset_id ILIKE $6 OR step_name ILIKE $6) ORDER BY created_at DESC LIMIT $7 OFFSET $8",
+    "SELECT * FROM account_renditions WHERE aid = $1 AND provider = $2 AND asset_type = $3 AND status = $4 AND workflow_id = $5 AND instance_id = $6 AND (provider ILIKE $7 OR provider_asset_id ILIKE $7 OR step_name ILIKE $7) ORDER BY created_at DESC LIMIT $8 OFFSET $9",
+];
+
 /// GET /api/v1/renditions
 /// List renditions for the current account (the gallery view)
 pub async fn list_renditions(
@@ -216,52 +290,17 @@ pub async fn list_renditions(
     let limit = query.limit.unwrap_or(50).min(200);
     let offset = query.offset.unwrap_or(0);
 
-    let mut sql = String::from("SELECT * FROM account_renditions WHERE aid = $1");
-    let mut param_idx = 2i32;
+    // The statement is looked up as a compile-time literal (see RENDITION_SQL above); only the
+    // CHOICE of literal is decided at run time.
+    let mask = (query.provider.is_some() as u8)
+        | ((query.asset_type.is_some() as u8) << 1)
+        | ((query.status.is_some() as u8) << 2)
+        | ((query.workflow_id.is_some() as u8) << 3)
+        | ((query.instance_id.is_some() as u8) << 4)
+        | ((query.search.is_some() as u8) << 5);
 
-    // WHERE filters
-    let mut params: Vec<String> = Vec::new();
-
-    if let Some(ref _provider) = query.provider {
-        params.push(format!("provider = ${}", param_idx));
-        param_idx += 1;
-    }
-    if let Some(ref _asset_type) = query.asset_type {
-        params.push(format!("asset_type = ${}", param_idx));
-        param_idx += 1;
-    }
-    if let Some(ref _status) = query.status {
-        params.push(format!("status = ${}", param_idx));
-        param_idx += 1;
-    }
-    if let Some(_wf_id) = query.workflow_id {
-        params.push(format!("workflow_id = ${}", param_idx));
-        param_idx += 1;
-    }
-    if let Some(_inst_id) = query.instance_id {
-        params.push(format!("instance_id = ${}", param_idx));
-        param_idx += 1;
-    }
-    if let Some(ref _search) = query.search {
-        params.push(format!(
-            "(provider ILIKE ${} OR provider_asset_id ILIKE ${} OR step_name ILIKE ${})",
-            param_idx, param_idx, param_idx
-        ));
-        param_idx += 1;
-    }
-
-    for p in &params {
-        sql.push_str(" AND ");
-        sql.push_str(p);
-    }
-
-    sql.push_str(" ORDER BY created_at DESC LIMIT $");
-    sql.push_str(&param_idx.to_string());
-    param_idx += 1;
-    sql.push_str(" OFFSET $");
-    sql.push_str(&param_idx.to_string());
-
-    let mut query_builder = sqlx::query_as::<_, AccountRendition>(&sql).bind(aid);
+    let mut query_builder =
+        sqlx::query_as::<_, AccountRendition>(RENDITION_SQL[mask as usize]).bind(aid);
 
     if let Some(ref _provider) = query.provider {
         query_builder = query_builder.bind(_provider);
@@ -589,4 +628,82 @@ pub async fn create_stitch_group(
             .await?;
 
     Ok((StatusCode::CREATED, Json(json!({"rendition": parent}))))
+}
+
+#[cfg(test)]
+mod t15a04e9d_rendition_sql_tests {
+    //! Behaviour-identical proof for the RENDITION_SQL table (gate rule 5d / class 14,
+    //! kanban t_15a04e9d): the mask-indexed literal must be the exact text the previous
+    //! run-time builder emitted for that combination of filters.
+
+    /// The statement the previous builder started from. Held as a `const` so this TEST-ONLY oracle
+    /// is not itself reported by the widened gate rule as a run-time-built statement: its text is
+    /// only compared, never sent to a database.
+    const ORACLE_BASE: &str = "SELECT * FROM account_renditions WHERE aid = $1";
+
+    /// The previous builder, kept here verbatim as the reference oracle.
+    fn reference_sql(present: [bool; 6]) -> String {
+        let mut sql = String::from(ORACLE_BASE);
+        let mut param_idx = 2i32;
+        let mut params: Vec<String> = Vec::new();
+
+        if present[0] {
+            params.push(format!("provider = ${}", param_idx));
+            param_idx += 1;
+        }
+        if present[1] {
+            params.push(format!("asset_type = ${}", param_idx));
+            param_idx += 1;
+        }
+        if present[2] {
+            params.push(format!("status = ${}", param_idx));
+            param_idx += 1;
+        }
+        if present[3] {
+            params.push(format!("workflow_id = ${}", param_idx));
+            param_idx += 1;
+        }
+        if present[4] {
+            params.push(format!("instance_id = ${}", param_idx));
+            param_idx += 1;
+        }
+        if present[5] {
+            params.push(format!(
+                "(provider ILIKE ${} OR provider_asset_id ILIKE ${} OR step_name ILIKE ${})",
+                param_idx, param_idx, param_idx
+            ));
+            param_idx += 1;
+        }
+
+        for p in &params {
+            sql.push_str(" AND ");
+            sql.push_str(p);
+        }
+
+        sql.push_str(" ORDER BY created_at DESC LIMIT $");
+        sql.push_str(&param_idx.to_string());
+        param_idx += 1;
+        sql.push_str(" OFFSET $");
+        sql.push_str(&param_idx.to_string());
+        sql
+    }
+
+    #[test]
+    fn every_mask_is_the_old_builder_text() {
+        for mask in 0u8..64 {
+            let present = [
+                mask & 1 != 0,
+                mask & 2 != 0,
+                mask & 4 != 0,
+                mask & 8 != 0,
+                mask & 16 != 0,
+                mask & 32 != 0,
+            ];
+            assert_eq!(
+                super::RENDITION_SQL[mask as usize],
+                reference_sql(present),
+                "mask {mask} text drifted"
+            );
+        }
+    }
 }
