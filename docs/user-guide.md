@@ -44,7 +44,9 @@ Base API: `https://workflowswift.com/api/v1` — all non-public endpoints need
   template-based platform mail, not a workflow sender) and no SMS provider at all, so both were
   channels a step could be built on that delivered nothing. The API refuses them the same way it
   refuses an unknown step type, and a step stored with one keeps its place as a no-op that names the
-  retirement.
+  retirement. Its URL goes through the same destination check as an HTTP Request step, and a
+  destination that answers non-2xx (or cannot be reached) fails the step — the run history records
+  the status and the reason, so a notification that did not go out is never reported as sent.
 - **HTTP Request / Action / Render Video/Image/Audio**: an HTTP Request or Action step calls the
   URL you configure, with the method you pick, and the run history records the status and the reply.
   A Render step calls your provider's `endpoint` and logs the result under **Renditions** (provider,

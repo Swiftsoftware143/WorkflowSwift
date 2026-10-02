@@ -348,6 +348,29 @@ async fn run_in_process(
         ));
     }
 
+    // A Notify step that could not send anything (a channel with no sender in this app, a blank
+    // Webhook URL — kanban t_e0e6a42e) is `skipped` with an `undeliverable` reason. It is not a
+    // failed step, but the run must not read as a clean success around a notification that went
+    // nowhere, so the reason is surfaced here.
+    let mut undeliverable: Vec<String> = outcome
+        .steps
+        .iter()
+        .filter_map(|s| {
+            s.get("undeliverable")
+                .and_then(|v| v.as_str())
+                .map(|t| t.to_string())
+        })
+        .collect();
+    undeliverable.sort();
+    undeliverable.dedup();
+    if !undeliverable.is_empty() {
+        warnings.push(format!(
+            "{} step(s) sent nothing: {}. Fix the step's configuration and re-run.",
+            undeliverable.len(),
+            undeliverable.join("; ")
+        ));
+    }
+
     let remaining_balance: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
     )

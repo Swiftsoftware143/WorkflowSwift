@@ -196,6 +196,59 @@ fn unexecutable_step_result(step: usize, step_type: &str) -> Value {
     })
 }
 
+/// The result of the `notify` arm's one outbound call (kanban t_e0e6a42e).
+///
+/// An `Ok` carries the upstream status **code**, which `classify_step_status` maps to `failed`
+/// for anything outside 2xx-3xx — so a destination that answers 404/500 fails the step instead
+/// of reading as a completion. An `Err` (a destination the SSRF gate refused, a transport
+/// failure, a timeout) is an explicit `error` with the reason. The arm this replaced collapsed
+/// BOTH into `status: "completed"`, which is how a 404 from a webhook that does not exist was
+/// reported as a successful Notify step.
+fn notify_step_result(
+    step: usize,
+    channel: &str,
+    url: &str,
+    call: Result<(u16, String), String>,
+) -> Value {
+    match call {
+        Ok((status, body)) => json!({
+            "step": step,
+            "type": "notify",
+            "status": status,
+            "channel": channel,
+            "recipient": url,
+            "response": truncate_for_log(&body, 500),
+        }),
+        Err(e) => json!({
+            "step": step,
+            "type": "notify",
+            "status": "error",
+            "channel": channel,
+            "recipient": url,
+            "error": e,
+        }),
+    }
+}
+
+/// A Notify step that could not send anything, with the reason NAMING the missing sender.
+///
+/// Two shapes reach it, both of them a row written straight into the database (the steps API
+/// refuses a channel outside `NOTIFY_CHANNELS` and requires a `recipient`): a channel retired by
+/// kanban t_08be842f (`email`/`sms` — this app has no mail relay reachable from a step and no SMS
+/// provider) and a blank Webhook URL. It is `skipped`, not `completed`: the step did nothing, and
+/// the walk's roll-up would otherwise report a run around it as a clean success. `undeliverable`
+/// carries the reason to the run's `warnings[]` (workflow_handler::run_in_process).
+fn notify_undeliverable_result(step: usize, channel: &str, reason: &str) -> Value {
+    json!({
+        "step": step,
+        "type": "notify",
+        "status": "skipped",
+        "channel": channel,
+        "undeliverable": reason,
+        "reason": reason,
+    })
+}
+
 /// One outbound call for the step arms whose destination comes from the step's own config
 /// (`webhook`, `http-request`/`action`, `render_*`).
 ///
@@ -1406,50 +1459,48 @@ async fn walk(
                     .get("recipient")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
-                let subject = step_config
-                    .get("subject")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
                 let message = step_config
                     .get("message")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
 
-                // Route to n8n notification handler
-                let n8n_payload = json!({
-                    "action": "notify",
-                    "channel": channel,
-                    "recipient": recipient,
-                    "subject": subject,
-                    "message": message,
-                    "context": context,
-                    "contact": contact,
-                    "data": data,
-                });
-
-                let n8n_url = format!(
-                    "{}/webhook/workflowswift-notify",
-                    state.config.n8n_webhook_url.trim_end_matches('/')
-                );
-                let client = reqwest::Client::new();
-                let mut req = client
-                    .post(&n8n_url)
-                    .json(&n8n_payload)
-                    .timeout(std::time::Duration::from_secs(15));
-                if !state.config.n8n_api_key.is_empty() {
-                    req = req.header("X-API-Key", &state.config.n8n_api_key);
-                }
-
-                let notify_result = req.send().await;
-
-                match notify_result {
-                    Ok(resp) => {
-                        let body = resp.text().await.unwrap_or_default();
-                        json!({"step": i, "type": "notify", "status": "completed", "channel": channel, "recipient": recipient, "response": body})
-                    }
-                    Err(e) => {
-                        json!({"step": i, "type": "notify", "status": "completed", "channel": channel, "recipient": recipient, "note": format!("Notify queued (n8n: {})", e)})
-                    }
+                // The `webhook` channel is an OUTBOUND POST of `{message, data}` to the URL the
+                // tenant configured as the step's Recipient — the console's own words ("POSTs the
+                // run data to a webhook URL you own", www-app/index.html) and the exact call the
+                // n8n mirror emits (src/n8n_converter.rs, notify arm). It is NOT a platform
+                // endpoint.
+                //
+                // This arm used to POST a platform-shaped body
+                // (`{action, channel, recipient, subject, message, context, contact, data}`) to
+                // `{N8N_WEBHOOK_URL}/webhook/workflowswift-notify` — a webhook that is not
+                // registered (404) — and returned `status: "completed"` for ANY outcome, 404 and
+                // transport error included (measured live 2026-10-02, kanban t_e0e6a42e: the step
+                // reported completed, the run reported completed, and the tenant's own URL was
+                // never called). A retired channel or a blank URL is not a completed step either.
+                if !is_notify_channel(channel) {
+                    json!(notify_undeliverable_result(
+                        i,
+                        channel,
+                        &format!(
+                            "Notify channel '{}' has no sender in this app (the console's Notify \
+                             channel is {})",
+                            channel,
+                            notify_channel_list()
+                        )
+                    ))
+                } else if recipient.is_empty() {
+                    json!(notify_undeliverable_result(
+                        i,
+                        channel,
+                        "Notify step has a blank Webhook URL, so it sent nothing"
+                    ))
+                } else {
+                    // The tenant's URL runs through the same SSRF destination gate as every other
+                    // step whose target comes from step config — this arm never ran it before,
+                    // because it never called the tenant's URL at all.
+                    let payload = json!({ "message": message, "data": data });
+                    let call = step_outbound_call("POST", recipient, &payload, 15).await;
+                    notify_step_result(i, channel, recipient, call)
                 }
             }
             "data-card" | "data_card" => {
@@ -1955,6 +2006,98 @@ mod tests {
             !include_str!("execution.rs").contains(&retired),
             "the silent-warning string must be gone from the engine"
         );
+    }
+
+    /// The Notify arm (kanban t_e0e6a42e): a destination that refuses the call must fail the
+    /// step, and a step that could not send anything must say so.
+    ///
+    /// Executed, not asserted on paper — `notify_step_result` is the exact function the arm hands
+    /// its call result to, and `classify_step_status` is what the walk (and the instance roll-up)
+    /// reads. The control leg is the PRE-FIX shape: the same 404 body, wrapped with
+    /// `status: "completed"` the way the old arm did it, which the walk called success.
+    #[test]
+    fn a_notify_webhook_that_answers_404_is_not_a_completed_step() {
+        let body = "{\"code\":404,\"message\":\"The requested webhook \\\"POST \
+                    workflowswift-notify\\\" is not registered.\"}";
+
+        // PRE-FIX control: any status code read as completed, with the 404 body in `response`.
+        let control = json!({
+            "step": 0, "type": "notify", "status": "completed", "channel": "webhook",
+            "recipient": "https://tenant.example.com/hook", "response": body,
+        });
+        assert_eq!(
+            classify_step_status(&control),
+            "completed",
+            "the pre-fix arm reported a 404 as a completed Notify step"
+        );
+
+        // The arm now: the upstream code IS the step status, so the walk records a failure and
+        // the log row names what came back.
+        let refused = notify_step_result(
+            0,
+            "webhook",
+            "https://tenant.example.com/hook",
+            Ok((404, body.to_string())),
+        );
+        assert_eq!(classify_step_status(&refused), "failed");
+        assert_eq!(refused.get("status").unwrap(), &json!(404));
+        assert_eq!(
+            step_error_text(&refused).unwrap(),
+            "upstream returned HTTP 404"
+        );
+        assert_eq!(refused.get("response").unwrap(), &json!(body));
+
+        // A 2xx is still a completion.
+        let delivered = notify_step_result(
+            0,
+            "webhook",
+            "https://tenant.example.com/hook",
+            Ok((200, "{\"ok\":true}".to_string())),
+        );
+        assert_eq!(classify_step_status(&delivered), "completed");
+
+        // A transport failure / a destination the SSRF gate refused is an explicit error, not a
+        // completion with a note.
+        let unreachable = notify_step_result(
+            0,
+            "webhook",
+            "http://127.0.0.1:9/hook",
+            Err(
+                "'127.0.0.1' resolves to 127.0.0.1 — a loopback/private/link-local address is \
+                 not a valid destination for a workflow step"
+                    .to_string(),
+            ),
+        );
+        assert_eq!(classify_step_status(&unreachable), "failed");
+        assert_eq!(unreachable.get("status").unwrap(), &json!("error"));
+        assert!(step_error_text(&unreachable)
+            .unwrap_or_default()
+            .contains("not a valid destination"));
+        assert!(
+            unreachable.get("note").is_none(),
+            "the old arm's 'Notify queued' note was the lie this replaces"
+        );
+
+        // A step that could not send anything NAMES the missing sender and is not a completion.
+        let retired = notify_undeliverable_result(
+            0,
+            "email",
+            "Notify channel 'email' has no sender in this app (the console's Notify channel is webhook)",
+        );
+        assert_eq!(classify_step_status(&retired), "skipped");
+        assert!(retired
+            .get("undeliverable")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .contains("no sender in this app"));
+        let blank =
+            notify_undeliverable_result(0, "webhook", "Notify step has a blank Webhook URL");
+        assert_eq!(classify_step_status(&blank), "skipped");
+        assert!(blank
+            .get("undeliverable")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .contains("blank Webhook URL"));
     }
 
     /// The destination gate is a refusal of the address, not of the URL shape: this box's own
