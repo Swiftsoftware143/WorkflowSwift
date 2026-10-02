@@ -873,7 +873,10 @@ pub async fn get_workflow_steps(
 /// no write path looked at what it left at position 0. It is enforced on every
 /// write that decides the order — create, update-with-move, reorder — and
 /// reported by validate-steps.
-fn is_data_card(step_type: &str) -> bool {
+/// The one Data-Card vocabulary predicate. `pub(crate)` because the template path asks the SAME
+/// question of a template's own first step — a template is installed as a workflow, so the two
+/// doors must not disagree about which types are a Data Card (kanban t_96e77263).
+pub(crate) fn is_data_card(step_type: &str) -> bool {
     matches!(step_type, "data-card" | "data_card")
 }
 
@@ -951,11 +954,29 @@ async fn load_ordered_steps(
     Ok(rows)
 }
 
+/// The Data-Card-first rule as ONE predicate: given whatever ends up at a workflow's position 0,
+/// answer yes or the refusal. Every write path that decides the order asks this — the Builder's
+/// create/reorder (below) and the template path's create/import/install (kanban t_96e77263), which
+/// is the only way the two doors cannot drift apart again.
+pub(crate) fn assert_first_step_is_data_card(
+    first_step_type: Option<&str>,
+) -> Result<(), AppError> {
+    match first_step_type {
+        Some(first) if !is_data_card(first) => Err(data_card_first_error()),
+        _ => Ok(()),
+    }
+}
+
 /// Refuse a write that would leave a non-Data-Card step first — unless the
 /// workflow already breaks the rule today, in which case it stays editable.
 /// The grandfather clause matters: the inbound-capture workflows legitimately
 /// start with an `integration` step, and refusing them would make live data
 /// impossible to edit.
+///
+/// The grandfather reads the CURRENT rows only. A NEW workflow (nothing at position 0 yet) has
+/// nothing to grandfather, so its step 1 is refused outright — which is exactly the template path's
+/// semantics: `create_template`/`import_template`/`install` all build a workflow that does not
+/// exist yet (kanban t_96e77263).
 fn assert_data_card_first(
     current: &[StepOrderRow],
     projected: &[StepOrderRow],
@@ -967,10 +988,7 @@ fn assert_data_card_first(
     if !already_ok {
         return Ok(());
     }
-    match projected.first() {
-        Some(first) if !is_data_card(&first.step_type) => Err(data_card_first_error()),
-        _ => Ok(()),
-    }
+    assert_first_step_is_data_card(projected.first().map(|s| s.step_type.as_str()))
 }
 
 pub async fn create_workflow_step(
@@ -1000,9 +1018,10 @@ pub async fn create_workflow_step(
 
     let sort_order = max_sort.and_then(|r| r.0).map(|m| m + 1).unwrap_or(0);
 
-    // Guardrail: step 1 of a workflow is always a Data Card.
-    if sort_order == 0 && !is_data_card(&req.step_type) {
-        return Err(data_card_first_error());
+    // Guardrail: step 1 of a workflow is always a Data Card. This is the SAME predicate the
+    // template path runs on a template's first step (kanban t_96e77263).
+    if sort_order == 0 {
+        assert_first_step_is_data_card(Some(&req.step_type))?;
     }
 
     // The whole vocabulary is `crate::execution::EXECUTABLE_STEP_TYPES`, so a step the engine has

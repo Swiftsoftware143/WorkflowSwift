@@ -32,7 +32,9 @@ Base API: `https://workflowswift.com/api/v1` — all non-public endpoints need
 - **Steps**: add, edit (name, description, config), reorder, delete. A step's **type is fixed
   when you create it** — to change the type, delete the step and add a new one.
 - **Step 1 is a Data Card step**: it picks a dashboard widget **by name** (e.g. "Orlando
-  Plumbers") from the widgets in your dashboard — nothing is hardcoded.
+  Plumbers") from the widgets in your dashboard — nothing is hardcoded. The API refuses any other
+  first step, and it refuses it on **every** door that decides the order: adding a step, moving a
+  step, and a **template** (which installs as a workflow — see Templates below).
 - **Step types**: Data Card, AI Action, Notify, Delay/Wait, Fork, HTTP Request, Action,
   Render Video/Image/Audio, Condition, Webhook and Manual/Approval — and **every one of them
   executes**. The API refuses any other step type (`POST /workflows/{id}/steps` answers `400`), so
@@ -92,6 +94,12 @@ Base API: `https://workflowswift.com/api/v1` — all non-public endpoints need
   as-is. That is now enforced on the way in: a template carrying a step type with no executor is
   refused — on create, on import and on install — with the offending step named and the valid
   types listed, so an install can no longer produce a workflow made of steps that do nothing.
+- A template's **step 1 is the installed workflow's step 1**, so the Data-Card rule holds here too:
+  a template whose first step (the lowest `sort_order`) is not a **Data Card** is refused — on
+  create, on import **and** on install — with the offending step and its type named, because the
+  Builder would refuse to build that workflow. (Workflows this platform created itself with another
+  first step — the inbound-capture `integration` — keep running and stay editable; the rule governs
+  what the API lets you *build*.)
 - The gallery's **Government Contracting Lifecycle** template is a 10-stage checklist: its first
   step is the Data Card every workflow opens with (pick your dashboard widget for it), and each
   stage after it is a **Manual / Approval** step — the run parks at the stage and you **Approve**

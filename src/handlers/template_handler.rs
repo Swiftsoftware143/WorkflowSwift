@@ -217,6 +217,81 @@ fn assert_template_step_runnable(
     super::workflow_handler::assert_notify_channel_ok(step_type, config)
 }
 
+/// A template step in the order install would copy it into the new workflow.
+///
+/// `sort_order` decides, exactly as it does for the workflow itself; the tiebreak only makes a tie
+/// deterministic (step id for a stored row, position for an incoming request), mirroring
+/// `workflow_handler::load_ordered_steps`' `(sort_order, id)` walk.
+struct TemplateStepOrder {
+    sort_order: i32,
+    tiebreak: String,
+    step_type: String,
+    name: String,
+}
+
+impl TemplateStepOrder {
+    fn from_request(position: usize, step: &TemplateStep) -> Self {
+        Self {
+            sort_order: step.sort_order,
+            tiebreak: format!("{position:06}"),
+            step_type: step.step_type.clone(),
+            name: step.name.clone(),
+        }
+    }
+
+    fn from_row(step: &WorkflowTemplateStep) -> Self {
+        Self {
+            sort_order: step.sort_order,
+            tiebreak: step.id.to_string(),
+            step_type: step.step_type.clone(),
+            name: step.name.clone(),
+        }
+    }
+
+    /// The step that lands at position 0 — the one the Builder calls "step 1".
+    fn first(steps: &[TemplateStepOrder]) -> Option<&TemplateStepOrder> {
+        steps
+            .iter()
+            .min_by(|a, b| (a.sort_order, &a.tiebreak).cmp(&(b.sort_order, &b.tiebreak)))
+    }
+}
+
+/// Refuse a template whose step 1 is not a Data Card.
+///
+/// The steps API refuses to build a workflow that opens with anything else
+/// (`workflow_handler::assert_first_step_is_data_card`, the rule docs/user-guide.md and the
+/// Builder's own picker both state), and `install` copies a template's steps into a NEW workflow
+/// verbatim. Without this the template path was a second door into `workflow_steps` that could
+/// manufacture exactly the shape the Builder refuses — measured live before kanban t_96e77263:
+/// a template with a `manual` step at position 0 was created (201) and installed (201).
+///
+/// The grandfather clause is deliberately NOT applied here, and this is the difference from the
+/// workflow edit paths: those grandfather an EXISTING workflow so live data stays editable. The
+/// workflow this guard protects does not exist yet — create_template builds a new template and
+/// install builds a new workflow — so there is nothing to grandfather and a non-Data-Card step 1
+/// is refused outright. The rule the app ships is unchanged: the inbound-capture workflows
+/// (`integration` first) keep running and stay editable, they just cannot be authored as new
+/// templates or installed as new workflows through this API.
+///
+/// An empty template has no step 1 and passes here; `install` refuses it separately ("Template has
+/// no steps").
+fn assert_template_opens_with_data_card(steps: &[TemplateStepOrder]) -> Result<(), AppError> {
+    let first = match TemplateStepOrder::first(steps) {
+        Some(first) => first,
+        None => return Ok(()),
+    };
+    if super::workflow_handler::is_data_card(&first.step_type) {
+        return Ok(());
+    }
+    Err(AppError::Validation(format!(
+        "Template step '{}' (step type '{}') would be step 1 of the workflow this template \
+         installs, but step 1 of a workflow must be a Data Card ('data-card') — it is what pulls \
+         the run's data, and the Builder refuses to build a workflow whose step 1 is not a Data \
+         Card. Make the template's first step (the lowest sort_order) a Data Card.",
+        first.name, first.step_type
+    )))
+}
+
 pub async fn create_template(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -230,6 +305,16 @@ pub async fn create_template(
     for step in &req.steps {
         assert_template_step_runnable(&step.step_type, &step.name, &step.config)?;
     }
+    // …and the ORDER too (kanban t_96e77263): install copies these steps into a new workflow
+    // verbatim, so a template that opens with anything but a Data Card would install a workflow the
+    // Builder refuses to build. Refused before the template row exists, like the check above.
+    assert_template_opens_with_data_card(
+        &req.steps
+            .iter()
+            .enumerate()
+            .map(|(i, s)| TemplateStepOrder::from_request(i, s))
+            .collect::<Vec<_>>(),
+    )?;
 
     let template_id = Uuid::new_v4();
     let template = sqlx::query_as::<_, WorkflowTemplate>(
@@ -416,6 +501,17 @@ pub async fn install_template_as_workflow(
         assert_template_step_runnable(&step.step_type, &step.name, &step.config)?;
     }
 
+    // …and the ORDER, for the same reason and at the same point (kanban t_96e77263): this call is
+    // what copies the template's position-0 step into a NEW workflow's position 0, so a stored
+    // template that opens with anything but a Data Card is refused here with a named reason
+    // instead of installing a workflow the Builder would refuse to build.
+    assert_template_opens_with_data_card(
+        &template_steps
+            .iter()
+            .map(TemplateStepOrder::from_row)
+            .collect::<Vec<_>>(),
+    )?;
+
     // Allow caller to override name/description/surface_id
     let workflow_name = req
         .get("name")
@@ -583,6 +679,15 @@ pub async fn import_template(
     for step in &req.steps {
         assert_template_step_runnable(&step.step_type, &step.name, &step.config)?;
     }
+    // The ordering rule is the same guard one level up (kanban t_96e77263) — an imported file is
+    // still a template, and a template's step 1 is the installed workflow's step 1.
+    assert_template_opens_with_data_card(
+        &req.steps
+            .iter()
+            .enumerate()
+            .map(|(i, s)| TemplateStepOrder::from_request(i, s))
+            .collect::<Vec<_>>(),
+    )?;
 
     let template_id = Uuid::new_v4();
     let template = sqlx::query_as::<_, WorkflowTemplate>(
@@ -686,5 +791,105 @@ mod tests {
             err.to_string().contains("email"),
             "the refusal must name the channel: {err}"
         );
+    }
+
+    // ── The ordering rule on the template path (kanban t_96e77263) ────────────────────────────────
+    //
+    // A template's position-0 step becomes the installed workflow's position-0 step, and the Builder
+    // refuses to build a workflow that opens with anything but a Data Card. Measured live before the
+    // fix: `POST /templates` with a `manual` step at sort_order 0 answered 201 and
+    // `POST /templates/{id}/install` answered 201 — manufacturing the shape the Builder refuses.
+
+    fn req_step(step_type: &str, name: &str, sort_order: i32) -> TemplateStep {
+        TemplateStep {
+            step_type: step_type.to_string(),
+            name: name.to_string(),
+            description: None,
+            sort_order,
+            config: None,
+        }
+    }
+
+    fn template_row(
+        id: Uuid,
+        step_type: &str,
+        name: &str,
+        sort_order: i32,
+    ) -> WorkflowTemplateStep {
+        WorkflowTemplateStep {
+            id,
+            template_id: Uuid::new_v4(),
+            step_type: step_type.to_string(),
+            name: name.to_string(),
+            description: None,
+            sort_order,
+            config: None,
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn a_template_that_opens_with_a_data_card_is_accepted() {
+        let steps = vec![
+            TemplateStepOrder::from_request(0, &req_step("data-card", "Discover", 0)),
+            TemplateStepOrder::from_request(1, &req_step("manual", "Qualify", 1)),
+        ];
+        assert!(assert_template_opens_with_data_card(&steps).is_ok());
+    }
+
+    #[test]
+    fn a_template_that_opens_with_anything_else_is_refused_and_names_the_step() {
+        let steps = vec![TemplateStepOrder::from_request(
+            0,
+            &req_step("manual", "Qualify", 0),
+        )];
+        let err = assert_template_opens_with_data_card(&steps)
+            .expect_err("a template whose step 1 is a manual step must be refused");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Qualify"),
+            "must name the offending step: {msg}"
+        );
+        assert!(msg.contains("manual"), "must name its type: {msg}");
+        assert!(
+            msg.contains("data-card"),
+            "must name the rule it breaks: {msg}"
+        );
+    }
+
+    /// The step that SITS at position 0 decides, not the order the steps arrive in — the lowest
+    /// `sort_order` is what install copies first.
+    #[test]
+    fn the_lowest_sort_order_decides_not_the_array_order() {
+        let steps = vec![
+            TemplateStepOrder::from_request(0, &req_step("data-card", "Discover", 3)),
+            TemplateStepOrder::from_request(1, &req_step("manual", "Qualify", 0)),
+        ];
+        let err = assert_template_opens_with_data_card(&steps)
+            .expect_err("sort_order 0 is the manual step, whatever the JSON order is");
+        assert!(err.to_string().contains("Qualify"), "{err}");
+    }
+
+    /// An empty template has no step 1 to refuse; `install` refuses it separately with its own
+    /// message ("Template has no steps").
+    #[test]
+    fn an_empty_template_has_no_step_one_to_refuse() {
+        assert!(assert_template_opens_with_data_card(&[]).is_ok());
+    }
+
+    /// The install leg reads STORED rows, so the rule has to hold for a template written straight
+    /// into the table (what a pre-rule template looks like). There is deliberately no grandfather
+    /// here: the workflow being protected does not exist yet.
+    #[test]
+    fn a_stored_template_that_opens_with_a_manual_step_is_refused() {
+        let rows = vec![
+            template_row(Uuid::new_v4(), "manual", "Qualify", 0),
+            template_row(Uuid::new_v4(), "data-card", "Discover", 1),
+        ];
+        let ordered: Vec<TemplateStepOrder> =
+            rows.iter().map(TemplateStepOrder::from_row).collect();
+        let err = assert_template_opens_with_data_card(&ordered)
+            .expect_err("a stored template whose first step is manual must not install");
+        assert!(err.to_string().contains("Qualify"), "{err}");
     }
 }
