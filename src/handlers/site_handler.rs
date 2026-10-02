@@ -413,6 +413,103 @@ fn inject_site_settings(html: &str, s: &serde_json::Value) -> String {
                 replace_inner_after(&mut result, "</h1>", "<p", "</p>", sh);
             }
         }
+
+        // ── The REST of the homepage editors (kanban t_e8bfd1f3) ──
+        // One card after t_0be214ec: the Site Configuration panel renders these editors, the row
+        // stores what the operator types, and no reader moved any of them — an operator's input
+        // landed in `admin_settings.workflowswift_site.homepage` and appeared nowhere. Each is now
+        // IN-PLACE surgery on an element the SERVED page already carries, located by the section
+        // that owns it (never by position, never by the value it currently holds, so a field stays
+        // repeatable after the operator sets it), and each is a no-op when the value equals the
+        // shipped one — the reconciled row IS the shipped row, so the applier's `--check` reads
+        // `unchanged` and the 5-minute run cannot rewrite the live homepage. A blank value leaves
+        // the shipped element alone: clearing a field can never blank a live page.
+        if let Some(v) = hp.get("logo_text").and_then(|v| v.as_str()) {
+            if !v.trim().is_empty() {
+                // The logo's icon box (`<div class="logo-icon">WS</div>`) is shipped markup the
+                // operator does not own; only the wordmark text node after it is the field's.
+                replace_logo_text(&mut result, v);
+            }
+        }
+        if let Some(v) = hp.get("sign_in_url").and_then(|v| v.as_str()) {
+            if !v.trim().is_empty() {
+                // BOTH sign-in entry points move together (the nav's plain link and the hero's
+                // outline button): "the sign-in URL" is one destination and the page offers it
+                // twice, so honouring only one would leave the page contradicting itself.
+                replace_plain_link_href_after(&mut result, "class=\"nav-links\"", v);
+                replace_anchor_href_after(
+                    &mut result,
+                    "class=\"hero-actions\"",
+                    "class=\"btn btn-outline\"",
+                    v,
+                );
+            }
+        }
+        if let Some(v) = hp.get("nav_cta_text").and_then(|v| v.as_str()) {
+            if !v.trim().is_empty() {
+                replace_anchor_inner_after(
+                    &mut result,
+                    "class=\"nav-links\"",
+                    "class=\"btn btn-primary\"",
+                    v,
+                );
+            }
+        }
+        if let Some(v) = hp.get("button_text").and_then(|v| v.as_str()) {
+            if !v.trim().is_empty() {
+                replace_anchor_inner_after(
+                    &mut result,
+                    "class=\"hero-actions\"",
+                    "class=\"btn btn-primary\"",
+                    v,
+                );
+            }
+        }
+        if let Some(v) = hp.get("secondary_button_text").and_then(|v| v.as_str()) {
+            if !v.trim().is_empty() {
+                replace_anchor_inner_after(
+                    &mut result,
+                    "class=\"hero-actions\"",
+                    "class=\"btn btn-outline\"",
+                    v,
+                );
+            }
+        }
+        if let Some(v) = hp.get("features_heading").and_then(|v| v.as_str()) {
+            if !v.trim().is_empty() {
+                // The FIRST `<h2>` after the features section. The page carries three `<h2>`,
+                // so the section anchor is what makes "the features heading" mean one element.
+                replace_inner_after(
+                    &mut result,
+                    "<section class=\"features\" id=\"features\">",
+                    "<h2",
+                    "</h2>",
+                    v,
+                );
+            }
+        }
+        if let Some(v) = hp.get("cta_heading").and_then(|v| v.as_str()) {
+            if !v.trim().is_empty() {
+                replace_inner_after(&mut result, "<section class=\"cta\">", "<h2", "</h2>", v);
+            }
+        }
+        if let Some(v) = hp.get("cta_text").and_then(|v| v.as_str()) {
+            if !v.trim().is_empty() {
+                replace_inner_after(&mut result, "<section class=\"cta\">", "<p", "</p>", v);
+            }
+        }
+        if let Some(v) = hp.get("footer_text").and_then(|v| v.as_str()) {
+            if !v.trim().is_empty() {
+                // The footer's FIRST `<p>` — the one carrying the copyright and the SwiftSoftware
+                // link. The legal-links `<p>` below it is shipped copy and stays.
+                replace_inner_after(&mut result, "<footer>", "<p", "</p>", v);
+            }
+        }
+        // NOTE: `homepage.features[]` is deliberately NOT read. Measured on the panel
+        // (`www-admin/index.html`): there is no features editor at all — the payload posted
+        // `features: []` on every save — and the six feature cards are a repeating structure no
+        // single field can express, so the dead key was deleted from the payload, the defaults and
+        // the row instead of being half-wired (kanban t_e8bfd1f3).
     }
 
     result
@@ -474,6 +571,134 @@ fn replace_inner_after(r: &mut String, anchor: &str, open_prefix: &str, close: &
         None => return,
     };
     if let Some(e) = r[start..].find(close) {
+        r.replace_range(start..start + e, value);
+    }
+}
+
+/// Replace the inner text of the FIRST `<a …>` element after `anchor` whose open tag contains
+/// `needle` (kanban t_e8bfd1f3).
+///
+/// The nav CTA and the hero's two buttons are three of the page's six `class="btn …"` anchors, so
+/// the element is located by the section that OWNS it (`class="nav-links"` / `class="hero-actions"`)
+/// and its own button class — never by position, and never by the text it currently carries (which
+/// is the value this field itself rewrites: a value-based locator would stop finding the element the
+/// moment an operator set it).
+fn replace_anchor_inner_after(r: &mut String, anchor: &str, needle: &str, value: &str) {
+    let mut from = match r.find(anchor) {
+        Some(p) => p + anchor.len(),
+        None => return,
+    };
+    loop {
+        let a = match r[from..].find("<a ") {
+            Some(p) => from + p,
+            None => return,
+        };
+        let gt = match r[a..].find('>') {
+            Some(p) => a + p,
+            None => return,
+        };
+        if r[a..gt].contains(needle) {
+            let start = gt + 1;
+            if let Some(e) = r[start..].find("</a>") {
+                r.replace_range(start..start + e, value);
+            }
+            return;
+        }
+        from = gt + 1;
+    }
+}
+
+/// Replace the `href` value of the FIRST `<a …>` element after `anchor` whose open tag contains
+/// `needle` (kanban t_e8bfd1f3).
+fn replace_anchor_href_after(r: &mut String, anchor: &str, needle: &str, href: &str) {
+    let mut from = match r.find(anchor) {
+        Some(p) => p + anchor.len(),
+        None => return,
+    };
+    loop {
+        let a = match r[from..].find("<a ") {
+            Some(p) => from + p,
+            None => return,
+        };
+        let gt = match r[a..].find('>') {
+            Some(p) => a + p,
+            None => return,
+        };
+        if r[a..gt].contains(needle) {
+            if let Some(h) = r[a..gt].find("href=\"") {
+                let start = a + h + "href=\"".len();
+                if let Some(e) = r[start..].find('"') {
+                    r.replace_range(start..start + e, href);
+                }
+            }
+            return;
+        }
+        from = gt + 1;
+    }
+}
+
+/// Replace the `href` of the FIRST *plain* link after `anchor`: an `<a>` that carries no `class`
+/// attribute and does not point at a fragment (kanban t_e8bfd1f3).
+///
+/// The nav's sign-in link is the only nav anchor with no class — `#features` / `#extension` scroll
+/// and the CTA is `class="btn btn-primary"` — so the sign-in element is located STRUCTURALLY. A
+/// locator that matched the shipped `/login` URL instead would render the value once and then never
+/// find the element again (the field would be one-shot), which is why the href's current value is
+/// deliberately not consulted.
+fn replace_plain_link_href_after(r: &mut String, anchor: &str, href: &str) {
+    let mut from = match r.find(anchor) {
+        Some(p) => p + anchor.len(),
+        None => return,
+    };
+    loop {
+        let a = match r[from..].find("<a ") {
+            Some(p) => from + p,
+            None => return,
+        };
+        let gt = match r[a..].find('>') {
+            Some(p) => a + p,
+            None => return,
+        };
+        let classless = !r[a..gt].contains("class=");
+        let href_at = r[a..gt].find("href=\"");
+        if classless {
+            if let Some(h) = href_at {
+                let start = a + h + "href=\"".len();
+                if let Some(e) = r[start..].find('"') {
+                    let is_fragment = r[start..start + e].starts_with('#');
+                    if !is_fragment {
+                        r.replace_range(start..start + e, href);
+                        return;
+                    }
+                }
+            }
+        }
+        from = gt + 1;
+    }
+}
+
+/// Replace the logo anchor's TEXT NODE, keeping its icon box (kanban t_e8bfd1f3).
+///
+/// The served markup is
+/// `<a href="/" class="logo"><div class="logo-icon">WS</div>WorkflowSwift</a>`: the icon box is
+/// shipped markup the operator does not own — "Logo Text" is the wordmark — so the region this
+/// field owns is the bytes between the icon's `</div>` and the anchor's `</a>`. Idempotent: after a
+/// render the same `</div>` is still the icon's, so re-rendering substitutes the value with itself.
+fn replace_logo_text(r: &mut String, value: &str) {
+    let a = match r.find("class=\"logo\"") {
+        Some(p) => p,
+        None => return,
+    };
+    let gt = match r[a..].find('>') {
+        Some(p) => a + p + 1,
+        None => return,
+    };
+    // A logo anchor with no icon box owns everything up to its own close tag.
+    let start = match r[gt..].find("</div>") {
+        Some(p) => gt + p + "</div>".len(),
+        None => gt,
+    };
+    if let Some(e) = r[start..].find("</a>") {
         r.replace_range(start..start + e, value);
     }
 }
@@ -728,18 +953,26 @@ fn default_site_settings() -> serde_json::Value {
 }
 "#,
         "homepage": {
+            // Every one of these is the SERVED byte string (kanban t_e8bfd1f3 derives them in
+            // `audits/t_e8bfd1f3/10-populate-row.py` from the published page), so a fresh install —
+            // no row at all — still renders the live homepage byte-for-byte. The three values that
+            // carry markup are VERBATIM: escaping them would publish the accent spans as text.
+            //
+            // `homepage.features` is deliberately ABSENT: no panel editor ever set it (the console
+            // posted `features: []` on every save) and nothing read it, so the key was deleted
+            // rather than half-wired.
             "logo_text": "WorkflowSwift",
+            // Blank is "leave the shipped /login hrefs alone" — the same arm `favicon_url` uses.
             "sign_in_url": "",
-            "nav_cta_text": "Sign In",
+            "nav_cta_text": "Get Started",
             "headline": "Build workflows<br>that <span class=\"accent\">actually work</span>.",
             "subheadline": "No-code automation meets dynamic data dashboards. Connect your tools, build visual workflows, see everything in one place. WorkflowSwift turns your data into action.",
-            "button_text": "Start Building Free",
-            "secondary_button_text": "Sign In",
-            "features_heading": "Everything You Need to Automate",
-            "features": [],
-            "cta_heading": "Ready to Automate Your Workflow?",
-            "cta_text": "Join thousands of teams using WorkflowSwift to save time and reduce errors.",
-            "footer_text": "© 2026 WorkflowSwift. All rights reserved."
+            "button_text": "Start Free →",
+            "secondary_button_text": "Log In",
+            "features_heading": "Everything you need to <span class=\"accent\">automate</span>",
+            "cta_heading": "Ready to <span class=\"accent\">automate</span> your work?",
+            "cta_text": "Get started in minutes. No credit card required.",
+            "footer_text": "© 2026 WorkflowSwift — <a href=\"https://swiftsoftware.net\">A SwiftSoftware Company</a>"
         }
     })
 }
@@ -879,5 +1112,187 @@ mod tests {
         let mut odd = "<html><body>no markers</body></html>".to_string();
         replace_legal_body(&mut odd, "X");
         assert_eq!(odd, "<html><body>no markers</body></html>");
+    }
+
+    // ── kanban t_e8bfd1f3: the REST of the homepage editors ──
+
+    /// Every homepage editor the Site Configuration panel renders moves EXACTLY the served line(s)
+    /// it owns. Measured on the REAL published page, so a reader that reached a sibling element — a
+    /// second `<h2>`, the features subtitle, the legal-links paragraph — fails here.
+    #[test]
+    fn every_homepage_editor_moves_only_its_own_region() {
+        let Some(served) = served_index() else { return };
+        let shipped = default_site_settings();
+        let cases: Vec<(&str, &str, Vec<usize>)> = vec![
+            ("logo_text", "ProbeBrand", vec![80]),
+            ("nav_cta_text", "PROBE-NAV-CTA", vec![85]),
+            ("button_text", "PROBE-PRIMARY", vec![97]),
+            ("secondary_button_text", "PROBE-SECONDARY", vec![98]),
+            ("features_heading", "PROBE-FEATURES-H2", vec![105]),
+            ("cta_heading", "PROBE-CTA-H2", vec![191]),
+            ("cta_text", "PROBE-CTA-P", vec![192]),
+            ("footer_text", "PROBE-FOOTER", vec![199]),
+        ];
+        for (field, probe, want) in cases {
+            let mut s = shipped.clone();
+            s["homepage"][field] = json!(probe);
+            let out = inject_site_settings(&served, &s);
+            let moved: Vec<usize> = served
+                .lines()
+                .zip(out.lines())
+                .enumerate()
+                .filter(|(_, (a, b))| a != b)
+                .map(|(i, _)| i + 1)
+                .collect();
+            assert_eq!(moved, want, "homepage.{field} moved the wrong region");
+            assert!(
+                out.contains(probe),
+                "homepage.{field} never reached the page"
+            );
+        }
+        // The sign-in URL owns TWO served lines: the nav's plain link (84) and the hero's outline
+        // button (98) — the page offers one destination twice.
+        let mut s = shipped.clone();
+        s["homepage"]["sign_in_url"] = json!("https://example.com/probe-signin");
+        let out = inject_site_settings(&served, &s);
+        let moved: Vec<usize> = served
+            .lines()
+            .zip(out.lines())
+            .enumerate()
+            .filter(|(_, (a, b))| a != b)
+            .map(|(i, _)| i + 1)
+            .collect();
+        assert_eq!(
+            moved,
+            vec![84, 98],
+            "homepage.sign_in_url moved the wrong regions"
+        );
+    }
+
+    /// A cleared field can never blank a live page: every blank editor is a no-op on the served file.
+    /// The settings start from the reconciled defaults — a settings object missing the SEO keys
+    /// would legitimately move the head (`og_title` absent DELETES the tag), which is not what this
+    /// card is about.
+    #[test]
+    fn a_blank_homepage_field_never_moves_the_shipped_page() {
+        let Some(served) = served_index() else { return };
+        let mut s = default_site_settings();
+        for k in [
+            "logo_text",
+            "sign_in_url",
+            "nav_cta_text",
+            "button_text",
+            "secondary_button_text",
+            "features_heading",
+            "cta_heading",
+            "cta_text",
+            "footer_text",
+        ] {
+            s["homepage"][k] = json!(if k == "sign_in_url" { "   " } else { "" });
+        }
+        assert_eq!(inject_site_settings(&served, &s), served);
+    }
+
+    /// The two locators that could have been written against the *value* they render — the sign-in
+    /// href and the logo wordmark — are structural, so the field keeps working after the operator
+    /// changes it (a value-based locator would make each field one-shot).
+    #[test]
+    fn the_sign_in_and_logo_locators_are_structural_not_value_based() {
+        let html = "<nav><div class=\"nav-links\"><a href=\"#features\">Features</a>\
+                    <a href=\"#extension\">Ext</a>\
+                    <a href=\"https://app.example.com/login\">Log In</a>\
+                    <a href=\"/register\" class=\"btn btn-primary\">Get Started</a></div></nav>\
+                    <div class=\"hero-actions\">\
+                    <a href=\"/register\" class=\"btn btn-primary\">Start</a>\
+                    <a href=\"https://app.example.com/login\" class=\"btn btn-outline\">Log In</a></div>";
+        let one = json!({"homepage": {"sign_in_url": "https://one.example.com/signin"}});
+        let a = inject_site_settings(html, &one);
+        assert!(
+            a.contains("<a href=\"https://one.example.com/signin\">Log In</a>"),
+            "the nav's plain link was not the element the field moved: {a}"
+        );
+        assert!(
+            a.contains("<a href=\"https://one.example.com/signin\" class=\"btn btn-outline\">"),
+            "the hero's outline button was not moved with it: {a}"
+        );
+        assert!(
+            !a.contains("app.example.com"),
+            "a shipped href survived: {a}"
+        );
+        assert!(
+            a.contains("href=\"#features\"") && a.contains("href=\"#extension\""),
+            "the scroll links are not sign-in URLs and must not be rewritten: {a}"
+        );
+        // A SECOND value still lands: the locator never consults the href it already wrote.
+        let two = json!({"homepage": {"sign_in_url": "https://two.example.com/signin"}});
+        let b = inject_site_settings(&a, &two);
+        assert!(
+            b.contains("<a href=\"https://two.example.com/signin\" class=\"btn btn-outline\">"),
+            "sign_in_url stopped working after the first render: {b}"
+        );
+        assert!(
+            !b.contains("one.example.com"),
+            "the first value survived: {b}"
+        );
+
+        // The logo field owns the wordmark TEXT NODE only: the icon box stays, and re-rendering is
+        // a byte-level no-op.
+        let logo_html = "<a href=\"/\" class=\"logo\"><div class=\"logo-icon\">WS</div>Brand</a>";
+        let logo = json!({"homepage": {"logo_text": "ProbeBrand"}});
+        let l1 = inject_site_settings(logo_html, &logo);
+        assert_eq!(
+            l1,
+            "<a href=\"/\" class=\"logo\"><div class=\"logo-icon\">WS</div>ProbeBrand</a>"
+        );
+        let l2 = inject_site_settings(&l1, &logo);
+        assert_eq!(l1, l2, "the logo render must be idempotent");
+    }
+
+    /// `homepage.features[]` had no editor and no reader; the key is gone from the defaults, and the
+    /// eleven fields the panel DOES render are all present.
+    #[test]
+    fn the_dead_features_key_is_gone_from_the_defaults() {
+        let hp = &default_site_settings()["homepage"];
+        assert!(
+            hp.get("features").is_none(),
+            "homepage.features has no editor and no reader; it must not be in the defaults"
+        );
+        for k in [
+            "logo_text",
+            "sign_in_url",
+            "nav_cta_text",
+            "button_text",
+            "secondary_button_text",
+            "features_heading",
+            "cta_heading",
+            "cta_text",
+            "footer_text",
+            "headline",
+            "subheadline",
+        ] {
+            assert!(hp.get(k).is_some(), "missing homepage.{k}");
+        }
+    }
+
+    /// A page with none of the markers is returned unchanged rather than corrupted.
+    #[test]
+    fn the_new_surgery_helpers_leave_a_foreign_page_untouched() {
+        let html = "<html><body><h1>x</h1></body></html>";
+        let mut r = html.to_string();
+        replace_logo_text(&mut r, "X");
+        replace_plain_link_href_after(&mut r, "class=\"nav-links\"", "/x");
+        replace_anchor_href_after(
+            &mut r,
+            "class=\"hero-actions\"",
+            "class=\"btn btn-outline\"",
+            "/x",
+        );
+        replace_anchor_inner_after(
+            &mut r,
+            "class=\"nav-links\"",
+            "class=\"btn btn-primary\"",
+            "X",
+        );
+        assert_eq!(r, html);
     }
 }

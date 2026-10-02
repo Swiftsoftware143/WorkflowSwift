@@ -888,7 +888,10 @@ function renderSiteConfig(c){
       body.canonical_url=GV("canonical_url");body.og_title=GV("og_title");body.og_description=GV("og_description");
       body.og_image_url=GV("og_image_url");body.favicon_url=GV("favicon_url");
       body.ga_id=GV("ga_id");body.gtm_id=GV("gtm_id");body.head_scripts=GV("head_scripts");body.body_scripts=GV("body_scripts");
-      body.homepage={logo_text:GV("homepage_logo_text"),sign_in_url:GV("homepage_sign_in_url"),nav_cta_text:GV("homepage_nav_cta_text"),headline:GV("homepage_headline"),subheadline:GV("homepage_subheadline"),button_text:GV("homepage_button_text"),secondary_button_text:GV("homepage_secondary_button_text"),features_heading:GV("homepage_features_heading"),cta_heading:GV("homepage_cta_heading"),cta_text:GV("homepage_cta_text"),footer_text:GV("homepage_footer_text"),features:[]};
+      // `homepage.features` is deliberately NOT posted: the panel has no features editor and nothing
+      // reads the key (kanban t_e8bfd1f3) — posting an empty array only kept a dead key alive in the
+      // settings row. The six feature cards are shipped page copy.
+      body.homepage={logo_text:GV("homepage_logo_text"),sign_in_url:GV("homepage_sign_in_url"),nav_cta_text:GV("homepage_nav_cta_text"),headline:GV("homepage_headline"),subheadline:GV("homepage_subheadline"),button_text:GV("homepage_button_text"),secondary_button_text:GV("homepage_secondary_button_text"),features_heading:GV("homepage_features_heading"),cta_heading:GV("homepage_cta_heading"),cta_text:GV("homepage_cta_text"),footer_text:GV("homepage_footer_text")};
       body.legal_tos=GV("legal_tos");body.legal_privacy=GV("legal_privacy");body.legal_refunds=GV("legal_refunds");
       body.schema_json=GV("schema_json");
       var st=document.getElementById("savestatus");st.textContent="Saving...";st.className="text-sm ml-3 text-blue-600";
