@@ -62,7 +62,7 @@ tags, portfolio companies, industries, plan creation, and **n8n deployment** (`n
 |---|---|---|
 | `/api/v1/admin/accounts` | GET | List all accounts (tenant) |
 | `/api/v1/admin/accounts/create` | POST | Create an account |
-| `/api/v1/admin/accounts/{id}` | DELETE | Delete the account and its data (cascades) |
+| `/api/v1/admin/accounts/{id}` | DELETE | Delete the account and its data (cascades). The account's n8n `WFS <uuid>` workflow mirrors are retired **first**; if they cannot be retired (n8n unreachable or refusing) the whole delete is **refused with 502** — an orphaned mirror is permanent, while a retryable 502 is not. |
 | `/api/v1/admin/accounts/{id}/retention` | PUT | Per-account retention override |
 | `/api/v1/admin/usage` | GET | Usage dashboard — credits, executions, n8n status per account |
 | `/api/v1/admin/impersonate` / `stop-impersonation` | POST | Support impersonation |
@@ -209,7 +209,18 @@ credits per call.
 - **1 credit per execution**; a run without credits is refused.
 - Checkout: `/api/v1/checkout/create`, `/checkout/sessions`; providers configured per plan via
   `/api/v1/payment-providers`. Webhooks: `POST /api/v1/webhooks/stripe`,
-  `POST /api/v1/webhooks/paypal` (signature-verified in the handler).
+  `POST /api/v1/webhooks/paypal`.
+- `POST /api/v1/webhooks/paypal` is **signature-verified before anything is written or dispatched**
+  (kanban t_5cf44e1b). The four PayPal signature headers (`paypal-transmission-id`,
+  `paypal-transmission-time`, `paypal-transmission-sig`, `paypal-cert-url`) are required and the
+  signature is checked against PayPal's `verify-webhook-signature` API, authenticated with the REST
+  `client_id:client_secret` and verified against `PAYPAL_WEBHOOK_ID` (or the `webhook_secret` of the
+  active `paypal` provider row — admin console -> Payment providers, no redeploy). Fail-closed
+  replies, in order: `401 missing_paypal_signature_headers`, `503 paypal_not_configured` (no webhook
+  id or no credential: PayPal is **not** called and nothing is written),
+  `401 paypal_verification_api_error` / `401 paypal_verification_unreachable` (the verdict itself
+  could not be obtained), `401 signature_verification_failed` (a real FAILURE verdict). Only a
+  verified event reaches `payment_webhook_events` and fulfilment.
 - Affiliate attribution is owned by FunnelSwift, not by this app: WorkflowSwift stores no affiliate
   records and exposes **no** `/api/v1/affiliates` endpoint (the auto-generated stub that answered
   500 was deleted — kanban t_01fa9bbc). A paid plan upgrade notifies
@@ -241,6 +252,15 @@ credits per call.
 
 Protected endpoints pass through `rate_limit` middleware keyed on the account. Exceeding it
 returns `429` with a `Retry-After` header.
+
+A second, `pre_auth_rate_limit` guard runs **before** any credential is verified, for requests
+that present an API key (`workflowswift_...`): it exists so a flood of requests that merely look
+like a key cannot drive the expensive Argon2 hash check, and its `429` arrives without the key
+ever being looked up (kanban t_da8a579a). It is keyed on the client address the PROXY vetted —
+nginx's `X-Real-IP` (`$remote_addr`: the real visitor behind Cloudflare, the true peer for a
+caller that reaches the origin directly) — never on a header the caller can hand-set. A request
+with no address header at all shares one `unknown` bucket, so omitting the header is not a way
+around the limit.
 
 ## Operational notes
 

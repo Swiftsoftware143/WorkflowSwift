@@ -62,7 +62,7 @@ tags, portfolio companies, industries, plan creation, and **n8n deployment** (`n
 |---|---|---|
 | `/api/v1/admin/accounts` | GET | List all accounts (tenant) |
 | `/api/v1/admin/accounts/create` | POST | Create an account |
-| `/api/v1/admin/accounts/{id}` | DELETE | Delete the account and its data (cascades) |
+| `/api/v1/admin/accounts/{id}` | DELETE | Delete the account and its data (cascades). The account's n8n `WFS <uuid>` workflow mirrors are retired **first**; if they cannot be retired (n8n unreachable or refusing) the whole delete is **refused with 502** — an orphaned mirror is permanent, while a retryable 502 is not. |
 | `/api/v1/admin/accounts/{id}/retention` | PUT | Per-account retention override |
 | `/api/v1/admin/usage` | GET | Usage dashboard — credits, executions, n8n status per account |
 | `/api/v1/admin/impersonate` / `stop-impersonation` | POST | Support impersonation |
@@ -90,8 +90,10 @@ the provider is an admin choice (`smtp`, `mailgun`, `sendgrid`, `sendiio`).
 
 ## Workspaces, agents and tickets
 
-Users create **workspaces** within their tenant; a workspace can carry its own industry and its
-own **provider keys**, and gives the dashboard a per-workspace view.
+Users create **workspaces** within their tenant (the `portfolio_companies` table); a workspace carries
+a name and a slug, `POST` takes an optional `industry_slug` that seeds that workspace's dashboard, and
+`GET /api/v1/agents?workspace_id={id}` scopes the agent list to one workspace. **Provider keys are
+per tenant, never per workspace** — see BYOK below.
 
 | Endpoint | Method | Description |
 |---|---|---|
@@ -107,12 +109,12 @@ exposes it — WorkflowSwift only hands work off and receives results.
 ## BYOK — provider keys
 
 Keys the **customer** brings (OpenAI, Resend/SendGrid, social, CoreSwift, …) are stored in
-`provider_keys` **per tenant** (`aid`) / per workspace, entered in the app UI.
+`provider_keys` **per tenant** (`aid`), one row per (tenant, provider), entered in the app UI.
 
 | Endpoint | Method | Description |
 |---|---|---|
 | `/api/v1/provider-keys` | GET | List configured providers — **values masked** |
-| `/api/v1/provider-keys` | POST | Save/update a tenant or workspace provider key |
+| `/api/v1/provider-keys` | POST | Save/update a tenant provider key |
 | `/api/v1/provider-keys/{provider}` | DELETE | Remove a provider key |
 | `/api/v1/provider-keys/{provider}/test` | POST | Live connection probe |
 | `/api/v1/provider-presets`, `/available-providers` | GET | Preset catalogue (public) |
@@ -139,12 +141,46 @@ keys) is argon2-hashed; `integration_targets.api_key` uses the same envelope (mi
 Inbound: `POST /api/v1/incoming` (internal key) is the single endpoint every Swift tool pushes
 to — WorkflowSwift matches the payload to an active workflow, creates an instance and steps
 through it, dispatching to integration targets and n8n. A workflow only dispatches to a target when
-its step carries a seeded `integration_target_id` — see `www/docs/admin-guide.md`, "Integration
-targets & step dispatch — operator-provisioned" (kanban t_97a0bd3f).
+its step carries a seeded `integration_target_id` (see below).
 
 MultiDirectory referral events can also arrive this way, e.g.
 `{ "event": "referral_verified", "referrer_email": "...", "referee_email": "...", "zaarcash_earned": 100 }`,
 and a workflow can turn them into notifications or CRM updates.
+
+## Integration targets & step dispatch — operator-provisioned
+
+Measured 2026-10-02 (kanban t_97a0bd3f). Targets exist and dispatch works; the **binding** has no
+shipped writer, so it is provisioned server-side.
+
+- **Targets** (`integration_targets`, aid-scoped) are created/edited in the admin console under
+  **Integrations → Integration Targets** (`GET/POST /api/v1/integration-targets`, `PUT/DELETE
+  /api/v1/integration-targets/{id}`). Each row carries `webhook_url`, a `provider_preset`,
+  `allowed_domains` and `daily_limit`; `webhook_security::check_webhook_security` enforces the
+  domain allowlist and the daily cap, counting rows in `delivery_log`.
+- **The binding** is the column `workflow_steps.integration_target_id`.
+  The executor reads it at `src/execution.rs` in the arm
+  `"integration" | "integration_dispatch"`, i.e. **a step dispatches only if its `step_type` is
+  `integration`**. Neither the Builder (15 types) nor the app's own `POST
+  /api/v1/workflows/validate-steps` vocabulary (25 types) contains that type, and the steps API
+  (`POST/PUT /api/v1/workflows/{id}/steps`) accepts no `integration_target_id` field — a request
+  carrying one is accepted and the value is dropped. Seed it with SQL; there is no UI to bind a step
+  and none is wanted until a tenant can create its own targets. Migration `072` retired migration
+  018's other step columns (`api_path` / `api_method` on both step tables, and this table's
+  `integration_target_id` twin): measured 0 readers, 0 writers, 0 non-default rows, and installing a
+  template copies only `step_type/name/description/sort_order/config` into `workflow_steps`.
+- **Credential:** `forward_dispatch` sends `Authorization: Bearer <key>` + `x-api-key: <key>` from,
+  in order, **(1)** the credential stored ON THE TARGET ROW (`integration_targets.api_key`, ciphertext
+  at rest; set at create, rotated/cleared via `api_key` on `PUT /api/v1/integration-targets/{id}`),
+  else **(2)** the account's `provider_keys` row. A target credential that cannot be decrypted fails
+  the dispatch (5xx, reason in `delivery_log`) instead of falling back to the account key; with
+  neither set the POST goes out unauthenticated. Before 2026-10-02 the target-row `api_key` was read
+  by no path at all, so a target created with one still dispatched with no auth header (kanban
+  t_c603a937). The account row's `metadata.auth_type` still picks the `basic`/`x-api-key` shape, and
+  a `_forward_auth` string in the payload body overrides the Authorization header last.
+- **One-shot dispatch:** `POST /api/v1/integration-dispatch?target_id={id}` forwards one JSON body to
+  the target (auth'd route; every attempt is counted in `delivery_log`). The legacy
+  `n8n-templates/*.json` name `/api/integration-dispatch` (no `/v1`) — the API is mounted at
+  `/api/v1`, so those URLs are unrouted; n8n flows must use `/api/v1/integration-dispatch`.
 
 ## Affiliate product auto-sync
 
@@ -175,8 +211,9 @@ credits per call.
   `/api/v1/payment-providers`. Webhooks: `POST /api/v1/webhooks/stripe`,
   `POST /api/v1/webhooks/paypal`.
 - `POST /api/v1/webhooks/paypal` is **signature-verified before anything is written or dispatched**
-  (kanban t_5cf44e1b). The four `paypal-transmission-*` headers are required and the signature is
-  checked against PayPal's `verify-webhook-signature` API, authenticated with the REST
+  (kanban t_5cf44e1b). The four PayPal signature headers (`paypal-transmission-id`,
+  `paypal-transmission-time`, `paypal-transmission-sig`, `paypal-cert-url`) are required and the
+  signature is checked against PayPal's `verify-webhook-signature` API, authenticated with the REST
   `client_id:client_secret` and verified against `PAYPAL_WEBHOOK_ID` (or the `webhook_secret` of the
   active `paypal` provider row — admin console -> Payment providers, no redeploy). Fail-closed
   replies, in order: `401 missing_paypal_signature_headers`, `503 paypal_not_configured` (no webhook
@@ -197,6 +234,16 @@ credits per call.
   `tag_groups`, migration 054) and `/api/v1/webhooks` (Communications -> Webhooks, `webhooks`,
   migration 055). The `webhooks` table is the tenant's own endpoint registry — it is not the
   inbound `stripe`/`paypal` receivers above, whose event log is `payment_webhook_events`.
+- Email templates are **platform-wide, not per-account**: the only create/read/update/delete path is
+  `/api/v1/admin/email-templates` (Admin -> Email Templates, super-admin only — the token must carry
+  `perm_is_super_admin`), and `src/email.rs` resolves a template with no `aid` filter
+  (`template_type = $1 AND (is_default = true OR is_default IS NULL)`). The tenant-scoped
+  `/api/v1/email-templates` family and its Communications -> Email Templates panel were **deleted**
+  (kanban t_00e7b709): every arm was dead — its INSERT omitted the NOT NULL
+  `template_type`/`subject`, so it answered `500 Database error` for every authenticated caller and
+  wrote no row; its reads decoded the NULL system `aid` as a UUID, so list answered
+  `200 {"items":[],"count":0}` over a table with rows and get/put answered 500; and its DELETE
+  removed a system-wide template for any authenticated caller. Do not re-add a second create path.
 - Invoices: `/api/v1/invoices` and `/api/v1/invoices/{id}` read `invoices`; `amount` is
   `NUMERIC(10,2)` and is returned as a decimal **string** (`amount::text`), like `plan_tiers`
   prices — sqlx cannot decode NUMERIC into a JSON value.
