@@ -290,6 +290,85 @@ fn ai_action_step_result(
     }
 }
 
+/// The AI Action decision — the ONE implementation, shared by the in-process engine arm above
+/// (kanban t_03e4d3d9) and the n8n mirror's callback (`POST /api/v1/n8n/ai-action`, kanban
+/// t_9f556c5c).
+///
+/// The mirror is executed by the n8n container, which holds no LLM provider credential, so the
+/// mirrored copy of an AI Action step cannot make the call itself. Instead of passing the step
+/// through (a `n8n-nodes-base.noOp` that silently did nothing when a tenant triggered the copy),
+/// the graph CALLS BACK here: an externally-triggered mirror — or one the tenant activated in its
+/// own n8n — then runs exactly the step this workflow describes, because the callback reads the
+/// step's STORED config and an edited graph cannot make this app run a different call.
+///
+/// BYOK: the credential is the TENANT'S OWN key from `provider_keys` (the same mapping
+/// `/integrations/resolve?step_type=ai-action` serves), so the call costs 0 credits and spends no
+/// platform money; the destination is a CONSTANT per provider, never a value out of step config,
+/// so no new SSRF surface is opened.
+///
+/// Four outcomes, none of them a fabricated completion: a no/unknown provider or a blank prompt
+/// gives `skipped` naming what is missing; a provider named with no key connected gives `skipped`
+/// naming the Provider Keys row; a provider that answered gives its HTTP status and its own
+/// message as `generated_content`; a transport failure or a 2xx carrying no message is an
+/// `error`, never `completed`.
+pub async fn ai_action_outcome(
+    db: &PgPool,
+    aid: Uuid,
+    step: usize,
+    prompt: &str,
+    named_provider: &str,
+    model_override: Option<&str>,
+) -> Value {
+    if prompt.trim().is_empty() {
+        return ai_action_undeliverable_result(
+            step,
+            named_provider,
+            "AI Action did nothing: the step has a blank Prompt. Write the prompt this step \
+             should send to your provider, then re-run.",
+        );
+    }
+    let Some(provider) = crate::ai_llm::provider_by_key(named_provider) else {
+        return ai_action_undeliverable_result(
+            step,
+            named_provider,
+            &ai_action_no_provider_reason(named_provider),
+        );
+    };
+    // `provider_keys.base_url` is deliberately NOT honoured: the destination is the provider
+    // constant, so a tenant cannot point its own credential at an address of its choosing (the
+    // SSRF surface the step arms' `gate_step_destination` exists to close).
+    let stored =
+        crate::handlers::provider_keys_handler::get_provider_key(db, aid, provider.key).await;
+    match stored {
+        Err(e) => json!({
+            "step": step,
+            "type": "ai-action",
+            "status": "error",
+            "provider": provider.key,
+            "error": format!("could not read the account's {} key: {}", provider.key, e),
+        }),
+        Ok(None) => ai_action_undeliverable_result(
+            step,
+            provider.key,
+            &ai_action_no_key_reason(provider.key),
+        ),
+        Ok(Some((api_key, _base_url, _metadata))) if api_key.is_empty() => {
+            ai_action_undeliverable_result(
+                step,
+                provider.key,
+                &ai_action_no_key_reason(provider.key),
+            )
+        }
+        Ok(Some((api_key, _base_url, _metadata))) => {
+            let model = model_override
+                .filter(|m| !m.trim().is_empty())
+                .unwrap_or(provider.default_model);
+            let call = crate::ai_llm::generate(provider, model, &api_key, prompt).await;
+            ai_action_step_result(step, provider.key, model, call)
+        }
+    }
+}
+
 /// The accepted vocabulary as one line, for a 400 body / a validation error.
 pub fn executable_step_type_list() -> String {
     EXECUTABLE_STEP_TYPES.join(", ")
@@ -1445,67 +1524,11 @@ async fn walk(
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
 
-                if prompt.trim().is_empty() {
-                    json!(ai_action_undeliverable_result(
-                        i,
-                        named_provider,
-                        "AI Action did nothing: the step has a blank Prompt. Write the prompt this \
-                         step should send to your provider, then re-run."
-                    ))
-                } else if let Some(provider) = crate::ai_llm::provider_by_key(named_provider) {
-                    // The tenant's own key. `provider_keys.base_url` is deliberately NOT honoured:
-                    // the destination is the provider constant, so a tenant cannot point its own
-                    // credential at an address of its choosing (the SSRF surface the step arms'
-                    // `gate_step_destination` exists to close).
-                    let stored = crate::handlers::provider_keys_handler::get_provider_key(
-                        &state.db,
-                        aid,
-                        provider.key,
-                    )
-                    .await;
+                let model = step_config.get("model").and_then(|v| v.as_str());
 
-                    match stored {
-                        Err(e) => json!({
-                            "step": i,
-                            "type": "ai-action",
-                            "status": "error",
-                            "provider": provider.key,
-                            "error": format!(
-                                "could not read the account's {} key: {}",
-                                provider.key, e
-                            ),
-                        }),
-                        Ok(None) => json!(ai_action_undeliverable_result(
-                            i,
-                            provider.key,
-                            &ai_action_no_key_reason(provider.key)
-                        )),
-                        Ok(Some((api_key, _base_url, _metadata))) if api_key.is_empty() => {
-                            json!(ai_action_undeliverable_result(
-                                i,
-                                provider.key,
-                                &ai_action_no_key_reason(provider.key)
-                            ))
-                        }
-                        Ok(Some((api_key, _base_url, _metadata))) => {
-                            let model = step_config
-                                .get("model")
-                                .and_then(|v| v.as_str())
-                                .filter(|m| !m.trim().is_empty())
-                                .unwrap_or(provider.default_model);
-                            let call =
-                                crate::ai_llm::generate(provider, model, &api_key, prompt).await;
-                            ai_action_step_result(i, provider.key, model, call)
-                        }
-                    }
-                } else {
-                    json!(ai_action_undeliverable_result(
-                        i,
-                        named_provider,
-                        &ai_action_no_provider_reason(named_provider)
-                    ))
-                }
+                ai_action_outcome(&state.db, aid, i, prompt, named_provider, model).await
             }
+
             // `transform`, `code` and `format` used to have an arm here, and it was the app's half of
             // the divergence kanban t_81602ca1 settled. It ran NO JavaScript: it read `format` /
             // `tone`, built a payload it dropped on the floor and answered `status: "completed"`

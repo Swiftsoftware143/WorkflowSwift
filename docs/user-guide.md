@@ -73,6 +73,10 @@ Base API: `https://workflowswift.com/api/v1` — all non-public endpoints need
   connected the step is **skipped** with that reason in the run history; a provider error (a rejected
   key, a rate limit) **fails** the step and shows the provider's status code. Nothing is ever
   reported as generated unless the provider generated it.
+  **The n8n copy runs it too** (2026-10-02): when your plan mirrors a workflow into n8n
+  (Deploy), the mirrored graph's AI Action step calls back into this app, so a run started from
+  the n8n copy's own webhook performs the same AI Action — same provider, same prompt, same key.
+  It used to be a pass-through in that copy: the mirrored step did nothing, silently.
 - **Notify**: the one channel is **Webhook** — the step POSTs `{message, data}` to the URL you put in
   its Recipient field, so the receiving end gets the run's own item. The **Email and SMS channels are
   retired** (2026-10-02): this app has no tenant-triggered mail sender (its mail provider is

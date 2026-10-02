@@ -509,6 +509,13 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/health",
             get(handlers::n8n_proxy_handler::check_n8n_health),
+        )
+        // The mirrored AI Action step's callback (kanban t_9f556c5c). Bearer-authenticated, like
+        // every other step callback the mirror emits: the account is the caller's, so a graph
+        // holder cannot run a step against another tenant's provider key.
+        .route(
+            "/ai-action",
+            post(handlers::instance_handler::n8n_ai_action),
         );
 
     let provider_keys_routes = Router::new()

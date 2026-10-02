@@ -8,7 +8,7 @@
 //!   WorkflowSwift (UI) → this converter → n8n import → n8n webhook trigger
 //!
 //! Each WorkflowSwift step_type maps to one or more n8n nodes:
-//!   - "ai-action"    → pass-through: the AI call runs in THIS app's engine (`src/ai_llm.rs`) on the tenant's own provider key (kanban t_03e4d3d9); the n8n graph carries no provider credential
+//!   - "ai-action"    → app callback (`n8n/ai-action`): the n8n graph carries no provider credential, so the mirrored copy POSTs the step's identity and THIS app runs it (`src/execution.rs` → `src/ai_llm.rs`) on the tenant's own provider key (kanban t_9f556c5c)
 //!   - "http-request" → n8n HTTP Request node
 //!   - "data-card"    → dashboard push node
 //!   - "export"       → Google Sheets / SendGrid / CSV
@@ -17,7 +17,7 @@
 //!   - "fork"         → n8n Switch node (parallel branches)
 //!   - "action"       → Generic API call
 //!   - "transform"    → RETIRED (kanban t_81602ca1): was an n8n Code node carrying the tenant's `config.code` verbatim — same for "code" and "format"; now a pass-through that names the gap, and the write path refuses all three
-//!   - "openclaw"     → RETIRED: nothing in this app performs it (same pass-through arm as ai-action)
+//!   - "openclaw"     → RETIRED: nothing in this app performs it — a pass-through that names the gap
 //!
 //! Callbacks into THIS app exist only for routes the app actually serves — `credits/balance`,
 //! `credits/deduct`, `dashboard/push-widget-data` and `renditions` (kanban t_642b6894). Every
@@ -834,37 +834,58 @@ fn convert_user_steps(
                 nodes.push(node);
             }
 
-            // AI Action is executed by THIS app's own engine (`src/execution.rs` -> `src/ai_llm.rs`)
-            // against the tenant's connected provider key. n8n holds no provider credential, so the
-            // graph cannot carry the call: this node is a pass-through whose notes say where the work
-            // happens. It used to emit `n8n-nodes-base.httpRequest` at `config.gateway_url` — default
+            // AI Action runs in THIS app's engine (`src/execution.rs` -> `src/ai_llm.rs`) on the
+            // tenant's own provider key — the n8n container holds no provider credential, so the
+            // mirror CALLS BACK into the app instead of passing the step through (kanban
+            // t_9f556c5c). An externally-triggered copy (or one the tenant activated in its own
+            // n8n) therefore runs the same AI Action the engine runs, and this node's own output
+            // IS the app's answer (the provider's reply or the named skip/failure). The node names
+            // the step only by its index: the app reads the step's STORED config, so an edited
+            // graph cannot make the app run a call the workflow does not describe.
+            //
+            // The arm used to emit `n8n-nodes-base.httpRequest` at `config.gateway_url` — default
             // `http://localhost:18792`, i.e. nothing at all inside the n8n container (kanban
-            // t_03e4d3d9) — while the console collected only a prompt, so no console-built AI Action
-            // ever reached a real destination. `openclaw` shares this arm and is a
-            // RETIRED_STEP_TYPES name: nothing in this app performs it.
-            "ai-action" | "ai_action" | "openclaw" => {
-                let provider = config
-                    .get("provider")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let note = if crate::ai_llm::provider_by_key(provider).is_some() {
-                    "runs in this app's own engine against the provider key you connected under \
-                     Provider Keys (0 credits) — the n8n graph carries no provider credential, so \
-                     this node is a pass-through."
-                        .to_string()
-                } else {
-                    format!(
-                        "names no provider this app calls, so it would do nothing. Set the step's \
-                         provider to one of: {} and connect its key under Provider Keys.",
-                        crate::ai_llm::provider_key_list()
-                    )
-                };
+            // t_03e4d3d9) — and then a `n8n-nodes-base.noOp` that passed the step through
+            // silently, so an externally-triggered copy performed no AI call at all.
+            "ai-action" | "ai_action" => {
+                let node = json!({
+                    "id": node_id,
+                    "name": step_name,
+                    "type": "n8n-nodes-base.httpRequest",
+                    "typeVersion": 4.2,
+                    "position": [x_pos, y_base],
+                    "parameters": {
+                        "method": "POST",
+                        "url": callback_url(callback_base_url, "n8n/ai-action"),
+                        "authentication": "none",
+                        "sendHeaders": true,
+                        "headerParameters": {
+                            "parameters": [
+                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
+                                { "name": "Content-Type", "value": "application/json" }
+                            ]
+                        },
+                        "sendBody": true,
+                        "bodyParameters": {
+                            "parameters": [
+                                { "name": "workflow_id", "value": workflow_id.to_string() },
+                                { "name": "step_index", "value": i }
+                            ]
+                        }
+                    }
+                });
+                nodes.push(node);
+            }
+
+            // `openclaw` is a RETIRED step type: nothing in this app performs it, so the step keeps
+            // its place in the graph as a no-op that NAMES the gap.
+            "openclaw" => {
                 nodes.push(passthrough_node(
                     &node_id,
                     step_name,
                     (x_pos, y_base),
                     step_type,
-                    &note,
+                    "this step type is retired — nothing in this app performs it, and the engine                      skips it with a warning that names the gap.",
                 ));
             }
 
@@ -1623,7 +1644,10 @@ mod tests {
             // `ai-action` used to be here: its arm emitted an `httpRequest` node at
             // `config.gateway_url` (default `http://localhost:18792`), so it had to be gated. The
             // step now runs in this app's engine against a CONSTANT provider URL (kanban
-            // t_03e4d3d9) and the mirror node is a pass-through — no tenant destination to gate.
+            // t_03e4d3d9); the mirror's node is this app's OWN callback (`n8n/ai-action`, kanban
+            // t_9f556c5c), excluded by the prefix rule below like credits/deduct — the provider is
+            // still called at a constant destination by the app, never by n8n, so there is no
+            // tenant destination to gate.
             // `export` used to be here too: a `http` destination emitted an `httpRequest` node whose
             // url is the tenant's, so it had to be gated. The step type is RETIRED (kanban
             // t_02519738) and its node is now a pass-through that names the retirement and calls
@@ -1771,6 +1795,44 @@ mod tests {
                 "{expected} missing from {names:?}"
             );
         }
+    }
+
+    /// The defect kanban t_9f556c5c is about: the mirrored copy of an AI Action step must RUN it,
+    /// not pass it through. The node is an app callback that names the step by index — this app
+    /// reads the step's STORED config, so the graph cannot ask for a call the workflow does not
+    /// hold, and no prompt or provider key ever rides the graph.
+    #[test]
+    fn the_ai_action_step_calls_back_into_the_app_and_names_the_step() {
+        let g = graph();
+        let n = g
+            .nodes
+            .iter()
+            .find(|n| n["name"] == "AI Action")
+            .expect("the ai-action step is in the graph");
+        assert_eq!(
+            n["type"],
+            json!("n8n-nodes-base.httpRequest"),
+            "a pass-through is a step that silently does nothing: {n}"
+        );
+        assert!(is_app_callback(n), "must be this app's own callback: {n}");
+        assert_eq!(
+            n["parameters"]["url"],
+            json!(format!("{BASE}/api/v1/n8n/ai-action")),
+            "the callback route the router serves"
+        );
+        assert_eq!(n["parameters"]["method"], json!("POST"));
+        let body = n["parameters"]["bodyParameters"]["parameters"]
+            .as_array()
+            .expect("a body");
+        let names: Vec<&str> = body.iter().filter_map(|p| p["name"].as_str()).collect();
+        assert_eq!(names, vec!["workflow_id", "step_index"]);
+        assert_eq!(n["parameters"]["authentication"], json!("none"));
+        assert_eq!(auth_header_value(n).as_deref(), Some(CALLBACK_AUTH_EXPR));
+        assert_eq!(n["onError"], json!("stopWorkflow"));
+        assert!(
+            !n.to_string().contains("Summarise the lead"),
+            "the step's config (prompt/provider) must not ride the graph: {n}"
+        );
     }
 
     /// The bearer is this app's own JWT: it must never be attached to a tenant-supplied URL.
@@ -2020,7 +2082,7 @@ mod tests {
     fn app_callback_census_is_generated_from_the_converter() {
         // Mounted for real; verdicts in `10-callback-census-post.txt`. A new arm that adds a path
         // here has to add the route first.
-        const SERVED: [&str; 5] = [
+        const SERVED: [&str; 6] = [
             "credits/balance",
             "credits/deduct",
             "dashboard/push-widget-data",
@@ -2028,6 +2090,9 @@ mod tests {
             // The failure arm's report route (kanban t_07c33d98): route and converter land
             // together, and this row is what would notice if either side moved alone.
             "n8n/run-outcome",
+            // The mirrored AI Action step's callback (kanban t_9f556c5c): the n8n copy posts the
+            // step's identity here and the app runs it on the tenant's own provider key.
+            "n8n/ai-action",
         ];
 
         let mut rows: Vec<Value> = Vec::new();
