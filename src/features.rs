@@ -256,6 +256,26 @@ pub async fn plan_flag(db: &PgPool, aid: Uuid, feature_key: &str) -> Result<bool
     let Some(pid) = resolve_plan_id(db, aid).await? else {
         return Ok(true);
     };
+    Ok(resolve_tier_flag(db, pid, feature_key)
+        .await?
+        .unwrap_or(true))
+}
+
+/// Resolve a boolean flag on ONE TIER, in this module's own order: `features` JSONB (the exact
+/// registry key, then the bare alias), then the dedicated legacy column, then `feature_limits`.
+/// `None` means the tier configures nothing and the CALLER applies the absence rule -- `plan_flag`
+/// reads that as `true`, an enforcement path that needs "explicitly off" can read it as `None`.
+///
+/// This is the same resolution `plan_flag` enforces, exposed so a DISPLAY surface can report what
+/// the gate will actually do instead of echoing one of the two stores it reads. It had to be:
+/// `admin_list_plans` printed the dedicated `has_api_access` column while the gate read
+/// `features->>'api_access'`, so the admin panel said "no API access" for Professional and
+/// Enterprise on a plan the gate let mint keys (kanban t_d08c1146).
+pub async fn resolve_tier_flag(
+    db: &PgPool,
+    pid: Uuid,
+    feature_key: &str,
+) -> Result<Option<bool>, AppError> {
     let (json_keys, column) = aliases(feature_key);
 
     for k in json_keys {
@@ -271,17 +291,17 @@ pub async fn plan_flag(db: &PgPool, aid: Uuid, feature_key: &str) -> Result<bool
                 continue;
             }
             if let Some(b) = v.as_bool() {
-                return Ok(b);
+                return Ok(Some(b));
             }
             if let Some(s) = v.as_str() {
                 match s.trim().to_ascii_lowercase().as_str() {
-                    "true" | "yes" | "on" | "1" | "enabled" => return Ok(true),
-                    "false" | "no" | "off" | "0" | "disabled" => return Ok(false),
+                    "true" | "yes" | "on" | "1" | "enabled" => return Ok(Some(true)),
+                    "false" | "no" | "off" | "0" | "disabled" => return Ok(Some(false)),
                     _ => continue,
                 }
             }
             if let Some(n) = v.as_i64() {
-                return Ok(n != 0);
+                return Ok(Some(n != 0));
             }
         }
     }
@@ -294,7 +314,7 @@ pub async fn plan_flag(db: &PgPool, aid: Uuid, feature_key: &str) -> Result<bool
                 .await?
                 .flatten();
             if let Some(b) = v {
-                return Ok(b);
+                return Ok(Some(b));
             }
         }
     }
@@ -309,10 +329,11 @@ pub async fn plan_flag(db: &PgPool, aid: Uuid, feature_key: &str) -> Result<bool
     .await?
     .flatten();
     if let Some(n) = fl {
-        return Ok(n != 0);
+        return Ok(Some(n != 0));
     }
 
-    Ok(true)
+    // The tier configures nothing: the caller applies the absence rule.
+    Ok(None)
 }
 
 /// Enforce an on/off plan flag: off -> 402 UpgradeRequired.

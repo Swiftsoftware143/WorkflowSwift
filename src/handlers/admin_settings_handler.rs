@@ -440,12 +440,25 @@ pub async fn admin_list_plans(
         let is_active: bool = row.try_get("is_active")?;
         let sort_order: Option<i32> = row.try_get("sort_order").ok();
         let created_at: chrono::DateTime<chrono::Utc> = row.try_get("created_at")?;
-        let max_workflows: Option<i32> = row.try_get("max_workflows").ok();
-        let max_users: Option<i32> = row.try_get("max_users").ok();
-        let retention_days: Option<i32> = row.try_get("retention_days").ok();
-        let can_export: Option<bool> = row.try_get("can_export").ok();
-        let can_deploy_n8n: Option<bool> = row.try_get("can_deploy_n8n").ok();
-        let has_api_access: Option<bool> = row.try_get("has_api_access").ok();
+        // The panel must report what the GATE will do, not one of the two stores it reads.
+        // These used to echo the legacy dedicated columns verbatim, while the gate resolves the
+        // `features` JSONB first and only falls back to the column. On the live data that made
+        // this endpoint tell the admin "no API access" for Starter/Professional/Enterprise (a
+        // plan the gate let mint keys) and "no n8n deploy" for a plan the gate lets deploy.
+        // Resolving through the gate's OWN helpers here -- plus the column repair in
+        // migrations/069 -- is what makes panel == gate by construction (kanban t_d08c1146).
+        let max_workflows = plan_limits::resolve_limit(&state.db, id, "max_workflows")
+            .await?
+            .map(|n| n as i32);
+        let max_users = plan_limits::resolve_limit(&state.db, id, "max_users")
+            .await?
+            .map(|n| n as i32);
+        let retention_days = plan_limits::resolve_limit(&state.db, id, "retention_days")
+            .await?
+            .map(|n| n as i32);
+        let can_export = plan_limits::resolve_tier_flag(&state.db, id, "csv_export").await?;
+        let can_deploy_n8n = plan_limits::resolve_tier_flag(&state.db, id, "n8n_deploy").await?;
+        let has_api_access = plan_limits::resolve_tier_flag(&state.db, id, "api_access").await?;
         let payment_provider: Option<String> = row.try_get("payment_provider").ok();
 
         // Get feature_limits for this plan
