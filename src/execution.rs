@@ -126,6 +126,36 @@ pub fn executable_step_type_list() -> String {
     EXECUTABLE_STEP_TYPES.join(", ")
 }
 
+/// Every Notify channel this product can actually deliver on. The tenant console offers exactly
+/// these (`www-app/index.html`, the Notify step's Channel select), `create_workflow_step` /
+/// `update_workflow_step` and `validate_workflow_steps` refuse anything else, and the n8n mirror's
+/// notify arm emits a real node only for these.
+///
+/// `email` and `sms` are RETIRED (kanban t_08be842f). Both were channels a tenant could pick that
+/// deliver nothing:
+///
+/// * `email` — this app owns a mail path (`email::send_email`, behind Admin > Settings > Email
+///   Provider) but it is template-based and not reachable from n8n, and n8n holds no smtp
+///   credential, so the mirror could not send mail even where the app can. Making the channel real
+///   would turn the platform into a sender of arbitrary tenant-named mail, i.e. the recipient rule
+///   (any address / the account's own users / rate-limited per plan) is a product decision that
+///   belongs with the picker policy, not inside a channel list.
+/// * `sms` — no SMS provider exists in this app and no sms credential in n8n.
+///
+/// `webhook` POSTs `{message, data}` to a URL the tenant owns — the outbound call both the engine
+/// and the n8n mirror really make.
+pub const NOTIFY_CHANNELS: &[&str] = &["webhook"];
+
+/// Is this a Notify channel the product can deliver on? The write path's and the validator's rule.
+pub fn is_notify_channel(channel: &str) -> bool {
+    NOTIFY_CHANNELS.contains(&channel)
+}
+
+/// The accepted Notify channels as one line, for a 400 body / a validation error.
+pub fn notify_channel_list() -> String {
+    NOTIFY_CHANNELS.join(", ")
+}
+
 /// Cap a response body before it goes into a step result and the execution log.
 fn truncate_for_log(text: &str, max: usize) -> String {
     if text.len() <= max {
@@ -1368,7 +1398,10 @@ async fn walk(
                 let channel = step_config
                     .get("channel")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("email");
+                    // `webhook` is the one channel NOTIFY_CHANNELS accepts; a step stored without a
+                    // channel (or with a retired one, e.g. the old `email` default) must not fall
+                    // back to a channel the product cannot deliver on.
+                    .unwrap_or("webhook");
                 let recipient = step_config
                     .get("recipient")
                     .and_then(|v| v.as_str())
@@ -1839,6 +1872,58 @@ mod tests {
             !offered.iter().any(|t| t == "research"),
             "research is retired and must not be offered"
         );
+    }
+
+    /// The Notify step's channel list is the same kind of vocabulary as the step types: the console
+    /// must offer exactly the channels this product can deliver on. `email` and `sms` were removed
+    /// (kanban t_08be842f) — neither has a sender anywhere in the app or in n8n — so this test reads
+    /// the served console's own Channel select out of its source and pins it to `NOTIFY_CHANNELS`,
+    /// which is also the list the write path refuses against.
+    #[test]
+    fn the_console_offers_only_deliverable_notify_channels() {
+        let spa = include_str!("../www-app/index.html");
+        // The cfgFields arm for notify (not the `draftConfig` arm, which has no select).
+        let start = spa
+            .find("case 'notify': return html")
+            .expect("the notify step's config fields are in the served console");
+        let rest = &spa[start..];
+        let select_start = rest.find("<select").expect("the notify Channel select");
+        let select_end = rest[select_start..]
+            .find("</select>")
+            .expect("the select's closing tag");
+        let select = &rest[select_start..select_start + select_end];
+        let mut offered: Vec<String> = Vec::new();
+        for (idx, _) in select.match_indices("<option value=\"") {
+            let after = &select[idx + "<option value=\"".len()..];
+            if let Some(v) = after.split('"').next() {
+                offered.push(v.to_string());
+            }
+        }
+        assert!(
+            !offered.is_empty(),
+            "the parse found no notify channel options — the parse is broken: {select:?}"
+        );
+        assert_eq!(
+            offered,
+            NOTIFY_CHANNELS
+                .iter()
+                .map(|c| c.to_string())
+                .collect::<Vec<String>>(),
+            "the console's Notify Channel select must offer exactly NOTIFY_CHANNELS"
+        );
+        for retired in ["email", "sms"] {
+            assert!(
+                !offered.iter().any(|c| c == retired),
+                "'{retired}' has no sender in this product and must not be offered (kanban t_08be842f)"
+            );
+            assert!(
+                !is_notify_channel(retired),
+                "'{retired}' must be refused by the write path and the validator"
+            );
+        }
+        // The engine's own fallback (a row stored without a channel) must be a channel it can
+        // deliver on — it used to default to the now-retired `email`.
+        assert!(is_notify_channel("webhook"));
     }
 
     /// The old arm's answer, and the new one, are what the bug was: `classify_step_status` mapped

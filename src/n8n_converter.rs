@@ -12,7 +12,7 @@
 //!   - "http-request" → n8n HTTP Request node
 //!   - "data-card"    → dashboard push node
 //!   - "export"       → Google Sheets / SendGrid / CSV
-//!   - "notify"       → Webhook callback (n8n httpRequest, POST {message}); email | sms are named no-ops (no sender exists — see the arm, kanban t_70baf9b0)
+//!   - "notify"       → Webhook callback (n8n httpRequest, POST {message}); the only channel the console offers. `email` | `sms` are retired (kanban t_08be842f): no sender exists in this product, so a row stored before the retirement keeps its place as a no-op that names the gap
 //!   - "delay"        → n8n Wait node
 //!   - "fork"         → n8n Switch node (parallel branches)
 //!   - "action"       → Generic API call
@@ -909,16 +909,19 @@ fn convert_user_steps(
                 let channel = config
                     .get("channel")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("email");
+                    // `webhook` is the one channel `execution::NOTIFY_CHANNELS` accepts (kanban
+                    // t_08be842f): a step stored without one, or with the retired `email` default,
+                    // must not fall back to a channel this product cannot deliver on.
+                    .unwrap_or("webhook");
                 let recipient = config
                     .get("recipient")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
                 let message = config.get("message").and_then(|v| v.as_str()).unwrap_or("");
-                // The step also carries `subject` (draftConfig, www-app/index.html). The n8n mirror
-                // no longer consumes it: the only node that could (a mail node) is retired below,
-                // and the webhook arm posts the message body. The in-process engine still reads it
-                // (src/execution.rs, the "notify" arm).
+                // The step carried a `subject` field (draftConfig, www-app/index.html) while the
+                // console still offered the Email channel; with `email` retired the console no
+                // longer sends one and nothing here consumes it. A row stored before the
+                // retirement may still carry the key — it is simply ignored.
 
                 match channel {
                     // The tenant's `webhook` channel is an OUTBOUND call to a URL the tenant owns,
@@ -956,11 +959,14 @@ fn convert_user_steps(
                         });
                         nodes.push(node);
                     }
-                    // RETIRED ARMS (kanban t_70baf9b0): `email` and `sms` are offered by the tenant
-                    // console's Notify step (www-app/index.html, Channel = email | webhook | sms)
-                    // but this app serves no sender for either, so the arm keeps the step's place
-                    // in the graph as an honest no-op that NAMES the gap (the same disposition
-                    // src/execution.rs applies to a step it cannot execute).
+                    // RETIRED ARMS (kanban t_70baf9b0, retired for good by t_08be842f): `email` and
+                    // `sms` used to be offered by the tenant console's Notify step
+                    // (www-app/index.html, Channel = email | webhook | sms). This app serves no
+                    // sender for either, so those were channels a tenant could pick that deliver
+                    // nothing; the console no longer offers them and the API refuses them
+                    // (`execution::NOTIFY_CHANNELS`). These arms stay for a row stored before the
+                    // retirement: an honest no-op that NAMES the gap, the same disposition
+                    // src/execution.rs applies to a step it cannot execute.
                     //
                     // `email` used to emit `n8n-nodes-base.emailSend` with a hardcoded
                     // `fromEmail: swiftsoftware143@yahoo.com` and NO credential. The node type
@@ -972,9 +978,10 @@ fn convert_user_steps(
                     //
                     // The app DOES own a mail path (`email::send_email`, behind Admin > Settings >
                     // Email Provider), but it is template-based, it is not reachable from n8n, and
-                    // "which recipient may a tenant email through the platform's provider?" is a
-                    // product/security decision, not a spelling. Until that is decided the node is
-                    // a no-op with a note (see the card's follow-up).
+                    // relaying a tenant-named recipient through the platform's provider would make
+                    // this product an open mail sender on its own domain. That recipient rule is a
+                    // product/security decision (card t_08be842f, decided with the picker policy):
+                    // until it is taken, the channel is not sold at all.
                     "email" => {
                         nodes.push(passthrough_node(
                             &node_id,
@@ -984,8 +991,9 @@ fn convert_user_steps(
                             "WorkflowSwift has no tenant-triggered mail sender: the platform's mail \
                              provider lives in the app (Admin > Settings > Email Provider) and no \
                              route relays a step's mail, so this Notify step sends nothing. The \
-                             console still offers the Email channel - whether a tenant may email a \
-                             recipient through the platform's provider is an open decision.",
+                             Email channel is RETIRED (kanban t_08be842f): the console no longer \
+                             offers it and the API refuses it. This node only keeps the place of a \
+                             step stored before the retirement.",
                         ));
                     }
                     "sms" => {
@@ -995,22 +1003,24 @@ fn convert_user_steps(
                             (x_pos, y_base),
                             step_type,
                             "WorkflowSwift has no SMS provider: no sender in the app and no sms \
-                             credential in n8n, so this Notify step sends nothing. (n8n does hold a \
-                             telegramApi credential, but the console offers no telegram channel.)",
+                             credential in n8n, so this Notify step sends nothing. The SMS channel \
+                             is RETIRED (kanban t_08be842f): the console no longer offers it and the \
+                             API refuses it. This node only keeps the place of a step stored before \
+                             the retirement. (n8n does hold a telegramApi credential, but this \
+                             product offers no telegram channel.)",
                         ));
                     }
                     // RETIRED callback (kanban t_642b6894): `slack` and `telegram` are not
-                    // offered by the tenant console's Notify step (its Channel select is
-                    // email | webhook | sms, www-app/index.html) and WorkflowSwift serves no
-                    // slack/telegram sender, so the arm posted a route that never existed and
-                    // the run died there.
+                    // offered by the tenant console's Notify step (its Channel select is `webhook`,
+                    // www-app/index.html) and WorkflowSwift serves no slack/telegram sender, so the
+                    // arm posted a route that never existed and the run died there.
                     "slack" | "telegram" => {
                         nodes.push(passthrough_node(
                             &node_id,
                             step_name,
                             (x_pos, y_base),
                             step_type,
-                            &format!("channel '{}' has no sender in WorkflowSwift (the console offers email | webhook | sms)", channel),
+                            &format!("channel '{}' has no sender in WorkflowSwift (the console's Notify channel is webhook)", channel),
                         ));
                     }
                     _ => {
@@ -1021,7 +1031,7 @@ fn convert_user_steps(
                             step_name,
                             (x_pos, y_base),
                             step_type,
-                            &format!("unknown notify channel '{}' (the console offers email | webhook | sms)", channel),
+                            &format!("unknown notify channel '{}' (the console's Notify channel is webhook)", channel),
                         ));
                     }
                 }
@@ -2284,7 +2294,9 @@ mod tests {
         );
         assert!(!is_app_callback(hook));
 
-        // email | sms | unknown channel → an honest no-op that NAMES the missing capability.
+        // email | sms | unknown channel → an honest no-op that NAMES the gap. The first two now also
+        // say the channel itself is RETIRED (kanban t_08be842f): the console no longer offers them
+        // and the write path refuses them, so only a row stored before the retirement can reach it.
         for (name, needle) in [
             ("Notify Email", "no tenant-triggered mail sender"),
             ("Notify SMS", "no SMS provider"),
@@ -2298,6 +2310,24 @@ mod tests {
                 n["notes"]
             );
         }
+        for retired in ["Notify Email", "Notify SMS"] {
+            let n = by_name(retired);
+            assert!(
+                n["notes"].as_str().unwrap_or("").contains("RETIRED"),
+                "{retired} must say the channel is retired, got {}",
+                n["notes"]
+            );
+            assert!(
+                !crate::execution::is_notify_channel(if retired.ends_with("Email") {
+                    "email"
+                } else {
+                    "sms"
+                }),
+                "{retired} carries a channel the API must refuse"
+            );
+        }
+        // The one channel the console still offers is the one the vocabulary accepts.
+        assert!(crate::execution::is_notify_channel("webhook"));
 
         // Exactly ONE Webhook node — the graph's own trigger. A second one is a stray
         // unauthenticated endpoint that does the step's work nowhere.

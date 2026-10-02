@@ -1343,7 +1343,7 @@ const STEP_TYPES = [
   { k:'data-card', label:'Data Card', hint:'Always step 1 — pulls the run\'s data from a named dashboard widget.' },
   { k:'ai-action', label:'AI Action', hint:'Runs an LLM prompt; the output stays editable.' },
   { k:'export', label:'Export', hint:'CSV / Resend / SendGrid / CoreSwift CRM.' },
-  { k:'notify', label:'Notify', hint:'Email or webhook notification.' },
+  { k:'notify', label:'Notify', hint:'POSTs the run data to a webhook URL you own.' },
   { k:'delay', label:'Delay / Wait', hint:'Parks the instance until due; the execution worker advances it.' },
   { k:'fork', label:'Fork', hint:'Splits the run into parallel branches.' },
 ];
@@ -1381,12 +1381,12 @@ const loadWidgetCatalog = async () => { if (S.widgetCat) return;
 const openStepModal = (wfId, step) => { loadWidgetCatalog(); S.stepValidation = null;
   const c = cfgOf(step);
   const base = { wfId, id: step ? step.id : null, type: step ? step.step_type : 'data-card', name: '', desc: '', widget_name: '', metric_key: '',
-    prompt: '', url: '', method: 'GET', destination: 'csv', channel: 'email', recipient: '', subject: '',
+    prompt: '', url: '', method: 'GET', destination: 'csv', channel: 'webhook', recipient: '',
     duration_seconds: 60, branches: '', query: '', provider: '', endpoint: '' };
   S.stepDraft = step ? Object.assign(base, { name: step.name || '', desc: step.description || '',
     widget_name: c.widget_name || '', metric_key: c.metric_key || '', prompt: c.prompt || '', url: c.url || '',
-    method: c.method || 'GET', destination: c.destination || 'csv', channel: c.channel || 'email',
-    recipient: c.recipient || '', subject: c.subject || '', duration_seconds: c.duration_seconds || (c.duration_ms ? Math.round(c.duration_ms / 1000) : 60),
+    method: c.method || 'GET', destination: c.destination || 'csv', channel: 'webhook',
+    recipient: c.recipient || '', duration_seconds: c.duration_seconds || (c.duration_ms ? Math.round(c.duration_ms / 1000) : 60),
     branches: Array.isArray(c.branches) ? c.branches.map(b => typeof b === 'string' ? b : ((b && b.name) || '')).join('\n') : '',
     query: c.query || '', provider: c.provider || '', endpoint: c.endpoint || '' }) : base;
   S.modal = 'step'; renderApp(); };
@@ -1397,7 +1397,11 @@ const draftConfig = (d) => { switch (d.type) {
   case 'data-card': return { widget_name: d.widget_name, metric_key: d.metric_key };
   case 'ai-action': return { prompt: d.prompt };
   case 'export': return { destination: d.destination, format: 'csv', targets: [d.destination] };
-  case 'notify': return { channel: d.channel, recipient: d.recipient, subject: d.subject };
+  // `channel` is always `webhook`: Notify has exactly one channel this product can deliver on
+  // (src/execution.rs NOTIFY_CHANNELS). Email and SMS were removed on 2026-10-02 (kanban
+  // t_08be842f) because neither has a sender anywhere in this app or in n8n, so choosing one built
+  // a step that silently did nothing.
+  case 'notify': return { channel: 'webhook', recipient: d.recipient };
   // duration_ms is the key BOTH the executor (delay_duration_ms) and validate-steps read — validate
   // only looks at duration_ms, so writing duration_seconds alone made a correct delay step report
   // "Delay duration is 0ms". Both keys are written so the edit form round-trips in seconds.
@@ -1448,11 +1452,16 @@ const StepModal = () => {
           <option value="csv">CSV download</option><option value="resend">Resend (email)</option>
           <option value="sendgrid">SendGrid (email)</option><option value="coreswift">CoreSwift CRM</option>
         </select></div>`;
+      // ONE channel, and it is the one the product can keep: `webhook` makes the run POST
+      // {message, data} to a URL the tenant owns. Email and SMS used to be listed here and both
+      // delivered nothing (no mail relay, no SMS provider — kanban t_08be842f), so they are gone
+      // from the picker and the API refuses them. Legacy rows: the generator emits a no-op that
+      // names the retirement, and opening such a step here offers the Webhook form to fix it.
       case 'notify': return html`<div class="mb-4"><label class="label">Channel</label>
         <select class="input" value=${d.channel} onChange=${e=>set('channel', e.target.value)}>
-          <option value="email">Email</option><option value="webhook">Webhook</option><option value="sms">SMS</option>
+          <option value="webhook">Webhook</option>
         </select></div>
-        ${field('Recipient', 'recipient', 'ops@example.com')}${field('Subject', 'subject', 'Run finished')}`;
+        ${field('Webhook URL', 'recipient', 'https://hooks.example.com/incoming')}`;
       case 'delay': case 'wait': return html`<div class="mb-4"><label class="label">Wait (seconds)</label>
         <input class="input" type="number" min="1" value=${d.duration_seconds} onInput=${e=>set('duration_seconds', e.target.value)} />
         <div class="text-xs text-gray-500 mt-1">The instance parks here and the execution worker advances it when due.</div></div>`;

@@ -51,6 +51,9 @@ surface. Pick a workflow, then:
   the API and shown as an error — step 1 must be the Data Card.
 - **Validate** checks the whole step list against the rules and lists errors/warnings inline.
 - **Edit** changes the name, description and step config in place; **Del** removes the step.
+- **Notify** posts the run's data (`{message, data}`) to a **webhook URL you own** — that URL is the
+  step's Recipient field. Email and SMS are no longer offered: this app has no tenant mail sender and
+  no SMS provider, so a step built on either would have delivered nothing.
 
 ## Renditions
 

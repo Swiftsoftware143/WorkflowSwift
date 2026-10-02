@@ -38,6 +38,13 @@ Base API: `https://workflowswift.com/api/v1` — all non-public endpoints need
   executes**. The API refuses any other step type (`POST /workflows/{id}/steps` answers `400`), so
   a step that cannot run can no longer be created. **Research is retired** for that reason: no path
   in this app performs a research call.
+- **Notify**: the one channel is **Webhook** — the step POSTs `{message, data}` to the URL you put in
+  its Recipient field, so the receiving end gets the run's own item. The **Email and SMS channels are
+  retired** (2026-10-02): this app has no tenant-triggered mail sender (its mail provider is
+  template-based platform mail, not a workflow sender) and no SMS provider at all, so both were
+  channels a step could be built on that delivered nothing. The API refuses them the same way it
+  refuses an unknown step type, and a step stored with one keeps its place as a no-op that names the
+  retirement.
 - **HTTP Request / Action / Render Video/Image/Audio**: an HTTP Request or Action step calls the
   URL you configure, with the method you pick, and the run history records the status and the reply.
   A Render step calls your provider's `endpoint` and logs the result under **Renditions** (provider,

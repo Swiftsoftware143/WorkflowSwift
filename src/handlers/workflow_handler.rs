@@ -813,6 +813,46 @@ fn data_card_first_error() -> AppError {
     )
 }
 
+/// A Notify step's `channel` is vocabulary, not a free string — `execution::NOTIFY_CHANNELS` is the
+/// one list, the console's Channel select offers exactly it, and the API refuses anything else.
+///
+/// `email` and `sms` were channels a tenant could pick that deliver nothing (kanban t_08be842f):
+/// no tenant-triggered mail sender exists in this app (its mail path is template-based and not
+/// reachable from n8n) and no SMS provider exists at all. A channel the step cannot deliver on is
+/// the same defect class as a step type the engine cannot execute (kanban t_fe60cdf5), one level
+/// down, so it is refused on the way in and reported by validate-steps.
+fn notify_channel_error(channel: &str) -> AppError {
+    AppError::Validation(format!(
+        "Notify channel '{}' has no sender in this app. Valid channels are: {}",
+        channel,
+        crate::execution::notify_channel_list()
+    ))
+}
+
+/// Refuse a notify step whose `config.channel` this product cannot deliver on. Every other step
+/// type passes through untouched.
+fn assert_notify_channel_ok(
+    step_type: &str,
+    config: &Option<serde_json::Value>,
+) -> Result<(), AppError> {
+    if step_type != "notify" {
+        return Ok(());
+    }
+    let channel = config
+        .as_ref()
+        .and_then(|c| c.get("channel"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if crate::execution::is_notify_channel(channel) {
+        return Ok(());
+    }
+    Err(notify_channel_error(if channel.is_empty() {
+        "(missing)"
+    } else {
+        channel
+    }))
+}
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct StepOrderRow {
     id: Uuid,
@@ -900,6 +940,9 @@ pub async fn create_workflow_step(
         )));
     }
 
+    // A notify step's CHANNEL is vocabulary too (kanban t_08be842f).
+    assert_notify_channel_ok(&req.step_type, &req.config)?;
+
     let step = sqlx::query_as::<_, WorkflowStep>(
         r#"INSERT INTO workflow_steps (id, workflow_id, step_type, name, description, sort_order, config)
            VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -954,6 +997,10 @@ pub async fn update_workflow_step(
             current_type, req.step_type
         )));
     }
+
+    // An edit may not write a notify channel the product cannot deliver on either (kanban
+    // t_08be842f): this is also the path a legacy `email` step takes to become deliverable.
+    assert_notify_channel_ok(&current_type, &req.config)?;
 
     // An absent sort_order PRESERVES the stored position. It used to default to 0,
     // which silently teleported any edited step to the front of the workflow — and
@@ -1278,6 +1325,26 @@ pub async fn validate_workflow_steps(
                 valid_types.join(", ")
             ));
             continue;
+        }
+
+        // A notify step's CHANNEL is vocabulary too (kanban t_08be842f): `email` and `sms` were
+        // channels the product could not deliver on, so a workflow that carries one is reported
+        // here exactly as an unknown step type is.
+        if step_type == "notify" {
+            let channel = step
+                .get("config")
+                .and_then(|c| c.get("channel"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if !channel.is_empty() && !crate::execution::is_notify_channel(channel) {
+                errors.push(format!(
+                    "Step {} '{}' (notify): Unknown channel '{}'. Valid channels are: {}",
+                    i + 1,
+                    step_name,
+                    channel,
+                    crate::execution::notify_channel_list()
+                ));
+            }
         }
 
         // Check required config fields
