@@ -325,6 +325,29 @@ async fn run_in_process(
         ));
     }
 
+    // A step the engine could not execute is not a clean run. `execution.rs`'s `_` arm marks such
+    // a step `unexecutable` (reachable only for a row written straight into the database — the
+    // steps API refuses these types now), and it is surfaced here because a run that reports
+    // success around a step that never happened is exactly the defect this card is about.
+    let mut unexecutable: Vec<String> = outcome
+        .steps
+        .iter()
+        .filter_map(|s| {
+            s.get("unexecutable")
+                .and_then(|v| v.as_str())
+                .map(|t| t.to_string())
+        })
+        .collect();
+    unexecutable.sort();
+    unexecutable.dedup();
+    if !unexecutable.is_empty() {
+        warnings.push(format!(
+            "{} step type(s) have no executor in this app and did nothing: {}. They cannot be added from the console — delete the step and re-add it as a supported type.",
+            unexecutable.len(),
+            unexecutable.join(", ")
+        ));
+    }
+
     let remaining_balance: i64 = sqlx::query_scalar(
         "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
     )
@@ -782,6 +805,17 @@ pub async fn create_workflow_step(
         return Err(data_card_first_error());
     }
 
+    // The whole vocabulary is `crate::execution::EXECUTABLE_STEP_TYPES`, so a step the engine has
+    // no arm for cannot be created at all. Before kanban t_fe60cdf5 this handler validated NOTHING
+    // and the API happily accepted types that fell through the engine's `_` arm and did nothing.
+    if !crate::execution::is_executable_step_type(&req.step_type) {
+        return Err(AppError::Validation(format!(
+            "Step type '{}' has no executor in this app. Valid step types are: {}",
+            req.step_type,
+            crate::execution::executable_step_type_list()
+        )));
+    }
+
     let step = sqlx::query_as::<_, WorkflowStep>(
         r#"INSERT INTO workflow_steps (id, workflow_id, step_type, name, description, sort_order, config)
            VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -1102,12 +1136,10 @@ pub async fn validate_workflow_steps(
         ("http-request", vec!["url", "method"]),
         ("action", vec!["url", "method"]),
         ("ai-action", vec!["prompt"]),
-        ("openclaw", vec!["prompt"]),
         ("generate", vec!["prompt"]),
         ("export", vec!["destination"]),
         ("notify", vec!["channel", "recipient"]),
         ("data-card", vec!["metric_key"]),
-        ("research", vec!["query"]),
         ("design", vec!["prompt"]),
         ("publish", vec!["content"]),
         ("condition", vec!["field"]),
@@ -1147,35 +1179,11 @@ pub async fn validate_workflow_steps(
         }
 
         // Check step_type is valid
-        let valid_types = [
-            "http-request",
-            "action",
-            "ai-action",
-            "openclaw",
-            "data-card",
-            "data_card",
-            "notify",
-            "export",
-            "delay",
-            "wait",
-            "transform",
-            "code",
-            "fork",
-            "branch",
-            "render_video",
-            "render_media",
-            "render_image",
-            "render_audio",
-            "generate",
-            "format",
-            "design",
-            "publish",
-            "loop",
-            "condition",
-            "manual",
-            "research",
-            "webhook",
-        ];
+        // ONE vocabulary: the types the engine can execute (src/execution.rs). This list used to be
+        // a second, hand-kept copy that had drifted — eleven of its names had no engine arm, so the
+        // validator blessed a workflow whose steps did nothing (kanban t_fe60cdf5). `research` and
+        // `openclaw` are retired: nothing in this app can run either (see the decision record).
+        let valid_types = crate::execution::EXECUTABLE_STEP_TYPES;
 
         if !valid_types.contains(&step_type) {
             errors.push(format!(

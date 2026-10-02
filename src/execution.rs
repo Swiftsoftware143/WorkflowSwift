@@ -84,6 +84,254 @@ pub struct ExecutionOutcome {
     pub failed_steps: i32,
 }
 
+/// Every step type this engine has an arm for. The API's accepted vocabulary IS this list:
+/// `workflow_handler::validate_workflow_steps` reads it, and `create_workflow_step` refuses
+/// anything else — so the app can no longer accept a step type it will not run. Before kanban
+/// t_fe60cdf5 there were two hand-kept lists and eleven of the accepted names had no arm here.
+pub const EXECUTABLE_STEP_TYPES: &[&str] = &[
+    "http-request",
+    "action",
+    "ai-action",
+    "data-card",
+    "data_card",
+    "notify",
+    "export",
+    "delay",
+    "wait",
+    "transform",
+    "code",
+    "fork",
+    "branch",
+    "render_video",
+    "render_media",
+    "render_image",
+    "render_audio",
+    "generate",
+    "format",
+    "design",
+    "publish",
+    "loop",
+    "condition",
+    "manual",
+    "webhook",
+];
+
+/// Is this a step type the engine can execute? The write path's and the validator's one rule.
+pub fn is_executable_step_type(step_type: &str) -> bool {
+    EXECUTABLE_STEP_TYPES.contains(&step_type)
+}
+
+/// The accepted vocabulary as one line, for a 400 body / a validation error.
+pub fn executable_step_type_list() -> String {
+    EXECUTABLE_STEP_TYPES.join(", ")
+}
+
+/// Cap a response body before it goes into a step result and the execution log.
+fn truncate_for_log(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let mut end = max;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!(
+        "{}… [{} more bytes]",
+        &text[..end],
+        text.len().saturating_sub(end)
+    )
+}
+
+/// The result for a step type this engine has no arm for.
+///
+/// It is `skipped` and carries the `unexecutable` marker, which `run_in_process` turns into a
+/// `warnings[]` entry the console shows.
+///
+/// The arm this replaced answered status `warning` and told the operator the workflow continues.
+/// `classify_step_status` maps that to "warning", which is neither failed nor pending, so the
+/// instance was recorded **completed** with an empty `warnings[]`: a run that reported success
+/// around a step that never happened (kanban t_fe60cdf5).
+fn unexecutable_step_result(step: usize, step_type: &str) -> Value {
+    json!({
+        "step": step,
+        "type": step_type,
+        "status": "skipped",
+        "unexecutable": step_type,
+        "reason": format!(
+            "Step type '{}' has no executor in this app — the step did nothing. It cannot be added \
+             from the console; supported types: {}",
+            step_type,
+            EXECUTABLE_STEP_TYPES.join(", ")
+        ),
+    })
+}
+
+/// One outbound call for the step arms whose destination comes from the step's own config
+/// (`webhook`, `http-request`/`action`, `render_*`).
+///
+/// Both halves of the SSRF pair are deliberate:
+///   * `webhook_security::gate_step_destination` refuses a destination inside the box BEFORE any
+///     socket is opened — these arms put the target's body in the step result, so without the gate
+///     a step is an authenticated read primitive against `127.0.0.1`, the docker bridge or the
+///     cloud metadata address;
+///   * the client is built with `redirect::Policy::none()`, because following a 30x would be a free
+///     hop past that gate (a validated public host that redirects into loopback).
+///
+/// Returns `(status_code, body)`; each caller decides what a non-2xx means for its step type.
+async fn step_outbound_call(
+    method: &str,
+    url: &str,
+    payload: &Value,
+    timeout_secs: u64,
+) -> Result<(u16, String), String> {
+    crate::security::webhook_security::gate_step_destination(url).await?;
+
+    let verb = reqwest::Method::from_bytes(method.trim().to_uppercase().as_bytes())
+        .map_err(|e| format!("Unsupported HTTP method '{}': {}", method, e))?;
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(timeout_secs))
+        .build()
+        .map_err(|e| format!("Could not build the HTTP client: {}", e))?;
+
+    let mut req = client.request(verb.clone(), url);
+    if verb != reqwest::Method::GET {
+        req = req.json(payload);
+    }
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    let status = resp.status().as_u16();
+    Ok((status, resp.text().await.unwrap_or_default()))
+}
+
+/// The run a rendition row belongs to.
+///
+/// Grouped rather than passed as ten positional arguments: two of the NOT NULL columns
+/// (`provider_asset_id`, `provider_asset_url`) and the `user_id` all come from different places,
+/// and a struct makes the one caller say which is which (clippy `too_many_arguments`).
+struct RenditionRequest<'a> {
+    aid: Uuid,
+    context: &'a Value,
+    workflow_id: Uuid,
+    instance_id: Uuid,
+    step_type: &'a str,
+    step_name: &'a str,
+    provider: &'a str,
+    asset_type: &'a str,
+    /// The provider's raw response body, kept verbatim in the row's metadata.
+    body: &'a str,
+}
+
+/// Write the `account_renditions` row a `render_*` step promises — the console's Builder says a
+/// render step's "output is logged as a rendition and shows up under Renditions".
+///
+/// The provider's own response decides the row: `provider_asset_id` and `provider_asset_url` are
+/// NOT NULL, and a response without them is reported as a step error that names what the provider
+/// actually sent — the step never invents an id or a URL to make a green row (kanban t_fe60cdf5).
+async fn record_rendition(state: &AppState, req: RenditionRequest<'_>) -> Result<Uuid, String> {
+    let parsed: Value = serde_json::from_str(req.body).unwrap_or(Value::Null);
+    let pick = |keys: &[&str]| -> Option<String> {
+        keys.iter().find_map(|k| {
+            parsed
+                .get(*k)
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+        })
+    };
+    let id_keys = [
+        "id",
+        "asset_id",
+        "render_id",
+        "video_id",
+        "file_id",
+        "job_id",
+    ];
+    let url_keys = [
+        "url",
+        "video_url",
+        "asset_url",
+        "generated_url",
+        "download_url",
+        "output_url",
+    ];
+    let asset_id = pick(&id_keys).ok_or_else(|| {
+        format!(
+            "the render provider '{}' answered HTTP 2xx without an asset id (looked for {} in: {})",
+            req.provider,
+            id_keys.join("/"),
+            truncate_for_log(req.body, 200)
+        )
+    })?;
+    let asset_url = pick(&url_keys).ok_or_else(|| {
+        format!(
+            "the render provider '{}' answered HTTP 2xx without an asset URL (looked for {} in: {})",
+            req.provider,
+            url_keys.join("/"),
+            truncate_for_log(req.body, 200)
+        )
+    })?;
+    let preview_url = pick(&["preview_url", "thumbnail_url", "url", "video_url"]);
+    let thumbnail_url = pick(&["thumbnail_url", "thumbnail"]);
+
+    // The run's user: the JWT subject on a manual run (the engine puts it in the context), else the
+    // account's first active user — an incoming capture has no user of its own. Never invented: no
+    // user means the step fails and says why, rather than writing a row that belongs to nobody.
+    let user_id = match req
+        .context
+        .get("triggered_by")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok())
+    {
+        Some(u) => Some(u),
+        None => sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM users WHERE aid = $1 AND is_active ORDER BY created_at LIMIT 1",
+        )
+        .bind(req.aid)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| format!("DB error resolving the run's user: {}", e))?,
+    }
+    .ok_or_else(|| "this account has no user to attach the rendition to".to_string())?;
+
+    let provider_category: Option<String> =
+        sqlx::query_scalar("SELECT category FROM available_providers WHERE key = $1")
+            .bind(req.provider)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+
+    let rendition_id = Uuid::new_v4();
+    sqlx::query(
+        r#"INSERT INTO account_renditions
+           (id, aid, user_id, workflow_id, instance_id, step_type, step_name, provider,
+            provider_asset_id, provider_asset_url, preview_url, thumbnail_url, asset_type,
+            provider_category, retention_expires_at, status, metadata)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                   NOW() + INTERVAL '90 days', 'active', $15)"#,
+    )
+    .bind(rendition_id)
+    .bind(req.aid)
+    .bind(user_id)
+    .bind(req.workflow_id)
+    .bind(req.instance_id)
+    .bind(req.step_type)
+    .bind(req.step_name)
+    .bind(req.provider)
+    .bind(&asset_id)
+    .bind(&asset_url)
+    .bind(&preview_url)
+    .bind(&thumbnail_url)
+    .bind(req.asset_type)
+    .bind(&provider_category)
+    .bind(json!({ "provider_response": parsed, "logged_by": "src/execution.rs" }))
+    .execute(&state.db)
+    .await
+    .map_err(|e| format!("DB error writing the rendition: {}", e))?;
+
+    Ok(rendition_id)
+}
+
 /// The `status` a step result really has.
 ///
 /// Three step arms (webhook, n8n, publish) store a raw HTTP status *code* in
@@ -713,37 +961,113 @@ async fn walk(
                     })
                 }
             }
-            "webhook" => {
+            // `webhook` keeps its shipped POST; `http-request` / `action` are the same call with the
+            // method the console's Builder gives them. All three take the tenant's URL, so all three
+            // run through the destination gate (kanban t_fe60cdf5) — the n8n mirror already emits a
+            // real HttpRequest node for every one of these names.
+            "webhook" | "http-request" | "action" => {
                 let url = step_config
                     .get("url")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
                 if url.is_empty() {
-                    json!({"step": i, "type": "webhook", "status": "skipped", "reason": "No URL configured"})
+                    json!({"step": i, "type": step_type, "status": "skipped", "reason": "No URL configured"})
                 } else {
-                    let wh_payload = json!({
+                    let method = if step_type == "webhook" {
+                        "POST".to_string()
+                    } else {
+                        step_config
+                            .get("method")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("GET")
+                            .to_uppercase()
+                    };
+                    let payload = json!({
                         "contact": contact,
                         "data": data,
                         "source": source,
                         "campaign_slug": slug,
                         "source_entry_id": source_entry_id,
                     });
-                    let client = reqwest::Client::new();
-                    match client
-                        .post(url)
-                        .json(&wh_payload)
-                        .timeout(std::time::Duration::from_secs(15))
-                        .send()
+                    match step_outbound_call(&method, url, &payload, 15).await {
+                        Ok((status, body)) => json!({
+                            "step": i, "type": step_type, "status": status,
+                            "method": method, "url": url, "response": body,
+                        }),
+                        Err(e) => json!({
+                            "step": i, "type": step_type, "status": "error",
+                            "method": method, "url": url, "error": e,
+                        }),
+                    }
+                }
+            }
+            // `render_*`: call the tenant's provider endpoint, then write the rendition row the
+            // console promises. The endpoint is the tenant's own provider URL — the same one the
+            // n8n mirror's node posts to — so it runs through the same destination gate.
+            //
+            // Bounded at 60s because a Run is a synchronous HTTP request; a provider that only
+            // accepts a job and answers later still logs its job id as the asset.
+            "render_video" | "render_image" | "render_audio" | "render_media" => {
+                let provider = step_config
+                    .get("provider")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let endpoint = step_config
+                    .get("endpoint")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                let asset_type = match step_type.as_str() {
+                    "render_image" => "image",
+                    "render_audio" => "audio",
+                    _ => "video",
+                };
+                if provider.is_empty() || endpoint.is_empty() {
+                    json!({"step": i, "type": step_type, "status": "skipped",
+                           "reason": "A render step needs both `provider` and `endpoint`"})
+                } else {
+                    let payload = json!({
+                        "provider": provider,
+                        "asset_type": asset_type,
+                        "step_name": step.name,
+                        "contact": contact,
+                        "data": data,
+                        "source": source,
+                        "campaign_slug": slug,
+                        "source_entry_id": source_entry_id,
+                        "context": context,
+                    });
+                    match step_outbound_call("POST", endpoint, &payload, 60).await {
+                        Err(e) => json!({"step": i, "type": step_type, "status": "error",
+                                         "provider": provider, "endpoint": endpoint, "error": e}),
+                        Ok((code, body)) if !(200..300).contains(&code) => json!({
+                            "step": i, "type": step_type, "status": "error",
+                            "provider": provider, "endpoint": endpoint, "status_code": code,
+                            "response": truncate_for_log(&body, 500),
+                            "error": format!("the render provider answered HTTP {}", code)}),
+                        Ok((code, body)) => match record_rendition(
+                            state,
+                            RenditionRequest {
+                                aid,
+                                context: &context,
+                                workflow_id,
+                                instance_id,
+                                step_type,
+                                step_name: &step.name,
+                                provider,
+                                asset_type,
+                                body: &body,
+                            },
+                        )
                         .await
-                    {
-                        Ok(resp) => {
-                            let status_code = resp.status().as_u16();
-                            let body = resp.text().await.unwrap_or_default();
-                            json!({"step": i, "type": "webhook", "status": status_code, "url": url, "response": body})
-                        }
-                        Err(e) => {
-                            json!({"step": i, "type": "webhook", "status": "error", "error": e.to_string()})
-                        }
+                        {
+                            Ok(rendition_id) => json!({
+                                "step": i, "type": step_type, "status": "completed",
+                                "provider": provider, "asset_type": asset_type,
+                                "status_code": code,
+                                "rendition_id": rendition_id.to_string()}),
+                            Err(e) => json!({"step": i, "type": step_type, "status": "error",
+                                             "provider": provider, "endpoint": endpoint, "error": e}),
+                        },
                     }
                 }
             }
@@ -889,7 +1213,7 @@ async fn walk(
                     }
                 }
             }
-            "format" => {
+            "format" | "transform" | "code" => {
                 let format_type = step_config
                     .get("format")
                     .and_then(|v| v.as_str())
@@ -1133,7 +1457,7 @@ async fn walk(
 
                 data_card_result(i, widget_name, metric_key, lookup)
             }
-            "fork" => {
+            "fork" | "branch" => {
                 let branches: Vec<serde_json::Value> = step_config
                     .get("branches")
                     .and_then(|v| v.as_array())
@@ -1155,11 +1479,7 @@ async fn walk(
                     .unwrap_or("true");
                 json!({"step": i, "type": "condition", "status": "completed", "condition": condition, "note": "Condition evaluation queued"})
             }
-            _ => {
-                // Allow unknown step types to pass through instead of failing
-                // Frontend can show a warning but the workflow doesn't break
-                json!({"step": i, "type": step_type, "status": "warning", "message": format!("Step type '{}' is not executable — marked as warning but workflow continues", step_type)})
-            }
+            _ => unexecutable_step_result(i, step_type),
         };
 
         // Mark step instance as completed (or error)
@@ -1422,5 +1742,162 @@ mod tests {
             "completed",
             "and the walk called that success"
         );
+    }
+
+    /// The step types the engine's `match step_type.as_str()` branches on, read out of THIS file's
+    /// own source so the list cannot drift from the code. Arm lines sit at twelve spaces of
+    /// indentation; every nested match (e.g. render_*'s asset_type) is deeper and is excluded.
+    fn engine_arm_keys() -> Vec<String> {
+        let src = include_str!("execution.rs");
+        let start = src
+            .find("let result = match step_type.as_str() {")
+            .expect("the engine's match is in this file");
+        let end = src[start..]
+            .find("\n        };\n")
+            .map(|off| start + off)
+            .expect("the end of the match block");
+        let mut keys: Vec<String> = Vec::new();
+        for line in src[start..end].lines() {
+            if !line.starts_with("            \"") || !line.contains("=>") {
+                continue;
+            }
+            for part in line.split('"').skip(1).step_by(2) {
+                let key = part.trim();
+                if !key.is_empty()
+                    && key
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c == '_' || c == '-')
+                {
+                    keys.push(key.to_string());
+                }
+            }
+        }
+        keys.sort();
+        keys.dedup();
+        keys
+    }
+
+    /// The card's core invariant (kanban t_fe60cdf5): the vocabulary the API accepts is the
+    /// vocabulary the engine can execute. Eleven accepted names used to have no arm, so a workflow
+    /// could be created, deployed and "run" while every one of those steps did nothing.
+    #[test]
+    fn every_accepted_step_type_has_an_arm() {
+        let arms = engine_arm_keys();
+        assert!(
+            arms.len() >= 20,
+            "the arm scan found only {} keys — the scan is broken, not the code: {arms:?}",
+            arms.len()
+        );
+        for t in EXECUTABLE_STEP_TYPES {
+            assert!(
+                arms.iter().any(|a| a == t),
+                "EXECUTABLE_STEP_TYPES accepts '{t}' but no `match step_type.as_str()` arm covers \
+                 it (arms: {arms:?})"
+            );
+        }
+        // The retired names must not be accepted: nothing in this app executes either.
+        for retired in ["research", "openclaw"] {
+            assert!(
+                !is_executable_step_type(retired),
+                "'{retired}' must be retired — no live path in this app runs it"
+            );
+        }
+    }
+
+    /// The console is the surface the product sells from: every step type its Builder offers must
+    /// be executable, or the tenant builds a step that silently does nothing.
+    #[test]
+    fn the_console_picker_offers_only_executable_step_types() {
+        let spa = include_str!("../www-app/index.html");
+        let mut offered: Vec<String> = Vec::new();
+        for decl in ["const STEP_TYPES = [", "const STEP_TYPES_EXTRA = ["] {
+            let start = spa
+                .find(decl)
+                .expect("the picker arrays are in the served console");
+            let end = start + spa[start..].find("];").expect("array terminator");
+            for (idx, _) in spa[start..end].match_indices("k:'") {
+                let rest = &spa[start + idx + 3..];
+                if let Some(key) = rest.split('\'').next() {
+                    offered.push(key.to_string());
+                }
+            }
+        }
+        offered.sort();
+        offered.dedup();
+        assert!(
+            offered.len() >= 8,
+            "the picker parse found only {} types — the parse is broken: {offered:?}",
+            offered.len()
+        );
+        for t in &offered {
+            assert!(
+                is_executable_step_type(t),
+                "the console offers '{t}' but the engine has no arm for it (kanban t_fe60cdf5)"
+            );
+        }
+        assert!(
+            !offered.iter().any(|t| t == "research"),
+            "research is retired and must not be offered"
+        );
+    }
+
+    /// The old arm's answer, and the new one, are what the bug was: `classify_step_status` mapped
+    /// `warning` to itself — neither failed nor pending — so the instance came out `completed`.
+    /// The replacement is `skipped` AND carries `unexecutable`, which `run_in_process` reads.
+    #[test]
+    fn a_step_with_no_executor_is_marked_not_merely_warned() {
+        let result = unexecutable_step_result(3, "research");
+        assert_eq!(result["status"], "skipped");
+        assert_eq!(result["unexecutable"], "research");
+        assert_eq!(result["type"], "research");
+        assert!(result["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("no executor"));
+        assert_eq!(classify_step_status(&result), "skipped");
+
+        // control: the pre-fix shape. `warning` is not failed and not pending, so a run built from
+        // it reported success — the defect this card exists for.
+        // (the old arm's own message is deliberately NOT repeated here: the file-level assertion
+        // below greps this file for it, and a copy of the string in the test would defeat that.)
+        let control = json!({"step": 3, "type": "research", "status": "warning"});
+        assert_eq!(classify_step_status(&control), "warning");
+        assert!(control.get("unexecutable").is_none());
+        // The needle is assembled at run time: a literal here would be embedded by
+        // `include_str!` and the file would always "contain" the phrase it is grepping for.
+        let retired = ["marked as warning", " but workflow continues"].concat();
+        assert!(
+            !include_str!("execution.rs").contains(&retired),
+            "the silent-warning string must be gone from the engine"
+        );
+    }
+
+    /// The destination gate is a refusal of the address, not of the URL shape: this box's own
+    /// public IP (what the acceptance probe posts to) passes, the box's own loopback does not.
+    #[tokio::test]
+    async fn a_public_destination_is_allowed_and_a_loopback_one_is_refused() {
+        use crate::security::webhook_security::gate_step_destination;
+        assert!(gate_step_destination("http://209.222.97.179:18099/hit/x")
+            .await
+            .is_ok());
+        assert!(gate_step_destination("https://example.com/hook")
+            .await
+            .is_ok());
+        for refused in [
+            "http://127.0.0.1:8085/api/v1/health",
+            "http://192.168.1.1/hook",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://[::1]:8080/",
+        ] {
+            let err = gate_step_destination(refused)
+                .await
+                .expect_err(&format!("{refused} must be refused"));
+            assert!(err.contains("not a valid destination"), "{err}");
+        }
+        // fail closed on a host that cannot resolve
+        assert!(gate_step_destination("http://no-such-host.invalid/hook")
+            .await
+            .is_err());
+        assert!(gate_step_destination("not-a-url").await.is_err());
     }
 }

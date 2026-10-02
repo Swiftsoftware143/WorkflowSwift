@@ -33,6 +33,17 @@ Base API: `https://workflowswift.com/api/v1` — all non-public endpoints need
   when you create it** — to change the type, delete the step and add a new one.
 - **Step 1 is a Data Card step**: it picks a dashboard widget **by name** (e.g. "Orlando
   Plumbers") from the widgets in your dashboard — nothing is hardcoded.
+- **Step types**: Data Card, AI Action, Export, Notify, Delay/Wait, Fork, HTTP Request, Action,
+  Render Video/Image/Audio, Condition, Webhook and Manual/Approval — and **every one of them
+  executes**. The API refuses any other step type (`POST /workflows/{id}/steps` answers `400`), so
+  a step that cannot run can no longer be created. **Research is retired** for that reason: no path
+  in this app performs a research call.
+- **HTTP Request / Action / Render Video/Image/Audio**: an HTTP Request or Action step calls the
+  URL you configure, with the method you pick, and the run history records the status and the reply.
+  A Render step calls your provider's `endpoint` and logs the result under **Renditions** (provider,
+  asset id and URL come from the provider's own response). Both refuse a destination that resolves
+  inside the platform's own network — loopback, private or link-local addresses are never called —
+  so a step can not be used to read an internal service.
 - **Deploy to n8n** (plan-gated) and **run manually**. A manual run creates an **instance** with
   traceable state, a step-by-step history and full execution logs.
 - The n8n copy is what an **external** caller triggers (it has its own webhook path). n8n answers

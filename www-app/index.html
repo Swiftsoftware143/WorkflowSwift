@@ -1347,10 +1347,16 @@ const STEP_TYPES = [
   { k:'delay', label:'Delay / Wait', hint:'Parks the instance until due; the execution worker advances it.' },
   { k:'fork', label:'Fork', hint:'Splits the run into parallel branches.' },
 ];
+// Every type offered here is executable by the engine (src/execution.rs EXECUTABLE_STEP_TYPES,
+// pinned by the test `the_console_picker_offers_only_executable_step_types`): a picker entry the
+// engine cannot run is a step the tenant builds, deploys and watches silently do nothing. `research`
+// was retired for exactly that reason — no path in this app performs a research call.
 const STEP_TYPES_EXTRA = [
-  { k:'http-request', label:'HTTP Request' }, { k:'action', label:'Action' },
-  { k:'render_video', label:'Render Video' }, { k:'render_image', label:'Render Image' },
-  { k:'render_audio', label:'Render Audio' }, { k:'research', label:'Research' },
+  { k:'http-request', label:'HTTP Request', hint:'Calls your URL with the method you choose, inside this run.' },
+  { k:'action', label:'Action', hint:'The same outbound call, for API actions.' },
+  { k:'render_video', label:'Render Video', hint:'Calls your provider endpoint and logs the result under Renditions.' },
+  { k:'render_image', label:'Render Image', hint:'Calls your provider endpoint and logs the result under Renditions.' },
+  { k:'render_audio', label:'Render Audio', hint:'Calls your provider endpoint and logs the result under Renditions.' },
   { k:'condition', label:'Condition' }, { k:'webhook', label:'Webhook' }, { k:'manual', label:'Manual / Approval' },
 ];
 const ALL_STEP_TYPES = STEP_TYPES.concat(STEP_TYPES_EXTRA);
@@ -1399,7 +1405,6 @@ const draftConfig = (d) => { switch (d.type) {
   case 'fork': return { branches: String(d.branches || '').split('\n').map(s => s.trim()).filter(Boolean).map(n => ({ name: n })) };
   case 'http-request': case 'action': return { url: d.url, method: String(d.method || 'GET').toUpperCase() };
   case 'webhook': return { url: d.url };
-  case 'research': return { query: d.query };
   case 'render_video': case 'render_image': case 'render_audio': case 'render_media':
     return { provider: d.provider, endpoint: d.endpoint };
   default: return {};
@@ -1457,7 +1462,6 @@ const StepModal = () => {
           <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
         </select></div>${field('URL', 'url', 'https://api.example.com/lead')}`;
       case 'webhook': return field('Webhook URL', 'url', 'https://hooks.example.com/incoming');
-      case 'research': return field('Query', 'query', 'Orlando plumbers with no website');
       case 'render_video': case 'render_image': case 'render_audio': case 'render_media':
         return html`${field('Provider', 'provider', 'heygen')}${field('Endpoint', 'endpoint', 'https://api.provider.com/render')}
           <div class="text-xs text-gray-500 mb-2">A render step's output is logged as a rendition and shows up under Renditions.</div>`;
