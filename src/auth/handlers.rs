@@ -14,6 +14,7 @@ use super::models::*;
 use crate::auth::api_key_auth::{argon2_hash, argon2_verify_result};
 use crate::error::{ApiResult, AppError};
 use crate::handlers::industry_handler;
+use crate::security::email_addr;
 use crate::AppState;
 use std::sync::Arc;
 
@@ -33,12 +34,23 @@ pub async fn register(
         ));
     }
 
-    // Check if user already exists
-    let existing = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE email = $1")
-        .bind(&req.email)
-        .fetch_one(&state.db)
-        .await
-        .unwrap_or(0);
+    // ── Address boundary (kanban t_09e76b27) ────────────────────────────────────────────────
+    // FIRST, before any SELECT and long before any INSERT. `users.email` is both the login identity
+    // and the only address the welcome/credentials mail can ever reach; this handler used to ask
+    // only `req.email.is_empty()`, so any string became a real login. Normalises (trim +
+    // lowercase) as well as validates, and the normalised value is what is checked, stored and
+    // mailed. A malformed value is refused here, one layer before the credentials mail that would
+    // never reach the address it was given.
+    let email = email_addr::normalize(&req.email).map_err(AppError::Validation)?;
+
+    // Check if user already exists. Case-insensitive: the stored value is normalised to lowercase
+    // from here on, but rows written before this boundary existed must still collide.
+    let existing =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE lower(email) = $1")
+            .bind(&email)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(0);
 
     if existing > 0 {
         return Err(AppError::Duplicate(
@@ -96,7 +108,7 @@ pub async fn register(
     )
     .bind(user_id)
     .bind(aid)
-    .bind(&req.email)
+    .bind(&email)
     .bind(&password_hash)
     .bind(&req.name)
     .bind(now)
@@ -106,10 +118,10 @@ pub async fn register(
     // Send welcome email with credentials
     let welcome_vars = serde_json::json!({
         "name": &req.name,
-        "email": &req.email,
+        "email": &email,
         "app_url": "https://app.workflowswift.com",
     });
-    let _ = crate::email::send_email(&state, &req.email, "welcome", &welcome_vars).await;
+    let _ = crate::email::send_email(&state, &email, "welcome", &welcome_vars).await;
 
     // Auto-generate API keys for the new user
     use crate::handlers::integration_center_handler;
@@ -247,7 +259,7 @@ pub async fn register(
     let user_response = UserResponse {
         id: user_id,
         aid,
-        email: req.email,
+        email: email.clone(),
         name: req.name,
         role: "user".to_string(),
         is_active: true,
@@ -283,8 +295,13 @@ pub async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE email = $1")
-        .bind(&req.email)
+    // The same normalisation the writers store by, matched case-insensitively so an account stored
+    // with capitals (or created before normalisation existed) still resolves when the customer
+    // retypes their address with different casing. A malformed value is NOT refused here: login
+    // answers its own invalid-credentials response for every wrong input, and it must not become an
+    // account-existence oracle. It simply matches nothing.
+    let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE lower(email) = $1")
+        .bind(email_addr::lookup_key(&req.email))
         .fetch_optional(&state.db)
         .await?
         .ok_or(AppError::InvalidCredentials)?;
@@ -439,8 +456,11 @@ pub async fn forgot_password(
     State(state): State<AppState>,
     Json(req): Json<ForgotPasswordRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    if let Some(user) = sqlx::query_as::<_, User>("SELECT * FROM users WHERE email = $1")
-        .bind(&req.email)
+    // Read through the same normalisation by which addresses are stored, and case-insensitively so
+    // a pre-boundary row still resolves. No failure arm on purpose: a malformed value matches
+    // nothing, and existing-vs-not must stay unobservable (this response is already uniform).
+    if let Some(user) = sqlx::query_as::<_, User>("SELECT * FROM users WHERE lower(email) = $1")
+        .bind(email_addr::lookup_key(&req.email))
         .fetch_optional(&state.db)
         .await?
     {

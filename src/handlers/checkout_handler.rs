@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::auth::models::Claims;
 use crate::email;
 use crate::error::{ApiResult, AppError};
+use crate::security::email_addr;
 use crate::AppState;
 use sqlx::Row;
 
@@ -1327,10 +1328,7 @@ async fn handle_checkout_completed(
         // outcome of *this* attempt is still authoritative: asking the provider to retry again is
         // the only way a buyer who never received credentials ever gets them.
         return match delivery_error {
-            Some(e) => Err(AppError::Internal(format!(
-                "credential delivery failed: {}",
-                e
-            ))),
+            Some(e) => Err(delivery_failure(e)),
             None => Ok(()),
         };
     }
@@ -1393,13 +1391,24 @@ async fn handle_checkout_completed(
     // The one thing that is *not* complete is the credential delivery: return 5xx so the payment
     // provider retries the webhook and the buyer gets a real second chance at their password.
     if let Some(e) = delivery_error {
-        return Err(AppError::Internal(format!(
-            "credential delivery failed: {}",
-            e
-        )));
+        return Err(delivery_failure(e));
     }
 
     Ok(())
+}
+
+/// Turn a `deliver_credentials` failure into the response the payment provider gets.
+///
+/// A refusal whose message starts with `email: ` (kanban t_09e76b27: the address in
+/// `checkout_sessions.metadata` is not an address) can never succeed on a retry, so it is a 4xx —
+/// asking the provider to retry forever would be a defect of its own. Everything else is a
+/// transient delivery failure and stays 5xx so the retry can actually deliver the credentials.
+fn delivery_failure(e: String) -> AppError {
+    if e.starts_with("email: ") {
+        AppError::BadRequest(e)
+    } else {
+        AppError::Internal(format!("credential delivery failed: {}", e))
+    }
 }
 
 /// Deliver login credentials or purchase confirmation to the customer.
@@ -1420,9 +1429,19 @@ async fn deliver_credentials(
     _session_account_id: Uuid,
     _purchasable_type: &str,
 ) -> Result<(), String> {
-    // Look for existing user
+    // ── Address boundary (kanban t_09e76b27) ────────────────────────────────────────────────
+    // FIRST, before the lookup below and long before the `INSERT INTO users` that mints the
+    // account. This value comes out of `checkout_sessions.metadata`, i.e. from whatever the payment
+    // provider last posted, and every statement in this function — the dup lookup, the account/user
+    // rows and the welcome mail that IS the credential — runs off it. Normalise + validate ONCE
+    // here so a malformed address can never become a user row whose login nobody can reach.
+    let email = email_addr::normalize(email)?;
+    let email = email.as_str();
+
+    // Look for existing user. Case-insensitive, so a row written before this boundary existed still
+    // matches the address the buyer actually typed.
     let existing_user = sqlx::query_as::<_, UserRow>(
-        "SELECT id, aid, password_hash, email, name FROM users WHERE email = $1",
+        "SELECT id, aid, password_hash, email, name FROM users WHERE lower(email) = $1",
     )
     .bind(email)
     .fetch_optional(&state.db)

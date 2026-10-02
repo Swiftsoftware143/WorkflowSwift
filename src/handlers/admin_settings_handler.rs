@@ -11,6 +11,7 @@ use uuid::Uuid;
 use crate::auth::models::Claims;
 use crate::error::{ApiResult, AppError};
 use crate::features as plan_limits;
+use crate::security::email_addr;
 use crate::AppState;
 
 /// Collect the canonical per-plan limit / flag values out of an admin plan payload.
@@ -1109,12 +1110,20 @@ pub async fn admin_create_account(
         ));
     }
 
+    // ── Address boundary (kanban t_09e76b27) ────────────────────────────────────────────────
+    // Before the duplicate SELECT and long before the INSERT. `users.email` is the login identity
+    // AND the only address this account's welcome mail (which carries the temporary password) can
+    // ever reach, so a malformed value would mint a customer nobody can reach. Normalises
+    // (trim + lowercase) as well as validates; the normalised value is checked, stored and mailed.
+    let email = email_addr::normalize(&email).map_err(AppError::Validation)?;
+
     // Check for existing user by email
-    let existing = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE email = $1")
-        .bind(&email)
-        .fetch_one(&state.db)
-        .await
-        .unwrap_or(0);
+    let existing =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE lower(email) = $1")
+            .bind(&email)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(0);
 
     if existing > 0 {
         return Err(AppError::Duplicate(

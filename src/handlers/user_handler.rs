@@ -12,6 +12,7 @@ use crate::auth::models::Claims;
 use crate::email;
 use crate::error::{ApiResult, AppError};
 use crate::models::user::User;
+use crate::security::email_addr;
 use crate::{features, AppState};
 
 /// Roles a workspace member may hold. The platform vocabulary is deliberately excluded:
@@ -154,6 +155,13 @@ pub async fn invite_user(
         ));
     }
 
+    // ── Address boundary (kanban t_09e76b27) ────────────────────────────────────────────────
+    // Before the duplicate SELECT and long before the INSERT. `users.email` is the login identity
+    // AND the only address the invite mail can ever reach, so a malformed value here would mint a
+    // teammate whose credentials nobody can ever receive. Normalises (trim + lowercase) as well as
+    // validates; the normalised value is what is checked, stored and mailed.
+    let email = email_addr::normalize(&email).map_err(AppError::Validation)?;
+
     // max_users is sold as a per-plan seat limit — enforce it here or the paid limit is a
     // no-op. The count includes the account owner (Free = 2 seats = owner + 1 invitee).
     features::enforce_feature_limit(&state.db, aid, "max_users", "Team members").await?;
@@ -162,11 +170,12 @@ pub async fn invite_user(
     // (`SELECT * FROM users WHERE email = $1` in auth::handlers) and register() makes the same
     // global check, so one email must map to exactly one user. `users_aid_email_key` alone
     // would let two tenants own the same address and make login ambiguous.
-    let existing = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE email = $1")
-        .bind(&email)
-        .fetch_one(&state.db)
-        .await
-        .unwrap_or(0);
+    let existing =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE lower(email) = $1")
+            .bind(&email)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(0);
 
     if existing > 0 {
         return Err(AppError::Duplicate(
