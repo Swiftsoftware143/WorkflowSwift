@@ -54,6 +54,213 @@ fn callback_url(base: &str, path: &str) -> String {
     )
 }
 
+/// The bearer every generated callback node presents to this app.
+///
+/// It is the CALLER's own token, taken off the **Webhook trigger item** — not `$json` and not
+/// an n8n credential. Two measured reasons (kanban t_eca73c55):
+///
+///  * `$json.headers...` only exists on the FIRST callback node. Every later node's input is
+///    the previous callback's RESPONSE (`{"balance":18,…}`), which has no `.headers`, so the
+///    expression threw on every node after "Auth & Credit".
+///  * `authentication: genericCredentialType` + `genericAuthType: httpHeaderAuth` demands
+///    `node.credentials.httpHeaderAuth.id`, and the converter has no credential to attach, so
+///    n8n refused the node at run time ("Credentials not found") and the whole graph executed
+///    nothing. The node builds its own header, so it needs no credential: `authentication: none`.
+///
+/// One constant, substituted into all 18 callback nodes and re-asserted by
+/// `harden_callback_nodes` (the choke point) plus a unit test, so a new arm cannot drift back
+/// to a credential n8n will refuse or to a `$json.headers` read that only works once.
+pub const CALLBACK_AUTH_EXPR: &str =
+    "=Bearer {{ $('Webhook').first().json.headers.authorization.split(' ')[1] }}";
+
+/// n8n Filter/IF (V2) operator pairs this install actually accepts.
+///
+/// Read out of the container's own runtime rather than guessed:
+/// `n8n-workflow/dist/cjs/node-parameters/filter-parameter.js` switches on exactly
+/// number = empty|notEmpty|equals|notEquals|gt|lt|gte|lte,
+/// string = empty|notEmpty|equals|notEquals|contains|notContains|startsWith|notStartsWith|
+/// endsWith|notEndsWith|regex|notRegex,
+/// boolean = empty|notEmpty|true|false|equals|notEquals,
+/// dateTime = empty|notEmpty|equals|notEquals|after|before|afterOrEquals|beforeOrEquals.
+/// `largerEqual` is NOT among them (it exists only in n8n's V1 filter) — that is why
+/// "Balance OK?" never ran: `Unknown filter parameter operator "number:largerEqual"`.
+fn filter_operator(kind: &str, operation: &str) -> Value {
+    json!({ "type": kind, "operation": operation })
+}
+
+/// A step config's field/path -> an n8n expression over the incoming item.
+///
+/// Accepts what a tenant console actually stores: a bare name (`balance`), a dotted path
+/// (`$json.balance`) or a ready expression (`={{ $json.balance }}`).
+fn field_expression(field: &str) -> String {
+    let f = field.trim();
+    if f.is_empty() {
+        return "={{ $json }}".to_string();
+    }
+    if f.starts_with("={{") || f.starts_with("{{") {
+        let inner = f.trim_start_matches("={{").trim_start_matches("{{").trim();
+        let inner = inner.trim_end_matches("}}").trim();
+        return format!("={{{{ {} }}}}", inner);
+    }
+    if let Some(rest) = f.strip_prefix('$') {
+        // `$json.x` / `$json["x"]` / `$now`: already a valid n8n expression body.
+        return format!("={{{{ ${} }}}}", rest);
+    }
+    let escaped = f.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("={{{{ $json[\"{}\"] }}}}", escaped)
+}
+
+/// A user `condition` step's (leftValue, rightValue, operator).
+///
+/// The old arm emitted `{"string": bool, "number": bool, "boolean": bool}` — not an operator
+/// at all: n8n's filter needs `{type, operation}`, so every generated Condition node was
+/// invalid and the run died there. The left side is coerced to the operator's own type
+/// because these nodes carry `typeValidation: "strict"`, which compares TYPES, not just values.
+fn condition_operands(field: &str, operator: &str, value: &Value) -> (String, Value, Value) {
+    let field = field.trim();
+    let bare = field_expression(field);
+    let inner = bare
+        .trim_start_matches("={{")
+        .trim_end_matches("}}")
+        .trim()
+        .to_string();
+    let text = match value {
+        Value::String(s) => s.clone(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    };
+    match operator.trim() {
+        "contains" => (
+            format!("={{{{ String({} ?? '') }}}}", inner),
+            json!(text),
+            filter_operator("string", "contains"),
+        ),
+        "startsWith" => (
+            format!("={{{{ String({} ?? '') }}}}", inner),
+            json!(text),
+            filter_operator("string", "startsWith"),
+        ),
+        "endsWith" => (
+            format!("={{{{ String({} ?? '') }}}}", inner),
+            json!(text),
+            filter_operator("string", "endsWith"),
+        ),
+        "larger" | "largerEqual" | "greater" | "greaterEqual" | "gte" | "gt" => {
+            let n = text.parse::<f64>().unwrap_or(0.0);
+            let op = if matches!(operator.trim(), "gt" | "larger" | "greater") {
+                "gt"
+            } else {
+                "gte"
+            };
+            (
+                format!("={{{{ Number({} ?? 0) }}}}", inner),
+                json!(n),
+                filter_operator("number", op),
+            )
+        }
+        "smaller" | "smallerEqual" | "less" | "lessEqual" | "lte" | "lt" => {
+            let n = text.parse::<f64>().unwrap_or(0.0);
+            let op = if operator.trim() == "lt" || operator.trim() == "smaller" {
+                "lt"
+            } else {
+                "lte"
+            };
+            (
+                format!("={{{{ Number({} ?? 0) }}}}", inner),
+                json!(n),
+                filter_operator("number", op),
+            )
+        }
+        "isTrue" => (
+            format!("={{{{ Boolean({}) }}}}", inner),
+            json!(true),
+            filter_operator("boolean", "true"),
+        ),
+        "isFalse" => (
+            format!("={{{{ Boolean({}) }}}}", inner),
+            json!(false),
+            filter_operator("boolean", "false"),
+        ),
+        "notEquals" => (
+            format!("={{{{ String({} ?? '') }}}}", inner),
+            json!(text),
+            filter_operator("string", "notEquals"),
+        ),
+        // Default arm is `equals`, and it is the only one that has to guess between a string
+        // and a number: a numeric-looking rightValue compares as a number, anything else as a
+        // string. Both forms keep the left side the same type as the right.
+        _ => match text.parse::<f64>() {
+            Ok(n) => (
+                format!("={{{{ Number({} ?? 0) }}}}", inner),
+                json!(n),
+                filter_operator("number", "equals"),
+            ),
+            Err(_) => (
+                format!("={{{{ String({} ?? '') }}}}", inner),
+                json!(text),
+                filter_operator("string", "equals"),
+            ),
+        },
+    }
+}
+
+/// Force the auth contract onto every node that calls THIS app back.
+///
+/// The single choke point that makes the fix structural rather than 18 hand edits: whatever a
+/// future arm writes, a node whose URL sits under this app's own `/api/v1/` prefix ends up
+/// with `authentication: "none"` and the caller's bearer, and explicit `onError` so a failing
+/// callback stops the run and is retained as a failed execution instead of disappearing.
+///
+/// The URL-prefix test is deliberately exact (the app's own configured origin) — a tenant's
+/// own URL must never receive this app's bearer.
+fn harden_callback_nodes(nodes: &mut [Value], callback_base_url: &str) {
+    let prefix = format!("{}/api/v1/", callback_base_url.trim_end_matches('/'));
+    for node in nodes.iter_mut() {
+        if node.get("type").and_then(|t| t.as_str()) != Some("n8n-nodes-base.httpRequest") {
+            continue;
+        }
+        let is_callback = node
+            .get("parameters")
+            .and_then(|p| p.get("url"))
+            .and_then(|u| u.as_str())
+            .map(|u| u.starts_with(&prefix))
+            .unwrap_or(false);
+        if !is_callback {
+            continue;
+        }
+        if let Some(obj) = node.as_object_mut() {
+            obj.insert("onError".to_string(), json!("stopWorkflow"));
+        }
+        let Some(params) = node.get_mut("parameters").and_then(|p| p.as_object_mut()) else {
+            continue;
+        };
+        params.remove("genericAuthType");
+        params.insert("authentication".to_string(), json!("none"));
+        params.insert("sendHeaders".to_string(), json!(true));
+        let mut headers: Vec<Value> = vec![json!({
+            "name": "Authorization",
+            "value": CALLBACK_AUTH_EXPR
+        })];
+        let existing = params
+            .get("headerParameters")
+            .and_then(|h| h.get("parameters"))
+            .and_then(|p| p.as_array())
+            .cloned()
+            .unwrap_or_default();
+        for h in existing {
+            let name = h.get("name").and_then(|n| n.as_str()).unwrap_or("");
+            if name.eq_ignore_ascii_case("Authorization") {
+                continue;
+            }
+            headers.push(h);
+        }
+        params.insert(
+            "headerParameters".to_string(),
+            json!({ "parameters": headers }),
+        );
+    }
+}
+
 pub fn convert_steps_to_n8n(
     steps: &[Value],
     aid: Uuid,
@@ -93,14 +300,13 @@ pub fn convert_steps_to_n8n(
         "parameters": {
             "method": "GET",
             "url": callback_url(callback_base_url, "credits/balance"),
-            "authentication": "genericCredentialType",
-            "genericAuthType": "httpHeaderAuth",
+            "authentication": "none",
             "sendHeaders": true,
             "headerParameters": {
                 "parameters": [
                     {
                         "name": "Authorization",
-                        "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+                        "value": CALLBACK_AUTH_EXPR
                     }
                 ]
             }
@@ -109,6 +315,11 @@ pub fn convert_steps_to_n8n(
     nodes.push(credit_node);
 
     // ===== Node 2: Balance Check =====
+    // The left side reads `/credits/balance`'s REAL response — `{"balance":20,"available":20,…}`,
+    // a flat object. It used to read `$json["data"][0].balance`, a shape that endpoint has never
+    // returned, so the expression resolved to `undefined` and the check was false for every
+    // tenant that ever had credits. `Number(… ?? 0)` keeps the strict type check happy (the
+    // operator is a number operator) whether the field is a number, a numeric string or absent.
     let balance_check_node = json!({
         "id": "balance_check",
         "name": "Balance OK?",
@@ -117,6 +328,7 @@ pub fn convert_steps_to_n8n(
         "position": [650, 300],
         "parameters": {
             "conditions": {
+                "combinator": "and",
                 "options": {
                     "caseSensitive": true,
                     "typeValidation": "strict"
@@ -124,12 +336,9 @@ pub fn convert_steps_to_n8n(
                 "conditions": [
                     {
                         "id": "has_balance",
-                        "leftValue": "={{ $json[\"data\"] && $json[\"data\"][0] && $json[\"data\"][0].balance }}",
+                        "leftValue": "={{ Number($json.balance ?? 0) }}",
                         "rightValue": 1,
-                        "operator": {
-                            "type": "number",
-                            "operation": "largerEqual"
-                        }
+                        "operator": filter_operator("number", "gte")
                     }
                 ]
             }
@@ -151,14 +360,13 @@ pub fn convert_steps_to_n8n(
         "parameters": {
             "method": "POST",
             "url": callback_url(callback_base_url, "credits/deduct"),
-            "authentication": "genericCredentialType",
-            "genericAuthType": "httpHeaderAuth",
+            "authentication": "none",
             "sendHeaders": true,
             "headerParameters": {
                 "parameters": [
                     {
                         "name": "Authorization",
-                        "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}"
+                        "value": CALLBACK_AUTH_EXPR
                     }
                 ]
             },
@@ -282,6 +490,11 @@ pub fn convert_steps_to_n8n(
     // graph built above (keyed by ids such as "credit_check") is rejected with 400.
     // Rewrite it to names, forcing the names to be unique first — n8n resolves a name to
     // exactly one node, and a user step may repeat a name or be called "Webhook".
+    //
+    // Before that: one pass over every finished node enforces the app-callback contract
+    // (`harden_callback_nodes`) — no credential, the caller's own bearer, explicit onError —
+    // for the whole graph, in ONE place, whatever arm produced the node.
+    harden_callback_nodes(&mut nodes, callback_base_url);
     let (nodes, connections) = names_and_connections(nodes, connections_map);
 
     N8nWorkflow {
@@ -484,10 +697,19 @@ fn convert_user_steps(
                     .get("metric_key")
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
+                // `value_expression` is the widget's value. The default used to be
+                // `={{ $json["data"] }}` — a path no callback response carries (the node's input
+                // is the previous callback's body, e.g. `/credits/deduct`'s
+                // `{"balance":18,"deducted":2,…}`). n8n drops a body parameter whose expression
+                // resolves to `undefined`, and the app answers 400 "value required" — measured on
+                // the live mirror (kanban t_eca73c55), and the tenant console never sets
+                // `value_expression` at all (its step modal sends widget_name + metric_key only),
+                // so every real workflow's Data Card push failed. The `report` arm below already
+                // uses the incoming item; the response card now matches it, and stays defined.
                 let value_expr = config
                     .get("value_expression")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("={{ $json[\"data\"] }}");
+                    .unwrap_or("={{ $json }}");
 
                 let node = json!({
                     "id": node_id,
@@ -498,12 +720,11 @@ fn convert_user_steps(
                     "parameters": {
                         "method": "POST",
                         "url": callback_url(callback_base_url, "dashboard/push-widget-data"),
-                        "authentication": "genericCredentialType",
-                        "genericAuthType": "httpHeaderAuth",
+                        "authentication": "none",
                         "sendHeaders": true,
                         "headerParameters": {
                             "parameters": [
-                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
                                 { "name": "Content-Type", "value": "application/json" }
                             ]
                         },
@@ -562,12 +783,11 @@ fn convert_user_steps(
                             "parameters": {
                                 "method": "POST",
                                 "url": callback_url(callback_base_url, &format!("notifications/{}", channel)),
-                                "authentication": "genericCredentialType",
-                                "genericAuthType": "httpHeaderAuth",
+                                "authentication": "none",
                                 "sendHeaders": true,
                                 "headerParameters": {
                                     "parameters": [
-                                        { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" }
+                                        { "name": "Authorization", "value": CALLBACK_AUTH_EXPR }
                                     ]
                                 },
                                 "sendBody": true,
@@ -770,12 +990,11 @@ fn convert_user_steps(
                     "parameters": {
                         "method": "POST",
                         "url": callback_url(callback_base_url, "renditions"),
-                        "authentication": "genericCredentialType",
-                        "genericAuthType": "httpHeaderAuth",
+                        "authentication": "none",
                         "sendHeaders": true,
                         "headerParameters": {
                             "parameters": [
-                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
                                 { "name": "Content-Type", "value": "application/json" }
                             ]
                         },
@@ -840,12 +1059,11 @@ fn convert_user_steps(
                     "parameters": {
                         "method": "POST",
                         "url": callback_url(callback_base_url, &format!("research/{}", source)),
-                        "authentication": "genericCredentialType",
-                        "genericAuthType": "httpHeaderAuth",
+                        "authentication": "none",
                         "sendHeaders": true,
                         "headerParameters": {
                             "parameters": [
-                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
                                 { "name": "Content-Type", "value": "application/json" }
                             ]
                         },
@@ -878,12 +1096,11 @@ fn convert_user_steps(
                     "parameters": {
                         "method": "POST",
                         "url": callback_url(callback_base_url, &format!("enrich/{}", provider)),
-                        "authentication": "genericCredentialType",
-                        "genericAuthType": "httpHeaderAuth",
+                        "authentication": "none",
                         "sendHeaders": true,
                         "headerParameters": {
                             "parameters": [
-                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
                                 { "name": "Content-Type", "value": "application/json" }
                             ]
                         },
@@ -922,12 +1139,11 @@ fn convert_user_steps(
                     "parameters": {
                         "method": "POST",
                         "url": callback_url(callback_base_url, "analyze"),
-                        "authentication": "genericCredentialType",
-                        "genericAuthType": "httpHeaderAuth",
+                        "authentication": "none",
                         "sendHeaders": true,
                         "headerParameters": {
                             "parameters": [
-                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
                                 { "name": "Content-Type", "value": "application/json" }
                             ]
                         },
@@ -962,12 +1178,11 @@ fn convert_user_steps(
                     "parameters": {
                         "method": "POST",
                         "url": callback_url(callback_base_url, "dashboard/push-widget-data"),
-                        "authentication": "genericCredentialType",
-                        "genericAuthType": "httpHeaderAuth",
+                        "authentication": "none",
                         "sendHeaders": true,
                         "headerParameters": {
                             "parameters": [
-                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
                                 { "name": "Content-Type", "value": "application/json" }
                             ]
                         },
@@ -1011,12 +1226,11 @@ fn convert_user_steps(
                     "parameters": {
                         "method": "POST",
                         "url": callback_url(callback_base_url, &format!("notifications/{}", channel)),
-                        "authentication": "genericCredentialType",
-                        "genericAuthType": "httpHeaderAuth",
+                        "authentication": "none",
                         "sendHeaders": true,
                         "headerParameters": {
                             "parameters": [
-                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" }
+                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR }
                             ]
                         },
                         "sendBody": true,
@@ -1049,12 +1263,11 @@ fn convert_user_steps(
                     "parameters": {
                         "method": "POST",
                         "url": callback_url(callback_base_url, "workflows/validate-config"),
-                        "authentication": "genericCredentialType",
-                        "genericAuthType": "httpHeaderAuth",
+                        "authentication": "none",
                         "sendHeaders": true,
                         "headerParameters": {
                             "parameters": [
-                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
                                 { "name": "Content-Type", "value": "application/json" }
                             ]
                         },
@@ -1089,12 +1302,11 @@ fn convert_user_steps(
                     "parameters": {
                         "method": "POST",
                         "url": callback_url(callback_base_url, endpoint),
-                        "authentication": "genericCredentialType",
-                        "genericAuthType": "httpHeaderAuth",
+                        "authentication": "none",
                         "sendHeaders": true,
                         "headerParameters": {
                             "parameters": [
-                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
                                 { "name": "Content-Type", "value": "application/json" }
                             ]
                         },
@@ -1188,12 +1400,11 @@ fn convert_user_steps(
                     "parameters": {
                         "method": "POST",
                         "url": callback_url(callback_base_url, &format!("provider-keys/{}/generate", provider)),
-                        "authentication": "genericCredentialType",
-                        "genericAuthType": "httpHeaderAuth",
+                        "authentication": "none",
                         "sendHeaders": true,
                         "headerParameters": {
                             "parameters": [
-                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
                                 { "name": "Content-Type", "value": "application/json" }
                             ]
                         },
@@ -1287,12 +1498,11 @@ return output;
                             callback_base_url,
                             &format!("provider-keys/{}/design/{}", provider, design_type),
                         ),
-                        "authentication": "genericCredentialType",
-                        "genericAuthType": "httpHeaderAuth",
+                        "authentication": "none",
                         "sendHeaders": true,
                         "headerParameters": {
                             "parameters": [
-                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
                                 { "name": "Content-Type", "value": "application/json" }
                             ]
                         },
@@ -1338,12 +1548,11 @@ return output;
                     "parameters": {
                         "method": "POST",
                         "url": callback_url(callback_base_url, "bridge/commands/publish"),
-                        "authentication": "genericCredentialType",
-                        "genericAuthType": "httpHeaderAuth",
+                        "authentication": "none",
                         "sendHeaders": true,
                         "headerParameters": {
                             "parameters": [
-                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
                                 { "name": "Content-Type", "value": "application/json" }
                             ]
                         },
@@ -1387,12 +1596,11 @@ return output;
                     "parameters": {
                         "method": "POST",
                         "url": callback_url(callback_base_url, "instances/loop-check"),
-                        "authentication": "genericCredentialType",
-                        "genericAuthType": "httpHeaderAuth",
+                        "authentication": "none",
                         "sendHeaders": true,
                         "headerParameters": {
                             "parameters": [
-                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
                                 { "name": "Content-Type", "value": "application/json" }
                             ]
                         },
@@ -1420,13 +1628,16 @@ return output;
                     .get("operator")
                     .and_then(|v| v.as_str())
                     .unwrap_or("equals");
-                let value = config.get("value").and_then(|v| v.as_str()).unwrap_or("");
+                let value = config
+                    .get("value")
+                    .cloned()
+                    .unwrap_or(Value::String(String::new()));
 
-                // Determine the operator type in Rust (not in JSON template)
-                let is_string_op =
-                    matches!(operator, "equals" | "contains" | "startsWith" | "endsWith");
-                let is_number_op = matches!(operator, "larger" | "smaller" | "equals");
-                let is_boolean_op = operator == "isTrue" || operator == "isFalse";
+                // One mapping, in Rust, from a step config to an operator pair the installed
+                // n8n accepts (see `condition_operands`). The old arm emitted
+                // `{"string": bool, "number": bool, "boolean": bool}`, which is not an
+                // operator at all — every generated Condition node was invalid.
+                let (left, right, operator_json) = condition_operands(field, operator, &value);
 
                 let node = json!({
                     "id": node_id,
@@ -1436,6 +1647,7 @@ return output;
                     "position": [x_pos, y_base],
                     "parameters": {
                         "conditions": {
+                            "combinator": "and",
                             "options": {
                                 "caseSensitive": true,
                                 "typeValidation": "strict"
@@ -1443,13 +1655,9 @@ return output;
                             "conditions": [
                                 {
                                     "id": "cond_0",
-                                    "leftValue": field,
-                                    "rightValue": value,
-                                    "operator": {
-                                        "string": is_string_op,
-                                        "number": is_number_op,
-                                        "boolean": is_boolean_op
-                                    }
+                                    "leftValue": left,
+                                    "rightValue": right,
+                                    "operator": operator_json
                                 }
                             ]
                         }
@@ -1497,12 +1705,11 @@ return output;
                     "parameters": {
                         "method": "POST",
                         "url": callback_url(callback_base_url, "notifications/manual-review"),
-                        "authentication": "genericCredentialType",
-                        "genericAuthType": "httpHeaderAuth",
+                        "authentication": "none",
                         "sendHeaders": true,
                         "headerParameters": {
                             "parameters": [
-                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
                                 { "name": "Content-Type", "value": "application/json" }
                             ]
                         },
@@ -1553,12 +1760,11 @@ return output;
                             callback_base_url,
                             &format!("provider-keys/{}/research/{}", provider, research_type),
                         ),
-                        "authentication": "genericCredentialType",
-                        "genericAuthType": "httpHeaderAuth",
+                        "authentication": "none",
                         "sendHeaders": true,
                         "headerParameters": {
                             "parameters": [
-                                { "name": "Authorization", "value": "=Bearer {{ $json.headers.authorization.split(' ')[1] }}" },
+                                { "name": "Authorization", "value": CALLBACK_AUTH_EXPR },
                                 { "name": "Content-Type", "value": "application/json" }
                             ]
                         },
@@ -1620,4 +1826,324 @@ pub fn to_n8n_json(wf: &N8nWorkflow) -> Value {
         "settings": wf.settings,
         "staticData": null,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BASE: &str = "https://app.example.com";
+
+    fn steps() -> Vec<Value> {
+        // One step of every arm that builds an IF node, a callback node or a tenant-URL node.
+        vec![
+            json!({"step_type": "data-card", "name": "Data Card",
+                   "config": {"widget_name": "Leads", "metric_key": "site-flipping_trends"}}),
+            json!({"step_type": "condition", "name": "Enough?",
+                   "config": {"field": "balance", "operator": "largerEqual", "value": "5"}}),
+            json!({"step_type": "notify", "name": "Email ops",
+                   "config": {"channel": "email", "recipient": "ops@example.com"}}),
+            json!({"step_type": "http-request", "name": "Tenant API",
+                   "config": {"url": "https://api.tenant.example/lead", "method": "POST"}}),
+            json!({"step_type": "ai-action", "name": "OpenClaw", "config": {}}),
+            json!({"step_type": "report", "name": "Report",
+                   "config": {"metric_key": "weekly", "period": "7d"}}),
+        ]
+    }
+
+    fn graph() -> N8nWorkflow {
+        // Identifiers are generated, not literals: the gate rule this fleet runs on rejects
+        // hardcoded UUID literals anywhere in src/ (the fleet has been burned by scripts that
+        // hardcode a tenant id), and the converter's output does not depend on WHICH uuid it is
+        // given — every assertion below is about node shape.
+        convert_steps_to_n8n(&steps(), Uuid::new_v4(), Uuid::new_v4(), BASE)
+    }
+
+    fn is_app_callback(node: &Value) -> bool {
+        node.get("parameters")
+            .and_then(|p| p.get("url"))
+            .and_then(|u| u.as_str())
+            .map(|u| u.starts_with(&format!("{}/api/v1/", BASE)))
+            .unwrap_or(false)
+    }
+
+    fn header_names(node: &Value) -> Vec<String> {
+        node.get("parameters")
+            .and_then(|p| p.get("headerParameters"))
+            .and_then(|h| h.get("parameters"))
+            .and_then(|p| p.as_array())
+            .map(|hs| {
+                hs.iter()
+                    .filter_map(|h| h.get("name").and_then(|n| n.as_str()))
+                    .map(|s| s.to_string())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn auth_header_value(node: &Value) -> Option<String> {
+        node.get("parameters")
+            .and_then(|p| p.get("headerParameters"))
+            .and_then(|h| h.get("parameters"))
+            .and_then(|p| p.as_array())?
+            .iter()
+            .find(|h| {
+                h.get("name")
+                    .and_then(|n| n.as_str())
+                    .map(|n| n.eq_ignore_ascii_case("authorization"))
+                    .unwrap_or(false)
+            })
+            .and_then(|h| h.get("value"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
+
+    /// The defect this card is about: `genericCredentialType` + `genericAuthType` with no
+    /// credential attached makes n8n refuse the node ("Credentials not found") — measured on
+    /// the live mirror, where the whole graph executed nothing.
+    #[test]
+    fn no_generated_node_demands_an_n8n_credential() {
+        let g = graph();
+        for node in &g.nodes {
+            let s = node.to_string();
+            assert!(
+                !s.contains("genericCredentialType") && !s.contains("httpHeaderAuth"),
+                "node {} demands a credential n8n will refuse: {}",
+                node["name"],
+                s
+            );
+        }
+    }
+
+    /// Every callback into THIS app carries the caller's own bearer, read from the WEBHOOK
+    /// item — not `$json`, whose `.headers` only exists on the first callback node.
+    #[test]
+    fn every_app_callback_carries_the_callers_bearer_from_the_webhook_item() {
+        let g = graph();
+        let mut names: Vec<String> = Vec::new();
+        for node in &g
+            .nodes
+            .iter()
+            .filter(|n| is_app_callback(n))
+            .collect::<Vec<_>>()
+        {
+            assert_eq!(
+                node["parameters"]["authentication"],
+                json!("none"),
+                "{}",
+                node["name"]
+            );
+            assert_eq!(
+                auth_header_value(node).as_deref(),
+                Some(CALLBACK_AUTH_EXPR),
+                "{}",
+                node["name"]
+            );
+            assert_eq!(
+                header_names(node)
+                    .iter()
+                    .filter(|h| h.eq_ignore_ascii_case("authorization"))
+                    .count(),
+                1,
+                "{} must carry exactly one Authorization header",
+                node["name"]
+            );
+            assert_eq!(node["onError"], json!("stopWorkflow"), "{}", node["name"]);
+            names.push(node["name"].as_str().unwrap_or_default().to_string());
+        }
+        // data-card + notify + ai-action-less callbacks + report + the three fixed nodes.
+        assert!(
+            names.len() >= 4,
+            "expected the app callbacks to be covered, saw {names:?}"
+        );
+        for expected in ["Auth & Credit", "Deduct Credit", "Data Card", "Report"] {
+            assert!(
+                names.iter().any(|n| n == expected),
+                "{expected} missing from {names:?}"
+            );
+        }
+    }
+
+    /// The bearer is this app's own JWT: it must never be attached to a tenant-supplied URL.
+    #[test]
+    fn tenant_urls_never_receive_the_app_bearer() {
+        let g = graph();
+        let tenant = g
+            .nodes
+            .iter()
+            .find(|n| n["name"] == "Tenant API")
+            .expect("the http-request step is in the graph");
+        assert!(
+            auth_header_value(tenant).is_none(),
+            "the tenant's own URL must not receive this app's bearer"
+        );
+        assert!(
+            tenant.get("onError").is_none(),
+            "tenant nodes keep n8n's default error policy"
+        );
+    }
+
+    /// Every IF the converter emits must use an operator pair the installed n8n accepts — the
+    /// verified sets are in `filter_operator`'s doc comment. `largerEqual` is NOT one of them.
+    #[test]
+    fn every_if_node_uses_an_operator_this_n8n_accepts() {
+        const NUMBER: [&str; 8] = [
+            "empty",
+            "notEmpty",
+            "equals",
+            "notEquals",
+            "gt",
+            "lt",
+            "gte",
+            "lte",
+        ];
+        const STRING: [&str; 12] = [
+            "empty",
+            "notEmpty",
+            "equals",
+            "notEquals",
+            "contains",
+            "notContains",
+            "startsWith",
+            "notStartsWith",
+            "endsWith",
+            "notEndsWith",
+            "regex",
+            "notRegex",
+        ];
+        const BOOLEAN: [&str; 6] = ["empty", "notEmpty", "true", "false", "equals", "notEquals"];
+        let g = graph();
+        let mut ifs = 0;
+        for node in &g.nodes {
+            if node["type"] != json!("n8n-nodes-base.if") {
+                continue;
+            }
+            ifs += 1;
+            let conds = &node["parameters"]["conditions"];
+            assert_eq!(conds["combinator"], json!("and"), "{}", node["name"]);
+            let list = conds["conditions"].as_array().expect("a conditions list");
+            assert!(!list.is_empty(), "{}", node["name"]);
+            for c in list {
+                let op = &c["operator"];
+                let (kind, operation) = (
+                    op["type"].as_str().expect("operator.type"),
+                    op["operation"].as_str().expect("operator.operation"),
+                );
+                let allowed: &[&str] = match kind {
+                    "number" => &NUMBER,
+                    "string" => &STRING,
+                    "boolean" => &BOOLEAN,
+                    other => panic!("unknown filter type {other} on {}", node["name"]),
+                };
+                assert!(
+                    allowed.contains(&operation),
+                    "{}: n8n 2.34.6 rejects {kind}:{operation}",
+                    node["name"]
+                );
+                assert!(
+                    c["leftValue"]
+                        .as_str()
+                        .expect("leftValue")
+                        .starts_with("={{"),
+                    "{}: leftValue must be an expression",
+                    node["name"]
+                );
+            }
+        }
+        assert_eq!(ifs, 2, "Balance OK? and the condition step");
+    }
+
+    /// `/credits/balance` answers `{"balance":20,…}` — a flat object, never `data[0].balance`.
+    #[test]
+    fn balance_check_reads_the_response_the_endpoint_actually_returns() {
+        let g = graph();
+        let node = g
+            .nodes
+            .iter()
+            .find(|n| n["name"] == "Balance OK?")
+            .expect("Balance OK?");
+        let left = node["parameters"]["conditions"]["conditions"][0]["leftValue"]
+            .as_str()
+            .unwrap();
+        assert!(left.contains("$json.balance"), "{left}");
+        assert!(
+            !left.contains("data"),
+            "the endpoint never returns a data array: {left}"
+        );
+    }
+
+    /// The response card's value must be a DEFINED expression: an undefined body parameter is
+    /// dropped by n8n and the app answers 400 "value required" (measured live).
+    #[test]
+    fn data_card_value_is_defined_by_default() {
+        let g = graph();
+        let card = g
+            .nodes
+            .iter()
+            .find(|n| n["name"] == "Data Card")
+            .expect("Data Card");
+        let value = card["parameters"]["bodyParameters"]["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["name"] == json!("value"))
+            .expect("the value parameter")["value"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(value, "={{ $json }}");
+        let metric = card["parameters"]["bodyParameters"]["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["name"] == json!("metric_key"))
+            .unwrap()["value"]
+            .as_str()
+            .unwrap();
+        assert_eq!(metric, "site-flipping_trends");
+    }
+
+    #[test]
+    fn condition_operands_map_every_supported_operator() {
+        let cases: [(&str, &Value, &str, &str); 7] = [
+            ("largerEqual", &json!("5"), "number", "gte"),
+            ("larger", &json!("5"), "number", "gt"),
+            ("smaller", &json!("5"), "number", "lt"),
+            ("equals", &json!("20"), "number", "equals"),
+            ("equals", &json!("paid"), "string", "equals"),
+            ("contains", &json!("lead"), "string", "contains"),
+            ("isTrue", &json!("true"), "boolean", "true"),
+        ];
+        for (operator, value, kind, operation) in cases {
+            let (left, _, op) = condition_operands("balance", operator, value);
+            assert_eq!(op["type"], json!(kind), "{operator}");
+            assert_eq!(op["operation"], json!(operation), "{operator}");
+            assert!(
+                left.starts_with("={{") && left.ends_with("}}"),
+                "{operator}: {left}"
+            );
+        }
+    }
+
+    /// A condition step's config can be EMPTY (the tenant console sends `{}` for it), and the
+    /// emitted node still has to be a valid operator.
+    #[test]
+    fn an_empty_condition_config_still_yields_a_valid_operator() {
+        let (left, right, op) = condition_operands("$json", "equals", &json!(""));
+        assert_eq!(op["type"], json!("string"));
+        assert_eq!(op["operation"], json!("equals"));
+        assert_eq!(left, "={{ String($json ?? '') }}");
+        assert_eq!(right, json!(""));
+    }
+
+    #[test]
+    fn field_expression_accepts_bare_names_paths_and_ready_expressions() {
+        assert_eq!(field_expression("balance"), "={{ $json[\"balance\"] }}");
+        assert_eq!(field_expression("$json.balance"), "={{ $json.balance }}");
+        assert_eq!(
+            field_expression("={{ $json.balance }}"),
+            "={{ $json.balance }}"
+        );
+        assert_eq!(field_expression(""), "={{ $json }}");
+    }
 }
