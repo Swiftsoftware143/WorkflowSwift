@@ -20,7 +20,13 @@ fn is_public_path(path: &str) -> bool {
             "/api/v1/auth/forgot-password".to_string(),
             "/api/v1/auth/reset-password".to_string(),
             "/api/v1/health".to_string(),
-            "/api/v1/admin/portfolio-sync".to_string(),
+            // The admin-sync name is deliberately NOT here (kanban t_b551a9a5): WorkflowSwift
+            // registers no such route — the app's only portfolio-sync is the internal,
+            // x-internal-key guarded POST /api/v1/internal/portfolio-sync (src/routes.rs) — and
+            // no caller asks for an admin one (CoreSwift's hub posts to the internal variant; the
+            // admin console's Portfolio Companies panel calls /admin/portfolio-companies; 0 n8n
+            // workflows, 0 scripts, 0 served shells). A PUBLIC_PATHS entry is an auth SKIP, so an
+            // unused one is a trap, not a placeholder.
             "/api/v1/plans".to_string(),
             "/api/v1/plans/".to_string(),
         ]
@@ -132,4 +138,51 @@ pub fn create_token(claims: &Claims, secret: &str) -> Result<String, AppError> {
 
     let encoding_key = EncodingKey::from_secret(secret.as_bytes());
     Ok(encode(&Header::default(), claims, &encoding_key)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_public_path;
+
+    /// The list as declared, plus its one prefix rule: the paths the middleware is *written* to
+    /// treat as public.
+    #[test]
+    fn declared_public_paths_and_prefix_rule_match() {
+        assert!(is_public_path("/api/v1/auth/login"));
+        assert!(is_public_path("/api/v1/auth/register"));
+        assert!(is_public_path("/api/v1/auth/forgot-password"));
+        assert!(is_public_path("/api/v1/auth/reset-password"));
+        assert!(is_public_path("/api/v1/industries"));
+        assert!(is_public_path("/api/v1/health"));
+        assert!(is_public_path("/api/v1/plans"));
+        assert!(is_public_path("/api/v1/industries/abc/templates"));
+    }
+
+    /// Tenant surfaces, and the dead admin-sync name this card removed, stay behind the
+    /// credential check — in both spellings, because `is_public_path` is asked about whatever
+    /// the router sees (kanban t_b551a9a5).
+    #[test]
+    fn tenant_surfaces_are_not_public() {
+        assert!(!is_public_path("/api/v1/workflows"));
+        assert!(!is_public_path("/api/v1/instances"));
+        assert!(!is_public_path("/api/v1/admin/portfolio-companies"));
+        assert!(!is_public_path("/api/v1/n8n/ai-action"));
+        assert!(!is_public_path("/api/v1/admin/portfolio-sync"));
+        assert!(!is_public_path("/admin/portfolio-sync"));
+    }
+
+    /// MEASURED GAP (kanban t_b551a9a5, 2026-10-02). axum strips the `/api/v1` nest prefix
+    /// before the router's layers run, so this middleware is handed `/plans`, never
+    /// `/api/v1/plans`: live, the AUTH_MIDDLEWARE log line for a request to /api/v1/plans reads
+    /// `path=/plans`, and that route answers 401 anon yet 200 with a token. Every
+    /// prefix-qualified entry above — and the `/api/v1/industries/…/templates` rule — is
+    /// therefore unreachable, and the app's real public surface is the `public_routes`
+    /// sub-router in src/routes.rs. Pinned here so the next lane fixes the list deliberately
+    /// (its own card) instead of re-adding dead entries.
+    #[test]
+    fn prefixed_entries_never_match_what_the_middleware_is_handed() {
+        assert!(!is_public_path("/plans"));
+        assert!(!is_public_path("/industries"));
+        assert!(!is_public_path("/health"));
+    }
 }
