@@ -14,70 +14,16 @@ use crate::features;
 use crate::models::plan::*;
 use crate::AppState;
 
-/// Fire-and-forget sync of a plan to FunnelSwift's affiliate_products.
-async fn sync_plan_to_affiliate(
-    config: &crate::config::AppConfig,
-    action: &str,
-    plan_name: &str,
-    plan_price: f64,
-    is_active: bool,
-) {
-    let url = format!(
-        "{}/api/v1/internal/sync-affiliate-plan",
-        config.funnelswift_url.trim_end_matches('/')
-    );
-    let api_key = config.internal_sync_key.clone();
-
-    let action_owned = action.to_string();
-    let plan_name_owned = plan_name.to_string();
-
-    let payload = serde_json::json!({
-        "action": &action_owned,
-        "plan_name": &plan_name_owned,
-        "plan_price": plan_price,
-        "source_app": "workflowswift",
-        "is_active": is_active,
-        "owner_name": "SwiftSoftware",
-        "product_type": "software",
-        "api_key": &api_key,
-    });
-
-    tokio::spawn(async move {
-        match reqwest::Client::new()
-            .post(&url)
-            .json(&payload)
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                let status = resp.status();
-                if status.is_success() {
-                    tracing::info!(
-                        "sync-affiliate-plan {} {}: {}",
-                        action_owned,
-                        plan_name_owned,
-                        status
-                    );
-                } else {
-                    let body = resp.text().await.unwrap_or_default();
-                    tracing::warn!(
-                        "sync-affiliate-plan {} {} failed: {} - {}",
-                        action_owned,
-                        plan_name_owned,
-                        status,
-                        body
-                    );
-                }
-            }
-            Err(e) => tracing::warn!(
-                "sync-affiliate-plan {} {} error: {}",
-                action_owned,
-                plan_name_owned,
-                e
-            ),
-        }
-    });
-}
+// ── Retired (kanban t_141162e7): the plan -> affiliate-product sync ──
+//
+// `POST /api/v1/internal/sync-affiliate-plan` was deleted from FunnelSwift:
+//   * its ONE WRITER contract requires the plan to exist in FunnelSwift's own `plans` table, which
+//     a sibling app's plan_id (a uuid from another database) can never satisfy, and
+//   * migration 070 forbids an affiliate product for a paid plan, so the only thing a sibling could
+//     legitimately push is its own free row — which FunnelSwift already owns and seeds.
+// The commissionable catalogue is FunnelSwift-owned. `notify_funnelswift_upgrade`
+// (`POST /api/v1/internal/affiliate/upgrade-event`, x-internal-key) is the live cross-app call and
+// is untouched.
 
 pub async fn list_plans(State(state): State<AppState>) -> ApiResult<impl IntoResponse> {
     let plans = sqlx::query_as::<_, PlanTier>(
@@ -134,12 +80,6 @@ pub async fn create_plan(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    // Capture price before it's moved into bind
-    let plan_price_for_sync = price_monthly
-        .as_deref()
-        .and_then(|s| s.parse::<f64>().ok())
-        .unwrap_or(0.0);
-
     // NOTE: `plan_tiers.price_monthly/price_yearly` are NUMERIC(10,2) and sqlx has no
     // String/f64 decode for numeric at all, so EVERY read of this struct must cast the
     // column (`price_monthly::text`) — an INSERT/UPDATE ... RETURNING list must therefore
@@ -159,13 +99,6 @@ pub async fn create_plan(
     .bind(&payment_provider)
     .fetch_one(&state.db)
     .await?;
-
-    // Sync to FunnelSwift affiliate products
-    let plan_name2 = name.clone();
-    let config2 = state.config.clone();
-    tokio::spawn(async move {
-        sync_plan_to_affiliate(&config2, "create", &plan_name2, plan_price_for_sync, true).await;
-    });
 
     Ok((StatusCode::CREATED, Json(json!({"plan": plan}))))
 }
