@@ -10,8 +10,8 @@ Base API: `https://workflowswift.com/api/v1` — all non-public endpoints need
 ## Getting started
 
 1. Register at `https://workflowswift.com/register`. Your **organization (tenant) is created
-   automatically** — it carries the slug, the branding settings (logo, primary/accent colour,
-   custom domain, footer company/year) and your **Hexomatic key**.
+   automatically** — it carries its tenant slug (`account_slug`, the NOT NULL UNIQUE identifier),
+   the footer text (`footer_year` / `footer_company`) and your **Hexomatic key**.
 2. You land on a dashboard pre-configured for the **industry** you picked at signup, with named
    **Data Cards** (dashboard widgets) already seeded.
 3. Invite team members (`POST /users/invite`) — they join **your** tenant, with their own

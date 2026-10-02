@@ -1135,9 +1135,13 @@ pub async fn admin_create_account(
         ));
     }
 
-    // Create the account
+    // Create the account.
+    // `slug` is NOT named here any more (kanban t_27bd3765): the column was dropped by
+    // migrations/078_drop_accounts_slug_column.sql, and naming it would make this handler a
+    // guaranteed ERROR 42703 on every admin account creation. The local was already fed from the
+    // request's `account_slug`, so it is named for what it is now.
     let account_id = Uuid::new_v4();
-    let slug = req
+    let account_slug = req
         .get("account_slug")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
@@ -1150,12 +1154,12 @@ pub async fn admin_create_account(
         });
 
     sqlx::query(
-        r#"INSERT INTO accounts (id, name, slug, account_slug)
-           VALUES ($1, $2, $3, $3)"#,
+        r#"INSERT INTO accounts (id, name, account_slug)
+           VALUES ($1, $2, $3)"#,
     )
     .bind(account_id)
     .bind(&account_name)
-    .bind(&slug)
+    .bind(&account_slug)
     .execute(&state.db)
     .await?;
 

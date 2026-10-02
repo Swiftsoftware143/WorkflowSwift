@@ -139,14 +139,6 @@ pub struct LoginRequest {
     pub password: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct Account {
-    pub id: Uuid,
-    pub name: String,
-    pub slug: String,
-    pub is_active: bool,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct ChangePasswordRequest {
     pub current_password: String,

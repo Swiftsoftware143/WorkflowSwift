@@ -102,7 +102,13 @@ tags, portfolio companies, industries, plan creation, and **n8n deployment** (`n
 | `/api/v1/admin/usage` | GET | Usage dashboard — credits, executions, n8n status per account |
 | `/api/v1/admin/impersonate` / `stop-impersonation` | POST | Support impersonation |
 
-A tenant (`accounts`) carries the slug, footer text (`footer_year` / `footer_company`, writable via
+A tenant (`accounts`) carries ONE identifier: `account_slug`, NOT NULL UNIQUE (`tenants_slug_key`),
+written by registration and the portfolio writers and read by the bridge and by this console's
+account list. A second, nullable `slug` column used to sit beside it and was **dropped** on
+2026-10-02 (migration 078, kanban t_27bd3765): no UNIQUE, no index, no view, no reader in the fleet,
+6 of 8 rows NULL — and on the 2 rows that carried a value it was an exact copy of `account_slug`, so
+`PUT /api/v1/accounts {"slug": "..."}` answered 200 while renaming a field nothing read.
+`accounts` also carries footer text (`footer_year` / `footer_company`, writable via
 `PUT /api/v1/accounts`), industry, retention days and **its own Hexomatic key**. The
 `logo_url` / `branding_name` / `primary_color` / `accent_color` branding columns and the unused
 `custom_domain` were **dropped** on 2026-10-02 (migration 077, kanban t_731bf864): nothing in this

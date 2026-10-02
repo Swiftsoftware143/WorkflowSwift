@@ -40,13 +40,18 @@ pub async fn update_account(
             .execute(&state.db)
             .await?;
     }
-    if let Some(slug) = req.get("slug").and_then(|v| v.as_str()) {
-        sqlx::query("UPDATE accounts SET slug = $1 WHERE id = $2")
-            .bind(slug)
-            .bind(aid)
-            .execute(&state.db)
-            .await?;
-    }
+
+    // There is deliberately NO `slug` arm here (kanban t_27bd3765). It used to run
+    // `UPDATE accounts SET slug = $1` while every writer that matters — registration
+    // (src/auth/handlers.rs:82), the portfolio handlers, the admin-create INSERT — wrote
+    // `account_slug`, and `src/handlers/bridge_handler.rs:155` read `account_slug`. Measured live
+    // before the change: `PUT /api/v1/accounts {"slug": "..."}` answered 200 "Account updated" and
+    // moved `slug` while `account_slug` did not move — a rename that renamed nothing, over a column
+    // no reader resolved (6 of 8 rows were NULL; on the other 2 it duplicated `account_slug`).
+    // `slug` was dropped by migrations/078_drop_accounts_slug_column.sql, so `account_slug` is the
+    // one tenant identifier. A body carrying `slug` is now inert (the handler binds only the keys it
+    // names below); `account_slug` is NOT settable through this route — renaming the identifier a
+    // bridge and the admin console list resolve is not a tenant-settings action.
 
     if let Some(hex_key) = req.get("hexomatic_key").and_then(|v| v.as_str()) {
         sqlx::query("UPDATE accounts SET hexomatic_key = $1 WHERE id = $2")

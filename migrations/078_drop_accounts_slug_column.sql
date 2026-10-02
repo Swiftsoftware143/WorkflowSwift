@@ -1,0 +1,57 @@
+-- 078_drop_accounts_slug_column.sql
+-- WorkflowSwift: DROP `accounts.slug` — the second, half-filled tenant identifier that no reader
+-- in the fleet resolves and that the writers disagree with `account_slug` about.
+-- Decision card t_27bd3765 ("two tenant identifiers drift — signup writes account_slug,
+-- PUT /api/v1/accounts writes slug; 6 of 8 rows NULL").
+--
+-- WHY THIS COLUMN IS RESIDUE AND NOT A SECOND IDENTIFIER (evidence /opt/swift/audits/t_27bd3765/):
+--   1. IT IS NOT UNIQUE AND NOT NOT NULL.  `\d accounts` at the decision: `slug | text |` (nullable,
+--      no default), and the ONLY unique/btree indexes on the table are on `account_slug`
+--      (`tenants_slug_key` UNIQUE, `idx_accounts_slug`) plus `tenants_pkey` (id) and
+--      `idx_accounts_is_active`. A tenant identifier that the database will not keep unique is not
+--      an identifier.
+--   2. IT IS A PARTIAL COPY OF `account_slug`.  Live value census, 8 accounts:
+--      `rows=8 slug_set=2 slug_null=6 slug_ne_account_slug=6` — i.e. 6 rows have no value at all,
+--      and on the 2 that do (`swiftsoftware`, `verify-fixture`) `slug` == `account_slug` exactly.
+--      There is no row where the two disagree, so nothing is lost by keeping the survivor.
+--   3. 0 READERS ANYWHERE BUT ONE UNUSED PAYLOAD KEY.  Its only consumers in the entire fleet:
+--        * the `Account` struct field `slug` (src/models/account.rs), served by
+--          `GET /api/v1/accounts` — and NO console calls that route: www-app's API map binds only
+--          `/accounts/industry` and `/accounts/hexomatic-key`, www-admin calls `/admin/accounts`
+--          (whose handler selects `account_slug` and aliases it `slug`). The struct field goes in
+--          this same commit.
+--        * the untracked one-off audit script /opt/swift/scripts/ws-t217d0e5f-delete-proof.py
+--          (local-only, baseline-denied; patched in the same pass, not committed).
+--      `information_schema.view_column_usage` for accounts.slug -> 0 rows; `pg_indexes` -> no slug
+--      index; no constraint, rule, routine or trigger references it (checked with pg_depend).
+--   4. 0 WRITERS THAT MEANT IT.  Registration (src/auth/handlers.rs:82) and the portfolio writers
+--      insert/upsert `account_slug` only; the admin-create INSERT
+--      (src/handlers/admin_settings_handler.rs:1153) echoed the same string into both columns; and
+--      `update_account` (PUT /api/v1/accounts, src/handlers/account_handler.rs:43) wrote ONLY
+--      `slug` — measured live: `PUT {"slug":"t27bd3765-probe-slug"}` answers 200 "Account updated"
+--      and changes `slug` while `account_slug` does not move. That is a rename that renames nothing.
+--
+-- VERDICT (arm (a) of the card, chosen by measurement not taste): retire `slug`;
+--   `account_slug` (NOT NULL UNIQUE, written by registration/portfolio, read by
+--   src/handlers/bridge_handler.rs:155 and by the admin console list) is the one tenant identifier.
+--   The card's arm (b) — "make `slug` real": backfill, write it on signup, add the UNIQUE the name
+--   implies, and decide which of the two the PUT arm binds — is REFUSED because it keeps two
+--   columns holding the same string and asks Postgres to enforce a 1:1 invariant it has no
+--   mechanism for (no trigger/CHECK exists, and none is proposed), for a value no reader resolves.
+--   Duplicating a NOT NULL UNIQUE identifier into a nullable unconstrained sibling is strictly
+--   worse than either having one identifier or having none. Reversal below.
+--
+-- LIVE SAFETY
+--   * Idempotent: `DROP COLUMN IF EXISTS`, a NO-OP on a fresh build (001_create_tenants.sql
+--     created it; a tree built from these migrations after 078 lands has no `slug` at all).
+--   * No BEGIN/COMMIT: the runner (src/db.rs) wraps each file in one transaction.
+--   * Recovery — one batch, restores the column and its 2 live values exactly as measured
+--     (type `text`, nullable, no default; read from information_schema at the decision):
+--       ALTER TABLE accounts ADD COLUMN IF NOT EXISTS slug TEXT;
+--       UPDATE accounts SET slug = account_slug WHERE account_slug IN ('swiftsoftware','verify-fixture');
+--
+-- ORDERING NOTE: deploy-app.sh runs the from-zero harness before the recreate, so a from-zero run
+-- against a live DB that still has the column reports drift until the boot applies this file (the
+-- same ordering artifact recorded for 067/076/077). Re-running the harness after the boot is PASS.
+
+ALTER TABLE accounts DROP COLUMN IF EXISTS slug;
