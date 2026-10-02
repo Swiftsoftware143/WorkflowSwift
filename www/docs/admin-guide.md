@@ -163,7 +163,7 @@ credits per call.
 | `/api/v1/accounts/industry` | GET/PUT | Account industries (GET lists linked; PUT sets primary) |
 | `/api/v1/accounts/industry/{slug}` | DELETE | Remove an industry dashboard from the account |
 | `/api/v1/dashboard/tabs` | GET | Tab-navigated dashboard (per-industry tabs + widgets) |
-| `/api/v1/dashboard/workspace`, `/stats`, `/timeline`, `/widgets`, `/activity` | GET | Dashboard data |
+| `/api/v1/dashboard/workspace`, `/stats`, `/timeline`, `/widgets` | GET | Dashboard data — `/stats` totals are rendered on the dashboard (workflows / clients / templates) |
 | `/api/v1/dashboard/push-widget-data` | POST | Ingest custom metrics |
 
 ## Credits, payments and affiliates

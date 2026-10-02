@@ -335,7 +335,12 @@ function renderDashboardOverview(c){
   api('/dashboard/stats').then(d=>{
     const s=c.querySelector('#stats');
     if(!d||!d.stats){s.innerHTML='<p class="text-gray-400">No stats available.</p>';return}
-    s.innerHTML=[{l:'Workflows',v:d.stats.total_workflows||d.total_workflows||0},{l:'Instances',v:d.stats.total_instances||d.total_instances||0},{l:'Credits',v:d.stats.credits||d.credits||0}]
+    // The three keys GET /dashboard/stats really returns. This read used to ask for
+    // `total_instances` and `credits`, neither of which the handler has EVER returned, so both
+    // tiles rendered a permanent 0 — measured live on this console's default page: "Instances 0"
+    // with a running instance committed, "Credits 0" with 5 credits on the account. The running
+    // count is `active_instances`; credits live on Plans & Credits (kanban t_3a8ccd2a).
+    s.innerHTML=[{l:'Workflows',v:d.stats.total_workflows||0},{l:'Active instances',v:d.stats.active_instances||0},{l:'Templates',v:d.stats.total_templates||0}]
       .map(x=>`<div class="card text-center"><div class="text-3xl font-bold text-blue-600">${x.v}</div><div class="text-sm text-gray-500">${x.l}</div></div>`).join('');
   }).catch(()=>c.querySelector('#stats').innerHTML='<p class="text-red-400">Failed.</p>');
 }

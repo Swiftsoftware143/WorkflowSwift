@@ -269,14 +269,10 @@ pub fn create_router(state: AppState) -> Router {
             get(handlers::paperclip_handler::activity_timeline),
         )
         .route("/stats", get(handlers::dashboard_handler::dashboard_stats))
-        .route(
-            "/activity",
-            get(handlers::dashboard_handler::dashboard_activity),
-        )
-        .route(
-            "/data",
-            post(handlers::dashboard_handler::push_dashboard_data),
-        )
+        // `/activity` (GET, audit_logs) and `/data` (POST, push_dashboard_data) were deleted by
+        // kanban t_3a8ccd2a: `audit_logs` is written by nothing in this app (0 rows, 0 INSERTs) so
+        // `/activity` could only ever answer [], and `/data` had no reachable caller at all.
+        // See /opt/swift/audits/t_3a8ccd2a/REPORT.md.
         .route(
             "/widgets",
             get(handlers::industry_handler::get_dashboard_widgets),
