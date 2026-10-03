@@ -45,8 +45,9 @@ PY
 
 # Cloudflare caches this path by default (verified 2026-09-21: cf-cache-status HIT,
 # age 843s, still serving the Jul 31 build after the origin file was replaced). So we
-# ALSO publish an immutable, version-named copy — that URL has never been requested
-# and therefore can never be stale. Point the site/guides at the versioned name.
+# ALSO publish an immutable, version-named copy. Do NOT point a page at either one:
+# the pages link the LIVE app route /api/v1/extension.zip, and this script now finishes by
+# calling that publisher so the version they print can never lag the bytes they serve.
 VER="$(python3 -c "import json;print(json.load(open('$SRC_DIR/manifest.json'))['version'])")"
 VERSIONED="swift-market-intel-extension-$VER.zip"
 
@@ -58,3 +59,21 @@ echo -n "  sha256: "; sha256sum "$OUT_ZIP" | cut -d' ' -f1
 echo -n "  version in manifest: $VER"
 echo
 echo -n "  api base in config.js: "; grep -o "'[^']*'" "$SRC_DIR/config.js" | tail -1
+
+# --- publish step (the one that was missed twice) --------------------------------------------
+# A new build used to land with nothing rewiring the site, so the pages kept handing customers the
+# previous version (card t_7c63618c). ws-publish-extension.sh is the single publisher: it proves
+# zip == dist tree, copies the mirrors, rewrites extension-latest.json in every serving root (that
+# file is the version+sha256 the marketing pages render), and asserts on the SERVED pages that the
+# only download they offer is the live route. So a build can no longer ship silently unadvertised.
+set +e
+bash /opt/swift/scripts/ws-publish-extension.sh
+rc=$?
+set -e
+case "$rc" in
+  0) ;;
+  2) echo "  NOTE: pages + metadata are published, but the live /api/v1/extension.zip still serves the"
+     echo "        PREVIOUS build (it is embedded in the API binary). Run scripts/deploy-workflowswift.sh"
+     echo "        to make the download button serve v$VER." ;;
+  *) echo "FATAL: ws-publish-extension.sh failed (rc=$rc) — the site was NOT updated."; exit "$rc" ;;
+esac
