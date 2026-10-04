@@ -32,6 +32,7 @@ pub mod integration_dispatch_handler;
 pub mod internal_handler;
 pub mod leads_handler;
 pub mod n8n_proxy_handler;
+pub mod notify_handler;
 pub mod paperclip_handler;
 pub mod prospecting_handler;
 pub mod provider_keys_handler;

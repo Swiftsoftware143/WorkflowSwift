@@ -632,6 +632,16 @@ pub fn create_router(state: AppState) -> Router {
             post(handlers::integration_center_handler::check_provider_health),
         );
 
+    // ── Notify (kanban t_d3ff37ef) ──
+    // What a Notify step may be set up with: the channels this install can REALLY deliver on, and
+    // the account's own people it may reach. Both JWT-scoped to the caller's account.
+    let notify_routes = Router::new()
+        .route("/channels", get(handlers::notify_handler::notify_channels))
+        .route(
+            "/recipients",
+            get(handlers::notify_handler::notify_recipients),
+        );
+
     // ── Admin routes (protected by admin middleware) ──
     let admin_routes = Router::new()
         // Usage dashboard
@@ -647,6 +657,12 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/settings/email/test",
             post(handlers::admin_settings_handler::test_email_settings),
+        )
+        // The SMS provider's own proof-of-configuration (kanban t_d3ff37ef), the sibling of the
+        // email test above.
+        .route(
+            "/settings/sms/test",
+            post(handlers::admin_settings_handler::test_sms_settings),
         )
         .route(
             "/settings/{key}",
@@ -733,6 +749,7 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/auth", auth_protected)
         .nest("/accounts", account_routes)
         .nest("/users", user_routes)
+        .nest("/notify", notify_routes)
         .nest("/templates", template_routes)
         .nest("/workflows", workflow_routes)
         .nest("/instances", instance_routes)
@@ -867,6 +884,14 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/n8n/run-outcome",
             post(handlers::instance_handler::n8n_run_outcome),
+        )
+        // A Notify step's email/SMS send (kanban t_d3ff37ef). Self-authenticating with
+        // X-Internal-Key, exactly like the routes around it: the generated graph's httpRequest
+        // node calls this, and a run triggered externally has no user token to present. Reads a
+        // body, so it belongs in THIS sub-router.
+        .route(
+            "/notify/dispatch",
+            post(handlers::notify_handler::notify_dispatch),
         )
         .route(
             "/internal/portfolio-sync",

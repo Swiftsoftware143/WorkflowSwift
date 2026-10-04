@@ -120,6 +120,49 @@ fn redact_secrets(value: &mut serde_json::Value) {
 }
 
 /// GET /api/v1/admin/settings — list all admin settings
+/// The settings rows whose value carries a SEALED credential. ONE list: the key that is opened on
+/// the way out (`open_row_secrets`) and sealed on the way in (`seal_row_secrets`) must be the same
+/// key, or a credential would round-trip as ciphertext.
+///
+/// `email` (kanban t_a794cb09) and `sms` (kanban t_d3ff37ef) — the app's two outbound providers.
+const SECRET_SETTINGS_KEYS: [&str; 2] = ["email", "sms"];
+
+/// Open the credential fields of a settings row IN PLACE after a DB read, so what reaches the admin
+/// panel is the credential (which `redact_secrets` then masks) and never the `enc:v1:` envelope.
+/// Best-effort: a row that cannot be opened is logged and left alone rather than failing the view.
+async fn open_row_secrets(pool: &sqlx::PgPool, key: &str, value: &mut serde_json::Value) {
+    if !SECRET_SETTINGS_KEYS.contains(&key) {
+        return;
+    }
+    let opened = match key {
+        "email" => crate::email::open_config_secrets(pool, value).await,
+        "sms" => crate::sms::open_config_secrets(pool, value).await,
+        _ => return,
+    };
+    if let Err(e) = opened {
+        tracing::error!(error = %e, key, "could not open admin_settings credentials for the admin view");
+    }
+}
+
+/// Seal the credential fields of a settings row IN PLACE before it is stored, so the generic
+/// `PUT /api/v1/admin/settings/{key}` route cannot store a provider key in the clear.
+async fn seal_row_secrets(
+    pool: &sqlx::PgPool,
+    key: &str,
+    value: &mut serde_json::Value,
+) -> Result<(), AppError> {
+    if !SECRET_SETTINGS_KEYS.contains(&key) {
+        return Ok(());
+    }
+    let sealed = match key {
+        "email" => crate::email::seal_config_secrets(pool, value).await,
+        "sms" => crate::sms::seal_config_secrets(pool, value).await,
+        _ => return Ok(()),
+    };
+    sealed.map_err(|e| AppError::Internal(format!("Failed to seal {key} credentials: {e}")))
+}
+
+/// GET /api/v1/admin/settings — list all admin settings
 pub async fn list_settings(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -137,11 +180,7 @@ pub async fn list_settings(
         let key: String = row.try_get("key")?;
         let mut value: serde_json::Value = row.try_get("value")?;
         // Same read-path rule as `get_setting` (kanban t_a794cb09): mask the DECRYPTED credential.
-        if key == "email" {
-            if let Err(e) = crate::email::open_config_secrets(&state.db, &mut value).await {
-                tracing::error!(error = %e, "could not open admin_settings.email for the admin view");
-            }
-        }
+        open_row_secrets(&state.db, &key, &mut value).await;
         if is_secret_field(&key) {
             if let serde_json::Value::String(s) = &value {
                 if !s.is_empty() {
@@ -193,11 +232,8 @@ pub async fn get_setting(
     // `admin_settings.email` carries a SEALED credential (kanban t_a794cb09): open it FIRST, so
     // the mask the admin is shown is derived from the credential and never from the envelope
     // (`enc...XYZ`), and so the panel never round-trips ciphertext as though it were the key.
-    if key_str == "email" {
-        if let Err(e) = crate::email::open_config_secrets(&state.db, &mut value).await {
-            tracing::error!(error = %e, "could not open admin_settings.email for the admin view");
-        }
-    }
+    // `admin_settings.sms` is the same row shape for the SMS provider (kanban t_d3ff37ef).
+    open_row_secrets(&state.db, &key_str, &mut value).await;
     if is_secret_field(&key_str) {
         if let serde_json::Value::String(s) = &value {
             if !s.is_empty() {
@@ -275,11 +311,8 @@ pub async fn update_setting(
 
     // `admin_settings.email` holds a credential (kanban t_a794cb09): seal it before it reaches the
     // database, so this generic route cannot store the fleet-wide Mailgun private key in the clear.
-    if key == "email" {
-        crate::email::seal_config_secrets(&state.db, &mut value)
-            .await
-            .map_err(|e| AppError::Internal(format!("Failed to seal email credentials: {e}")))?;
-    }
+    // `admin_settings.sms` holds one too (kanban t_d3ff37ef), under the same rule.
+    seal_row_secrets(&state.db, &key, &mut value).await?;
 
     sqlx::query(
         r#"INSERT INTO admin_settings (key, value, description, updated_at, updated_by)
@@ -635,6 +668,12 @@ pub async fn admin_update_plan_full(
         .map(|v| v as i32);
     let can_deploy_n8n = req.get("can_deploy_n8n").and_then(|v| v.as_bool());
     let has_api_access = req.get("has_api_access").and_then(|v| v.as_bool());
+    // The hourly outbound Notify cap (kanban t_d3ff37ef). -1 = unlimited, the same convention the
+    // sibling caps use; it is read live by `crate::notify::per_hour_cap`.
+    let max_notify_per_hour = req
+        .get("max_notify_per_hour")
+        .and_then(|v| v.as_i64())
+        .map(|v| v as i32);
     let payment_provider = req
         .get("payment_provider")
         .and_then(|v| v.as_str())
@@ -674,8 +713,9 @@ pub async fn admin_update_plan_full(
             retention_days = COALESCE($10, retention_days),
             can_deploy_n8n = COALESCE($11, can_deploy_n8n),
             has_api_access = COALESCE($12, has_api_access),
-            payment_provider = COALESCE($13, payment_provider)
-         WHERE id = $14"#,
+            payment_provider = COALESCE($13, payment_provider),
+            max_notify_per_hour = COALESCE($14, max_notify_per_hour)
+         WHERE id = $15"#,
     )
     .bind(if name.is_empty() {
         None
@@ -698,6 +738,7 @@ pub async fn admin_update_plan_full(
     .bind(can_deploy_n8n)
     .bind(has_api_access)
     .bind(&payment_provider)
+    .bind(max_notify_per_hour)
     .bind(id)
     .execute(&state.db)
     .await?;
@@ -741,14 +782,16 @@ pub async fn admin_update_plan_full(
                 max_users      = COALESCE($2, max_users),
                 retention_days = COALESCE($3, retention_days),
                 can_deploy_n8n = COALESCE($4, can_deploy_n8n),
-                has_api_access = COALESCE($5, has_api_access)
-               WHERE id = $6"#,
+                has_api_access = COALESCE($5, has_api_access),
+                max_notify_per_hour = COALESCE($6, max_notify_per_hour)
+               WHERE id = $7"#,
         )
         .bind(limit_i32(&limit_map, "max_workflows"))
         .bind(limit_i32(&limit_map, "max_users"))
         .bind(limit_i32(&limit_map, "retention_days"))
         .bind(flag_bool(&limit_map, "n8n_deploy").or(flag_bool(&limit_map, "can_deploy_n8n")))
         .bind(flag_bool(&limit_map, "api_access").or(flag_bool(&limit_map, "has_api_access")))
+        .bind(limit_i32(&limit_map, "max_notify_per_hour"))
         .bind(id)
         .execute(&state.db)
         .await?;
@@ -1584,6 +1627,39 @@ pub async fn test_email_settings(
 
     match crate::email::send_email(&state, &to, "email_test", &vars).await {
         Ok(_) => Ok(Json(json!({ "status": "sent", "to": to }))),
+        Err(e) => Ok(Json(json!({ "status": "error", "detail": e }))),
+    }
+}
+
+/// POST /api/v1/admin/settings/sms/test — send a REAL test message through the provider saved in
+/// Admin > Settings > SMS (kanban t_d3ff37ef).
+///
+/// The same contract as the email test: the provider's OWN outcome is returned, never a fabricated
+/// "OK", so an admin can prove a configuration after entering the credentials. The number is
+/// normalised to E.164 first, because that is the only shape this product dials.
+pub async fn test_sms_settings(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<impl IntoResponse> {
+    require_admin(&claims)?;
+
+    let to = req
+        .get("to")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    crate::sms::normalize_phone(&to).map_err(AppError::Validation)?;
+
+    match crate::sms::send_sms(
+        &state,
+        &to,
+        "WorkflowSwift: your SMS provider is configured.",
+    )
+    .await
+    {
+        Ok(()) => Ok(Json(json!({ "status": "sent", "to": to }))),
         Err(e) => Ok(Json(json!({ "status": "error", "detail": e }))),
     }
 }

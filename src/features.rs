@@ -19,7 +19,7 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 /// The canonical numeric limit keys the admin UI can set per plan.
-pub const NUMERIC_LIMIT_KEYS: [&str; 14] = [
+pub const NUMERIC_LIMIT_KEYS: [&str; 15] = [
     "max_workflows",
     "max_templates",
     "max_instances",
@@ -34,6 +34,10 @@ pub const NUMERIC_LIMIT_KEYS: [&str; 14] = [
     "max_plans",
     "max_credit_packages",
     "retention_days",
+    // The account's hourly outbound Notify cap (kanban t_d3ff37ef). It has a dedicated
+    // `plan_tiers` column AND is read by a live gate — `crate::notify::per_hour_cap`, which the
+    // Notify dispatch route applies before every send.
+    "max_notify_per_hour",
 ];
 
 /// The canonical boolean (on/off) feature keys the admin UI can set per plan.
@@ -95,6 +99,10 @@ fn aliases(key: &str) -> (&'static [&'static str], Option<&'static str>) {
         "max_credit_packages" | "credit_packages" => {
             (&["max_credit_packages", "credit_packages"], None)
         }
+        "max_notify_per_hour" | "notify_per_hour" => (
+            &["max_notify_per_hour", "notify_per_hour"],
+            Some("max_notify_per_hour"),
+        ),
         "retention_days" => (&["retention_days"], Some("retention_days")),
         "n8n_deploy" => (&["n8n_deploy", "can_deploy_n8n"], Some("can_deploy_n8n")),
         "api_access" => (&["api_access", "has_api_access"], Some("has_api_access")),
@@ -130,6 +138,7 @@ fn tier_column_sql(col: &str) -> Option<&'static str> {
         "retention_days" => Some("SELECT retention_days FROM plan_tiers WHERE id = $1"),
         "can_deploy_n8n" => Some("SELECT can_deploy_n8n FROM plan_tiers WHERE id = $1"),
         "has_api_access" => Some("SELECT has_api_access FROM plan_tiers WHERE id = $1"),
+        "max_notify_per_hour" => Some("SELECT max_notify_per_hour FROM plan_tiers WHERE id = $1"),
         _ => None,
     }
 }

@@ -201,6 +201,7 @@ pub async fn list_templates(
 /// A Notify step's deliverable channel is the same rule one level down, so it is checked here too
 /// by the steps API's own function (kanban t_08be842f).
 fn assert_template_step_runnable(
+    senders: &crate::notify::NotifySenders,
     step_type: &str,
     name: &str,
     config: &Option<serde_json::Value>,
@@ -214,7 +215,9 @@ fn assert_template_step_runnable(
             crate::execution::executable_step_type_list()
         )));
     }
-    super::workflow_handler::assert_notify_channel_ok(step_type, config)?;
+    // A Notify step's channel is SENDER-BACKED (kanban t_d3ff37ef): `email` / `sms` pass only where
+    // this install has the matching provider configured.
+    super::workflow_handler::assert_notify_channel_ok(senders, step_type, config)?;
     // An AI Action step's provider is the same rule one level down (kanban t_03e4d3d9): a template
     // that names a provider this app cannot call would install a dead step into a live workflow.
     super::workflow_handler::assert_ai_provider_ok(step_type, config)
@@ -305,8 +308,14 @@ pub async fn create_template(
 
     // Validate EVERY step before the template row exists: a refused step must not leave an empty
     // template behind (t_27a15474).
+    let template_notify_senders = crate::notify::load_senders(&state).await;
     for step in &req.steps {
-        assert_template_step_runnable(&step.step_type, &step.name, &step.config)?;
+        assert_template_step_runnable(
+            &template_notify_senders,
+            &step.step_type,
+            &step.name,
+            &step.config,
+        )?;
     }
     // …and the ORDER too (kanban t_96e77263): install copies these steps into a new workflow
     // verbatim, so a template that opens with anything but a Data Card would install a workflow the
@@ -500,8 +509,14 @@ pub async fn install_template_as_workflow(
     // execute is answered with a named reason instead of installing into a workflow whose every
     // step is `skipped`/`unexecutable` (kanban t_27a15474; the seeded template hit this for all ten
     // of its rows). The check runs up front so a refusal cannot leave a half-built workflow behind.
+    let template_notify_senders = crate::notify::load_senders(&state).await;
     for step in &template_steps {
-        assert_template_step_runnable(&step.step_type, &step.name, &step.config)?;
+        assert_template_step_runnable(
+            &template_notify_senders,
+            &step.step_type,
+            &step.name,
+            &step.config,
+        )?;
     }
 
     // …and the ORDER, for the same reason and at the same point (kanban t_96e77263): this call is
@@ -679,8 +694,14 @@ pub async fn import_template(
 
     // Same guard as create_template, and for the same reason: this is the other door a template can
     // come in through, and install copies its steps verbatim into a workflow (kanban t_27a15474).
+    let template_notify_senders = crate::notify::load_senders(&state).await;
     for step in &req.steps {
-        assert_template_step_runnable(&step.step_type, &step.name, &step.config)?;
+        assert_template_step_runnable(
+            &template_notify_senders,
+            &step.step_type,
+            &step.name,
+            &step.config,
+        )?;
     }
     // The ordering rule is the same guard one level up (kanban t_96e77263) — an imported file is
     // still a template, and a template's step 1 is the installed workflow's step 1.
@@ -743,7 +764,11 @@ mod tests {
     /// the caller cannot act on it.
     #[test]
     fn a_stage_name_step_type_is_refused() {
-        let err = assert_template_step_runnable("manage", "Manage", &None)
+        let none = crate::notify::NotifySenders {
+            email: false,
+            sms: false,
+        };
+        let err = assert_template_step_runnable(&none, "manage", "Manage", &None)
             .expect_err("a stage name is not a step type");
         let msg = err.to_string();
         assert!(
@@ -768,7 +793,7 @@ mod tests {
             "dashboard",
         ] {
             assert!(
-                assert_template_step_runnable(stage, "Stage", &None).is_err(),
+                assert_template_step_runnable(&none, stage, "Stage", &None).is_err(),
                 "'{stage}' is a lifecycle stage, not a step type"
             );
         }
@@ -779,20 +804,57 @@ mod tests {
     /// channel rule the steps API enforces, which must hold on this path too.
     #[test]
     fn executable_step_types_pass_and_an_undeliverable_channel_does_not() {
-        assert!(assert_template_step_runnable("data-card", "Discover", &None).is_ok());
-        assert!(assert_template_step_runnable("manual", "Qualify", &Some(json!({}))).is_ok());
+        // No sender configured at all: webhook still passes, both sender-backed channels do not.
+        let none = crate::notify::NotifySenders {
+            email: false,
+            sms: false,
+        };
+        assert!(assert_template_step_runnable(&none, "data-card", "Discover", &None).is_ok());
+        assert!(
+            assert_template_step_runnable(&none, "manual", "Qualify", &Some(json!({}))).is_ok()
+        );
         assert!(assert_template_step_runnable(
+            &none,
             "notify",
             "Outreach",
             &Some(json!({"channel": "webhook"}))
         )
         .is_ok());
-        let err =
-            assert_template_step_runnable("notify", "Outreach", &Some(json!({"channel": "email"})))
-                .expect_err("email has no sender in this app");
+        for channel in ["email", "sms"] {
+            let err = assert_template_step_runnable(
+                &none,
+                "notify",
+                "Outreach",
+                &Some(json!({ "channel": channel })),
+            )
+            .unwrap_err();
+            assert!(
+                err.to_string().contains(channel),
+                "the refusal must name the channel: {err}"
+            );
+        }
+
+        // With a mail sender configured, `email` is the same rule the steps API applies: accepted.
+        let mail = crate::notify::NotifySenders {
+            email: true,
+            sms: false,
+        };
+        assert!(assert_template_step_runnable(
+            &mail,
+            "notify",
+            "Outreach",
+            &Some(json!({"channel": "email"}))
+        )
+        .is_ok());
         assert!(
-            err.to_string().contains("email"),
-            "the refusal must name the channel: {err}"
+            assert_template_step_runnable(
+                &mail,
+                "notify",
+                "Outreach",
+                &Some(json!({"channel": "sms"}))
+            )
+            .is_err(),
+            "sms is still refused while no SMS provider is configured"
         );
     }
 

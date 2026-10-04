@@ -537,6 +537,7 @@ pub fn convert_steps_to_n8n(
         aid,
         workflow_id,
         callback_base_url,
+        internal_sync_key,
         &mut connections_map,
     );
 
@@ -782,6 +783,11 @@ fn convert_user_steps(
     aid: Uuid,
     workflow_id: Uuid,
     callback_base_url: &str,
+    // The machine credential a Notify step's dispatch node presents (kanban t_d3ff37ef). It is
+    // threaded here for the same reason the failure arm needs it: `POST /api/v1/notify/dispatch`
+    // is an internal-key route, and `CALLBACK_AUTH_EXPR` would present the CALLER's bearer, which
+    // is the wrong credential for a route that authenticates machines.
+    internal_sync_key: &str,
     connections_map: &mut serde_json::Map<String, Value>,
 ) -> (Vec<Value>, Vec<String>) {
     let mut nodes: Vec<Value> = Vec::new();
@@ -992,56 +998,58 @@ fn convert_user_steps(
                         });
                         nodes.push(node);
                     }
-                    // RETIRED ARMS (kanban t_70baf9b0, retired for good by t_08be842f): `email` and
-                    // `sms` used to be offered by the tenant console's Notify step
-                    // (www-app/index.html, Channel = email | webhook | sms). This app serves no
-                    // sender for either, so those were channels a tenant could pick that deliver
-                    // nothing; the console no longer offers them and the API refuses them
-                    // (`execution::NOTIFY_CHANNELS`). These arms stay for a row stored before the
-                    // retirement: an honest no-op that NAMES the gap, the same disposition
-                    // src/execution.rs applies to a step it cannot execute.
+                    // REAL ARMS (kanban t_d3ff37ef): `email` and `sms` are deliverable again. The
+                    // console offers both, the write path accepts both where the matching sender is
+                    // configured, and each emits a node that can actually RUN.
                     //
-                    // `email` used to emit `n8n-nodes-base.emailSend` with a hardcoded
-                    // `fromEmail: swiftsoftware143@yahoo.com` and NO credential. The node type
-                    // declares the `smtp` credential as REQUIRED, n8n holds no smtp credential at
-                    // all, and the runtime activation path refuses the whole workflow:
+                    // The node is the SAME httpRequest-to-an-app-route shape the sibling arms use
+                    // (`dashboard/push-widget-data`, `n8n/run-outcome`). It must NOT be an
+                    // `n8n-nodes-base.emailSend`: that type declares the `smtp` credential as
+                    // REQUIRED, n8n holds no smtp credential at all, and ONE such node makes the
+                    // tenant's ENTIRE generated workflow un-activatable —
                     // `Cannot publish workflow: 1 node have configuration issues: Node "<step>":
-                    // Missing required credential: smtp` — measured, so ONE email Notify step
-                    // makes the tenant's ENTIRE generated workflow un-activatable.
+                    // Missing required credential: smtp` (measured on n8n 2.34.6, kanban
+                    // t_70baf9b0). No provider credential ever lives in n8n: the app sends, from the
+                    // provider its admin configured in the panel.
                     //
-                    // The app DOES own a mail path (`email::send_email`, behind Admin > Settings >
-                    // Email Provider), but it is template-based, it is not reachable from n8n, and
-                    // relaying a tenant-named recipient through the platform's provider would make
-                    // this product an open mail sender on its own domain. That recipient rule is a
-                    // product/security decision (card t_08be842f, decided with the picker policy):
-                    // until it is taken, the channel is not sold at all.
-                    "email" => {
-                        nodes.push(passthrough_node(
-                            &node_id,
-                            step_name,
-                            (x_pos, y_base),
-                            step_type,
-                            "WorkflowSwift has no tenant-triggered mail sender: the platform's mail \
-                             provider lives in the app (Admin > Settings > Email Provider) and no \
-                             route relays a step's mail, so this Notify step sends nothing. The \
-                             Email channel is RETIRED (kanban t_08be842f): the console no longer \
-                             offers it and the API refuses it. This node only keeps the place of a \
-                             step stored before the retirement.",
-                        ));
-                    }
-                    "sms" => {
-                        nodes.push(passthrough_node(
-                            &node_id,
-                            step_name,
-                            (x_pos, y_base),
-                            step_type,
-                            "WorkflowSwift has no SMS provider: no sender in the app and no sms \
-                             credential in n8n, so this Notify step sends nothing. The SMS channel \
-                             is RETIRED (kanban t_08be842f): the console no longer offers it and the \
-                             API refuses it. This node only keeps the place of a step stored before \
-                             the retirement. (n8n does hold a telegramApi credential, but this \
-                             product offers no telegram channel.)",
-                        ));
+                    // The destination is NOT the step's config — the app resolves the recipient
+                    // itself from the workflow's OWN account (`crate::notify`), so this graph cannot
+                    // name an address, and the platform never becomes an open outbound relay.
+                    "email" | "sms" => {
+                        let node = json!({
+                            "id": node_id,
+                            "name": step_name,
+                            "type": "n8n-nodes-base.httpRequest",
+                            "typeVersion": 4.2,
+                            "position": [x_pos, y_base],
+                            // A send that cannot happen must FAIL the run, not pass silently: the
+                            // route answers a refusal as 400, the account's hourly cap as 429 and a
+                            // provider failure as 502, and this is what turns any of them into a
+                            // failed execution. `harden_callback_nodes` skips a node that carries
+                            // the machine key, so it is set here.
+                            "onError": "stopWorkflow",
+                            "parameters": {
+                                "method": "POST",
+                                "url": callback_url(callback_base_url, "notify/dispatch"),
+                                "authentication": "none",
+                                "sendHeaders": true,
+                                "headerParameters": {
+                                    "parameters": [
+                                        { "name": INTERNAL_KEY_HEADER, "value": internal_sync_key },
+                                        { "name": "Content-Type", "value": "application/json" }
+                                    ]
+                                },
+                                "sendBody": true,
+                                "bodyParameters": {
+                                    "parameters": [
+                                        { "name": "workflow_id", "value": workflow_id.to_string() },
+                                        { "name": "step_index", "value": i.to_string() }
+                                    ]
+                                },
+                                "options": { "timeout": 20000 }
+                            }
+                        });
+                        nodes.push(node);
                     }
                     // RETIRED callback (kanban t_642b6894): `slack` and `telegram` are not
                     // offered by the tenant console's Notify step (its Channel select is `webhook`,
@@ -2082,7 +2090,7 @@ mod tests {
     fn app_callback_census_is_generated_from_the_converter() {
         // Mounted for real; verdicts in `10-callback-census-post.txt`. A new arm that adds a path
         // here has to add the route first.
-        const SERVED: [&str; 6] = [
+        const SERVED: [&str; 7] = [
             "credits/balance",
             "credits/deduct",
             "dashboard/push-widget-data",
@@ -2093,6 +2101,11 @@ mod tests {
             // The mirrored AI Action step's callback (kanban t_9f556c5c): the n8n copy posts the
             // step's identity here and the app runs it on the tenant's own provider key.
             "n8n/ai-action",
+            // The Notify step's email/SMS dispatch (kanban t_d3ff37ef): the mirror's node posts
+            // `{workflow_id, step_index}` and the APP sends through its panel-configured provider,
+            // so no mail/SMS credential ever lives in n8n. Registered here so a converter change
+            // that names a route the router does not serve fails this test instead of shipping.
+            "notify/dispatch",
         ];
 
         let mut rows: Vec<Value> = Vec::new();
@@ -2447,33 +2460,52 @@ mod tests {
         assert_eq!(driven["main"][0][0]["node"], "Auth & Credit");
     }
 
-    /// kanban t_70baf9b0 — the Notify step's n8n nodes, pinned to the shapes measured live on
-    /// n8n 2.34.6 (audits/t_70baf9b0/):
+    /// A header's value on a generated node, by name (the `X-Internal-Key` leg of the assertions
+    /// below). `auth_header_value` is the `Authorization`-specific sibling.
+    fn header_value(node: &Value, name: &str) -> Option<String> {
+        node.get("parameters")
+            .and_then(|p| p.get("headerParameters"))
+            .and_then(|h| h.get("parameters"))
+            .and_then(|p| p.as_array())?
+            .iter()
+            .find(|h| {
+                h.get("name")
+                    .and_then(|n| n.as_str())
+                    .map(|n| n.eq_ignore_ascii_case(name))
+                    .unwrap_or(false)
+            })
+            .and_then(|h| h.get("value"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
+
+    /// kanban t_d3ff37ef — the Notify step's n8n nodes, rewritten to the truth that card landed
+    /// (superseding the retirement in t_08be842f), pinned against the measured shapes on
+    /// n8n 2.34.6:
     ///
-    /// * `email` emitted `n8n-nodes-base.emailSend` (hardcoded `fromEmail`, NO credential). The
-    ///   node type declares `smtp` as a REQUIRED credential and n8n holds none, so the runtime
-    ///   activation path refused the WHOLE workflow: `Cannot publish workflow: 1 node have
-    ///   configuration issues: Node "<step>": Missing required credential: smtp`. One Email
-    ///   Notify step therefore made a tenant's entire generated workflow un-activatable.
-    /// * `webhook`/`sms`/unknown emitted `n8n-nodes-base.webhook` — a TRIGGER. n8n activated the
-    ///   graph anyway, reported `executionStatus=success`, posted NOTHING to the declared URL,
-    ///   and registered a stray unauthenticated GET webhook at a random UUID path.
-    ///
-    /// The webhook channel is a real outbound call (httpRequest); email and sms have no sender in
-    /// this product, so they are honest no-ops that NAME the gap.
+    /// * `email` / `sms` are REAL again: each emits an `httpRequest` POSTing
+    ///   `{workflow_id, step_index}` to this app's own `POST /api/v1/notify/dispatch`, carrying the
+    ///   MACHINE credential. The app resolves the recipient from the workflow's own account and
+    ///   sends through the provider its admin configured in the panel, so the graph holds no
+    ///   provider credential and names no destination.
+    /// * `webhook` is unchanged: an outbound POST to a URL the tenant owns.
+    /// * the retired `emailSend` shape stays gone — that node type declares `smtp` as a REQUIRED
+    ///   credential, n8n holds none, and ONE such node made a tenant's ENTIRE generated workflow
+    ///   un-activatable (`Missing required credential: smtp`).
     #[test]
     fn notify_channels_emit_nodes_that_can_actually_run() {
+        let wf = Uuid::new_v4();
         let steps = vec![
             json!({"step_type": "notify", "name": "Notify Email",
-                   "config": {"channel": "email", "recipient": "ops@example.com", "subject": "s"}}),
+                   "config": {"channel": "email", "recipient_scope": "all_users", "message": "hi"}}),
             json!({"step_type": "notify", "name": "Notify Webhook",
                    "config": {"channel": "webhook", "recipient": "https://hooks.tenant.example/incoming"}}),
             json!({"step_type": "notify", "name": "Notify SMS",
-                   "config": {"channel": "sms", "recipient": "+15551234567"}}),
+                   "config": {"channel": "sms", "recipient_scope": "billing_contact"}}),
             json!({"step_type": "notify", "name": "Notify Unknown",
                    "config": {"channel": "carrier-pigeon", "recipient": "x"}}),
         ];
-        let g = convert_steps_to_n8n(&steps, Uuid::new_v4(), Uuid::new_v4(), BASE, KEY);
+        let g = convert_steps_to_n8n(&steps, Uuid::new_v4(), wf, BASE, KEY);
         let by_name = |n: &str| {
             g.nodes
                 .iter()
@@ -2481,8 +2513,8 @@ mod tests {
                 .unwrap_or_else(|| panic!("no node named {n}"))
         };
 
-        // Nothing in the graph may require a credential this n8n does not hold (it holds exactly
-        // telegramApi and postgres): that is what made the whole graph un-activatable.
+        // Nothing in the graph may require a credential this n8n does not hold: that is what made
+        // the whole graph un-activatable, and it is why the provider credential lives in the APP.
         for node in &g.nodes {
             assert_ne!(
                 node["type"],
@@ -2524,40 +2556,130 @@ mod tests {
         );
         assert!(!is_app_callback(hook));
 
-        // email | sms | unknown channel → an honest no-op that NAMES the gap. The first two now also
-        // say the channel itself is RETIRED (kanban t_08be842f): the console no longer offers them
-        // and the write path refuses them, so only a row stored before the retirement can reach it.
-        for (name, needle) in [
-            ("Notify Email", "no tenant-triggered mail sender"),
-            ("Notify SMS", "no SMS provider"),
-            ("Notify Unknown", "unknown notify channel"),
-        ] {
+        // email | sms → a REAL send: an httpRequest to THIS app's dispatch route, authenticated
+        // with the machine key. Nothing about the send is decided by the graph.
+        for (name, idx) in [("Notify Email", 0usize), ("Notify SMS", 2usize)] {
             let n = by_name(name);
-            assert_eq!(n["type"], json!("n8n-nodes-base.noOp"), "{name}");
+            assert_eq!(n["type"], json!("n8n-nodes-base.httpRequest"), "{name}");
+            assert_eq!(n["parameters"]["method"], json!("POST"), "{name}");
+            assert_eq!(
+                n["parameters"]["url"],
+                json!(format!("{BASE}/api/v1/notify/dispatch")),
+                "{name} must call the app's own dispatch route"
+            );
             assert!(
-                n["notes"].as_str().unwrap_or("").contains(needle),
-                "{name} must name the gap, got {}",
-                n["notes"]
+                is_app_callback(n),
+                "{name} must be a callback into this app, not a third party"
+            );
+            assert_eq!(
+                n["onError"],
+                json!("stopWorkflow"),
+                "{name}: a send that cannot happen must fail the run, never pass silently"
+            );
+            // The MACHINE credential, never the caller's bearer: the dispatch route authenticates
+            // machines exactly like the sibling `n8n/run-outcome`.
+            assert!(
+                carries_internal_key(n),
+                "{name} must present {INTERNAL_KEY_HEADER}"
+            );
+            assert_eq!(
+                header_value(n, INTERNAL_KEY_HEADER).as_deref(),
+                Some(KEY),
+                "{name} must present the machine key"
+            );
+            assert!(
+                auth_header_value(n).is_none(),
+                "{name} must not send the caller's bearer to a machine route"
+            );
+            let body = n["parameters"]["bodyParameters"]["parameters"]
+                .as_array()
+                .expect("body parameters");
+            let field = |k: &str| {
+                body.iter()
+                    .find(|p| p["name"] == json!(k))
+                    .map(|p| p["value"].clone())
+            };
+            assert_eq!(field("workflow_id"), Some(json!(wf.to_string())), "{name}");
+            assert_eq!(field("step_index"), Some(json!(idx.to_string())), "{name}");
+            // …and the graph never carries the step's own destination: the app resolves the
+            // recipient from the workflow's account, so the platform is never an open relay.
+            assert!(
+                !serde_json::to_string(n).unwrap().contains("all_users")
+                    && !serde_json::to_string(n)
+                        .unwrap()
+                        .contains("billing_contact"),
+                "{name} must not carry the recipient scope — the app resolves it"
             );
         }
-        for retired in ["Notify Email", "Notify SMS"] {
-            let n = by_name(retired);
-            assert!(
-                n["notes"].as_str().unwrap_or("").contains("RETIRED"),
-                "{retired} must say the channel is retired, got {}",
-                n["notes"]
-            );
-            assert!(
-                !crate::execution::is_notify_channel(if retired.ends_with("Email") {
-                    "email"
-                } else {
-                    "sms"
-                }),
-                "{retired} carries a channel the API must refuse"
-            );
-        }
-        // The one channel the console still offers is the one the vocabulary accepts.
-        assert!(crate::execution::is_notify_channel("webhook"));
+
+        // An unknown channel → an honest no-op that NAMES the gap.
+        let unknown = by_name("Notify Unknown");
+        assert_eq!(unknown["type"], json!("n8n-nodes-base.noOp"));
+        assert!(
+            unknown["notes"]
+                .as_str()
+                .unwrap_or("")
+                .contains("unknown notify channel"),
+            "got {}",
+            unknown["notes"]
+        );
+
+        // The vocabulary, the sender-backed set and the retired set are pinned here against the
+        // gate in `execution.rs`, so the console, the write path and the mirror cannot drift.
+        assert_eq!(
+            crate::execution::NOTIFY_CHANNELS.to_vec(),
+            vec!["webhook", "email", "sms"]
+        );
+        assert_eq!(
+            crate::execution::SENDER_BACKED_NOTIFY_CHANNELS.to_vec(),
+            vec!["email", "sms"]
+        );
+        assert_eq!(
+            crate::execution::RETIRED_NOTIFY_CHANNELS.to_vec(),
+            vec!["slack", "telegram"]
+        );
+        assert!(crate::execution::is_notify_channel("email"));
+        assert!(crate::execution::is_notify_channel("sms"));
+        assert!(!crate::execution::is_notify_channel("carrier-pigeon"));
+        assert!(!crate::execution::is_notify_channel("slack"));
+
+        // Fail-closed: a channel is offerable only where its sender exists. `webhook` needs none.
+        let no_senders = crate::notify::NotifySenders {
+            email: false,
+            sms: false,
+        };
+        let all_senders = crate::notify::NotifySenders {
+            email: true,
+            sms: true,
+        };
+        assert!(crate::execution::notify_channel_available(
+            "webhook",
+            &no_senders
+        ));
+        assert!(!crate::execution::notify_channel_available(
+            "email",
+            &no_senders
+        ));
+        assert!(!crate::execution::notify_channel_available(
+            "sms",
+            &no_senders
+        ));
+        assert!(crate::execution::notify_channel_available(
+            "email",
+            &all_senders
+        ));
+        assert!(crate::execution::notify_channel_available(
+            "sms",
+            &all_senders
+        ));
+        assert_eq!(
+            crate::execution::notify_channels_for(&no_senders),
+            "webhook"
+        );
+        assert_eq!(
+            crate::execution::notify_channels_for(&all_senders),
+            "webhook, email, sms"
+        );
 
         // Exactly ONE Webhook node — the graph's own trigger. A second one is a stray
         // unauthenticated endpoint that does the step's work nowhere.

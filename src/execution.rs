@@ -374,34 +374,64 @@ pub fn executable_step_type_list() -> String {
     EXECUTABLE_STEP_TYPES.join(", ")
 }
 
-/// Every Notify channel this product can actually deliver on. The tenant console offers exactly
-/// these (`www-app/index.html`, the Notify step's Channel select), `create_workflow_step` /
+/// Every Notify channel this product KNOWS. The tenant console offers exactly these
+/// (`www-app/index.html`, the Notify step's Channel select), `create_workflow_step` /
 /// `update_workflow_step` and `validate_workflow_steps` refuse anything else, and the n8n mirror's
 /// notify arm emits a real node only for these.
 ///
-/// `email` and `sms` are RETIRED (kanban t_08be842f). Both were channels a tenant could pick that
-/// deliver nothing:
+/// `email` and `sms` were RETIRED (kanban t_08be842f) because neither had a sender anywhere in
+/// this app. They are BACK (kanban t_d3ff37ef) — and the reason they can be back is that the two
+/// things that retired them now exist:
 ///
-/// * `email` — this app owns a mail path (`email::send_email`, behind Admin > Settings > Email
-///   Provider) but it is template-based and not reachable from n8n, and n8n holds no smtp
-///   credential, so the mirror could not send mail even where the app can. Making the channel real
-///   would turn the platform into a sender of arbitrary tenant-named mail, i.e. the recipient rule
-///   (any address / the account's own users / rate-limited per plan) is a product decision that
-///   belongs with the picker policy, not inside a channel list.
-/// * `sms` — no SMS provider exists in this app and no sms credential in n8n.
+/// * `email` — the app owns a mail path (`email::send_email`, behind Admin > Settings > Email
+///   Provider) and a new app route relays a Notify step's mail through it (`POST
+///   /api/v1/notify/dispatch`), so the mirror never needs — and never gets — an SMTP credential.
+/// * `sms` — a real provider seam now exists (`crate::sms`, behind Admin > Settings > SMS).
+///
+/// Being IN this list is not the same as being OFFERABLE. Both sender-backed channels are
+/// FAIL-CLOSED: `notify_channels_for` reports the channels this install can actually deliver on,
+/// and the write path accepts `email`/`sms` only when that sender is configured.
 ///
 /// `webhook` POSTs `{message, data}` to a URL the tenant owns — the outbound call both the engine
-/// and the n8n mirror really make.
-pub const NOTIFY_CHANNELS: &[&str] = &["webhook"];
+/// and the n8n mirror really make. It needs no provider, so it is always available.
+pub const NOTIFY_CHANNELS: &[&str] = &["webhook", "email", "sms"];
 
-/// Is this a Notify channel the product can deliver on? The write path's and the validator's rule.
+/// The channels whose availability depends on a configured SENDER. `webhook` is deliberately not
+/// here — it is an outbound call to a URL the tenant owns.
+pub const SENDER_BACKED_NOTIFY_CHANNELS: &[&str] = &["email", "sms"];
+
+/// Channels that are NOT part of this product at all: never sold, never deliverable, and refused
+/// wherever a channel is checked. `slack`/`telegram` were retired with the callback that never
+/// existed (kanban t_642b6894) and stay retired.
+pub const RETIRED_NOTIFY_CHANNELS: &[&str] = &["slack", "telegram"];
+
+/// Is this a Notify channel the product KNOWS? The engine's and the mirror's vocabulary rule.
+/// Whether it can be DELIVERED right now is a separate question — see `notify_channel_available`.
 pub fn is_notify_channel(channel: &str) -> bool {
     NOTIFY_CHANNELS.contains(&channel)
 }
 
-/// The accepted Notify channels as one line, for a 400 body / a validation error.
+/// Can this channel be delivered on right now, given which senders this install has configured?
+/// This is the rule the write path gates on, so nothing is ever offered that cannot be sent.
+pub fn notify_channel_available(channel: &str, senders: &crate::notify::NotifySenders) -> bool {
+    senders.available(channel)
+}
+
+/// The channels this install may currently OFFER, as one line, for a 400 body / a validation
+/// error. The configured set, not the vocabulary (`notify_channel_list`).
+pub fn notify_channels_for(senders: &crate::notify::NotifySenders) -> String {
+    senders.offered().join(", ")
+}
+
+/// The whole Notify channel vocabulary as one line. Used where the product describes what it
+/// supports rather than what one install has configured.
 pub fn notify_channel_list() -> String {
     NOTIFY_CHANNELS.join(", ")
+}
+
+/// The retired/never-supported channels as one line, for a refusal that has to name them.
+pub fn retired_notify_channel_list() -> String {
+    RETIRED_NOTIFY_CHANNELS.join(", ")
 }
 
 /// Cap a response body before it goes into a step result and the execution log.
@@ -1592,17 +1622,49 @@ async fn walk(
                 // transport error included (measured live 2026-10-02, kanban t_e0e6a42e: the step
                 // reported completed, the run reported completed, and the tenant's own URL was
                 // never called). A retired channel or a blank URL is not a completed step either.
-                if !is_notify_channel(channel) {
+                let senders = crate::notify::load_senders(state).await;
+                if !is_notify_channel(channel) || RETIRED_NOTIFY_CHANNELS.contains(&channel) {
                     json!(notify_undeliverable_result(
                         i,
                         channel,
                         &format!(
-                            "Notify channel '{}' has no sender in this app (the console's Notify \
-                             channel is {})",
+                            "Notify channel '{}' has no sender in this app (available channels: \
+                             {}; retired: {})",
                             channel,
-                            notify_channel_list()
+                            notify_channels_for(&senders),
+                            retired_notify_channel_list()
                         )
                     ))
+                } else if channel != "webhook" && !notify_channel_available(channel, &senders) {
+                    // FAIL-CLOSED: the channel exists in the product but THIS install has no
+                    // sender for it. Nothing is sent and the step names exactly what is missing —
+                    // a channel that cannot be delivered is never recorded as completed.
+                    json!(notify_undeliverable_result(
+                        i,
+                        channel,
+                        &format!(
+                            "Notify channel '{}' is not configured on this install — set the \
+                             provider in Admin > Settings > {}, or this step sends nothing",
+                            channel,
+                            if channel == "sms" { "SMS" } else { "Email" }
+                        )
+                    ))
+                } else if channel != "webhook" {
+                    // `email` | `sms`: the APP sends, through its own panel-configured provider,
+                    // to the account's OWN people only. `crate::notify` resolves the recipient,
+                    // refuses anything that is not one of the account's own people, applies the
+                    // per-account hourly cap and records the outcome — the same code the mirror's
+                    // `POST /api/v1/notify/dispatch` route runs, so the two doors cannot drift.
+                    crate::notify::deliver(
+                        state,
+                        aid,
+                        Some(workflow_id),
+                        Some(i as i32),
+                        channel,
+                        &step_config,
+                    )
+                    .await
+                    .to_step_json(i)
                 } else if recipient.is_empty() {
                     json!(notify_undeliverable_result(
                         i,
@@ -2334,56 +2396,64 @@ mod tests {
         );
     }
 
-    /// The Notify step's channel list is the same kind of vocabulary as the step types: the console
-    /// must offer exactly the channels this product can deliver on. `email` and `sms` were removed
-    /// (kanban t_08be842f) — neither has a sender anywhere in the app or in n8n — so this test reads
-    /// the served console's own Channel select out of its source and pins it to `NOTIFY_CHANNELS`,
-    /// which is also the list the write path refuses against.
+    /// The Notify step's channel list is the same kind of vocabulary as the step types, and since
+    /// kanban t_d3ff37ef it is SENDER-BACKED: the console must offer exactly the channels this
+    /// install can deliver on, so it carries NO hardcoded list — it renders
+    /// `S.notifyChannels.channels`, which is what `GET /api/v1/notify/channels` answers
+    /// (`crate::notify::NotifySenders::offered`).
+    ///
+    /// What this test can pin from the served console's own source is the SHAPE: the options come
+    /// from the fetched, configured set; the offline fallback is exactly `webhook`; and no retired
+    /// channel is named. What the RUNTIME set contains is pinned where it is decided — `crate::notify`
+    /// and `n8n_converter`'s `notify_channels_emit_nodes_that_can_actually_run`.
     #[test]
     fn the_console_offers_only_deliverable_notify_channels() {
         let spa = include_str!("../www-app/index.html");
-        // The cfgFields arm for notify (not the `draftConfig` arm, which has no select).
-        let start = spa
-            .find("case 'notify': return html")
-            .expect("the notify step's config fields are in the served console");
-        let rest = &spa[start..];
-        let select_start = rest.find("<select").expect("the notify Channel select");
-        let select_end = rest[select_start..]
-            .find("</select>")
-            .expect("the select's closing tag");
-        let select = &rest[select_start..select_start + select_end];
-        let mut offered: Vec<String> = Vec::new();
-        for (idx, _) in select.match_indices("<option value=\"") {
-            let after = &select[idx + "<option value=\"".len()..];
-            if let Some(v) = after.split('"').next() {
-                offered.push(v.to_string());
-            }
-        }
         assert!(
-            !offered.is_empty(),
-            "the parse found no notify channel options — the parse is broken: {select:?}"
+            spa.contains("const channels = (S.notifyChannels && S.notifyChannels.channels) || ['webhook'];"),
+            "the notify Channel select must render the FETCHED, configured set — not a literal list"
         );
-        assert_eq!(
-            offered,
-            NOTIFY_CHANNELS
-                .iter()
-                .map(|c| c.to_string())
-                .collect::<Vec<String>>(),
-            "the console's Notify Channel select must offer exactly NOTIFY_CHANNELS"
+        assert!(
+            spa.contains("channels.map(c => html`<option key=${c} value=${c}>"),
+            "the notify Channel select must build its options from that set"
         );
-        for retired in ["email", "sms"] {
+        // The offline fallback (the fetch failed) is `webhook` alone: it needs no provider, so it is
+        // the one channel that can honestly be offered with nothing configured.
+        assert!(
+            spa.contains("channels:['webhook']"),
+            "the notify offline fallback must be webhook alone"
+        );
+        // No retired channel may be named anywhere in the notify arm.
+        let start = spa
+            .find("case 'notify': {")
+            .expect("the notify cfgFields arm is in the served console");
+        // A byte window has to land on a char boundary — the console is full of em dashes, and
+        // slicing through one panics (measured: "byte index … is not a char boundary").
+        let mut end = (start + 2600).min(spa.len());
+        while end > start && !spa.is_char_boundary(end) {
+            end -= 1;
+        }
+        let arm = &spa[start..end];
+        for retired in ["slack", "telegram", "discord", "sendgrid", "smtp"] {
             assert!(
-                !offered.iter().any(|c| c == retired),
-                "'{retired}' has no sender in this product and must not be offered (kanban t_08be842f)"
-            );
-            assert!(
-                !is_notify_channel(retired),
-                "'{retired}' must be refused by the write path and the validator"
+                !arm.contains(retired),
+                "'{retired}' is retired and must not be offered by the Notify step (kanban t_642b6894 / t_d3ff37ef)"
             );
         }
-        // The engine's own fallback (a row stored without a channel) must be a channel it can
-        // deliver on — it used to default to the now-retired `email`.
+        // The recipient rule is visible in the console too: the sender-backed channels pick from the
+        // account's own people, and carry no free-text address field.
+        assert!(
+            spa.contains("scopes = (S.notifyChannels && S.notifyChannels.scopes)"),
+            "the notify recipient picker must render the scopes the API reports"
+        );
+        assert!(
+            arm.contains("recipient_scope"),
+            "the sender-backed notify channels must pick a recipient scope, never a typed address"
+        );
+        // The vocabulary itself is still the write path's rule, and `webhook` is still in it.
         assert!(is_notify_channel("webhook"));
+        assert_eq!(NOTIFY_CHANNELS.to_vec(), vec!["webhook", "email", "sms"]);
+        assert_eq!(RETIRED_NOTIFY_CHANNELS.to_vec(), vec!["slack", "telegram"]);
     }
 
     /// The old arm's answer, and the new one, are what the bug was: `classify_step_status` mapped

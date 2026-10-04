@@ -727,6 +727,48 @@ function renderAdminSettings(c){
     const r=await api('/admin/settings/email/test',{method:'POST',body:JSON.stringify({to})});
     c.querySelector('#eresult').textContent=r?JSON.stringify(r,null,2):'Request failed.';
   };
+
+  // ── SMS Provider (kanban t_d3ff37ef) ───────────────────────────────────────────────────────────
+  // The transport a Notify step's SMS channel sends with. Same discipline as the Email Provider
+  // above: the credential lives in admin_settings.sms (sealed at rest), is read at send time, and
+  // is NEVER copied into n8n. Until a provider is saved here the SMS channel is not offered by the
+  // tenant console and an `sms` step is refused at the write path — nothing is sold undeliverable.
+  c.insertAdjacentHTML('beforeend',
+    '<div class="card mt-4"><h2 class="text-xl font-bold mb-1">SMS Provider</h2>'
+   +'<p class="text-xs text-gray-500 mb-4">The transport the Notify step\u2019s <strong>SMS</strong> channel sends with. Credentials are stored in the database, sealed at rest, and read at send time &mdash; no environment variables, and nothing is copied into n8n. Save, then send a test to prove it works.</p>'
+   +'<div id="smsform" class="grid grid-cols-2 gap-3"></div>'
+   +'<div class="flex gap-2 mt-4"><button class="btn btn-primary btn-sm" id="ssave">Save SMS provider</button>'
+   +'<button class="btn btn-sm btn-ghost" id="stest">Send test SMS</button></div>'
+   +'<pre id="sresult" class="text-xs text-gray-600 mt-3 whitespace-pre-wrap"></pre></div>');
+
+  api('/admin/settings/sms').then(d=>{
+    const form=c.querySelector('#smsform');
+    if(!form)return;
+    const v=(d&&d.value)||{};
+    const f=(id,label,ph,val)=>'<div><label class="text-xs text-gray-500">'+label+'</label><input id="'+id+'" class="input" placeholder="'+(ph||'')+'" value="'+String(val==null?'':val).replace(/"/g,'&quot;')+'"></div>';
+    form.innerHTML='<div><label class="text-xs text-gray-500">Provider</label><select id="s_provider" class="input">'
+      +['twilio','vonage'].map(p=>'<option value="'+p+'"'+((v.provider||'twilio')===p?' selected':'')+'>'+p+'</option>').join('')
+      +'</select></div>'
+      +f('s_from_number','From number (E.164)','+15551234567',v.from_number)
+      +f('s_api_key','API key / auth token (leave the mask to keep it)','',v.api_key)
+      +f('s_api_secret','API secret (vonage only, leave the mask to keep it)','',v.api_secret)
+      +f('s_account_sid','Account SID (twilio only)','ACxxxxxxxxxxxx',v.account_sid)
+      +f('s_api_url','API URL override (optional)','',v.api_url);
+  });
+  const ssave=c.querySelector('#ssave'), stest=c.querySelector('#stest');
+  if(ssave)ssave.onclick=async()=>{
+    const g=id=>{const e=c.querySelector('#'+id);return e?e.value:''};
+    const value={provider:g('s_provider'),from_number:g('s_from_number'),api_key:g('s_api_key'),
+      api_secret:g('s_api_secret'),account_sid:g('s_account_sid'),api_url:g('s_api_url')};
+    const r=await api('/admin/settings/sms',{method:'PUT',body:JSON.stringify({value,description:'SMS provider configuration'})});
+    c.querySelector('#sresult').textContent=r?'Saved SMS provider: '+value.provider:'Save failed.';
+  };
+  if(stest)stest.onclick=async()=>{
+    const to=prompt('Send a test SMS to (E.164, e.g. +15551234567):');if(!to)return;
+    c.querySelector('#sresult').textContent='Sending...';
+    const r=await api('/admin/settings/sms/test',{method:'POST',body:JSON.stringify({to})});
+    c.querySelector('#sresult').textContent=r?JSON.stringify(r,null,2):'Request failed.';
+  };
 }
 
 function renderAdminUsers(c){

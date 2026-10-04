@@ -145,6 +145,10 @@ const API = (() => {
     // is only ever sent on write. NOTE: the routes are `/provider-keys` and
     // `/provider-keys/{provider}` (DELETE by provider, not by id).
     listProviderKeys: () => fetch(base + '/provider-keys', { headers: headers() }).then(handle),
+    // The Notify step's two vocabularies (kanban t_d3ff37ef): which channels this install can
+    // really deliver on, and which of the account's own people a step may reach.
+    notifyChannels: () => fetch(base + '/notify/channels', { headers: headers() }).then(handle),
+    notifyRecipients: () => fetch(base + '/notify/recipients', { headers: headers() }).then(handle),
     saveProviderKey: (provider, api_key) => fetch(base + '/provider-keys', { method:'POST', headers: headers(), body: JSON.stringify({ provider, api_key }) }).then(handle),
     deleteProviderKey: (provider) => fetch(base + '/provider-keys/' + encodeURIComponent(provider), { method:'DELETE', headers: headers() }).then(handle),
     // --- Team management (see TeamView). NOTE: /users and /users/team are registered WITHOUT a
@@ -192,7 +196,7 @@ const API = (() => {
   };
 })();
 
-const S = { view:'login', loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, dataVer:0, apiKeys:null, extBuild:null, hexKey:null, hexKeyInput:'', enrich:null, enriching:null, newApiKey:null, builder:null, steps:null, stepsWf:null, stepValidation:null, stepDraft:null, widgetCat:null, rendSummary:null, renditions:null, rendWf:'', rendStatus:'active', rendSel:null, stitchName:'', modalErr:null };
+const S = { view:'login', loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, dataVer:0, apiKeys:null, extBuild:null, hexKey:null, hexKeyInput:'', enrich:null, enriching:null, newApiKey:null, builder:null, steps:null, stepsWf:null, stepValidation:null, stepDraft:null, widgetCat:null, notifyChannels:null, notifyRecipients:null, rendSummary:null, renditions:null, rendWf:'', rendStatus:'active', rendSel:null, stitchName:'', modalErr:null };
 
 // Views call their loaders from inside render (the house pattern: `if(!S.x) loadX();`), and
 // every loader calls renderApp() again — a *re-entrant* preact render. The inner render
@@ -1384,15 +1388,25 @@ const loadWidgetCatalog = async () => { if (S.widgetCat) return;
   try { const r = await API.getDashboardWidgets(currentIndustrySlug());
     S.widgetCat = (r.widgets || []).map(w => ({ id: w.id, title: w.title || w.name || '', metric_key: ((w.config || {}).metric_key || '') })); }
   catch(e){ S.widgetCat = []; } renderApp(); };
-const openStepModal = (wfId, step) => { loadWidgetCatalog(); S.stepValidation = null;
+// Notify's two vocabularies, fetched before its form is drawn (kanban t_d3ff37ef): the channels
+// this install can REALLY deliver on (so nothing undeliverable is ever offered) and the account's
+// own people (the only destinations a step may name). Cached per session.
+const loadNotifyMeta = async () => {
+  if (!S.notifyChannels) { try { S.notifyChannels = await API.notifyChannels(); } catch(e){ S.notifyChannels = { channels:['webhook'], scopes:['all_users','billing_contact','user'] }; } }
+  if (!S.notifyRecipients) { try { const r = await API.notifyRecipients(); S.notifyRecipients = r.recipients || []; } catch(e){ S.notifyRecipients = []; } }
+};
+const openStepModal = (wfId, step) => { loadWidgetCatalog(); loadNotifyMeta(); S.stepValidation = null;
   const c = cfgOf(step);
   const base = { wfId, id: step ? step.id : null, type: step ? step.step_type : 'data-card', name: '', desc: '', widget_name: '', metric_key: '',
     prompt: '', url: '', method: 'GET', destination: 'csv', channel: 'webhook', recipient: '',
+    recipient_scope: 'all_users', recipient_user_id: '', message: '', subject: '',
     duration_seconds: 60, branches: '', query: '', provider: '', endpoint: '' };
   S.stepDraft = step ? Object.assign(base, { name: step.name || '', desc: step.description || '',
     widget_name: c.widget_name || '', metric_key: c.metric_key || '', prompt: c.prompt || '', url: c.url || '',
-    method: c.method || 'GET', destination: c.destination || 'csv', channel: 'webhook',
-    recipient: c.recipient || '', duration_seconds: c.duration_seconds || (c.duration_ms ? Math.round(c.duration_ms / 1000) : 60),
+    method: c.method || 'GET', destination: c.destination || 'csv', channel: c.channel || 'webhook',
+    recipient: c.recipient || '', recipient_scope: c.recipient_scope || 'all_users',
+    recipient_user_id: c.recipient_user_id || '', message: c.message || '', subject: c.subject || '',
+    duration_seconds: c.duration_seconds || (c.duration_ms ? Math.round(c.duration_ms / 1000) : 60),
     branches: Array.isArray(c.branches) ? c.branches.map(b => typeof b === 'string' ? b : ((b && b.name) || '')).join('\n') : '',
     query: c.query || '', provider: c.provider || '', endpoint: c.endpoint || '' }) : base;
   S.modal = 'step'; renderApp(); };
@@ -1405,11 +1419,20 @@ const draftConfig = (d) => { switch (d.type) {
   // the step names the provider whose key it uses, and only the four this app can call are accepted.
   case 'ai-action': return { prompt: d.prompt, provider: d.provider };
   case 'export': return { destination: d.destination, format: 'csv', targets: [d.destination] };
-  // `channel` is always `webhook`: Notify has exactly one channel this product can deliver on
-  // (src/execution.rs NOTIFY_CHANNELS). Email and SMS were removed on 2026-10-02 (kanban
-  // t_08be842f) because neither has a sender anywhere in this app or in n8n, so choosing one built
-  // a step that silently did nothing.
-  case 'notify': return { channel: 'webhook', recipient: d.recipient };
+  // A Notify step's config is CHANNEL-SHAPED (kanban t_d3ff37ef). `webhook` posts `{message, data}`
+  // to a URL the tenant owns, so it carries `recipient`. `email` and `sms` reach the account's OWN
+  // people only, so they carry `recipient_scope` (all account users | billing contact | one named
+  // account user) and NEVER a free-text address: the API refuses one, and the app resolves the
+  // destination itself from the account.
+  case 'notify': {
+    const ch = d.channel || 'webhook';
+    if (ch === 'webhook') return { channel: 'webhook', recipient: d.recipient, message: d.message };
+    const cfg = { channel: ch, recipient_scope: d.recipient_scope || 'all_users' };
+    if (cfg.recipient_scope === 'user') cfg.recipient_user_id = d.recipient_user_id || '';
+    if (d.message) cfg.message = d.message;
+    if (ch === 'email' && d.subject) cfg.subject = d.subject;
+    return cfg;
+  }
   // duration_ms is the key BOTH the executor (delay_duration_ms) and validate-steps read — validate
   // only looks at duration_ms, so writing duration_seconds alone made a correct delay step report
   // "Delay duration is 0ms". Both keys are written so the edit form round-trips in seconds.
@@ -1486,16 +1509,49 @@ const StepModal = () => {
         has no download surface, Resend/SendGrid hold no credential here, CoreSwift CRM is an inbound
         lead push), so it exported nothing. Delete it, or use an HTTP Request step to POST the run to
         your own endpoint.</div></div>`;
-      // ONE channel, and it is the one the product can keep: `webhook` makes the run POST
-      // {message, data} to a URL the tenant owns. Email and SMS used to be listed here and both
-      // delivered nothing (no mail relay, no SMS provider — kanban t_08be842f), so they are gone
-      // from the picker and the API refuses them. Legacy rows: the generator emits a no-op that
-      // names the retirement, and opening such a step here offers the Webhook form to fix it.
-      case 'notify': return html`<div class="mb-4"><label class="label">Channel</label>
-        <select class="input" value=${d.channel} onChange=${e=>set('channel', e.target.value)}>
-          <option value="webhook">Webhook</option>
-        </select></div>
-        ${field('Webhook URL', 'recipient', 'https://hooks.example.com/incoming')}`;
+      // The Channel list is EXACTLY what this install can deliver on (kanban t_d3ff37ef): the API's
+      // `/notify/channels` reports the configured set, so `email`/`sms` appear only once a sender
+      // exists under Admin > Settings. Choosing one replaces the free-text Recipient box with a
+      // picker limited to the account's OWN people — the platform is never an open outbound relay,
+      // and the API refuses a step that names an outside address.
+      case 'notify': {
+        const channels = (S.notifyChannels && S.notifyChannels.channels) || ['webhook'];
+        const scopes = (S.notifyChannels && S.notifyChannels.scopes) || ['all_users', 'billing_contact', 'user'];
+        const people = S.notifyRecipients || [];
+        const scopeLabel = { all_users:'All account users', billing_contact:'Billing contact', user:'One named account user' };
+        const chanLabel = { webhook:'Webhook', email:'Email', sms:'SMS' };
+        return html`
+          <div class="mb-4"><label class="label">Channel</label>
+            <select class="input" value=${d.channel} onChange=${e=>set('channel', e.target.value)}>
+              ${channels.map(c => html`<option key=${c} value=${c}>${chanLabel[c] || c}</option>`)}
+            </select>
+            ${channels.length <= 1
+              ? html`<div class="text-xs text-gray-500 mt-1">Only Webhook is available — configure a mail or SMS provider under Admin &gt; Settings to offer those channels.</div>`
+              : null}
+          </div>
+          ${d.channel === 'webhook'
+            ? html`${field('Webhook URL', 'recipient', 'https://hooks.example.com/incoming')}
+                ${area('Message (optional)', 'message', 'The workflow ran')}`
+            : html`
+              <div class="mb-4"><label class="label">Recipient</label>
+                <select class="input" value=${d.recipient_scope} onChange=${e=>set('recipient_scope', e.target.value)}>
+                  ${scopes.map(s => html`<option key=${s} value=${s}>${scopeLabel[s] || s}</option>`)}
+                </select>
+                <div class="text-xs text-gray-500 mt-1">${d.channel === 'sms' ? 'A text' : 'A message'} may only reach your account's own people — never an address typed here.</div>
+              </div>
+              ${d.recipient_scope === 'user' ? html`<div class="mb-4"><label class="label">Account user</label>
+                <select class="input" value=${d.recipient_user_id} onChange=${e=>set('recipient_user_id', e.target.value)}>
+                  <option value="">Select a person…</option>
+                  ${people.map(p => html`<option key=${p.user_id} value=${p.user_id}>${p.name || p.email}${p.billing_contact ? ' — billing contact' : ''}${d.channel === 'sms' && !p.has_phone ? ' (no phone)' : ''}</option>`)}
+                </select>
+                ${people.length === 0 ? html`<div class="text-xs text-gray-500 mt-1">No people on this account yet.</div>` : null}
+                ${d.channel === 'sms' ? html`<div class="text-xs text-gray-500 mt-1">A person with no phone on file cannot be texted — add one to their user record first.</div>` : null}
+              </div>` : null}
+              ${d.channel === 'email' ? field('Subject', 'subject', 'WorkflowSwift notification') : null}
+              ${area('Message', 'message', 'The workflow ran')}
+            `}
+        `;
+      }
       case 'delay': case 'wait': return html`<div class="mb-4"><label class="label">Wait (seconds)</label>
         <input class="input" type="number" min="1" value=${d.duration_seconds} onInput=${e=>set('duration_seconds', e.target.value)} />
         <div class="text-xs text-gray-500 mt-1">The instance parks here and the execution worker advances it when due.</div></div>`;

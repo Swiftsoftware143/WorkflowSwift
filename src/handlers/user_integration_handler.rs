@@ -323,19 +323,35 @@ mod tests {
     /// The `notify` arm speaks the ENGINE's channel vocabulary: a Notify step refuses every channel
     /// outside `NOTIFY_CHANNELS`, and `slack`/`discord`/`sendgrid`/`smtp` are all retired there
     /// (t_08be842f), so none of them may be advertised as a provider for a Notify step.
+    ///
+    /// `email` and `sms` are BACK (kanban t_d3ff37ef) and are part of `NOTIFY_CHANNELS` again — but
+    /// the resolver's answer is unchanged: `notify` resolves to the ENGINE's channel set, not to a
+    /// static provider list, because which of those channels is offerable depends on which senders
+    /// this install has configured (`NotifySenders`, `execution::notify_channel_available`).
     #[test]
     fn the_notify_arm_is_the_engine_channel_vocabulary() {
         assert_eq!(
             step_type_provider_source("notify"),
             ProviderSource::NotifyChannels
         );
-        assert_eq!(crate::execution::NOTIFY_CHANNELS.to_vec(), vec!["webhook"]);
-        for resigned in ["slack", "discord", "sendgrid", "smtp", "email", "sms"] {
+        assert_eq!(
+            crate::execution::NOTIFY_CHANNELS.to_vec(),
+            vec!["webhook", "email", "sms"]
+        );
+        for resigned in ["slack", "discord", "sendgrid", "smtp"] {
             assert!(
                 !crate::execution::is_notify_channel(resigned),
                 "notify channel '{resigned}' is retired and must not be advertised"
             );
         }
+        // The retired list and the sender-backed list are the other two halves of the vocabulary:
+        // a retired channel is refused everywhere, and a sender-backed one is only offerable where
+        // the matching sender exists (pinned in `crate::notify`'s own tests).
+        assert!(crate::execution::RETIRED_NOTIFY_CHANNELS.contains(&"slack"));
+        assert_eq!(
+            crate::execution::SENDER_BACKED_NOTIFY_CHANNELS.to_vec(),
+            vec!["email", "sms"]
+        );
     }
 
     /// Every step type the tenant console offers in its Builder picker either has no provider arm

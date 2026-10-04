@@ -889,28 +889,36 @@ fn data_card_first_error() -> AppError {
 }
 
 /// A Notify step's `channel` is vocabulary, not a free string — `execution::NOTIFY_CHANNELS` is the
-/// one list, the console's Channel select offers exactly it, and the API refuses anything else.
+/// one list and the console's Channel select offers exactly it. On top of the vocabulary, `email`
+/// and `sms` are SENDER-BACKED (kanban t_d3ff37ef): they may be picked only where this install has
+/// the matching provider configured, so the accepted set is the channels that can really be
+/// delivered (`notify_channels_for`). `webhook` needs no provider and is always in it.
 ///
-/// `email` and `sms` were channels a tenant could pick that deliver nothing (kanban t_08be842f):
-/// no tenant-triggered mail sender exists in this app (its mail path is template-based and not
-/// reachable from n8n) and no SMS provider exists at all. A channel the step cannot deliver on is
-/// the same defect class as a step type the engine cannot execute (kanban t_fe60cdf5), one level
-/// down, so it is refused on the way in and reported by validate-steps.
-fn notify_channel_error(channel: &str) -> AppError {
+/// A channel the step cannot deliver on is the same defect class as a step type the engine cannot
+/// execute (kanban t_fe60cdf5), one level down, so it is refused on the way in and reported by
+/// validate-steps.
+fn notify_channel_error(channel: &str, senders: &crate::notify::NotifySenders) -> AppError {
     AppError::Validation(format!(
-        "Notify channel '{}' has no sender in this app. Valid channels are: {}",
+        "Notify channel '{}' cannot be delivered from this install. Available channels are: {}. \
+         (Retired, never deliverable: {}.)",
         channel,
-        crate::execution::notify_channel_list()
+        crate::execution::notify_channels_for(senders),
+        crate::execution::retired_notify_channel_list()
     ))
 }
 
-/// Refuse a notify step whose `config.channel` this product cannot deliver on. Every other step
+/// Refuse a notify step whose `config.channel` this install cannot deliver on. Every other step
 /// type passes through untouched.
 ///
 /// `pub(crate)` because the template write paths enforce the SAME rule: a template step is copied
 /// verbatim into `workflow_steps` by `POST /templates/{id}/install`, so a channel the steps API
 /// refuses cannot be allowed to arrive through a template (kanban t_27a15474).
+///
+/// `senders` is computed once per request by the caller (`crate::notify::load_senders`) — the gate
+/// itself stays a pure function of the channel and the configured senders, which is what makes it
+/// cheap to pin in a unit test.
 pub(crate) fn assert_notify_channel_ok(
+    senders: &crate::notify::NotifySenders,
     step_type: &str,
     config: &Option<serde_json::Value>,
 ) -> Result<(), AppError> {
@@ -922,14 +930,17 @@ pub(crate) fn assert_notify_channel_ok(
         .and_then(|c| c.get("channel"))
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    if crate::execution::is_notify_channel(channel) {
+    if crate::execution::notify_channel_available(channel, senders) {
         return Ok(());
     }
-    Err(notify_channel_error(if channel.is_empty() {
-        "(missing)"
-    } else {
-        channel
-    }))
+    Err(notify_channel_error(
+        if channel.is_empty() {
+            "(missing)"
+        } else {
+            channel
+        },
+        senders,
+    ))
 }
 
 /// Refuse an AI Action step whose `config.provider` this app cannot call (kanban t_03e4d3d9).
@@ -1101,8 +1112,11 @@ pub async fn create_workflow_step(
         )));
     }
 
-    // A notify step's CHANNEL is vocabulary too (kanban t_08be842f).
-    assert_notify_channel_ok(&req.step_type, &req.config)?;
+    // A notify step's CHANNEL is vocabulary too, and SENDER-BACKED (kanban t_d3ff37ef): `email` /
+    // `sms` are accepted only when this install has the matching sender configured, so a step that
+    // could not deliver is refused here instead of being stored.
+    let notify_senders = crate::notify::load_senders(&state).await;
+    assert_notify_channel_ok(&notify_senders, &req.step_type, &req.config)?;
 
     // And an AI Action step's PROVIDER is vocabulary (kanban t_03e4d3d9): the engine calls exactly
     // `crate::ai_llm::AI_PROVIDERS`, so any other name is a step that could not run.
@@ -1164,8 +1178,10 @@ pub async fn update_workflow_step(
     }
 
     // An edit may not write a notify channel the product cannot deliver on either (kanban
-    // t_08be842f): this is also the path a legacy `email` step takes to become deliverable.
-    assert_notify_channel_ok(&current_type, &req.config)?;
+    // t_d3ff37ef): this is also the path a legacy `email` step takes to become deliverable, once a
+    // mail sender is configured.
+    let notify_senders = crate::notify::load_senders(&state).await;
+    assert_notify_channel_ok(&notify_senders, &current_type, &req.config)?;
 
     // An edit may not name an AI provider this app cannot call either (kanban t_03e4d3d9).
     assert_ai_provider_ok(&current_type, &req.config)?;
@@ -1415,10 +1431,14 @@ pub async fn run_workflow(
 ///   - Cyclic dependencies (for fork/loop steps)
 /// Returns validation warnings and errors without requiring a DB write.
 pub async fn validate_workflow_steps(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Extension(_claims): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
+    // Which sender-backed channels this install can really deliver on (kanban t_d3ff37ef): the
+    // validator must report an `email` step on an install with no mail sender exactly as it reports
+    // an unknown step type, or a workflow would validate clean and then send nothing.
+    let notify_senders = crate::notify::load_senders(&state).await;
     let steps = req
         .get("steps")
         .and_then(|v| v.as_array())
@@ -1442,7 +1462,7 @@ pub async fn validate_workflow_steps(
         ("http-request", vec!["url", "method"]),
         ("action", vec!["url", "method"]),
         ("ai-action", vec!["prompt", "provider"]),
-        ("notify", vec!["channel", "recipient"]),
+        ("notify", vec!["channel"]),
         ("data-card", vec!["metric_key"]),
         ("condition", vec!["field"]),
         ("webhook", vec!["url"]),
@@ -1510,22 +1530,28 @@ pub async fn validate_workflow_steps(
             continue;
         }
 
-        // A notify step's CHANNEL is vocabulary too (kanban t_08be842f): `email` and `sms` were
-        // channels the product could not deliver on, so a workflow that carries one is reported
-        // here exactly as an unknown step type is.
+        // A notify step's CHANNEL is vocabulary too, and sender-backed (kanban t_d3ff37ef): a
+        // channel this install has no sender for is reported here exactly as an unknown step type
+        // is, so a workflow cannot validate clean and then send nothing.
         if step_type == "notify" {
             let channel = step
                 .get("config")
                 .and_then(|c| c.get("channel"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            if !channel.is_empty() && !crate::execution::is_notify_channel(channel) {
+            if !crate::execution::notify_channel_available(channel, &notify_senders) {
                 errors.push(format!(
-                    "Step {} '{}' (notify): Unknown channel '{}'. Valid channels are: {}",
+                    "Step {} '{}' (notify): channel '{}' cannot be delivered from this install. \
+                     Available channels are: {}. (Retired, never deliverable: {}.)",
                     i + 1,
                     step_name,
-                    channel,
-                    crate::execution::notify_channel_list()
+                    if channel.is_empty() {
+                        "(missing)"
+                    } else {
+                        channel
+                    },
+                    crate::execution::notify_channels_for(&notify_senders),
+                    crate::execution::retired_notify_channel_list()
                 ));
             }
         }
@@ -1568,6 +1594,56 @@ pub async fn validate_workflow_steps(
                         step_name,
                         step_type,
                         field
+                    ));
+                }
+            }
+        }
+
+        // A Notify step's REQUIRED config depends on its channel (kanban t_d3ff37ef). A `webhook`
+        // step names the URL it posts to; an `email` / `sms` step names WHICH of the account's own
+        // people it reaches — never a free-text address, which is the recipient rule the card
+        // turns on. `recipient_scope` is required for the sender-backed channels, and a leftover
+        // free-text `recipient` beside it is reported rather than ignored.
+        if step_type == "notify" {
+            let config_obj = step.get("config");
+            let channel = config_obj
+                .and_then(|c| c.get("channel"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let has = |key: &str| {
+                config_obj
+                    .and_then(|c| c.get(key))
+                    .and_then(|v| v.as_str())
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false)
+            };
+            if channel == "webhook" && !has("recipient") {
+                errors.push(format!(
+                    "Step {} '{}' (notify): Missing required config field 'recipient' — a webhook \
+                     Notify step must name the URL it posts to",
+                    i + 1,
+                    step_name
+                ));
+            }
+            if crate::execution::SENDER_BACKED_NOTIFY_CHANNELS.contains(&channel) {
+                if !has("recipient_scope") {
+                    errors.push(format!(
+                        "Step {} '{}' (notify): Missing required config field 'recipient_scope' — \
+                         an {} Notify step must name which of the account's own people it reaches. \
+                         Valid scopes: {}",
+                        i + 1,
+                        step_name,
+                        channel,
+                        crate::notify::NOTIFY_SCOPES.join(", ")
+                    ));
+                } else if has("recipient") {
+                    errors.push(format!(
+                        "Step {} '{}' (notify): an {} Notify step may not name a free-text \
+                         'recipient' — it reaches the account's own people only. Remove it and pick \
+                         a recipient instead",
+                        i + 1,
+                        step_name,
+                        channel
                     ));
                 }
             }

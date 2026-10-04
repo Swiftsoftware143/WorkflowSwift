@@ -333,13 +333,23 @@ struct EmailConfig {
 
 impl EmailConfig {
     /// Are the fields the selected provider needs present?
-    fn is_configured(&self) -> bool {
+    pub fn is_configured(&self) -> bool {
         match self.provider.as_str() {
             "smtp" | "mail" => !self.smtp_host.trim().is_empty(),
             "sendgrid" => !self.api_key.trim().is_empty(),
             _ => !self.api_url.trim().is_empty() && !self.api_key.trim().is_empty(),
         }
     }
+}
+
+/// Is there a mail sender on this install? The SAME predicate the Notify gate gates on
+/// (kanban t_d3ff37ef) — an `email` Notify step is only storable when this is true, so the
+/// console can never offer a mail channel that would deliver nothing.
+pub async fn is_configured(state: &AppState) -> bool {
+    get_email_config(state)
+        .await
+        .map(|c| c.is_configured())
+        .unwrap_or(false)
 }
 
 /// The credential fields carried inside the `admin_settings.email` object. They are sealed with
@@ -699,6 +709,28 @@ async fn send_email_fallback(
             );
 
             send_email_request(cfg, to, "Password Reset Request", &text_body, &html_body).await
+        }
+        // A Notify step's mail (kanban t_d3ff37ef). The recipient is ALWAYS one of the account's
+        // own people — `crate::notify` resolves it and refuses anything else BEFORE this is
+        // reached, so the address here is never a free-text one the step named.
+        "workflow_notify" => {
+            let message = vars.get("message").and_then(|v| v.as_str()).unwrap_or("");
+            let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
+            let subject = vars
+                .get("subject")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or("WorkflowSwift notification");
+            let safe = message.replace('<', "&lt;").replace('>', "&gt;");
+            let html_body = format!(
+                "<html><body style=\"font-family:sans-serif\"><p>Hi {name},</p>\
+                 <p>A workflow you own sent you this notification:</p>\
+                 <blockquote style=\"border-left:4px solid #6366f1;padding:8px 16px;color:#374151\">\
+                 {safe}</blockquote>\
+                 <p style=\"font-size:13px;color:#9ca3af\">- WorkflowSwift</p></body></html>"
+            );
+            let text_body = format!("Hi {name},\n\nA workflow you own sent you this notification:\n\n{message}\n\n- WorkflowSwift");
+            send_email_request(cfg, to, subject, &text_body, &html_body).await
         }
         _ => {
             let text_body = format!("WorkflowSwift Notification:\n\n{}", vars);
