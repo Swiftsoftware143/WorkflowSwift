@@ -1028,6 +1028,23 @@ fn assert_data_card_first(
     assert_first_step_is_data_card(projected.first().map(|s| s.step_type.as_str()))
 }
 
+/// The Data-Card-first rule as applied to a DELETE: dropping `step_id` must not leave a
+/// non-Data-Card step at position 0 (deleting the Data Card itself is how a workflow silently
+/// stopped opening with one). Reuses the same grandfather predicate as create/reorder/update, so a
+/// workflow that already breaks the rule stays editable and deleting any later step is unaffected
+/// (kanban t_96e77263).
+fn assert_delete_keeps_data_card_first(
+    current: &[StepOrderRow],
+    step_id: Uuid,
+) -> Result<(), AppError> {
+    let projected: Vec<StepOrderRow> = current
+        .iter()
+        .filter(|s| s.id != step_id)
+        .cloned()
+        .collect();
+    assert_data_card_first(current, &projected)
+}
+
 pub async fn create_workflow_step(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -1204,6 +1221,12 @@ pub async fn delete_workflow_step(
     .fetch_optional(&state.db)
     .await?
     .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
+
+    // Guardrail: deleting the step that currently holds the Data-Card-first rule must not leave a
+    // non-Data-Card step at position 0. Same predicate (and grandfather clause) as
+    // create/reorder/update — a legacy workflow that already breaks the rule stays editable.
+    let current = load_ordered_steps(&state.db, workflow_id).await?;
+    assert_delete_keeps_data_card_first(&current, step_id)?;
 
     let result = sqlx::query("DELETE FROM workflow_steps WHERE id = $1 AND workflow_id = $2")
         .bind(step_id)
@@ -1704,6 +1727,47 @@ mod data_card_first_tests {
         assert!(
             assert_data_card_first(&current, &projected).is_ok(),
             "a workflow that already breaks the rule must not become uneditable"
+        );
+    }
+
+    #[test]
+    fn deleting_the_data_card_is_refused_while_other_steps_remain() {
+        let card = row("data-card", 0);
+        let current = ordered(vec![card.clone(), row("notify", 1)]);
+        assert!(
+            assert_delete_keeps_data_card_first(&current, card.id).is_err(),
+            "deleting the Data Card must not leave `notify` as step 1"
+        );
+    }
+
+    #[test]
+    fn deleting_a_later_step_is_allowed() {
+        let current = ordered(vec![row("data-card", 0), row("notify", 1)]);
+        let notify_id = current[1].id;
+        assert!(
+            assert_delete_keeps_data_card_first(&current, notify_id).is_ok(),
+            "deleting a later step leaves the Data Card first"
+        );
+    }
+
+    #[test]
+    fn deleting_the_only_step_is_allowed() {
+        let card = row("data-card", 0);
+        let current = ordered(vec![card.clone()]);
+        assert!(
+            assert_delete_keeps_data_card_first(&current, card.id).is_ok(),
+            "an emptied workflow has no step 1 to violate the rule"
+        );
+    }
+
+    #[test]
+    fn deleting_from_a_legacy_workflow_stays_editable() {
+        // Already breaks the rule today (inbound capture opens with `integration`).
+        let current = ordered(vec![row("integration", 0), row("notify", 1)]);
+        let integration_id = current[0].id;
+        assert!(
+            assert_delete_keeps_data_card_first(&current, integration_id).is_ok(),
+            "a grandfather'd workflow must not become uneditable by a delete"
         );
     }
 }
