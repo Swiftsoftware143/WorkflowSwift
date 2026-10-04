@@ -730,7 +730,7 @@ function renderAdminSettings(c){
 }
 
 function renderAdminUsers(c){
-  c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Users (Tenants)</h2><button class="btn btn-primary btn-sm">+ Add Tenants</button></div><p class="text-xs text-gray-400 mb-4">All registered tenants. Tenants manage their own workflows, automations, and integrations. Their portfolio companies are managed here under Admin → Portfolio Companies.</p><p class="text-xs text-gray-400 mb-4">Plan changing is the only supported way to move an account between tiers — there is no self-serve checkout, and a tier that denies API access keeps <code>POST /api-keys</code> at 402 for that account.</p><div id="audata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
+  c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Users (Tenants)</h2><button class="btn btn-primary btn-sm" id="addTenant">+ Add Tenants</button></div><p class="text-xs text-gray-400 mb-4">All registered tenants. Tenants manage their own workflows, automations, and integrations. Their portfolio companies are managed here under Admin → Portfolio Companies.</p><p class="text-xs text-gray-400 mb-4">Plan changing is the only supported way to move an account between tiers — there is no self-serve checkout, and a tier that denies API access keeps <code>POST /api-keys</code> at 402 for that account.</p><div id="audata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
   Promise.all([api('/admin/accounts'),api('/admin/plans')]).then(res=>{
     const d=res[0],pd=res[1];
     const items=(d&&d.accounts)||(d&&d.items)||[];
@@ -766,6 +766,12 @@ function renderAdminUsers(c){
       else showMsg('Plan change failed: '+LAST_ERR,'error');
     });
   });
+  // The "+ Add Tenants" button rendered with NO handler while POST /admin/accounts/create
+  // (admin_create_account, which also sends the welcome credentials email) existed and was
+  // reachable — a backend route with no UI. Wire it to the same generic form the Portfolio /
+  // Surfaces editors already use, so an operator can actually create a tenant here.
+  const addBtn=c.querySelector('#addTenant');
+  if(addBtn)addBtn.onclick=()=>showForm('account','Tenant',['name','email','account_name','plan_slug'],'/admin/accounts/create',null,()=>renderPage());
 }
 
 function renderAdminPortfolio(c){
