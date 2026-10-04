@@ -77,15 +77,29 @@ Base API: `https://workflowswift.com/api/v1` — all non-public endpoints need
   (Deploy), the mirrored graph's AI Action step calls back into this app, so a run started from
   the n8n copy's own webhook performs the same AI Action — same provider, same prompt, same key.
   It used to be a pass-through in that copy: the mirrored step did nothing, silently.
-- **Notify**: the one channel is **Webhook** — the step POSTs `{message, data}` to the URL you put in
-  its Recipient field, so the receiving end gets the run's own item. The **Email and SMS channels are
-  retired** (2026-10-02): this app has no tenant-triggered mail sender (its mail provider is
-  template-based platform mail, not a workflow sender) and no SMS provider at all, so both were
-  channels a step could be built on that delivered nothing. The API refuses them the same way it
-  refuses an unknown step type, and a step stored with one keeps its place as a no-op that names the
-  retirement. Its URL goes through the same destination check as an HTTP Request step, and a
-  destination that answers non-2xx (or cannot be reached) fails the step — the run history records
-  the status and the reason, so a notification that did not go out is never reported as sent.
+- **Notify**: a step can post to a **webhook**, send **email**, or send **sms** — set it up for
+  either, both, or just the webhook. What each channel does:
+  - **Webhook** POSTs `{message, data}` to the URL you put in the step's Recipient field, so the
+    receiving end gets the run's own item. Its URL goes through the same destination check as an
+    HTTP Request step, and a destination that answers non-2xx (or cannot be reached) fails the step —
+    the run history records the status and the reason, so a notification that did not go out is never
+    reported as sent.
+  - **Email** sends a message from the platform, and **SMS** sends a text. Both reach **your
+    account's own people only**: your account's users and its billing contact for email, and the
+    phone numbers on those same people's user records for SMS. There is deliberately no box for
+    typing an arbitrary address or number — the platform will not send mail or texts to people who
+    are not on your account. Pick an audience in the step instead: *All account users*, *Billing
+    contact*, or *One named account user*.
+  - A channel appears in the step's Channel list **only when the platform has a sender configured
+    for it** (an admin sets that up under Settings → Email Provider / SMS Provider). If nothing is
+    configured for email or SMS, the channel is not offered and the step is refused rather than
+    silently built to do nothing.
+  - Every send is recorded: sent, failed, refused, or throttled. A refusal (for example a person
+    with no phone number on file) names the reason in the run, and your account has an hourly
+    sending cap so a looping workflow cannot flood a mailbox. Past the cap the send is refused and
+    the run says so.
+  - If your plan mirrors the workflow into n8n (Deploy), the mirrored copy sends through this app's
+    own provider — no credential is copied into n8n, and the mirrored graph stays activatable.
 - **HTTP Request / Action / Render Video/Image/Audio**: an HTTP Request or Action step calls the
   URL you configure, with the method you pick, and the run history records the status and the reply.
   A Render step calls your provider's `endpoint` and logs the result under **Renditions** (provider,
