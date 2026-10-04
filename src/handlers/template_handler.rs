@@ -856,6 +856,21 @@ mod tests {
             .is_err(),
             "sms is still refused while no SMS provider is configured"
         );
+
+        // A sender-backed channel may not ALSO carry the retired free-text `recipient` (kanban
+        // t_d3ff37ef): that box used to mean "any address", which is exactly the open-relay shape
+        // the recipient rule removes. Refused at the WRITE path, not only at send time.
+        let err = assert_template_step_runnable(
+            &mail,
+            "notify",
+            "Outreach",
+            &Some(json!({"channel": "email", "recipient": "stranger@example.com"})),
+        )
+        .expect_err("a free-text destination is not an audience");
+        assert!(
+            err.to_string().contains("free-text"),
+            "the refusal must say why: {err}"
+        );
     }
 
     // ── The ordering rule on the template path (kanban t_96e77263) ────────────────────────────────

@@ -29,6 +29,20 @@ use crate::auth::models::Claims;
 use crate::error::{ApiResult, AppError};
 use crate::AppState;
 
+/// The step index out of a dispatch body.
+///
+/// n8n's `httpRequest` node sends every `bodyParameters` value as a STRING, so the graph this route
+/// exists for posts `{"step_index":"1"}` — measured live (kanban t_d3ff37ef: the mirrored node ran,
+/// the route answered 400 `step_index must be an integer`, and the graph's Error Trigger arm
+/// reported it). Accepting the decimal string as well as the JSON number keeps the route's contract
+/// honest without making the generated graph carry a type n8n cannot express here.
+fn step_index_from(body: &serde_json::Value) -> Option<i64> {
+    body.get("step_index").and_then(|v| {
+        v.as_i64()
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
+    })
+}
+
 /// `POST /api/v1/notify/dispatch`
 ///
 /// Body, exactly the sibling arms' shape:
@@ -61,9 +75,7 @@ pub async fn notify_dispatch(
         .ok_or_else(|| {
             AppError::BadRequest("workflow_id must be the workflow's uuid".to_string())
         })?;
-    let step_index = body
-        .get("step_index")
-        .and_then(|v| v.as_i64())
+    let step_index = step_index_from(&body)
         .ok_or_else(|| AppError::BadRequest("step_index must be an integer".to_string()))?;
     if step_index < 0 || step_index > i32::MAX as i64 {
         return Err(AppError::BadRequest(
@@ -193,4 +205,27 @@ pub async fn notify_recipients(
         .collect();
 
     Ok(Json(json!({ "recipients": people })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The dispatch body a generated graph really posts. n8n's `httpRequest` node sends every
+    /// `bodyParameters` value as a STRING — measured live on the mirrored node (kanban t_d3ff37ef:
+    /// `{"step_index":"1"}` answered 400 `step_index must be an integer`), so the route has to read
+    /// the decimal string as well as the JSON number, and refuse anything else.
+    #[test]
+    fn step_index_is_read_from_the_number_or_its_decimal_string() {
+        assert_eq!(step_index_from(&json!({"step_index": 1})), Some(1));
+        assert_eq!(step_index_from(&json!({"step_index": "1"})), Some(1));
+        assert_eq!(step_index_from(&json!({"step_index": " 12 "})), Some(12));
+        assert_eq!(step_index_from(&json!({"step_index": "0"})), Some(0));
+        // Not an index: refused, never defaulted to 0 (which would dispatch the FIRST step).
+        assert_eq!(step_index_from(&json!({"step_index": "abc"})), None);
+        assert_eq!(step_index_from(&json!({"step_index": ""})), None);
+        assert_eq!(step_index_from(&json!({"step_index": null})), None);
+        assert_eq!(step_index_from(&json!({})), None);
+        assert_eq!(step_index_from(&json!({"step_index": 1.5})), None);
+    }
 }

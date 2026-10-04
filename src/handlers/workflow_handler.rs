@@ -931,6 +931,27 @@ pub(crate) fn assert_notify_channel_ok(
         .and_then(|v| v.as_str())
         .unwrap_or("");
     if crate::execution::notify_channel_available(channel, senders) {
+        // A sender-backed channel names WHICH of the account's own people it reaches
+        // (`recipient_scope`). It must not ALSO carry the retired free-text `recipient`, whose
+        // whole meaning was "any address" — that is the open-relay shape this card removes
+        // (kanban t_d3ff37ef). Refused at the WRITE path, so the step cannot even be stored in the
+        // old shape; the dispatch route refuses it again if it got in another way.
+        let free_text = config
+            .as_ref()
+            .and_then(|c| c.get("recipient"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        if crate::execution::SENDER_BACKED_NOTIFY_CHANNELS.contains(&channel)
+            && !free_text.is_empty()
+        {
+            return Err(AppError::Validation(format!(
+                "Notify channel '{}' reaches the account's own people only — it may not name a \
+                 free-text recipient ('{}'). Pick an audience instead: all account users, the \
+                 billing contact, or one named account user.",
+                channel, free_text
+            )));
+        }
         return Ok(());
     }
     Err(notify_channel_error(

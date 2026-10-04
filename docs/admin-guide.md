@@ -117,13 +117,14 @@ that sold it (`custom_branding`) had already been retired by kanban t_413b4aab. 
 belong to one tenant; `users.role` is `admin` / `member` (`perm_is_super_admin` marks the platform
 operator).
 
-## Admin settings, retention and email
+## Admin settings, retention and outbound providers
 
 | Endpoint | Method | Description |
 |---|---|---|
 | `/api/v1/admin/settings` | GET | All settings |
 | `/api/v1/admin/settings/{key}` | GET/PUT | Read/update one setting (secret values come back **masked**) |
 | `/api/v1/admin/settings/email/test` | POST | Send a real test email |
+| `/api/v1/admin/settings/sms/test` | POST | Send a real test SMS |
 | `/api/v1/admin/retention` | GET/PUT | Platform retention policy |
 | `/api/v1/admin/email-templates` | GET/POST | Message templates |
 | `/api/v1/admin/email-templates/{id}` | PUT/DELETE | Edit/delete a template |
@@ -132,6 +133,59 @@ operator).
 
 Email credentials are read from the **database only** — there is no environment fallback — and
 the provider is an admin choice (`smtp`, `mailgun`, `sendgrid`, `sendiio`).
+
+SMS credentials follow the same rule: `admin_settings.sms` holds
+`{provider, api_key, api_secret, account_sid, from_number, api_url}`, the secret fields are sealed
+at rest with the same `enc:v1:` envelope, there is no environment fallback, and the provider is an
+admin choice (`twilio`, `vonage`). Both rows are edited in **Admin → Settings → Email Provider** and
+**Admin → Settings → SMS Provider**; each card has a *Send test* button that performs a REAL send
+and reports the provider's own answer — a fabricated "OK" is never shown.
+
+### Notify channels — what a Notify step can actually deliver on
+
+A Notify step's **Channel** is vocabulary, not free text, and it is **sender-backed**: the list the
+console renders is exactly the list this install can deliver on
+(`GET /api/v1/notify/channels`).
+
+| Channel | What it does | When it is offered |
+|---|---|---|
+| `webhook` | POSTs `{message, data}` to a URL you own | always — it needs no provider |
+| `email` | the app mails **your account's own people** | only while an **Email Provider** is configured |
+| `sms` | the app texts **your account's own people** | only while an **SMS Provider** is configured |
+
+Two rules hold fail-closed — at the write path *and* again at send time:
+
+1. **Recipients are the account's own people only.** `email` reaches the account's users and its
+   billing contact (the account's `company_admin`); `sms` reaches those same people's
+   `users.phone`. A step may never name an address or number of its own: the API **refuses** a
+   sender-backed step that carries a free-text `recipient`, and a row already stored in that shape
+   is refused with a 400 and recorded — never sent. The platform is not an outbound relay on its own
+   sending domain.
+2. **Nothing undeliverable is offered.** A channel whose sender is not configured is refused at the
+   write path, refused again at send time if the provider is removed later, and reported by
+   `POST /api/v1/workflows/validate-steps`.
+
+Every attempt is recorded in `notify_send_attempts` — `sent`, `failed`, `refused` or `throttled`,
+with the channel, the recipient and the reason. No outcome is silent. A per-account hourly cap
+bounds a runaway workflow: `plan_tiers.max_notify_per_hour` (`-1` = unlimited, editable in the
+plans editor) with the install-wide fallback `admin_settings.limits.notify_per_hour`; past the cap
+the dispatch route answers **429** and the attempt is recorded `throttled`.
+
+`users.phone` is where an SMS destination lives — set it on the account's own user records, in
+E.164 form (`+15551234567`). A person with no phone on file is shown as not selectable in the
+step's recipient picker rather than being silently dropped.
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/v1/notify/channels` | GET | The channels this install can deliver on (what the console offers) |
+| `/api/v1/notify/recipients` | GET | The account's own people, for the step's recipient picker |
+| `/api/v1/notify/dispatch` | POST | Machine-keyed (`X-Internal-Key`); the mirrored n8n Notify send |
+
+The mirrored n8n copy carries **no provider credential**: its Notify node is a plain
+`httpRequest` that POSTs `{workflow_id, step_index}` to `/api/v1/notify/dispatch`, and the app sends
+from the provider configured above. That is deliberately not an `emailSend`/SMTP node — that node
+type declares an `smtp` credential this n8n does not hold, and ONE such node made a tenant's entire
+generated workflow un-activatable (`Missing required credential: smtp`).
 
 ## Workspaces, agents and tickets
 
