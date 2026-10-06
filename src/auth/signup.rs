@@ -71,6 +71,78 @@ pub async fn email_taken(db: &sqlx::PgPool, email: &str) -> Result<bool, AppErro
     Ok(n > 0)
 }
 
+/// The slug the public signup has always derived from a workspace name: lowercased, spaces →
+/// hyphens, capped. Kept byte-for-byte, so a free name keeps minting the same workspace
+/// identifier it minted before this card.
+fn derived_slug(name: &str) -> String {
+    name.to_lowercase()
+        .replace(' ', "-")
+        .chars()
+        .take(30)
+        .collect()
+}
+
+async fn slug_taken(db: &sqlx::PgPool, slug: &str) -> Result<bool, AppError> {
+    Ok(sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM accounts WHERE account_slug = $1)",
+    )
+    .bind(slug)
+    .fetch_one(db)
+    .await?)
+}
+
+/// Is this the `accounts.account_slug` UNIQUE index (`tenants_slug_key`) firing?
+fn is_unique_violation(e: &sqlx::Error) -> bool {
+    matches!(e, sqlx::Error::Database(db) if db.code().as_deref() == Some("23505"))
+}
+
+/// Insert the workspace row. Split out so [`create_account`] can tell the UNIQUE index apart
+/// from any other failure and answer a 409 instead of a 500.
+async fn insert_account(
+    db: &sqlx::PgPool,
+    id: Uuid,
+    name: &str,
+    slug: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO accounts (id, name, account_slug, is_active) VALUES ($1, $2, $3, true)",
+    )
+    .bind(id)
+    .bind(name)
+    .bind(slug)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// A workspace slug that is not already taken. `accounts.account_slug` is UNIQUE, so a name that
+/// matches an existing workspace (two businesses both called "Acme") or a retry after a partial
+/// failure would otherwise collide and 500 the caller. Base from the name + a short random
+/// suffix, retried against the index rather than trusting one draw. ONE helper for both account
+/// doors (kanban t_ede5f6ed, t_bf9e00fe) — `provision_handler` calls it directly, and the public
+/// signup calls it when its derived slug is taken.
+pub async fn unique_account_slug(db: &sqlx::PgPool, name: &str) -> Result<String, AppError> {
+    let base: String = name
+        .to_lowercase()
+        .replace(' ', "-")
+        .chars()
+        .take(24)
+        .collect();
+    let base = if base.trim_matches('-').is_empty() {
+        "account".to_string()
+    } else {
+        base
+    };
+    for _ in 0..5 {
+        let short = &Uuid::new_v4().to_string()[..8];
+        let candidate = format!("{base}-{short}");
+        if !slug_taken(db, &candidate).await? {
+            return Ok(candidate);
+        }
+    }
+    Ok(format!("{base}-{}", Uuid::new_v4()))
+}
+
 /// Create an account. Refuses (without writing anything) if the address is already a login.
 pub async fn create_account(
     state: &AppState,
@@ -90,24 +162,41 @@ pub async fn create_account(
         .account_name
         .map(str::to_string)
         .unwrap_or_else(|| format!("{}'s Workspace", a.name));
-    let account_slug = a.account_slug.map(str::to_string).unwrap_or_else(|| {
-        a.name
-            .to_lowercase()
-            .replace(' ', "-")
-            .chars()
-            .take(30)
-            .collect()
-    });
+    // ── Workspace slug (kanban t_bf9e00fe) ──────────────────────────────────────────────
+    // `accounts.account_slug` is UNIQUE (`tenants_slug_key`). An EXPLICIT slug is the caller's
+    // own choice, so a taken one stays a refusal (409, below) and is never silently renamed. A
+    // DERIVED slug (the caller passed none) must instead always yield a workspace: the bare
+    // `<name>` when it is free — exactly what the public signup has always minted — and the same
+    // retried, suffixed shape the tag door uses when it is not.
+    let explicit_slug = a.account_slug.is_some();
+    let mut account_slug = match a.account_slug {
+        Some(slug) => slug.to_string(),
+        None => {
+            let base = derived_slug(a.name);
+            if slug_taken(db, &base).await? {
+                unique_account_slug(db, a.name).await?
+            } else {
+                base
+            }
+        }
+    };
 
     let account_id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO accounts (id, name, account_slug, is_active) VALUES ($1, $2, $3, true)",
-    )
-    .bind(account_id)
-    .bind(&account_name)
-    .bind(&account_slug)
-    .execute(db)
-    .await?;
+    if let Err(e) = insert_account(db, account_id, &account_name, &account_slug).await {
+        if is_unique_violation(&e) {
+            if explicit_slug {
+                return Err(AppError::Duplicate(
+                    "That workspace name is taken \u{2014} try another".to_string(),
+                ));
+            }
+            // A derived slug lost the race between the check above and this INSERT: one bounded
+            // retry on the suffixed shape, which the index cannot be holding yet.
+            account_slug = unique_account_slug(db, a.name).await?;
+            insert_account(db, account_id, &account_name, &account_slug).await?;
+        } else {
+            return Err(AppError::from(e));
+        }
+    }
 
     // Seed default tags for this account.
     for tag_name in ["active", "archived", "priority"] {

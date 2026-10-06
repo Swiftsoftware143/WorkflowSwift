@@ -163,38 +163,8 @@ fn looks_like_placeholder(email: &str) -> bool {
         || email.ends_with(".invalid")
 }
 
-/// A workspace slug that is not already taken. `accounts.account_slug` is UNIQUE, so the public
-/// signup's plain `<name>-slug` derivation can collide on the tag path (two leads of the same
-/// business, or a name that matches an existing workspace) — and a unique violation here would
-/// 500 the caller without ever telling it why. Base from the name + a short random suffix, retried
-/// against the index rather than trusting one draw.
-async fn unique_account_slug(db: &sqlx::PgPool, name: &str) -> Result<String, AppError> {
-    let base: String = name
-        .to_lowercase()
-        .replace(' ', "-")
-        .chars()
-        .take(24)
-        .collect();
-    let base = if base.trim_matches('-').is_empty() {
-        "account".to_string()
-    } else {
-        base
-    };
-    for _ in 0..5 {
-        let short = &Uuid::new_v4().to_string()[..8];
-        let candidate = format!("{base}-{short}");
-        let exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM accounts WHERE account_slug = $1)")
-                .bind(&candidate)
-                .fetch_one(db)
-                .await
-                .unwrap_or(false);
-        if !exists {
-            return Ok(candidate);
-        }
-    }
-    Ok(format!("{base}-{}", Uuid::new_v4()))
-}
+// The slug helper moved to `crate::auth::signup::unique_account_slug` (kanban t_bf9e00fe):
+// ONE implementation of the retried, suffixed workspace slug for both account doors.
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 // The receiver
@@ -292,7 +262,7 @@ pub async fn provision_free_account(
 
     let raw_password = generate_password();
     let password_hash = crate::auth::api_key_auth::argon2_hash(raw_password.clone()).await?;
-    let account_slug = unique_account_slug(&state.db, &name).await?;
+    let account_slug = crate::auth::signup::unique_account_slug(&state.db, &name).await?;
 
     let ids = match crate::auth::signup::create_account(
         &state,
