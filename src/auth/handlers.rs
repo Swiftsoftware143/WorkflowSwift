@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use super::middleware::create_token;
 use super::models::*;
-use crate::auth::api_key_auth::{argon2_hash, argon2_verify_result};
+use crate::auth::api_key_auth::{argon2_hash, argon2_verify_result, is_usable_hash};
 use crate::error::{ApiResult, AppError};
 use crate::handlers::industry_handler;
 use crate::security::email_addr;
@@ -291,6 +291,12 @@ pub async fn register(
     ))
 }
 
+/// How many rows one address may map to before login refuses it WITHOUT hashing anything. Far
+/// beyond any real multi-tenant address (and unreachable from `register`, which refuses an address
+/// that exists anywhere), so it only ever binds on a table stuffed by a fixture or a privileged
+/// writer. It exists so the Argon2 work one unauthenticated request can buy is a constant.
+const MAX_LOGIN_CANDIDATES: usize = 8;
+
 pub async fn login(
     State(state): State<AppState>,
     Json(req): Json<LoginRequest>,
@@ -300,30 +306,80 @@ pub async fn login(
     // retypes their address with different casing. A malformed value is NOT refused here: login
     // answers its own invalid-credentials response for every wrong input, and it must not become an
     // account-existence oracle. It simply matches nothing.
-    let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE lower(email) = $1")
-        .bind(email_addr::lookup_key(&req.email))
-        .fetch_optional(&state.db)
+    //
+    // The unique index is (aid, email) — NOT email — so one address CAN exist in several tenants,
+    // and a login carries no tenant. The credential is therefore what picks the row; every
+    // candidate is fetched, oldest first, so nothing below depends on HEAP order. That lottery is
+    // exactly what made this route non-deterministic (t_db00b05c: three rows for the platform
+    // operator's address, one of them answerable with a 500).
+    let candidates = sqlx::query_as::<_, User>(
+        "SELECT * FROM users WHERE lower(email) = $1 ORDER BY created_at ASC, id ASC LIMIT $2",
+    )
+    .bind(email_addr::lookup_key(&req.email))
+    .bind(MAX_LOGIN_CANDIDATES as i64 + 1)
+    .fetch_all(&state.db)
+    .await?;
+
+    if candidates.len() > MAX_LOGIN_CANDIDATES {
+        // More rows than the cap: ambiguous by construction. Refuse BEFORE spending a single hash,
+        // so a stuffed address cannot be used as an Argon2 amplifier through an unauthenticated
+        // route. Nothing is leaked — this is the same answer as a wrong password.
+        tracing::warn!(
+            rows = candidates.len(),
+            "login refused: more than {} rows carry one address",
+            MAX_LOGIN_CANDIDATES
+        );
+        return Err(AppError::InvalidCredentials);
+    }
+
+    // A stored hash that is not a usable Argon2 PHC string is not a credential: no password can
+    // match it, and it must never turn a login into a 500. Two live cases — a user created by a
+    // checkout whose credential mail never went out (`checkout_handler::deliver_credentials`
+    // leaves `password_hash` empty on purpose), and a fixture/legacy row holding a placeholder
+    // (`'x'`, measured live). Both are SKIPPED, which is an ordinary invalid-credentials answer
+    // rather than an internal error, and it keeps a broken row from being a probe target.
+    let mut winner: Option<User> = None;
+    let mut verified = 0usize;
+    for candidate in candidates {
+        if !is_usable_hash(&candidate.password_hash) {
+            continue;
+        }
+        // Verify password — off the reactor, bounded by the same process-wide semaphore the
+        // API-key path uses (argon2_verify_result). Reached without any credential, so inline
+        // this is a free way for an unauthenticated caller to park every worker thread. A genuine
+        // runtime failure is still an error; an unusable stored hash is not (filtered above).
+        if argon2_verify_result(
+            candidate.password_hash.clone(),
+            Arc::from(req.password.as_str()),
+        )
         .await?
-        .ok_or(AppError::InvalidCredentials)?;
+        {
+            verified += 1;
+            if winner.is_none() {
+                winner = Some(candidate);
+            }
+        }
+    }
+
+    let user = match (verified, winner) {
+        // Exactly one row holds this credential: it IS the identity, whatever the heap order.
+        (1, Some(user)) => user,
+        // No row does — an unknown address, a wrong password, or a row with no usable hash.
+        (0, _) => return Err(AppError::InvalidCredentials),
+        // Several tenants' rows hold this same credential and a login carries no tenant. Minting a
+        // session for one of them would be the heap-order lottery again, so refuse — and say it
+        // once, in the log, where an operator can see the address needs one identity.
+        (n, _) => {
+            tracing::warn!(
+                rows = n,
+                "login refused: one address matches more than one stored credential"
+            );
+            return Err(AppError::InvalidCredentials);
+        }
+    };
 
     if !user.is_active {
         return Err(AppError::Forbidden("Account is deactivated".to_string()));
-    }
-
-    // A user created by a checkout whose credential mail never went out has no usable password
-    // (checkout_handler::deliver_credentials leaves `password_hash` empty on purpose). There is no
-    // stored hash to parse, so this has to be an ordinary invalid-credentials answer rather than a
-    // 500 from the hasher.
-    if user.password_hash.trim().is_empty() {
-        return Err(AppError::InvalidCredentials);
-    }
-
-    // Verify password — off the reactor, bounded by the same process-wide semaphore the
-    // API-key path uses (argon2_verify_result). Reached without any credential, so inline
-    // this is a free way for an unauthenticated caller to park every worker thread.
-    // Error mapping is unchanged: bad password -> 401, unusable stored hash -> 500.
-    if !argon2_verify_result(user.password_hash.clone(), Arc::from(req.password.as_str())).await? {
-        return Err(AppError::InvalidCredentials);
     }
 
     // Update last_login
@@ -398,13 +454,15 @@ pub async fn change_password(
         .ok_or(AppError::Unauthorized)?;
 
     // Verify current password, then hash the new one — both off the reactor behind the
-    // process-wide Argon2 semaphore, error mapping unchanged (bad current password -> 401,
-    // unusable stored hash -> 500).
-    if !argon2_verify_result(
-        user.password_hash.clone(),
-        Arc::from(req.current_password.as_str()),
-    )
-    .await?
+    // process-wide Argon2 semaphore. A stored hash that is not a usable Argon2 PHC string is not a
+    // credential (no password can match it), so it answers invalid-credentials like a wrong
+    // password rather than a 500 from the hasher — the same rule `login` applies (t_db00b05c).
+    if !is_usable_hash(&user.password_hash)
+        || !argon2_verify_result(
+            user.password_hash.clone(),
+            Arc::from(req.current_password.as_str()),
+        )
+        .await?
     {
         return Err(AppError::InvalidCredentials);
     }

@@ -116,6 +116,25 @@ pub(crate) async fn argon2_verify_result(hash: String, secret: Arc<str>) -> Resu
     .map_err(|e| AppError::Hash(format!("verification task failed: {e}")))?
 }
 
+/// True when `hash` is a PHC string this crate's hasher can actually use — the predicate a
+/// credential path needs BEFORE it offers a stored value to [`argon2_verify_result`].
+///
+/// A stored value that is not one (an empty string, a hand-written placeholder like `x`, a
+/// truncated PHC string, or a PHC string for another algorithm) is not a credential: no password
+/// can ever match it, so a login has to answer `401 InvalidCredentials` instead of letting the
+/// hasher answer `500 "Password hashing error"`. Measured live (t_db00b05c): a fixture row carrying
+/// `password_hash = 'x'` made `POST /api/v1/auth/login` answer 500 for ANY password, for an
+/// unauthenticated caller who merely knew the address.
+pub(crate) fn is_usable_hash(hash: &str) -> bool {
+    match PasswordHash::new(hash) {
+        Ok(parsed) => matches!(
+            parsed.algorithm.as_str(),
+            "argon2id" | "argon2i" | "argon2d"
+        ),
+        Err(_) => false,
+    }
+}
+
 /// One Argon2 verification against one stored hash, off the reactor and bounded by
 /// [`argon2_permits`]. `false` means "does not match" — or "unusable stored hash" — which
 /// is what every caller already treats as "not this credential".
@@ -636,6 +655,31 @@ mod tests {
                 .is_err(),
             "an unusable stored hash must be an error, not a silent mismatch"
         );
+    }
+
+    /// The credential-path predicate (t_db00b05c): only a usable Argon2 PHC string may be offered
+    /// to the verifier, so an unusable stored hash can only ever read as "does not match".
+    #[tokio::test]
+    async fn only_a_usable_argon2_phc_string_is_a_credential() {
+        let real = argon2_hash("Proof!12345".to_string())
+            .await
+            .expect("hash a password");
+        assert!(
+            is_usable_hash(&real),
+            "the hash this crate minted must read as usable, got {real}"
+        );
+        for bad in [
+            "",
+            "   ",
+            "x",
+            "$argon2id$",
+            "$scrypt$ln=16,r=8,p=1$c2FsdA$aGFzaA",
+        ] {
+            assert!(
+                !is_usable_hash(bad),
+                "{bad:?} must not read as a credential"
+            );
+        }
     }
 
     /// The same controlled A/B as `off_reactor_verification_keeps_the_runtime_responsive`,
