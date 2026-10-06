@@ -83,6 +83,28 @@ async fn main() {
         ),
     }
 
+    // At-rest seal for the payment-provider credentials (kanban t_6104de65). `payment_providers`
+    // holds two money-bearing credentials — the provider's secret key and the endpoint's webhook
+    // signing secret — in columns migration 041 named after an encryption promise the write path
+    // never kept. The upsert now seals before it binds and the read path opens after it reads; THIS
+    // is the half that converges a row arriving plaintext from an older dump, and (because the
+    // migration that arms the guard is recorded in `_migrations` and never re-runs) the only path
+    // that can re-arm a guard constraint a restore dropped. Never fatal: a credential row must not
+    // stop the app booting.
+    match crate::security::payment_provider_secrets::seal_legacy_payment_provider_secrets(&pool)
+        .await
+    {
+        Ok(0) => {}
+        Ok(n) => tracing::warn!(
+            rows = n,
+            "payment_providers: sealed legacy plaintext credential(s) at rest"
+        ),
+        Err(e) => tracing::error!(
+            "payment_providers credential backfill failed (plaintext may remain at rest): {}",
+            e
+        ),
+    }
+
     // At-rest encryption posture for BYOK provider credentials. This belongs in the boot log:
     // without the master key, provider key writes fail closed, and that must be visible before
     // a customer hits it (never silently fall back to plaintext).

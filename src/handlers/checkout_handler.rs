@@ -12,6 +12,7 @@ use crate::email;
 use crate::error::{ApiResult, AppError};
 use crate::security::address_identity::{self, AddressIdentity};
 use crate::security::email_addr;
+use crate::security::payment_provider_secrets as provider_secrets;
 use crate::AppState;
 use sqlx::Row;
 
@@ -106,6 +107,22 @@ pub async fn upsert_payment_provider(
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
+    // Seal both credentials BEFORE either is bound (kanban t_6104de65). Migration 041 named these
+    // columns after a promise ("Encrypted API credentials (encrypted-at-rest via app-layer
+    // encryption)") that this write path never kept: the raw request value went straight into
+    // `api_key_encrypted` and `webhook_secret_encrypted`, so a Stripe secret key (which can charge
+    // cards) and the endpoint's webhook signing secret (which alone decides whether an anonymous
+    // POST /api/v1/webhooks/stripe completes a checkout) sat in the clear at rest, readable by
+    // anyone holding a dump, a backup or a read-only SQL grant.
+    //
+    // `seal_for_write` returns an empty value unchanged — that is the "not submitted" signal the
+    // four UPDATE literals below key on — and returns an already sealed value byte-identical, so a
+    // masked round-trip cannot double-wrap the credential into an outer envelope that the receiver
+    // would then use as its HMAC key. A missing master key fails the request instead of storing
+    // plaintext (the app's standing fail-closed rule).
+    let api_key_sealed = provider_secrets::seal_for_write(&state.db, api_key).await?;
+    let webhook_secret_sealed = provider_secrets::seal_for_write(&state.db, webhook_secret).await?;
+
     // Check if provider already exists
     let existing =
         sqlx::query_scalar::<_, Uuid>("SELECT id FROM payment_providers WHERE provider_type = $1")
@@ -141,10 +158,10 @@ pub async fn upsert_payment_provider(
             .bind(&config);
 
         if !api_key.is_empty() {
-            q = q.bind(api_key);
+            q = q.bind(&api_key_sealed);
         }
         if !webhook_secret.is_empty() {
-            q = q.bind(webhook_secret);
+            q = q.bind(&webhook_secret_sealed);
         }
         q = q.bind(provider_id);
 
@@ -172,8 +189,8 @@ pub async fn upsert_payment_provider(
         .bind(provider_type)
         .bind(label)
         .bind(is_active)
-        .bind(api_key)
-        .bind(webhook_secret)
+        .bind(&api_key_sealed)
+        .bind(&webhook_secret_sealed)
         .bind(publishable_key)
         .bind(&config)
         .bind(is_test_mode)
@@ -222,7 +239,20 @@ pub async fn delete_payment_provider(
 // Checkout Session Creation
 // ──────────────────────────────────────────────
 
-/// Get active payment provider configuration
+/// Get active payment provider configuration, with both credentials OPENED (kanban t_6104de65).
+///
+/// The two credential columns are ciphertext at rest (`enc:v1:` + base64, see
+/// `crate::security::payment_provider_secrets`), and every caller here uses the value against the
+/// provider: `api_key` is the secret key handed to Stripe / PayPal, `webhook_secret` is the HMAC key
+/// `verify_stripe_signature` recomputes a Stripe delivery's signature with and the webhook id a
+/// PayPal delivery is verified against. Handing any of them the stored envelope instead of the
+/// credential would verify nothing and charge nothing, so the open happens HERE — at the single read
+/// choke point — and never returns ciphertext to a caller.
+///
+/// A row written before this change holds legacy plaintext and is passed through unchanged. A row
+/// that cannot be opened by this deployment (restored under a different `PROVIDER_KEY_ENC_SECRET`)
+/// yields an empty credential, which leaves the receivers on their documented not-configured arms
+/// instead of using the envelope as if it were the secret.
 async fn get_active_provider(
     db: &sqlx::PgPool,
     provider_type: &str,
@@ -238,16 +268,30 @@ async fn get_active_provider(
     .fetch_optional(db)
     .await?;
 
-    Ok(row.map(|r| {
-        json!({
-            "id": r.try_get::<Uuid,_>("id").map(|u| u.to_string()).unwrap_or_default(),
-            "provider_type": r.try_get::<&str,_>("provider_type").unwrap_or(""),
-            "api_key": r.try_get::<Option<&str>,_>("api_key_encrypted").unwrap_or(None).unwrap_or(""),
-            "publishable_key": r.try_get::<Option<&str>,_>("publishable_key").unwrap_or(None).unwrap_or(""),
-            "webhook_secret": r.try_get::<Option<&str>,_>("webhook_secret_encrypted").unwrap_or(None).unwrap_or(""),
-            "is_test_mode": r.try_get::<bool,_>("is_test_mode").unwrap_or(true),
-        })
-    }))
+    let Some(r) = row else {
+        return Ok(None);
+    };
+
+    let api_key_stored: Option<String> = r.try_get("api_key_encrypted").unwrap_or(None);
+    let webhook_secret_stored: Option<String> =
+        r.try_get("webhook_secret_encrypted").unwrap_or(None);
+
+    Ok(Some(json!({
+        "id": r.try_get::<Uuid,_>("id").map(|u| u.to_string()).unwrap_or_default(),
+        "provider_type": r.try_get::<&str,_>("provider_type").unwrap_or(""),
+        "api_key": provider_secrets::open_for_use(
+            db,
+            provider_secrets::API_KEY_COLUMN,
+            api_key_stored.as_deref().unwrap_or(""),
+        ).await,
+        "publishable_key": r.try_get::<Option<&str>,_>("publishable_key").unwrap_or(None).unwrap_or(""),
+        "webhook_secret": provider_secrets::open_for_use(
+            db,
+            provider_secrets::WEBHOOK_SECRET_COLUMN,
+            webhook_secret_stored.as_deref().unwrap_or(""),
+        ).await,
+        "is_test_mode": r.try_get::<bool,_>("is_test_mode").unwrap_or(true),
+    })))
 }
 
 /// Read a request header as a `&str`, `""` when it is absent or not valid UTF-8. Header names
