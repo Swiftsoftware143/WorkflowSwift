@@ -801,6 +801,21 @@ pub fn create_router(state: AppState) -> Router {
             "/checkout/create",
             post(handlers::checkout_handler::create_checkout_session),
         )
+        // The two bridge LISTINGS (kanban t_061a4e26). They were anonymous: the handlers take only
+        // `State` and read /opt/ai-bridge/{inbound,outbound}/*.json off the host filesystem, so an
+        // anonymous caller listed those files' parsed contents. Every caller presents a credential
+        // (`www-admin/index.html::renderBridge` goes through the panel's `api()` helper, which adds
+        // `Authorization: Bearer <jwt>`; `/opt/swift/bin/ws-admin-api-sweep.py` mints a super-admin
+        // token), so the paths moved here unchanged and both callers are unaffected. `bridge-ping`
+        // (a constant `{"status":"bridge-ok"}`) stays public.
+        .route(
+            "/bridge-tasks",
+            get(handlers::bridge_handler::list_inbound_tasks),
+        )
+        .route(
+            "/bridge-results",
+            get(handlers::bridge_handler::list_outbound_results),
+        )
         .route(
             "/checkout/sessions",
             get(handlers::checkout_handler::list_checkout_sessions),
@@ -932,18 +947,24 @@ pub fn create_router(state: AppState) -> Router {
         ));
 
     // Public routes (no auth) that do not read a body, plus the bounded password-auth routes.
+    //
+    // Everything registered HERE answers a caller with no credential at all — the boundary is
+    // `public_routes` having no auth layer, so membership is the whole decision. The committed list
+    // that decides it is `src/auth/route_policy.rs::PUBLIC_ROUTES`, and
+    // `src/auth/boundary.rs::require_credential` (mounted outside the routing layers in main.rs)
+    // refuses an anonymous caller to anything not on it. **A route added here without a
+    // route_policy entry answers 401, not its handler** (kanban t_061a4e26).
+    //
+    // NOTE (kanban t_061a4e26): `/bridge-tasks` and `/bridge-results` USED to be registered here.
+    // Both take only `State` — no extractor, no key check — and read
+    // /opt/ai-bridge/{inbound,outbound}/*.json off the host filesystem, so an anonymous caller could
+    // list those files' parsed contents. Neither has an anonymous caller: `www-admin/index.html`
+    // reads them through its `api()` helper (which attaches `Authorization: Bearer <jwt>`) and the
+    // fleet's own `/opt/swift/bin/ws-admin-api-sweep.py` mints a super-admin token. They are now on
+    // `protected_routes` — same paths, so both callers are unchanged.
     let public_routes = Router::new()
         .nest("/auth", auth_public)
         .route("/health", get(health_check))
-        .route(
-            "/bridge-tasks",
-            get(handlers::bridge_handler::list_inbound_tasks),
-        )
-        .route(
-            "/bridge-results",
-            get(handlers::bridge_handler::list_outbound_results),
-        )
-        .route("/bridge-ping", get(handlers::bridge_handler::ping_bridge))
         .route(
             "/extension.zip",
             get(handlers::extension_download_handler::download_extension),
@@ -952,6 +973,7 @@ pub fn create_router(state: AppState) -> Router {
             "/internal/dashboard-data-seed",
             post(handlers::internal_handler::seed_dashboard_data),
         )
+        .route("/bridge-ping", get(handlers::bridge_handler::ping_bridge))
         .route(
             "/provider-presets",
             get(handlers::integration_dispatch_handler::list_provider_presets),

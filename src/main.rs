@@ -151,6 +151,18 @@ async fn main() {
 
     let app = routes::create_router(state.clone())
         .layer(TraceLayer::new_for_http())
+        // Default-deny credential boundary (kanban t_061a4e26). Mounted OUTSIDE the routing/nest
+        // layers — so it is handed the FULL path (`/api/v1/...`, the form the committed allowlist
+        // in `src/auth/route_policy.rs` is written in; axum strips a nest prefix below this layer,
+        // which is why `auth_middleware` inside the nest sees the stripped form) — and INSIDE CORS,
+        // so a 401 still carries the headers a browser needs to read it.
+        //
+        // It refuses only a caller that presents no credential at all; tenancy, roles and row scope
+        // stay exactly where they were, in `auth::middleware::auth_middleware` and the handlers.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::boundary::require_credential,
+        ))
         .layer(CorsLayer::permissive());
 
     let addr = format!("{}:{}", config.host, config.port);
