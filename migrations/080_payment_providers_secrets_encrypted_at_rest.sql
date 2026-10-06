@@ -23,20 +23,69 @@
 -- The publishable_key column is deliberately NOT covered: 041 stores it in plaintext for frontend
 -- use and its name says so.
 --
--- NOT VALID by design: a row written before today (legacy plaintext, e.g. from a restored dump) is
--- exempt so the app keeps reading it through `decrypt_from_storage`'s passthrough, while every NEW
--- insert/update is checked. The VALIDATE half is NOT in this file on purpose: this runner
--- (`src/db.rs`) sends the whole file as one batch and exits the process when a file fails, so a
--- VALIDATE against a restored-plaintext row would refuse to boot. The boot half
+-- The ADD is NOT VALID by design: a row written before today (legacy plaintext, e.g. from a
+-- restored dump) is exempt so the app keeps reading it through `decrypt_from_storage`'s
+-- passthrough, while every NEW insert/update is checked.
+--
+-- The VALIDATE half is NOW in this file (fleet from-zero gate, 2026-10-06 — the same correction
+-- migration 048 received under card t_4ebd6f98). Production carries both constraints as VALIDATED
+-- (`convalidated = true`) because the boot half
 -- (`payment_provider_secrets::seal_legacy_payment_provider_secrets`, called from main.rs) seals the
--- legacy rows first and validates only once nothing is left, on every start — which is also the
--- only repair path for a constraint dropped by hand or lost in a restore, because this file is
--- recorded in `_migrations` and never re-runs.
+-- legacy rows and validates on every start — but a from-zero build applies only the files, so it
+-- left them NOT VALID and differed from production on the one property the constraint is about.
+-- The guarded DO block below is the canonical idiom, verbatim in shape from
+-- migrations/053_integration_targets_api_key_encrypted_at_rest.sql (which mirrors
+-- /opt/swift/fleet/templates/guard-constraint-not-valid.sql): it validates an empty or clean table
+-- instantly, is a no-op where the constraint is already validated, and catches a check_violation
+-- as a WARNING instead of aborting the boot when a restored dump still holds plaintext rows
+-- (src/db.rs sends a file as one batch and exits the process if the file fails). This file is
+-- recorded in `_migrations` on production and never re-runs there, so the change is
+-- fresh-install-only; the boot half remains the repair path for a dropped or unvalidated guard.
 
 ALTER TABLE payment_providers DROP CONSTRAINT IF EXISTS payment_providers_api_key_encrypted;
 
 ALTER TABLE payment_providers ADD CONSTRAINT payment_providers_api_key_encrypted CHECK (api_key_encrypted = '' OR api_key_encrypted LIKE 'enc:v1:%') NOT VALID;
 
+DO $guard$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'payment_providers_api_key_encrypted'
+          AND conrelid = 'payment_providers'::regclass
+          AND convalidated
+    ) THEN
+        BEGIN
+            ALTER TABLE payment_providers VALIDATE CONSTRAINT payment_providers_api_key_encrypted;
+            RAISE NOTICE 'payment_providers.payment_providers_api_key_encrypted validated: every existing row is compliant';
+        EXCEPTION
+            WHEN check_violation THEN
+                RAISE WARNING 'payment_providers.payment_providers_api_key_encrypted still NOT VALID: pre-existing rows violate the guard (the boot half seals them, then validates); new writes are still rejected';
+        END;
+    END IF;
+END
+$guard$;
+
 ALTER TABLE payment_providers DROP CONSTRAINT IF EXISTS payment_providers_webhook_secret_encrypted;
 
 ALTER TABLE payment_providers ADD CONSTRAINT payment_providers_webhook_secret_encrypted CHECK (webhook_secret_encrypted = '' OR webhook_secret_encrypted LIKE 'enc:v1:%') NOT VALID;
+
+DO $guard$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'payment_providers_webhook_secret_encrypted'
+          AND conrelid = 'payment_providers'::regclass
+          AND convalidated
+    ) THEN
+        BEGIN
+            ALTER TABLE payment_providers VALIDATE CONSTRAINT payment_providers_webhook_secret_encrypted;
+            RAISE NOTICE 'payment_providers.payment_providers_webhook_secret_encrypted validated: every existing row is compliant';
+        EXCEPTION
+            WHEN check_violation THEN
+                RAISE WARNING 'payment_providers.payment_providers_webhook_secret_encrypted still NOT VALID: pre-existing rows violate the guard (the boot half seals them, then validates); new writes are still rejected';
+        END;
+    END IF;
+END
+$guard$;
