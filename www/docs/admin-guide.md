@@ -377,6 +377,26 @@ caller that reaches the origin directly) — never on a header the caller can ha
 with no address header at all shares one `unknown` bucket, so omitting the header is not a way
 around the limit.
 
+## Tag → free account (admin-configurable)
+
+FunnelSwift can create a free WorkflowSwift account when one of its leads is tagged with
+WorkflowSwift. It posts to `POST /api/v1/internal/provision-free-account` with the shared internal
+key; this app resolves the entry plan **in-app** and mints its own account for the lead's address
+through the same signup core the public signup uses — the `accounts` row, its owner `users` row, an
+`account_plans` row on the chosen free tier and that tier's first month of credits — then mails the
+generated credentials. A second call for the same address answers `already_exists` and mints
+nothing.
+
+The switch is in the admin console under **Admin → Settings → Tag → free account**:
+
+- **Enable auto-provisioning from tags** — `admin_settings.provision_from_tags_enabled`. Ships
+  **off**; while it is off the receiver answers `403` and creates nothing.
+- **Entry plan** — `admin_settings.provision_entry_plan_slug`, default `free`. Only free tiers are
+  listed; a paid plan is refused.
+
+Both are read by the receiver and written through `GET|PUT /api/v1/admin/provisioning-settings`
+(platform admins only).
+
 ## Operational notes
 
 - The container runs with `network_mode: host` and publishes nothing — the API binds

@@ -13,16 +13,20 @@
 //! probe)
 //!
 //! ```text
-//!   177 mounted `.route(..)` calls in the one routing file, and 39 `.nest(..)` targets
+//!   179 mounted `.route(..)` calls in the one routing file, and 39 `.nest(..)` targets
 //!        (two of them — `/step-integrations` and `/available-integrations` — are deliberately
 //!        commented out, see the note beside the list below)
-//!   159 mounts reach `protected_routes`  (39 nested sub-routers, 153 route entries, plus the six
+//!   160 mounts reach `protected_routes`  (39 nested sub-routers, 153 route entries, plus the six
 //!        direct mounts: /impersonate, /stop-impersonation, /checkout/{create,sessions},
 //!        /payment-providers, /payment-providers/{provider_type})
-//!    23 mounts reach `public_routes` (which merges `public_body_routes` and nests `auth_public`)
+//!    24 mounts reach `public_routes` (which merges `public_body_routes` and nests `auth_public`)
+//!
+//!   (+2 from kanban t_ede5f6ed: `/api/v1/internal/provision-free-account` joins the public body
+//!    sub-router as a named key route, `/api/v1/admin/provisioning-settings` joins the protected
+//!    admin router.)
 //!
 //!   live, with NO credential, against 127.0.0.1:8085:
-//!    21 of those 23 are DELIBERATE   -> 12 [`PUBLIC_ROUTES`] + 9 [`INTERNAL_ROUTES`]
+//!    22 of those 24 are DELIBERATE   -> 12 [`PUBLIC_ROUTES`] + 10 [`INTERNAL_ROUTES`]
 //!     2 of them were NOT             ->  `/api/v1/bridge-tasks`, `/api/v1/bridge-results`
 //! ```
 //!
@@ -157,6 +161,11 @@ pub const INTERNAL_ROUTES: &[&str] = &[
     "/api/v1/incoming",
     // n8n's execution-result callback (shared key) or the panel (JWT scoped to the instance).
     "/api/v1/instances/{id}/callback",
+    // FunnelSwift's tag → free-account receiver (design §3.1, kanban t_ede5f6ed). The handler
+    // checks `x-internal-key` itself with the same fail-closed posture; naming it here is what
+    // makes the boundary demand the key as well, so the route is never reachable on the session
+    // arm alone.
+    "/api/v1/internal/provision-free-account",
 ];
 
 /// Is this path inside the API surface this boundary decides?
@@ -377,6 +386,7 @@ mod tests {
             "/api/v1/notify/dispatch",
             "/api/v1/incoming",
             "/api/v1/instances/instance-one/callback",
+            "/api/v1/internal/provision-free-account",
         ] {
             assert!(is_internal_route(path), "{} is a named key route", path);
             assert!(!is_public_route(path), "{} must not be anonymous", path);
@@ -437,11 +447,11 @@ mod tests {
     #[test]
     fn the_census_shape_is_what_the_docs_say() {
         assert_eq!(super::PUBLIC_ROUTES.len(), 12, "PUBLIC_ROUTES size");
-        assert_eq!(super::INTERNAL_ROUTES.len(), 9, "INTERNAL_ROUTES size");
-        // The 23 anonymous placements the census found, minus the 2 moved to the protected router.
+        assert_eq!(super::INTERNAL_ROUTES.len(), 10, "INTERNAL_ROUTES size");
+        // The 24 anonymous placements the census found, minus the 2 moved to the protected router.
         assert_eq!(
             super::PUBLIC_ROUTES.len() + super::INTERNAL_ROUTES.len(),
-            21
+            22
         );
     }
 }

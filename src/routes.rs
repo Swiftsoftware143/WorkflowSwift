@@ -669,6 +669,15 @@ pub fn create_router(state: AppState) -> Router {
             get(handlers::admin_settings_handler::get_setting)
                 .put(handlers::admin_settings_handler::update_setting),
         )
+        // Tag → free account: the master toggle + the in-app free-plan picker (design §3.3,
+        // kanban t_ede5f6ed). Two keys of `admin_settings`
+        // (`provision_from_tags_enabled`, `provision_entry_plan_slug`) that the receiver reads;
+        // this is the console surface David turns the feature on from.
+        .route(
+            "/provisioning-settings",
+            get(handlers::provision_handler::get_provisioning_settings)
+                .put(handlers::provision_handler::update_provisioning_settings),
+        )
         // Retention policy
         .route(
             "/retention",
@@ -912,14 +921,23 @@ pub fn create_router(state: AppState) -> Router {
             "/internal/portfolio-sync",
             post(handlers::portfolio_sync_handler::portfolio_sync_internal),
         )
-        // NOTE (card t_79d7d1d2): /internal/tag-provision is deliberately NOT a route here.
-        // Its handler file (handlers/tag_provision_handler.rs, which wrote into `clients`/`accounts`
-        // keyed off "the oldest account in the DB") was never declared in handlers/mod.rs, so the
-        // route answered 404 for every caller since the module declaration was lost, and nothing
-        // called it: 0 n8n workflows, 0 fleet apps, 0 served shells, 0 shell scripts. Deleted
-        // 2026-09-25 rather than wired — a webhook would have injected leads into an arbitrary
-        // tenant, and cross-app tag/lead provisioning belongs to the CRM hub (CoreSwift-CRM),
-        // which owns a real /api/v1/internal/tag-provision. Do not re-add one here without a caller.
+        // ── FunnelSwift tag → free account (design §3.1, kanban t_ede5f6ed) ────────────────────
+        // Caller: FunnelSwift's tag orchestrator (`FunnelSwift/src/app_provision.rs`, card
+        // t_847f9d63); contract: the FROZEN internal shape in
+        // /opt/swift/docs/tag-to-free-account-design-2026-10-06.md §3.1. The credential is the
+        // shared `x-internal-key` (also demanded at `auth::boundary`), checked inside the handler.
+        //
+        // This REPLACES the 2026-09-25 deletion note ("do not re-add one without a caller AND a
+        // target route that accepts the body", t_79d7d1d2). Both conditions now hold, and the
+        // objection that deleted the old handler is answered by construction: the old one wrote
+        // into `clients`/`accounts` keyed off "the oldest account in the DB", whereas this route
+        // names no tenant at all — it resolves its plan in-app and mints its OWN account for the
+        // contact address the caller sends, through the one shared signup core
+        // (`auth::signup::create_account`). Reads a body, so it belongs in THIS sub-router.
+        .route(
+            "/internal/provision-free-account",
+            post(handlers::provision_handler::provision_free_account),
+        )
         .route(
             "/internal/tags/assign",
             post(handlers::internal_handler::internal_assign_tag),

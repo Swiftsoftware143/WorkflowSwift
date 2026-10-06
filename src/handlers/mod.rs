@@ -36,6 +36,7 @@ pub mod notify_handler;
 pub mod paperclip_handler;
 pub mod prospecting_handler;
 pub mod provider_keys_handler;
+pub mod provision_handler;
 pub mod rendition_handler;
 pub mod site_handler;
 pub mod surfaces_handler;

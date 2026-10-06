@@ -658,7 +658,10 @@ async function editSetting(key){
 }
 
 function renderAdminSettings(c){
-  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">Platform Settings</h2><div id="sdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>'
+  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-1">Tag &rarr; free account</h2>'
+   +'<p class="text-xs text-gray-500 mb-4">When FunnelSwift tags one of its leads with WorkflowSwift, this app creates a free account for that business on the plan you pick here and emails them their login. Off by default &mdash; nothing is created until you switch it on.</p>'
+   +'<div id="provbody"><p class="text-gray-400 text-sm">Loading...</p></div></div>'
+   +'<div class="card mt-4"><h2 class="text-xl font-bold mb-4">Platform Settings</h2><div id="sdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>'
    +'<div class="card mt-4"><h2 class="text-xl font-bold mb-1">Email Provider</h2>'
    +'<p class="text-xs text-gray-500 mb-4">Pick the transport WorkflowSwift sends with. These credentials live in the database and are read at send time &mdash; no server environment variables are consulted. Save, then send a test to prove it works.</p>'
    +'<div id="estatus"></div>'
@@ -666,6 +669,26 @@ function renderAdminSettings(c){
    +'<div class="flex gap-2 mt-4"><button class="btn btn-primary btn-sm" id="esave">Save email provider</button>'
    +'<button class="btn btn-sm btn-ghost" id="etest">Send test email</button></div>'
    +'<pre id="eresult" class="text-xs text-gray-600 mt-3 whitespace-pre-wrap"></pre></div>';
+
+  // Tag → free account (design §3.3): the master toggle + the in-app entry-plan picker. Both keys
+  // are read by POST /api/v1/internal/provision-free-account, the receiver FunnelSwift's tag
+  // orchestrator calls; this card is where they are set.
+  api('/admin/provisioning-settings').then(d=>{
+    const el=c.querySelector('#provbody');
+    if(!el)return;
+    if(!d){el.innerHTML='<p class="text-red-400 text-sm">Not available.</p>';return}
+    el.innerHTML='<div class="flex items-center gap-2 mb-3"><input type="checkbox" id="prov_on"'+(d.provision_from_tags_enabled?' checked':'')+'><label class="text-sm">Enable auto-provisioning from tags</label></div>'
+      +'<div class="flex items-center gap-2"><label class="text-sm">Entry plan</label><select id="prov_plan" class="input">'
+      +(d.free_plans||[]).map(p=>'<option value="'+p.slug+'"'+(p.slug===d.provision_entry_plan_slug?' selected':'')+'>'+p.name+'</option>').join('')
+      +'</select><span class="text-xs text-gray-400">Only free plans are listed.</span></div>';
+    const on=el.querySelector('#prov_on'), pl=el.querySelector('#prov_plan');
+    const save=async()=>{
+      const r=await api('/admin/provisioning-settings',{method:'PUT',body:JSON.stringify({provision_from_tags_enabled:on.checked,provision_entry_plan_slug:pl.value})});
+      showMsg(r?'Provisioning settings saved':('Save failed: '+(LAST_ERR||'request failed')),r?undefined:'error');
+    };
+    if(on)on.onchange=save;
+    if(pl)pl.onchange=save;
+  });
 
   api('/admin/settings').then(d=>{
     const el=c.querySelector('#sdata');

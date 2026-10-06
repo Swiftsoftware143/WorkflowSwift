@@ -13,7 +13,6 @@ use super::middleware::create_token;
 use super::models::*;
 use crate::auth::api_key_auth::{argon2_hash, argon2_verify_result, is_usable_hash};
 use crate::error::{ApiResult, AppError};
-use crate::handlers::industry_handler;
 use crate::security::address_identity::{self, AddressIdentity};
 use crate::security::email_addr;
 use crate::AppState;
@@ -44,16 +43,10 @@ pub async fn register(
     // never reach the address it was given.
     let email = email_addr::normalize(&req.email).map_err(AppError::Validation)?;
 
-    // Check if user already exists. Case-insensitive: the stored value is normalised to lowercase
-    // from here on, but rows written before this boundary existed must still collide.
-    let existing =
-        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE lower(email) = $1")
-            .bind(&email)
-            .fetch_one(&state.db)
-            .await
-            .unwrap_or(0);
-
-    if existing > 0 {
+    // Refuse a duplicate BEFORE hashing. This route needs no credential, so spending the Argon2
+    // hash on an address that already exists would be a free amplification. `create_account`
+    // enforces the same rule again before its first write (design §3.1 rule 3).
+    if super::signup::email_taken(&state.db, &email).await? {
         return Err(AppError::Duplicate(
             "A user with this email already exists".to_string(),
         ));
@@ -65,175 +58,33 @@ pub async fn register(
     // to reach.
     let password_hash = argon2_hash(req.password.clone()).await?;
 
-    // Create account
-    let account_name = req
-        .account_name
-        .unwrap_or_else(|| format!("{}'s Workspace", req.name));
-    let account_slug = req.account_slug.unwrap_or_else(|| {
-        req.name
-            .to_lowercase()
-            .replace(' ', "-")
-            .chars()
-            .take(30)
-            .collect()
-    });
-
-    let aid = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO accounts (id, name, account_slug, is_active) VALUES ($1, $2, $3, true)",
+    // ── ONE writer (design §3.1 rule 4, kanban t_ede5f6ed) ──────────────────────────────────
+    // The account itself is minted by `crate::auth::signup::create_account`, the SAME function the
+    // fleet-internal `POST /api/v1/internal/provision-free-account` calls (FunnelSwift tag → free
+    // account). This handler keeps only what is public-signup-specific: the input validation, the
+    // address boundary, the pre-hash duplicate check and the token response.
+    let ids = super::signup::create_account(
+        &state,
+        super::signup::NewAccount {
+            email: &email,
+            name: &req.name,
+            password_hash: &password_hash,
+            // The public signup does not mail back the password the user just chose.
+            password_plain: None,
+            account_name: req.account_name.as_deref(),
+            account_slug: req.account_slug.as_deref(),
+            plan_slug: req.plan_slug.as_deref().unwrap_or("free"),
+            industry_slug: req.industry_slug.as_deref().unwrap_or("site-flipping"),
+            role: "user",
+        },
     )
-    .bind(aid)
-    .bind(&account_name)
-    .bind(&account_slug)
-    .execute(&state.db)
     .await?;
 
-    // Seed default tags for this account
-    let default_tag_names = vec!["active", "archived", "priority"];
-    for tag_name in &default_tag_names {
-        sqlx::query("INSERT INTO tags (id, aid, name) VALUES ($1, $2, $3)")
-            .bind(Uuid::new_v4())
-            .bind(aid)
-            .bind(tag_name)
-            .execute(&state.db)
-            .await
-            .ok();
-    }
-
-    // Create user (user role — only David is super_admin)
-    let user_id = Uuid::new_v4();
+    let aid = ids.account_id;
+    let user_id = ids.user_id;
+    let account_name = ids.account_name;
+    let account_slug = ids.account_slug;
     let now = Utc::now();
-    sqlx::query(
-        r#"INSERT INTO users (id, aid, email, password_hash, name, role, is_active, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5, 'user', true, $6, $6)"#,
-    )
-    .bind(user_id)
-    .bind(aid)
-    .bind(&email)
-    .bind(&password_hash)
-    .bind(&req.name)
-    .bind(now)
-    .execute(&state.db)
-    .await?;
-
-    // Send welcome email with credentials
-    let welcome_vars = serde_json::json!({
-        "name": &req.name,
-        "email": &email,
-        "app_url": "https://app.workflowswift.com",
-    });
-    let _ = crate::email::send_email(&state, &email, "welcome", &welcome_vars).await;
-
-    // Auto-generate API keys for the new user
-    use crate::handlers::integration_center_handler;
-    let _ = integration_center_handler::seed_user_keys(&state.db, user_id, aid).await;
-
-    // Provision n8n tenant config for this account
-    crate::n8n_provision::provision_n8n_for_account(&state.db, aid).await;
-
-    // Assign plan if provided, or use default Free plan
-    let plan_slug = req.plan_slug.as_deref().unwrap_or("free");
-    let plan_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM plan_tiers WHERE slug = $1 AND is_active = true")
-            .bind(plan_slug)
-            .fetch_optional(&state.db)
-            .await?;
-
-    if let Some(pid) = plan_id {
-        sqlx::query(
-            r#"INSERT INTO account_plans (aid, plan_id, status, started_at)
-               VALUES ($1, $2, 'active', NOW())"#,
-        )
-        .bind(aid)
-        .bind(pid)
-        .execute(&state.db)
-        .await
-        .ok();
-
-        // Grant initial monthly credits for the plan
-        let credits: Option<i32> = sqlx::query_scalar(
-            r#"SELECT (features->>'credits_monthly')::integer
-               FROM plan_tiers WHERE id = $1"#,
-        )
-        .bind(pid)
-        .fetch_optional(&state.db)
-        .await
-        .unwrap_or(None);
-
-        if let Some(amt) = credits {
-            if amt > 0 {
-                sqlx::query(
-                    r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
-                       VALUES ($1, $2, $3, 'grant', 'Welcome credits: first month of ' || (
-                         SELECT name FROM plan_tiers WHERE id = $4
-                       ))"#
-                )
-                .bind(Uuid::new_v4())
-                .bind(aid)
-                .bind(amt)
-                .bind(pid)
-                .execute(&state.db)
-                .await
-                .ok();
-            }
-        }
-    }
-
-    // Set industry and seed dashboard if provided
-    let industry_slug = req.industry_slug.as_deref().unwrap_or("site-flipping");
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM template_categories WHERE slug = $1 AND is_active = true)",
-    )
-    .bind(industry_slug)
-    .fetch_one(&state.db)
-    .await
-    .unwrap_or(false);
-
-    if exists {
-        sqlx::query("UPDATE accounts SET industry_slug = $1 WHERE id = $2")
-            .bind(industry_slug)
-            .bind(aid)
-            .execute(&state.db)
-            .await?;
-
-        // Use human-readable category name for dashboard, not slug
-        let industry_name: String =
-            sqlx::query_scalar("SELECT name FROM template_categories WHERE slug = $1")
-                .bind(industry_slug)
-                .fetch_optional(&state.db)
-                .await?
-                .unwrap_or_else(|| industry_slug.to_string());
-
-        // Create dashboard and seed widgets
-        let dashboard_id = Uuid::new_v4();
-        let dashboard_name = format!("{} Dashboard", industry_name);
-        sqlx::query(
-            r#"INSERT INTO dashboards (id, aid, name, description)
-               VALUES ($1, $2, $3, $4)"#,
-        )
-        .bind(dashboard_id)
-        .bind(aid)
-        .bind(&dashboard_name)
-        .bind(format!("Your {} dashboard", industry_name))
-        .execute(&state.db)
-        .await?;
-
-        industry_handler::seed_default_widgets_internal(&state, aid, dashboard_id, industry_slug)
-            .await;
-
-        // Also register in account_industries (for multi-industry support)
-        sqlx::query(
-            r#"INSERT INTO account_industries (aid, industry_slug, dashboard_id)
-               VALUES ($1, $2, $3)
-               ON CONFLICT (aid, industry_slug) DO NOTHING"#,
-        )
-        .bind(aid)
-        .bind(industry_slug)
-        .bind(dashboard_id)
-        .execute(&state.db)
-        .await
-        .ok();
-    }
 
     // Create JWT
     let now_ts = chrono::Utc::now().timestamp() as usize;
