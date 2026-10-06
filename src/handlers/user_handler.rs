@@ -167,9 +167,11 @@ pub async fn invite_user(
     features::enforce_feature_limit(&state.db, aid, "max_users", "Team members").await?;
 
     // Check duplicate. Deliberately GLOBAL, not per-account: `email` is the login key
-    // (`SELECT * FROM users WHERE email = $1` in auth::handlers) and register() makes the same
-    // global check, so one email must map to exactly one user. `users_aid_email_key` alone
-    // would let two tenants own the same address and make login ambiguous.
+    // (`auth::handlers::login` fetches every row for the address and lets the credential pick it,
+    // refusing an address that matches more than one) and register() makes the same global check,
+    // so one email must map to exactly one user. `users_aid_email_key` alone would let two tenants
+    // own the same address — which is exactly the ambiguity login/`forgot_password`/checkout
+    // credential delivery now have to refuse (kanban t_8bcd0a8e).
     let existing =
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE lower(email) = $1")
             .bind(&email)

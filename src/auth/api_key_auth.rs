@@ -127,10 +127,20 @@ pub(crate) async fn argon2_verify_result(hash: String, secret: Arc<str>) -> Resu
 /// unauthenticated caller who merely knew the address.
 pub(crate) fn is_usable_hash(hash: &str) -> bool {
     match PasswordHash::new(hash) {
-        Ok(parsed) => matches!(
-            parsed.algorithm.as_str(),
-            "argon2id" | "argon2i" | "argon2d"
-        ),
+        Ok(parsed) => {
+            matches!(
+                parsed.algorithm.as_str(),
+                "argon2id" | "argon2i" | "argon2d"
+            )
+                // …AND it must actually carry a salt and a digest. A PHC string with a valid
+                // header but no salt/digest parses fine (`hash` and `salt` are `Option`), so the
+                // algorithm check alone calls it usable while no password can ever verify against
+                // it — which made such a row count as an identity. Measured by
+                // `only_a_usable_argon2_phc_string_is_a_credential`: `$argon2id$v=19$m=19456,t=2,p=1$c2FsdA`
+                // parses with `algorithm = argon2id` and `hash = None` (kanban t_8bcd0a8e).
+                && parsed.salt.is_some()
+                && parsed.hash.is_some()
+        }
         Err(_) => false,
     }
 }
@@ -673,6 +683,10 @@ mod tests {
             "   ",
             "x",
             "$argon2id$",
+            // A header with a salt but no digest, and one with neither: both parse, and neither
+            // can ever verify, so neither may read as a credential or as an identity.
+            "$argon2id$v=19$m=19456,t=2,p=1$c2FsdA",
+            "$argon2id$v=19$m=19456,t=2,p=1",
             "$scrypt$ln=16,r=8,p=1$c2FsdA$aGFzaA",
         ] {
             assert!(

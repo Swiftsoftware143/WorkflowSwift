@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::auth::models::Claims;
 use crate::email;
 use crate::error::{ApiResult, AppError};
+use crate::security::address_identity::{self, AddressIdentity};
 use crate::security::email_addr;
 use crate::AppState;
 use sqlx::Row;
@@ -1399,12 +1400,17 @@ async fn handle_checkout_completed(
 
 /// Turn a `deliver_credentials` failure into the response the payment provider gets.
 ///
-/// A refusal whose message starts with `email: ` (kanban t_09e76b27: the address in
-/// `checkout_sessions.metadata` is not an address) can never succeed on a retry, so it is a 4xx —
-/// asking the provider to retry forever would be a defect of its own. Everything else is a
-/// transient delivery failure and stays 5xx so the retry can actually deliver the credentials.
+/// A refusal that no retry can clear is a 4xx — asking the provider to retry forever would be a
+/// defect of its own — and there are two of them, each named by its own prefix:
+///   * `email: ` — the address in `checkout_sessions.metadata` is not an address (kanban
+///     t_09e76b27);
+///   * `permanent: ` — the address resolves to more than one user identity, so no single account
+///     owns it and nothing may be minted or mailed for an arbitrary tenant (kanban t_8bcd0a8e);
+///     only a data fix clears it.
+/// Everything else is a transient delivery failure and stays 5xx so the retry can actually deliver
+/// the credentials.
 fn delivery_failure(e: String) -> AppError {
-    if e.starts_with("email: ") {
+    if e.starts_with("email: ") || e.starts_with("permanent: ") {
         AppError::BadRequest(e)
     } else {
         AppError::Internal(format!("credential delivery failed: {}", e))
@@ -1438,15 +1444,42 @@ async fn deliver_credentials(
     let email = email_addr::normalize(email)?;
     let email = email.as_str();
 
-    // Look for existing user. Case-insensitive, so a row written before this boundary existed still
-    // matches the address the buyer actually typed.
-    let existing_user = sqlx::query_as::<_, UserRow>(
-        "SELECT id, aid, password_hash, email, name FROM users WHERE lower(email) = $1",
-    )
-    .bind(email)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| format!("DB lookup error: {}", e))?;
+    // Look for the existing user. Case-insensitive, so a row written before this boundary existed
+    // still matches the address the buyer actually typed, and resolved by IDENTITY rather than by
+    // heap order (kanban t_8bcd0a8e).
+    //
+    // ── One address = ONE identity ──────────────────────────────────────────────────────────
+    // This used to be `fetch_optional` on `lower(email)`, i.e. whichever row the heap returned —
+    // and this function does not stop at reading: for a row it judges to have no password it MINTS
+    // one and WRITES the hash, and for a row that has one it mails the buyer's receipt.
+    // `users` is unique on `(aid, email)`, NOT on `email`, and this request carries no tenant and
+    // no credential, so an address that maps to more than one identity must never resolve to an
+    // arbitrary row: that is how a paid customer's receipt — or a freshly minted password — would
+    // silently land on another tenant's user. Same rule as `auth::handlers::login`, through the
+    // same resolver.
+    let existing_user =
+        match address_identity::resolve_address(&state.db, email, |user: &UserRow| {
+            user.password_hash.as_str()
+        })
+        .await
+        .map_err(|e| format!("DB lookup error: {}", e))?
+        {
+            AddressIdentity::Unique(user) => Some(user),
+            AddressIdentity::Unknown => None,
+            AddressIdentity::Ambiguous { rows, identities } => {
+                // Nothing is mailed, minted or written. A retry cannot clear this (it is a data
+                // condition, not a provider hiccup), so the caller answers it as a permanent refusal.
+                tracing::error!(
+                    rows,
+                    identities,
+                    "credential delivery refused: one address maps to more than one identity"
+                );
+                return Err(format!(
+                "permanent: this address maps to {rows} user rows carrying {identities} usable \
+                 credentials, so no single account owns it"
+            ));
+            }
+        };
 
     let app_url = "https://app.workflowswift.com";
 

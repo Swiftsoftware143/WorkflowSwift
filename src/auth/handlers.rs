@@ -14,6 +14,7 @@ use super::models::*;
 use crate::auth::api_key_auth::{argon2_hash, argon2_verify_result, is_usable_hash};
 use crate::error::{ApiResult, AppError};
 use crate::handlers::industry_handler;
+use crate::security::address_identity::{self, AddressIdentity};
 use crate::security::email_addr;
 use crate::AppState;
 use std::sync::Arc;
@@ -515,13 +516,33 @@ pub async fn forgot_password(
     Json(req): Json<ForgotPasswordRequest>,
 ) -> ApiResult<impl IntoResponse> {
     // Read through the same normalisation by which addresses are stored, and case-insensitively so
-    // a pre-boundary row still resolves. No failure arm on purpose: a malformed value matches
-    // nothing, and existing-vs-not must stay unobservable (this response is already uniform).
-    if let Some(user) = sqlx::query_as::<_, User>("SELECT * FROM users WHERE lower(email) = $1")
-        .bind(email_addr::lookup_key(&req.email))
-        .fetch_optional(&state.db)
+    // a pre-boundary row still resolves. The row is picked by IDENTITY, never by heap order
+    // (t_8bcd0a8e): the unique index is `(aid, email)`, so one address can exist in several tenants
+    // while this request carries neither a tenant nor a credential — nothing the caller sent can
+    // choose between rows. An address that still maps to more than one identity therefore mints
+    // NOTHING (see below): the reset mail reaches the one address either way, so a token for an
+    // arbitrary row would silently reset ANOTHER TENANT's identity. No failure arm on purpose: a
+    // malformed value matches nothing, and existing-vs-not must stay unobservable (this response is
+    // already uniform, and it stays uniform in every arm below).
+    let reset_target =
+        match address_identity::resolve_address(&state.db, &req.email, |user: &User| {
+            user.password_hash.as_str()
+        })
         .await?
-    {
+        {
+            AddressIdentity::Unique(user) => Some(user),
+            AddressIdentity::Unknown => None,
+            AddressIdentity::Ambiguous { rows, identities } => {
+                tracing::warn!(
+                    rows,
+                    identities,
+                    "password reset refused: one address maps to more than one identity"
+                );
+                None
+            }
+        };
+
+    if let Some(user) = reset_target {
         let token = Uuid::new_v4().to_string();
         let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
 
