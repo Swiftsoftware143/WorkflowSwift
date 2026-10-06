@@ -193,8 +193,9 @@ pub async fn provision_free_account(
         return Err(AppError::Unauthorized);
     }
 
-    // 2. Master toggle — ships OFF; David enables it per app from the console (design §3.1 rule 2).
-    if !admin_setting_bool(&state.db, "provision_from_tags_enabled", false).await? {
+    // 2. Master toggle — ships ON (code default true, so a FRESH INSTALL has the door open); an
+    //    operator closes it from the console (design §3.1 rule 2).
+    if !admin_setting_bool(&state.db, "provision_from_tags_enabled", true).await? {
         return Ok(refused("provisioning_disabled"));
     }
 
@@ -341,7 +342,7 @@ pub async fn get_provisioning_settings(
     // layer: each handler decides). Provisioning writes accounts, so a tenant user must not reach
     // the switch.
     require_admin(&claims)?;
-    let enabled = admin_setting_bool(&state.db, "provision_from_tags_enabled", false).await?;
+    let enabled = admin_setting_bool(&state.db, "provision_from_tags_enabled", true).await?;
     let plan_slug = admin_setting_str(&state.db, "provision_entry_plan_slug", "free").await?;
     let free_plans: Vec<(String, String)> = sqlx::query_as(
         "SELECT slug, name FROM plan_tiers WHERE is_active = true AND COALESCE(price_monthly, 0) = 0 \
