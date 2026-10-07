@@ -1,0 +1,872 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WorkflowSwift — Admin Guide</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.svg">
+<style>
+  :root {
+    --indigo: #4f46e5; --indigo-light: #6366f1; --indigo-dark: #3730a3; --indigo-glow: rgba(79, 70, 229, 0.15);
+    --bg-dark: #0E0F12; --bg-card: #16181D; --bg-elevated: #1E2028; --border: #2A2D38;
+    --text-primary: #F1F5F9; --text-secondary: #94A3B8; --text-muted: #64748B;
+    --success: #22C55E; --warning: #F97316; --danger: #EF4444; --info: #3B82F6;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background: var(--bg-dark); color: var(--text-primary); line-height: 1.6; min-height: 100vh; }
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg-dark); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+  .app-layout { display: flex; min-height: 100vh; }
+
+  .sidebar { width: 260px; background: var(--bg-card); border-right: 1px solid var(--border); position: fixed; top: 0; left: 0; height: 100vh; overflow-y: auto; z-index: 100; display: flex; flex-direction: column; }
+  .sidebar-logo { display: flex; align-items: center; gap: 12px; padding: 24px; border-bottom: 1px solid var(--border); }
+  .sidebar-logo .logo-icon { width: 40px; height: 40px; border-radius: 12px; background: linear-gradient(135deg, var(--indigo), #8B5CF6); display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; }
+  .sidebar-logo h1 { font-size: 18px; font-weight: 600; color: var(--text-primary); }
+  .sidebar-logo p { font-size: 11px; color: var(--text-muted); }
+  .sidebar-nav { flex: 1; padding: 16px 12px; overflow-y: auto; }
+  .sidebar-nav .section-title { padding: 8px 12px 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px; font-size: 14px; font-weight: 500; color: var(--text-secondary); text-decoration: none; transition: all 0.15s ease; cursor: pointer; border: none; background: none; width: 100%; text-align: left; margin-bottom: 2px; }
+  .nav-item:hover { background: var(--border); color: var(--text-primary); }
+  .nav-item.active { background: var(--indigo-glow); color: var(--indigo-light); border-left: 2px solid var(--indigo-light); }
+  .nav-item .nav-icon { width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 16px; }
+  .sidebar-footer { padding: 16px 24px; border-top: 1px solid var(--border); text-align: center; font-size: 12px; color: var(--text-muted); }
+
+  .main-content { margin-left: 260px; flex: 1; display: flex; flex-direction: column; }
+  .topbar { padding: 16px 28px; border-bottom: 1px solid var(--border); background: var(--bg-card); display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 50; }
+  .topbar h2 { font-size: 16px; font-weight: 600; }
+  .topbar-badge { background: var(--indigo-glow); color: var(--indigo-light); padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 500; }
+  .content-area { flex: 1; padding: 28px; overflow-y: auto; max-width: 1100px; }
+
+  h1 { font-size: 32px; font-weight: 700; margin-bottom: 8px; }
+  h2 { font-size: 24px; font-weight: 700; margin: 48px 0 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 18px; font-weight: 600; margin: 28px 0 12px; color: var(--indigo-light); }
+  h4 { font-size: 15px; font-weight: 600; margin: 20px 0 8px; }
+  p { margin-bottom: 16px; color: var(--text-secondary); }
+  a { color: var(--indigo-light); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .lead { font-size: 18px; color: var(--text-secondary); margin-bottom: 32px; padding: 16px 0; border-bottom: 1px solid var(--border); }
+
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 20px; }
+  .card-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .card-header .card-icon { width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, var(--indigo), #7C3AED); display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
+  .card-header h3 { margin: 0; padding: 0; border: none; color: var(--text-primary); font-size: 16px; }
+
+  .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin: 20px 0; }
+  .feature-card { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 10px; padding: 20px; transition: border-color 0.2s; }
+  .feature-card:hover { border-color: var(--indigo); }
+  .feature-card .fc-icon { width: 40px; height: 40px; border-radius: 10px; background: var(--indigo-glow); display: flex; align-items: center; justify-content: center; font-size: 18px; margin-bottom: 12px; }
+  .feature-card h4 { margin: 0 0 8px; font-size: 14px; }
+  .feature-card p { margin: 0; font-size: 13px; color: var(--text-muted); }
+
+  code { background: var(--bg-elevated); color: var(--indigo-light); padding: 2px 8px; border-radius: 4px; font-size: 13px; font-family: 'SF Mono', 'Fira Code', monospace; }
+  pre { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px; padding: 16px; overflow-x: auto; margin: 16px 0; font-size: 13px; font-family: 'SF Mono', 'Fira Code', monospace; color: var(--text-secondary); line-height: 1.5; }
+  pre code { background: none; padding: 0; color: var(--text-secondary); }
+
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px; }
+  th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { background: var(--bg-elevated); font-weight: 600; color: var(--text-primary); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+  td { color: var(--text-secondary); }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  .badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 500; }
+  .badge-indigo { background: var(--indigo-glow); color: var(--indigo-light); }
+  .badge-green { background: rgba(34,197,94,0.15); color: var(--success); }
+  .badge-orange { background: rgba(249,115,22,0.15); color: var(--warning); }
+  .badge-red { background: rgba(239,68,68,0.15); color: var(--danger); }
+  .badge-blue { background: rgba(59,130,246,0.15); color: var(--info); }
+
+  .step-list { list-style: none; counter-reset: step; }
+  .step-list li { counter-increment: step; padding: 16px 16px 16px 52px; position: relative; margin-bottom: 8px; background: var(--bg-elevated); border-radius: 8px; border: 1px solid var(--border); }
+  .step-list li::before { content: counter(step); position: absolute; left: 14px; top: 14px; width: 26px; height: 26px; border-radius: 50%; background: var(--indigo); color: white; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; }
+  .step-list li strong { color: var(--text-primary); }
+  .step-list li p { margin: 4px 0 0; font-size: 13px; }
+
+  .alert { padding: 14px 18px; border-radius: 8px; margin: 16px 0; border-left: 3px solid; font-size: 14px; }
+  .alert-info { background: rgba(59,130,246,0.08); border-color: var(--info); color: #93C5FD; }
+  .alert-warning { background: rgba(249,115,22,0.08); border-color: var(--warning); color: #FDBA74; }
+  .alert-success { background: rgba(34,197,94,0.08); border-color: var(--success); color: #86EFAC; }
+  .alert-danger { background: rgba(239,68,68,0.08); border-color: var(--danger); color: #FCA5A5; }
+
+  a.section-title { display: block; padding: 8px 12px 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); text-decoration: none; cursor: pointer; }
+  a.section-title:hover { color: var(--indigo-light); background: rgba(255,255,255,0.03); border-radius: 6px; }
+
+  .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 20px 0; }
+  .stat-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .stat-card .stat-value { font-size: 28px; font-weight: 700; color: var(--text-primary); }
+  .stat-card .stat-label { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+  .stat-card .stat-change { font-size: 12px; color: var(--success); margin-top: 4px; }
+
+  dl { display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; margin: 12px 0; }
+  dt { font-weight: 600; color: var(--text-primary); font-size: 13px; padding: 6px 0; }
+  dd { color: var(--text-secondary); font-size: 13px; padding: 6px 0; }
+  dd code { font-size: 12px; }
+
+  .faq-item { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
+  .faq-q { padding: 14px 18px; background: var(--bg-elevated); font-weight: 600; font-size: 14px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; color: var(--text-primary); border: none; width: 100%; text-align: left; }
+  .faq-q:hover { background: var(--bg-card); }
+  .faq-a { padding: 16px 18px; border-top: 1px solid var(--border); font-size: 14px; color: var(--text-secondary); display: none; }
+  .faq-a.open { display: block; }
+
+  .kv-tag { display: inline-flex; align-items: center; gap: 6px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; font-size: 13px; font-family: 'SF Mono', monospace; color: var(--text-secondary); }
+  .kv-tag .kv-key { color: var(--text-muted); }
+  .kv-tag .kv-val { color: var(--indigo-light); }
+
+  .template-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin: 16px 0; }
+  .tmpl-card { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 12px; padding: 20px; text-align: center; transition: border-color 0.2s; }
+  .tmpl-card:hover { border-color: var(--indigo); }
+  .tmpl-card .tmpl-icon { font-size: 36px; margin-bottom: 8px; display: block; }
+  .tmpl-card h4 { margin: 0 0 4px; }
+  .tmpl-card p { margin: 0; font-size: 12px; color: var(--text-muted); }
+  .tmpl-card .tmpl-badge { display: inline-block; margin-top: 8px; }
+
+  ul { color: var(--text-secondary); margin: 8px 0 16px 24px; }
+  ul li { margin-bottom: 4px; }
+
+  .mobile-menu-btn { display: none; position: fixed; top: 14px; left: 14px; z-index: 200; background: var(--bg-card); border: 1px solid var(--border); color: var(--text-primary); width: 40px; height: 40px; border-radius: 8px; cursor: pointer; font-size: 20px; align-items: center; justify-content: center; }
+  @media (max-width: 900px) {
+    .sidebar { transform: translateX(-100%); transition: transform 0.25s ease; }
+    .sidebar.open { transform: translateX(0); }
+    .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 99; }
+    .sidebar-overlay.open { display: block; }
+    .main-content { margin-left: 0; }
+    .mobile-menu-btn { display: flex; }
+    .topbar { padding: 14px 16px 14px 64px; }
+    .content-area { padding: 16px; }
+    .feature-grid { grid-template-columns: 1fr; }
+    .template-grid { grid-template-columns: 1fr; }
+    dl { grid-template-columns: 1fr; gap: 2px; }
+    dt { padding-bottom: 0; }
+  }
+</style>
+</head>
+<body>
+<button class="mobile-menu-btn" id="mobileMenuBtn" onclick="toggleMobileSidebar()">=</button>
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleMobileSidebar()"></div>
+<div class="app-layout">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-icon">🛠️</div>
+      <div>
+        <h1>WorkflowSwift</h1>
+        <p>Admin Guide v1.0</p>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="section-title">Contents</div>
+      <a href="#plan-limits-settable-and-enforced" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Plan limits — settable AND enforced</a>
+      <a href="#accounts-and-tenants" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Accounts and tenants</a>
+      <a href="#admin-settings-retention-and-outbound-providers" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Admin settings, retention and outbound providers</a>
+      <a href="#workspaces-agents-and-tickets" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Workspaces, agents and tickets</a>
+      <a href="#byok-provider-keys" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> BYOK — provider keys</a>
+      <a href="#integration-center-coreswift" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Integration Center — CoreSwift</a>
+      <a href="#integration-targets-step-dispatch-operator-provisioned" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Integration targets &amp; step dispatch — operator-provisioned</a>
+      <a href="#affiliate-product-auto-sync" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Affiliate product auto-sync</a>
+      <a href="#industries-and-dashboards" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Industries and dashboards</a>
+      <a href="#credits-payments-and-affiliates" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Credits, payments and affiliates</a>
+      <a href="#rate-limiting" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Rate limiting</a>
+      <a href="#tag-free-account-admin-configurable" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Tag → free account (admin-configurable)</a>
+      <a href="#operational-notes" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Operational notes</a>
+    </nav>
+    <div class="sidebar-footer">&copy; 2026 WorkflowSwift &mdash; Admin Console</div>
+  </aside>
+  <div class="main-content">
+    <header class="topbar">
+      <h2>WorkflowSwift — Admin Guide</h2>
+      <span class="topbar-badge">v1.0 &middot; Tenants, Plans &amp; Operators</span>
+    </header>
+    <div class="content-area">
+      <h1>WorkflowSwift — Admin Guide</h1>
+      <p class="lead">Audience: the <strong>super admin</strong> (the platform operator). Everything under <code>/api/v1/admin/*</code>
+      requires a super-admin JWT — <code>perm_is_super_admin</code> is checked at the API, so a tenant admin or
+      member gets <code>403</code>, not a hidden button.</p>
+      <p>Base: <code>https://workflowswift.com/api/v1</code> · Health: <code>GET /api/v1/health</code> (public).</p>
+      <h2 id="plan-limits-settable-and-enforced">Plan limits — settable AND enforced</h2>
+      <p>This is the part of the platform that controls revenue, so it is worth stating exactly how it
+      works.</p>
+      <p><strong>One source of truth.</strong> A plan's limits live in <code>plan_tiers</code>, in the <code>features</code> JSONB under the
+      <strong>canonical key names</strong>, mirrored into the legacy dedicated columns (<code>max_workflows</code>,
+      <code>max_users</code>, <code>retention_days</code>, <code>can_deploy_n8n</code>, <code>has_api_access</code>) so both views of
+      a plan agree.</p>
+      <p><strong>The keys:</strong></p>
+      <ul>
+      <li>Numeric: <code>max_workflows</code>, <code>max_templates</code>, <code>max_instances</code>, <code>max_users</code>, <code>max_automations</code>,
+        <code>max_integrations</code>, <code>max_api_keys</code>, <code>max_clients</code>, <code>max_portfolio</code>, <code>max_tags</code>,
+        <code>max_industries</code>, <code>retention_days</code></li>
+      <li>On/off, <strong>enforced by a gate</strong>: <code>n8n_deploy</code>, <code>api_access</code></li>
+      <li>On/off, <strong>support-tier promises</strong> (not code gates — see below): <code>priority_support</code>,
+        <code>dedicated_support</code>, <code>sla_guarantee</code></li>
+      </ul>
+      <p><strong>Retired keys (kanban t_1aa78926).</strong> <code>csv_export</code>, <code>webhook_export</code> and <code>google_sheets</code> used to be
+      settable per plan and are gone — from <code>plan_tiers.features</code>, from the plan payloads and from
+      <code>src/features.rs::BOOLEAN_FLAG_KEYS</code> (migration <code>074_retire_export_entitlements.sql</code>). All three were
+      <code>true</code> on every plan including Free and <strong>no code path in the crate honoured any of them</strong>: there is
+      no CSV writer/store/download, no export contract to gate, and no Google credential, OAuth flow,
+      provider preset or destination row. A plan that advertises an entitlement the app cannot deliver is
+      the defect, not a feature. A flag belongs here only together with the gate that enforces it.</p>
+      <p><strong>Retired keys (kanban t_413b4aab).</strong> <code>custom_branding</code>, <code>audit_logs</code> and <code>custom_reports</code> are gone
+      the same way (migration <code>075_retire_unbacked_plan_flags.sql</code>). They were off on Free but on from a
+      paid tier up, and each named a software capability the crate does not have:</p>
+      <ul>
+      <li><code>custom_branding</code> — the <code>accounts</code> branding columns (<code>logo_url</code>, <code>branding_name</code>,
+        <code>primary_color</code>, <code>accent_color</code>) have no writer, no reader and no renderer, and this app has no
+        per-tenant public page to white-label in the first place. <strong>The columns themselves were then
+        dropped</strong> (<code>077_drop_account_branding_columns.sql</code>, kanban t_731bf864), together with the equally
+        unused <code>custom_domain</code>; they had 0 non-null values across all 8 accounts.</li>
+      <li><code>audit_logs</code> — the <code>audit_logs</code> table holds <strong>0 rows</strong> and is written by nothing; its only
+        reader (<code>GET /dashboard/activity</code>) was deleted by kanban t_3a8ccd2a.</li>
+      <li><code>custom_reports</code> — there is no report table, handler, route or console surface anywhere.</li>
+      </ul>
+      <p>Removing them changed nothing a tenant could receive: no console renders these key names, the
+      tenant console reads <code>GET /api/v1/plans</code> for <strong>name and price only</strong>, and the marketing site never
+      names them. Do not re-add one without both the gate that enforces it and the surface that delivers it.</p>
+      <p><strong>Support-tier promises (kanban t_413b4aab) — deliberately NOT gated.</strong> <code>priority_support</code>
+      ("Priority email and chat support"), <code>dedicated_support</code> ("Dedicated account manager") and
+      <code>sla_guarantee</code> ("Service level agreement guarantee") have <strong>no code path and are not supposed to</strong>:
+      their mechanism is the support process, and which tier promises what is a pricing/support-contract
+      decision, not an engineering one. They stay in <code>plan_tiers.features</code> and
+      <code>plan_feature_definitions</code>, are named here on purpose, and are pinned by the
+      <code>boolean_keys_are_either_gated_or_documented_support_promises</code> test in <code>src/features.rs</code>, so the
+      next "a flag no gate reads" census does not re-flag them. If a future pass wants them <em>removed</em>,
+      that is a pricing decision to make first.</p>
+      <p><strong>Semantics:</strong> <code>-1</code> or the string <code>"unlimited"</code> means unlimited; <code>0</code> means "not included in this
+      plan" (any attempt returns <code>402 Payment Required</code>); any other number is a hard cap and the
+      boundary is refused with <code>402</code>. A key that is absent is treated as <em>not configured</em> and allowed.</p>
+      <p><strong>Endpoints:</strong></p>
+      <table>
+      <thead>
+      <tr>
+      <th>Endpoint</th>
+      <th>Method</th>
+      <th>Notes</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+      <td><code>/api/v1/admin/plans</code></td>
+      <td>GET</td>
+      <td>List plan tiers with their limits</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/admin/plans</code></td>
+      <td>POST</td>
+      <td>Create a plan — accepts the limit keys <strong>either at the top level or inside <code>features</code></strong></td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/admin/plans/{id}</code></td>
+      <td>PUT</td>
+      <td>Update a plan — limits are <strong>merged</strong>, so saving one field never wipes the others</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/admin/plans/{id}</code></td>
+      <td>DELETE</td>
+      <td>Delete a plan</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/admin/feature-definitions</code></td>
+      <td>GET</td>
+      <td>The 16 canonical feature keys, their value type, default and category</td>
+      </tr>
+      </tbody>
+      </table>
+      <p><strong>Where enforcement happens:</strong> <code>src/features.rs</code> resolves the account's plan
+      (<code>account_plans</code> → <code>accounts.plan_id</code> → lowest-<code>sort_order</code> active tier, so an account with no
+      plan falls back to the free tier rather than being unlimited) and applies
+      <code>enforce_feature_limit</code> / <code>enforce_plan_flag</code> at the API. Wired gates include: workflow creation
+      (<code>max_workflows</code>), templates (<code>max_templates</code>), instance creation (<code>max_instances</code>), team growth
+      (<code>max_users</code>), automations, integration targets, API-key creation (<code>max_api_keys</code> + <code>api_access</code>),
+      tags, portfolio companies, industries, plan creation, and <strong>n8n deployment</strong> (<code>n8n_deploy</code>).</p>
+      <p><strong>Default tiers as seeded:</strong></p>
+      <table>
+      <thead>
+      <tr>
+      <th>Tier</th>
+      <th>Workflows</th>
+      <th>Users</th>
+      <th>Templates</th>
+      <th>Instances</th>
+      <th>API keys</th>
+      <th>Clients</th>
+      <th>Ret. days</th>
+      <th>n8n</th>
+      <th>API</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+      <td>Free</td>
+      <td>3</td>
+      <td>2</td>
+      <td>3</td>
+      <td>10</td>
+      <td>1</td>
+      <td>5</td>
+      <td>30</td>
+      <td>–</td>
+      <td>–</td>
+      </tr>
+      <tr>
+      <td>Starter</td>
+      <td>15</td>
+      <td>10</td>
+      <td>10</td>
+      <td>100</td>
+      <td>3</td>
+      <td>25</td>
+      <td>30</td>
+      <td>✓</td>
+      <td>✓</td>
+      </tr>
+      <tr>
+      <td>Professional</td>
+      <td>unlimited</td>
+      <td>25</td>
+      <td>25</td>
+      <td>1000</td>
+      <td>10</td>
+      <td>100</td>
+      <td>90</td>
+      <td>✓</td>
+      <td>✓</td>
+      </tr>
+      <tr>
+      <td>Enterprise</td>
+      <td>unlimited</td>
+      <td>unlimited</td>
+      <td>unlimited</td>
+      <td>unlimited</td>
+      <td>unlimited</td>
+      <td>unlimited</td>
+      <td>365</td>
+      <td>✓</td>
+      <td>✓</td>
+      </tr>
+      </tbody>
+      </table>
+      <h2 id="accounts-and-tenants">Accounts and tenants</h2>
+      <table>
+      <thead>
+      <tr>
+      <th>Endpoint</th>
+      <th>Method</th>
+      <th>Description</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+      <td><code>/api/v1/admin/accounts</code></td>
+      <td>GET</td>
+      <td>List all accounts (tenant)</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/admin/accounts/create</code></td>
+      <td>POST</td>
+      <td>Create an account</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/admin/accounts/{id}</code></td>
+      <td>DELETE</td>
+      <td>Delete the account and its data (cascades). The account's n8n <code>WFS &lt;uuid&gt;</code> workflow mirrors are retired <strong>first</strong>; if they cannot be retired (n8n unreachable or refusing) the whole delete is <strong>refused with 502</strong> — an orphaned mirror is permanent, while a retryable 502 is not.</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/admin/accounts/{id}/retention</code></td>
+      <td>PUT</td>
+      <td>Per-account retention override</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/admin/usage</code></td>
+      <td>GET</td>
+      <td>Usage dashboard — credits, executions, n8n status per account</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/admin/impersonate</code> / <code>stop-impersonation</code></td>
+      <td>POST</td>
+      <td>Support impersonation</td>
+      </tr>
+      </tbody>
+      </table>
+      <p>A tenant (<code>accounts</code>) carries ONE identifier: <code>account_slug</code>, NOT NULL UNIQUE (<code>tenants_slug_key</code>),
+      written by registration and the portfolio writers and read by the bridge and by this console's
+      account list. A second, nullable <code>slug</code> column used to sit beside it and was <strong>dropped</strong> on
+      2026-10-02 (migration 078, kanban t_27bd3765): no UNIQUE, no index, no view, no reader in the fleet,
+      6 of 8 rows NULL — and on the 2 rows that carried a value it was an exact copy of <code>account_slug</code>, so
+      <code>PUT /api/v1/accounts {"slug": "..."}</code> answered 200 while renaming a field nothing read.
+      <code>accounts</code> also carries footer text (<code>footer_year</code> / <code>footer_company</code>, writable via
+      <code>PUT /api/v1/accounts</code>), industry, retention days and <strong>its own Hexomatic key</strong>. The
+      <code>logo_url</code> / <code>branding_name</code> / <code>primary_color</code> / <code>accent_color</code> branding columns and the unused
+      <code>custom_domain</code> were <strong>dropped</strong> on 2026-10-02 (migration 077, kanban t_731bf864): nothing in this
+      app wrote or rendered them, so the schema no longer advertises white-label branding. The plan flag
+      that sold it (<code>custom_branding</code>) had already been retired by kanban t_413b4aab. Users (<code>users.aid</code>)
+      belong to one tenant; <code>users.role</code> is <code>admin</code> / <code>member</code> (<code>perm_is_super_admin</code> marks the platform
+      operator).</p>
+      <h2 id="admin-settings-retention-and-outbound-providers">Admin settings, retention and outbound providers</h2>
+      <table>
+      <thead>
+      <tr>
+      <th>Endpoint</th>
+      <th>Method</th>
+      <th>Description</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+      <td><code>/api/v1/admin/settings</code></td>
+      <td>GET</td>
+      <td>All settings</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/admin/settings/{key}</code></td>
+      <td>GET/PUT</td>
+      <td>Read/update one setting (secret values come back <strong>masked</strong>)</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/admin/settings/email/test</code></td>
+      <td>POST</td>
+      <td>Send a real test email</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/admin/settings/sms/test</code></td>
+      <td>POST</td>
+      <td>Send a real test SMS</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/admin/retention</code></td>
+      <td>GET/PUT</td>
+      <td>Platform retention policy</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/admin/email-templates</code></td>
+      <td>GET/POST</td>
+      <td>Message templates</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/admin/email-templates/{id}</code></td>
+      <td>PUT/DELETE</td>
+      <td>Edit/delete a template</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/admin/site</code></td>
+      <td>GET/PUT</td>
+      <td>Public site copy</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/admin/industry-sources</code></td>
+      <td>GET/POST</td>
+      <td>Industry data sources (+ <code>/seed</code>, <code>/{id}</code> DELETE)</td>
+      </tr>
+      </tbody>
+      </table>
+      <p>Email credentials are read from the <strong>database only</strong> — there is no environment fallback — and
+      the provider is an admin choice (<code>smtp</code>, <code>mailgun</code>, <code>sendgrid</code>, <code>sendiio</code>).</p>
+      <p>SMS credentials follow the same rule: <code>admin_settings.sms</code> holds
+      <code>{provider, api_key, api_secret, account_sid, from_number, api_url}</code>, the secret fields are sealed
+      at rest with the same <code>enc:v1:</code> envelope, there is no environment fallback, and the provider is an
+      admin choice (<code>twilio</code>, <code>vonage</code>). Both rows are edited in <strong>Admin → Settings → Email Provider</strong> and
+      <strong>Admin → Settings → SMS Provider</strong>; each card has a <em>Send test</em> button that performs a REAL send
+      and reports the provider's own answer — a fabricated "OK" is never shown.</p>
+      <h3 id="notify-channels-what-a-notify-step-can-actually-deliver-on">Notify channels — what a Notify step can actually deliver on</h3>
+      <p>A Notify step's <strong>Channel</strong> is vocabulary, not free text, and it is <strong>sender-backed</strong>: the list the
+      console renders is exactly the list this install can deliver on
+      (<code>GET /api/v1/notify/channels</code>).</p>
+      <table>
+      <thead>
+      <tr>
+      <th>Channel</th>
+      <th>What it does</th>
+      <th>When it is offered</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+      <td><code>webhook</code></td>
+      <td>POSTs <code>{message, data}</code> to a URL you own</td>
+      <td>always — it needs no provider</td>
+      </tr>
+      <tr>
+      <td><code>email</code></td>
+      <td>the app mails <strong>your account's own people</strong></td>
+      <td>only while an <strong>Email Provider</strong> is configured</td>
+      </tr>
+      <tr>
+      <td><code>sms</code></td>
+      <td>the app texts <strong>your account's own people</strong></td>
+      <td>only while an <strong>SMS Provider</strong> is configured</td>
+      </tr>
+      </tbody>
+      </table>
+      <p>Two rules hold fail-closed — at the write path <em>and</em> again at send time:</p>
+      <ol>
+      <li><strong>Recipients are the account's own people only.</strong> <code>email</code> reaches the account's users and its
+         billing contact (the account's <code>company_admin</code>); <code>sms</code> reaches those same people's
+         <code>users.phone</code>. A step may never name an address or number of its own: the API <strong>refuses</strong> a
+         sender-backed step that carries a free-text <code>recipient</code>, and a row already stored in that shape
+         is refused with a 400 and recorded — never sent. The platform is not an outbound relay on its own
+         sending domain.</li>
+      <li><strong>Nothing undeliverable is offered.</strong> A channel whose sender is not configured is refused at the
+         write path, refused again at send time if the provider is removed later, and reported by
+         <code>POST /api/v1/workflows/validate-steps</code>.</li>
+      </ol>
+      <p>Every attempt is recorded in <code>notify_send_attempts</code> — <code>sent</code>, <code>failed</code>, <code>refused</code> or <code>throttled</code>,
+      with the channel, the recipient and the reason. No outcome is silent. A per-account hourly cap
+      bounds a runaway workflow: <code>plan_tiers.max_notify_per_hour</code> (<code>-1</code> = unlimited, editable in the
+      plans editor) with the install-wide fallback <code>admin_settings.limits.notify_per_hour</code>; past the cap
+      the dispatch route answers <strong>429</strong> and the attempt is recorded <code>throttled</code>.</p>
+      <p><code>users.phone</code> is where an SMS destination lives — set it on the account's own user records, in
+      E.164 form (<code>+15551234567</code>). A person with no phone on file is shown as not selectable in the
+      step's recipient picker rather than being silently dropped.</p>
+      <table>
+      <thead>
+      <tr>
+      <th>Endpoint</th>
+      <th>Method</th>
+      <th>Description</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+      <td><code>/api/v1/notify/channels</code></td>
+      <td>GET</td>
+      <td>The channels this install can deliver on (what the console offers)</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/notify/recipients</code></td>
+      <td>GET</td>
+      <td>The account's own people, for the step's recipient picker</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/notify/dispatch</code></td>
+      <td>POST</td>
+      <td>Machine-keyed (<code>X-Internal-Key</code>); the mirrored n8n Notify send</td>
+      </tr>
+      </tbody>
+      </table>
+      <p>The mirrored n8n copy carries <strong>no provider credential</strong>: its Notify node is a plain
+      <code>httpRequest</code> that POSTs <code>{workflow_id, step_index}</code> to <code>/api/v1/notify/dispatch</code>, and the app sends
+      from the provider configured above. That is deliberately not an <code>emailSend</code>/SMTP node — that node
+      type declares an <code>smtp</code> credential this n8n does not hold, and ONE such node made a tenant's entire
+      generated workflow un-activatable (<code>Missing required credential: smtp</code>).</p>
+      <h2 id="workspaces-agents-and-tickets">Workspaces, agents and tickets</h2>
+      <p>Users create <strong>workspaces</strong> within their tenant (the <code>portfolio_companies</code> table); a workspace carries
+      a name and a slug, <code>POST</code> takes an optional <code>industry_slug</code> that seeds that workspace's dashboard, and
+      <code>GET /api/v1/agents?workspace_id={id}</code> scopes the agent list to one workspace. <strong>Provider keys are
+      per tenant, never per workspace</strong> — see BYOK below.</p>
+      <table>
+      <thead>
+      <tr>
+      <th>Endpoint</th>
+      <th>Method</th>
+      <th>Description</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+      <td><code>/api/v1/workspaces</code></td>
+      <td>GET/POST</td>
+      <td>List/create workspaces</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/workspaces/{id}</code></td>
+      <td>DELETE</td>
+      <td>Delete a workspace</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/agents?workspace_id={id}</code></td>
+      <td>GET</td>
+      <td>Agents in a workspace</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/tickets</code></td>
+      <td>GET/POST</td>
+      <td>Ticket list / create</td>
+      </tr>
+      </tbody>
+      </table>
+      <p><strong>Paperclip</strong> is the agent-orchestration layer <em>above</em> WorkflowSwift (task assignment, budgets,
+      execution history). It is not a WorkflowSwift user-facing feature and nothing in the user sidebar
+      exposes it — WorkflowSwift only hands work off and receives results.</p>
+      <h2 id="byok-provider-keys">BYOK — provider keys</h2>
+      <p>Keys the <strong>customer</strong> brings (OpenAI, Resend/SendGrid, social, CoreSwift, …) are stored in
+      <code>provider_keys</code> <strong>per tenant</strong> (<code>aid</code>), one row per (tenant, provider), entered in the app UI.</p>
+      <table>
+      <thead>
+      <tr>
+      <th>Endpoint</th>
+      <th>Method</th>
+      <th>Description</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+      <td><code>/api/v1/provider-keys</code></td>
+      <td>GET</td>
+      <td>List configured providers — <strong>values masked</strong></td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/provider-keys</code></td>
+      <td>POST</td>
+      <td>Save/update a tenant provider key</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/provider-keys/{provider}</code></td>
+      <td>DELETE</td>
+      <td>Remove a provider key</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/provider-keys/{provider}/test</code></td>
+      <td>POST</td>
+      <td>Live connection probe</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/provider-presets</code>, <code>/available-providers</code></td>
+      <td>GET</td>
+      <td>Preset catalogue (public)</td>
+      </tr>
+      </tbody>
+      </table>
+      <p>Every read endpoint returns the key masked (<code>sk-…161</code>); the raw value is never returned. There is
+      no env-var-only provider and no single global admin paste — if a provider has no per-tenant key,
+      the related feature is simply "not connected".</p>
+      <p><strong>Storage note (measured 2026-10-02, kanban t_c603a937):</strong> <code>provider_keys.api_key</code> is <strong>ciphertext
+      at rest</strong> — <code>enc:v1:</code> + base64, AES-256 via pgcrypto, master key only in the process environment
+      (<code>PROVIDER_KEY_ENC_SECRET</code>); migration <code>048</code> arms it, a DB CHECK refuses a value without the prefix,
+      and a write fails closed when the master key is absent. <code>api_keys.key_hash</code> (the WorkflowSwift-issued
+      keys) is argon2-hashed; <code>integration_targets.api_key</code> uses the same envelope (migration <code>053</code>).</p>
+      <h2 id="integration-center-coreswift">Integration Center — CoreSwift</h2>
+      <table>
+      <thead>
+      <tr>
+      <th>Endpoint</th>
+      <th>Method</th>
+      <th>Description</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+      <td><code>/api/v1/integrations/coreswift/status</code></td>
+      <td>GET</td>
+      <td>Is a CoreSwift key connected, and its base URL</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/integrations/coreswift/lists</code></td>
+      <td>GET</td>
+      <td>Proxy the CoreSwift lists catalogue</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/integrations/coreswift/push</code></td>
+      <td>POST</td>
+      <td>Manual push of captured leads</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/user-keys</code></td>
+      <td>GET/POST</td>
+      <td>Per-user integration keys (+ <code>/{id}</code> DELETE, <code>/health-check</code>)</td>
+      </tr>
+      </tbody>
+      </table>
+      <p>The per-user <code>user_integrations</code> family (<code>GET</code>/<code>POST /api/v1/integrations</code>, <code>/native</code>,
+      <code>/native/{provider}</code>, <code>DELETE /{provider}</code>, <code>/health-check</code>) and the console's "My Integrations"
+      panel were RETIRED on 2026-10-02 (kanban t_cb839034): that store had 0 rows and no delivery path
+      read it — every delivery path reads <code>provider_keys</code> — so those paths answer 404, and the table is
+      dropped by migration <code>076</code>. <code>GET /api/v1/integrations/resolve</code> (the step-provider resolver) and the
+      CoreSwift spoke above are unaffected.</p>
+      <p>Inbound: <code>POST /api/v1/incoming</code> (internal key) is the single endpoint every Swift tool pushes
+      to — WorkflowSwift matches the payload to an active workflow, creates an instance and steps
+      through it, dispatching to integration targets and n8n. A workflow only dispatches to a target when
+      its step carries a seeded <code>integration_target_id</code> (see below).</p>
+      <p>MultiDirectory referral events can also arrive this way, e.g.
+      <code>{ "event": "referral_verified", "referrer_email": "...", "referee_email": "...", "zaarcash_earned": 100 }</code>,
+      and a workflow can turn them into notifications or CRM updates.</p>
+      <h2 id="integration-targets-step-dispatch-operator-provisioned">Integration targets &amp; step dispatch — operator-provisioned</h2>
+      <p>Measured 2026-10-02 (kanban t_97a0bd3f). Targets exist and dispatch works; the <strong>binding</strong> has no
+      shipped writer, so it is provisioned server-side.</p>
+      <ul>
+      <li><strong>Targets</strong> (<code>integration_targets</code>, aid-scoped) are created/edited in the admin console under
+        <strong>Integrations → Integration Targets</strong> (<code>GET/POST /api/v1/integration-targets</code>, <code>PUT/DELETE
+        /api/v1/integration-targets/{id}</code>). Each row carries <code>webhook_url</code>, a <code>provider_preset</code>,
+        <code>allowed_domains</code> and <code>daily_limit</code>; <code>webhook_security::check_webhook_security</code> enforces the
+        domain allowlist and the daily cap, counting rows in <code>delivery_log</code>.</li>
+      <li><strong>The URL source</strong> is the target's <code>webhook_url</code> or, when that is blank, its <code>provider_preset</code> — a
+        key in <code>integration_provider_presets</code>, served by <code>GET /api/v1/provider-presets</code>
+        (8 rows). The console's <strong>Integration Targets</strong> panel offers the catalogue as a SELECT, the create
+        and update routes validate the key against it (an unknown key is a field-level 422, never a
+        23503), and both accept <code>provider_preset</code> — a string sets it, <code>null</code> clears it. <code>forward_dispatch</code>
+        appends the payload's <code>path</code> to the preset's <code>base_url</code>, and the dispatch security gate validates
+        that same effective URL, so a preset-routed target needs no webhook URL at all (kanban t_cb839034
+        wired this half of the routing contract: until then the read was live while 5/5 rows had no writer
+        for the column).</li>
+      <li><strong>The binding</strong> is the column <code>workflow_steps.integration_target_id</code>.
+        The executor reads it at <code>src/execution.rs</code> in the arm
+        <code>"integration" | "integration_dispatch"</code>, i.e. <strong>a step dispatches only if its <code>step_type</code> is
+        <code>integration</code></strong>. Neither the Builder (15 types) nor the app's own <code>POST
+        /api/v1/workflows/validate-steps</code> vocabulary (25 types) contains that type, and the steps API
+        (<code>POST/PUT /api/v1/workflows/{id}/steps</code>) accepts no <code>integration_target_id</code> field — a request
+        carrying one is accepted and the value is dropped. Seed it with SQL; there is no UI to bind a step
+        and none is wanted until a tenant can create its own targets. Migration <code>072</code> retired migration
+        018's other step columns (<code>api_path</code> / <code>api_method</code> on both step tables, and this table's
+        <code>integration_target_id</code> twin): measured 0 readers, 0 writers, 0 non-default rows, and installing a
+        template copies only <code>step_type/name/description/sort_order/config</code> into <code>workflow_steps</code>.</li>
+      <li><strong>Credential:</strong> <code>forward_dispatch</code> sends <code>Authorization: Bearer &lt;key&gt;</code> + <code>x-api-key: &lt;key&gt;</code> from,
+        in order, <strong>(1)</strong> the credential stored ON THE TARGET ROW (<code>integration_targets.api_key</code>, ciphertext
+        at rest; set at create, rotated/cleared via <code>api_key</code> on <code>PUT /api/v1/integration-targets/{id}</code>),
+        else <strong>(2)</strong> the account's <code>provider_keys</code> row. A target credential that cannot be decrypted fails
+        the dispatch (5xx, reason in <code>delivery_log</code>) instead of falling back to the account key; with
+        neither set the POST goes out unauthenticated. Before 2026-10-02 the target-row <code>api_key</code> was read
+        by no path at all, so a target created with one still dispatched with no auth header (kanban
+        t_c603a937). The account row's <code>metadata.auth_type</code> still picks the <code>basic</code>/<code>x-api-key</code> shape, and
+        a <code>_forward_auth</code> string in the payload body overrides the Authorization header last.</li>
+      <li><strong>One-shot dispatch:</strong> <code>POST /api/v1/integration-dispatch?target_id={id}</code> forwards one JSON body to
+        the target (auth'd route; every attempt is counted in <code>delivery_log</code>). The legacy
+        <code>n8n-templates/*.json</code> name <code>/api/integration-dispatch</code> (no <code>/v1</code>) — the API is mounted at
+        <code>/api/v1</code>, so those URLs are unrouted; n8n flows must use <code>/api/v1/integration-dispatch</code>.</li>
+      </ul>
+      <h2 id="affiliate-product-auto-sync">Affiliate product auto-sync</h2>
+      <p>Plan changes sync to FunnelSwift's <code>affiliate_products</code>: create → <code>action: create</code>, update →
+      <code>action: update</code>, delete → <code>action: deactivate</code>. The sync is asynchronous and needs
+      <code>FUNNELSWIFT_URL</code> (default <code>http://localhost:8080</code>).</p>
+      <h2 id="industries-and-dashboards">Industries and dashboards</h2>
+      <p>The platform ships <strong>6 industries</strong>: site-flipping, e-commerce, saas, government-contracting,
+      real-estate, marketing-agency. Each account gets a dashboard tab per selected industry, seeded
+      with Data Cards; industry data sources can be <code>api</code>, <code>webhook</code>, <code>rss</code> or <code>scraper</code> and cost
+      credits per call.</p>
+      <table>
+      <thead>
+      <tr>
+      <th>Endpoint</th>
+      <th>Method</th>
+      <th>Description</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+      <td><code>/api/v1/industries</code></td>
+      <td>GET</td>
+      <td>List industries (public)</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/accounts/industry</code></td>
+      <td>GET/PUT</td>
+      <td>Account industries (GET lists linked; PUT sets primary)</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/accounts/industry/{slug}</code></td>
+      <td>DELETE</td>
+      <td>Remove an industry dashboard from the account</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/dashboard/tabs</code></td>
+      <td>GET</td>
+      <td>Tab-navigated dashboard (per-industry tabs + widgets)</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/dashboard/workspace</code>, <code>/stats</code>, <code>/timeline</code>, <code>/widgets</code></td>
+      <td>GET</td>
+      <td>Dashboard data — <code>/stats</code> totals are rendered on the dashboard (workflows / clients / templates)</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/dashboard/push-widget-data</code></td>
+      <td>POST</td>
+      <td>Ingest custom metrics</td>
+      </tr>
+      </tbody>
+      </table>
+      <h2 id="credits-payments-and-affiliates">Credits, payments and affiliates</h2>
+      <ul>
+      <li><strong>1 credit per execution</strong>; a run without credits is refused.</li>
+      <li>Checkout: <code>/api/v1/checkout/create</code>, <code>/checkout/sessions</code>; providers configured per plan via
+        <code>/api/v1/payment-providers</code>. Webhooks: <code>POST /api/v1/webhooks/stripe</code>,
+        <code>POST /api/v1/webhooks/paypal</code>.</li>
+      <li><code>POST /api/v1/webhooks/paypal</code> is <strong>signature-verified before anything is written or dispatched</strong>
+        (kanban t_5cf44e1b). The four PayPal signature headers (<code>paypal-transmission-id</code>,
+        <code>paypal-transmission-time</code>, <code>paypal-transmission-sig</code>, <code>paypal-cert-url</code>) are required and the
+        signature is checked against PayPal's <code>verify-webhook-signature</code> API, authenticated with the REST
+        <code>client_id:client_secret</code> and verified against <code>PAYPAL_WEBHOOK_ID</code> (or the <code>webhook_secret</code> of the
+        active <code>paypal</code> provider row — admin console -&gt; Payment providers, no redeploy). Fail-closed
+        replies, in order: <code>401 missing_paypal_signature_headers</code>, <code>503 paypal_not_configured</code> (no webhook
+        id or no credential: PayPal is <strong>not</strong> called and nothing is written),
+        <code>401 paypal_verification_api_error</code> / <code>401 paypal_verification_unreachable</code> (the verdict itself
+        could not be obtained), <code>401 signature_verification_failed</code> (a real FAILURE verdict). Only a
+        verified event reaches <code>payment_webhook_events</code> and fulfilment.</li>
+      <li>Affiliate attribution is owned by FunnelSwift, not by this app: WorkflowSwift stores no affiliate
+        records and exposes <strong>no</strong> <code>/api/v1/affiliates</code> endpoint (the auto-generated stub that answered
+        500 was deleted — kanban t_01fa9bbc). A paid plan upgrade notifies
+        <code>POST {FUNNELSWIFT_URL}/api/v1/internal/affiliate/upgrade-event</code> (key-authenticated) and the
+        referral is credited there — that is the only conversion this app reports. The keyless
+        <code>POST {FUNNELSWIFT_URL}/api/v1/webhooks/conversion</code> post was <strong>deleted</strong> (kanban t_f6eb8834): it
+        sent no <code>X-Internal-Key</code> and no attribution, so the now key-gated receiver refused it <code>401</code> and
+        the conversion was lost silently; re-adding it would only double-pay, because the upgrade event
+        above already credits the same purchase.</li>
+      <li>Per-account registries backed by real tables: <code>/api/v1/tag-groups</code> (Tags &amp; Labels -&gt; Tag Groups,
+        <code>tag_groups</code>, migration 054) and <code>/api/v1/webhooks</code> (Communications -&gt; Webhooks, <code>webhooks</code>,
+        migration 055). The <code>webhooks</code> table is the tenant's own endpoint registry — it is not the
+        inbound <code>stripe</code>/<code>paypal</code> receivers above, whose event log is <code>payment_webhook_events</code>.</li>
+      <li>Email templates are <strong>platform-wide, not per-account</strong>: the only create/read/update/delete path is
+        <code>/api/v1/admin/email-templates</code> (Admin -&gt; Email Templates, super-admin only — the token must carry
+        <code>perm_is_super_admin</code>), and <code>src/email.rs</code> resolves a template with no <code>aid</code> filter
+        (<code>template_type = $1 AND (is_default = true OR is_default IS NULL)</code>). The tenant-scoped
+        <code>/api/v1/email-templates</code> family and its Communications -&gt; Email Templates panel were <strong>deleted</strong>
+        (kanban t_00e7b709): every arm was dead — its INSERT omitted the NOT NULL
+        <code>template_type</code>/<code>subject</code>, so it answered <code>500 Database error</code> for every authenticated caller and
+        wrote no row; its reads decoded the NULL system <code>aid</code> as a UUID, so list answered
+        <code>200 {"items":[],"count":0}</code> over a table with rows and get/put answered 500; and its DELETE
+        removed a system-wide template for any authenticated caller. Do not re-add a second create path.</li>
+      <li>Invoices: <code>/api/v1/invoices</code> and <code>/api/v1/invoices/{id}</code> read <code>invoices</code>; <code>amount</code> is
+        <code>NUMERIC(10,2)</code> and is returned as a decimal <strong>string</strong> (<code>amount::text</code>), like <code>plan_tiers</code>
+        prices — sqlx cannot decode NUMERIC into a JSON value.</li>
+      </ul>
+      <h2 id="rate-limiting">Rate limiting</h2>
+      <p>Protected endpoints pass through <code>rate_limit</code> middleware keyed on the account. Exceeding it
+      returns <code>429</code> with a <code>Retry-After</code> header.</p>
+      <p>A second, <code>pre_auth_rate_limit</code> guard runs <strong>before</strong> any credential is verified, for requests
+      that present an API key (<code>workflowswift_...</code>): it exists so a flood of requests that merely look
+      like a key cannot drive the expensive Argon2 hash check, and its <code>429</code> arrives without the key
+      ever being looked up (kanban t_da8a579a). It is keyed on the client address the PROXY vetted —
+      nginx's <code>X-Real-IP</code> (<code>$remote_addr</code>: the real visitor behind Cloudflare, the true peer for a
+      caller that reaches the origin directly) — never on a header the caller can hand-set. A request
+      with no address header at all shares one <code>unknown</code> bucket, so omitting the header is not a way
+      around the limit.</p>
+      <h2 id="tag-free-account-admin-configurable">Tag → free account (admin-configurable)</h2>
+      <p>FunnelSwift can create a free WorkflowSwift account when one of its leads is tagged with
+      WorkflowSwift. It posts to <code>POST /api/v1/internal/provision-free-account</code> with the shared internal
+      key; this app resolves the entry plan <strong>in-app</strong> and mints its own account for the lead's address
+      through the same signup core the public signup uses — the <code>accounts</code> row, its owner <code>users</code> row, an
+      <code>account_plans</code> row on the chosen free tier and that tier's first month of credits — then mails the
+      generated credentials. A second call for the same address answers <code>already_exists</code> and mints
+      nothing.</p>
+      <p>The switch is in the admin console under <strong>Admin → Settings → Tag → free account</strong>:</p>
+      <ul>
+      <li><strong>Enable auto-provisioning from tags</strong> — <code>admin_settings.provision_from_tags_enabled</code>. Ships
+        <strong>off</strong>; while it is off the receiver answers <code>403</code> and creates nothing.</li>
+      <li><strong>Entry plan</strong> — <code>admin_settings.provision_entry_plan_slug</code>, default <code>free</code>. Only free tiers are
+        listed; a paid plan is refused.</li>
+      </ul>
+      <p>Both are read by the receiver and written through <code>GET|PUT /api/v1/admin/provisioning-settings</code>
+      (platform admins only).</p>
+      <h2 id="operational-notes">Operational notes</h2>
+      <ul>
+      <li>The container runs with <code>network_mode: host</code> and publishes nothing — the API binds
+        <code>127.0.0.1:8085</code> on the host, behind nginx/Cloudflare.</li>
+      <li>The binary is <strong>image-baked</strong> (no bind mount): restarting the container re-runs the same
+        binary. Deploy with <code>/opt/swift/bin/deploy-workflowswift.sh</code>, which rebuilds the image,
+        force-recreates the container and verifies sha256 parity against the repo build.</li>
+      <li><code>sqlx::migrate!</code> embeds migrations in the binary, so a new <code>migrations/*.sql</code> file only takes
+        effect at the next deploy — read it before it can run.</li>
+      </ul>
+
+    </div>
+  </div>
+</div>
+<script>
+function toggleMobileSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('sidebarOverlay').classList.toggle('open');
+}
+function closeMobile() {
+  if (window.innerWidth <= 900) {
+    document.getElementById('sidebar').classList.remove('open');
+    document.getElementById('sidebarOverlay').classList.remove('open');
+  }
+}
+</script>
+</body>
+</html>

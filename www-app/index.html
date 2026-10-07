@@ -1790,6 +1790,7 @@ const App = () => {
         <nav class="flex-1 overflow-y-auto p-3 space-y-1">
           ${NAV.map(n => html`<button class="nav-item ${S.current===n.id?'active':''}" onClick=${()=>setView(n.id)}><span>${n.icon}</span> ${n.label}</button>`)}
           <a class="nav-item" href="/integrations.html" style="text-decoration:none"><span>🔌</span> Integrations</a>
+          <a class="nav-item" id="guide-link" href="/guide.html" style="text-decoration:none"><span>📖</span> User Guide</a>
         </nav>
         <div class="p-3 border-t border-gray-100">
           <div class="text-xs text-gray-500 mb-2 truncate">${user.email || 'signed in'}</div>

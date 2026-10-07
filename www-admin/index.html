@@ -182,6 +182,11 @@ function sidebar(){
       });
     }
   });
+  // kanban t_06354530 — the fleet guide standard: the console links its admin guide on its OWN
+  // origin, and it is reachable from the console nav rather than merely served. Literal markup (not
+  // h('a',{href:…})) on purpose: the served shell must CARRY `href="/admin-guide.html"` as bytes, so
+  // a grep for the entry point finds it.
+  nav.insertAdjacentHTML('beforeend','<div class="px-4 mt-4"><a id="admin-guide-link" class="btn btn-ghost w-full" href="/admin-guide.html" style="text-decoration:none">📘 Admin Guide</a></div>');
   nav.appendChild(h('div',{className:'px-4 mt-6'},h('button',{className:'btn btn-ghost text-red-500 w-full',onclick:logout},'Log Out')));
   return nav;
 }
