@@ -2082,11 +2082,10 @@ mod tests {
             Err(sqlx::Error::RowNotFound),
         );
         assert_eq!(classify_step_status(&broken), "failed");
-        assert_eq!(
+        assert!(
             step_error_text(&broken)
                 .unwrap_or_default()
                 .starts_with("dashboard series lookup failed"),
-            true,
             "the reason must reach the execution log: {broken}"
         );
 

@@ -568,7 +568,7 @@ mod tests {
             collected
         }
 
-        fn p(v: &mut Vec<f64>, q: f64) -> f64 {
+        fn p(v: &mut [f64], q: f64) -> f64 {
             v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             if v.is_empty() {
                 return 0.0;
@@ -746,7 +746,7 @@ mod tests {
             collected
         }
 
-        fn p(v: &mut Vec<f64>, q: f64) -> f64 {
+        fn p(v: &mut [f64], q: f64) -> f64 {
             v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             if v.is_empty() {
                 return 0.0;

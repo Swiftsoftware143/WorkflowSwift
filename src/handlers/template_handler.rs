@@ -962,7 +962,7 @@ mod tests {
     /// here: the workflow being protected does not exist yet.
     #[test]
     fn a_stored_template_that_opens_with_a_manual_step_is_refused() {
-        let rows = vec![
+        let rows = [
             template_row(Uuid::new_v4(), "manual", "Qualify", 0),
             template_row(Uuid::new_v4(), "data-card", "Discover", 1),
         ];

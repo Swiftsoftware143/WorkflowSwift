@@ -2066,16 +2066,13 @@ mod tests {
         let mut probes: Vec<(String, Value)> = Vec::new();
         for st in converted_step_types() {
             probes.push((st.clone(), json!({})));
-            match st.as_str() {
-                "notify" => {
-                    for ch in ["email", "slack", "telegram", "webhook", "sms"] {
-                        probes.push((
-                            st.clone(),
-                            json!({"channel": ch, "recipient": "ops@example.com"}),
-                        ));
-                    }
+            if st.as_str() == "notify" {
+                for ch in ["email", "slack", "telegram", "webhook", "sms"] {
+                    probes.push((
+                        st.clone(),
+                        json!({"channel": ch, "recipient": "ops@example.com"}),
+                    ));
                 }
-                _ => {}
             }
         }
         probes
