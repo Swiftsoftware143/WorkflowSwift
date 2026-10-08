@@ -25,6 +25,12 @@
   if (typeof window.appGuidePages === 'undefined') window.appGuidePages = {};
   var LS_KEY = 'inline_guide_closed';
 
+  // Has the operator already opened the guide by hand? (kanban t_39cea779) The panel used to
+  // AUTO-OPEN over every screen it describes, which covered the very content it described — on the
+  // account screen it sat on the Save button. It is now closed by default and only the round ?
+  // button opens it; nothing opens itself over the content.
+  var userOpened = false;
+
   // ── helpers ────────────────────────────────────────────────────
   function getClosed() {
     try { return JSON.parse(localStorage.getItem(LS_KEY) || '{}'); } catch(e) { return {}; }
@@ -126,9 +132,10 @@
     var closeBtn = document.getElementById('ig-close');
     var dismissBtn = document.getElementById('ig-dismiss');
 
-    toggle.addEventListener('click', function(){ panel.classList.toggle('open'); });
-    closeBtn.addEventListener('click', function(){ panel.classList.remove('open'); });
+    toggle.addEventListener('click', function(){ userOpened = true; panel.classList.toggle('open'); });
+    closeBtn.addEventListener('click', function(){ userOpened = false; panel.classList.remove('open'); });
     dismissBtn.addEventListener('click', function(){
+      userOpened = false;
       setClosed(getPageKey(), true);
       panel.classList.remove('open');
       toggle.style.display = 'none';
@@ -167,11 +174,12 @@
       actionsEl.innerHTML = '';
     }
 
-    // Show panel if not dismissed
-    if (closed === true) {
+    // Never auto-open (kanban t_39cea779). The panel is closed unless the operator opened it with
+    // the ? button; a SPA re-render (this function runs on MutationObserver + every view switch)
+    // must never close a panel the operator opened by hand either. `closed`/`getClosed()` still
+    // honour a previous "Don't show this again".
+    if (!userOpened || closed === true) {
       panel.classList.remove('open');
-    } else {
-      panel.classList.add('open');
     }
   }
 

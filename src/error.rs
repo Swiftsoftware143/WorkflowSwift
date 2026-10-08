@@ -13,6 +13,15 @@ pub enum AppError {
     #[error("Invalid credentials")]
     InvalidCredentials,
 
+    /// The caller IS signed in but the `current_password` they supplied does not match the stored
+    /// one (programme card t_2cb77960, this app's card t_39cea779). Deliberately distinct from
+    /// [`AppError::InvalidCredentials`]: a wrong CURRENT password on the change-password form must
+    /// name the field the user has to fix — the fleet contract is exactly the sentence
+    /// "Current password is incorrect" — instead of the generic "Invalid credentials" a failed
+    /// sign-in answers, which would leave the account screen with nothing useful to show.
+    #[error("Current password is incorrect")]
+    InvalidPassword,
+
     #[error("Forbidden: {0}")]
     Forbidden(String),
 
@@ -63,6 +72,10 @@ impl IntoResponse for AppError {
             AppError::InvalidCredentials => {
                 (StatusCode::UNAUTHORIZED, "Invalid credentials".to_string())
             }
+            AppError::InvalidPassword => (
+                StatusCode::UNAUTHORIZED,
+                "Current password is incorrect".to_string(),
+            ),
             AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
             AppError::Duplicate(msg) => (StatusCode::CONFLICT, msg.clone()),

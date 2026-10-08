@@ -117,7 +117,7 @@ window.appGuidePages = {
   profile:       { title: "Profile", desc: "Your account details and sign-in for this workspace.", actions: ["Update your name and password"] }
 };
 </script>
-<script src="/inline-guide-widget.js"></script>
+<script src="/inline-guide-widget.js?v=8a094f0b"></script>
 <script type="module">
 import { h, render } from 'https://esm.sh/preact@10.26.4';
 import htm from 'https://esm.sh/htm@3.1.1';
@@ -149,8 +149,13 @@ const API = (() => {
   return {
     register: (name, email) => fetch(base + '/auth/register', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, email}) }).then(handle),
     login: (email, password) => fetch(base + '/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, password}) }).then(handle),
-    changePassword: (current_password, new_password) => fetch(base + '/auth/change-password', { method:'POST', headers: headers(), body: JSON.stringify({ current_password, new_password }) }).then(handle),
-    updateProfile: (name) => fetch(base + '/auth/profile', { method:'PUT', headers: headers(), body: JSON.stringify({ name }) }).then(handle),
+    me: () => fetch(base + '/auth/me', { headers: headers() }).then(handle),
+    changePassword: (current_password, new_password) => fetch(base + '/auth/password', { method:'PUT', headers: headers(), body: JSON.stringify({ current_password, new_password }) }).then(handle),
+    updateProfile: (patch) => fetch(base + '/auth/profile', { method:'PUT', headers: headers(), body: JSON.stringify(patch) }).then(handle),
+    // The profile picture is RAW image bytes, not JSON: no multipart envelope. The bearer token is
+    // still attached (the route is private); Content-Type is only a hint — the server sniffs the
+    // bytes and ignores this header (kanban t_39cea779).
+    uploadAvatar: (blob) => fetch(base + '/auth/avatar', { method:'POST', headers: { ...(token ? { 'Authorization': 'Bearer ' + token } : {}), 'Content-Type': blob.type || 'application/octet-stream' }, body: blob }).then(handle),
     get: (p) => fetch(base + p, { headers: headers() }).then(handle),
     post: (p, b) => fetch(base + p, { method:'POST', headers: headers(), body: b === undefined ? undefined : JSON.stringify(b) }).then(handle),
     put: (p, b) => fetch(base + p, { method:'PUT', headers: headers(), body: JSON.stringify(b) }).then(handle),
@@ -219,7 +224,20 @@ const API = (() => {
     get token(){ return token; }, get user(){ return user; },
     get isLoggedIn(){ return !!sessionStorage.getItem('wf_token'); },
     setAuth(t, u){ token = t; user = u; sessionStorage.setItem('wf_token', t); sessionStorage.setItem('wf_user', JSON.stringify(u)); },
-    logout(){ token = null; user = null; sessionStorage.removeItem('wf_token'); sessionStorage.removeItem('wf_user'); }
+    // Refresh the cached identity WITHOUT touching the token (kanban t_39cea779): the console reads
+    // /auth/me on boot to learn the REAL plan name, company and picture, which the login response
+    // does not carry.
+    setUser(u){ user = u; try { sessionStorage.setItem('wf_user', JSON.stringify(u)); } catch(e){} },
+    // Sign Out must ACTUALLY sign out (kanban t_39cea779). login.html stores the session in BOTH
+    // storages (`ws_fs_token` in localStorage and `wf_token` in sessionStorage) and the boot IIFE
+    // re-adopts whichever survives — so clearing only sessionStorage left the SPA signed in after a
+    // reload and the password-change acceptance leg ("Sign Out -> sign in with the NEW password")
+    // could never run. Every key the boot adoption reads is cleared here.
+    logout(){
+      token = null; user = null;
+      try { sessionStorage.removeItem('wf_token'); sessionStorage.removeItem('wf_user'); } catch(e){}
+      try { localStorage.removeItem('ws_fs_token'); localStorage.removeItem('token'); localStorage.removeItem('access_token'); } catch(e){}
+    }
   };
 })();
 
@@ -252,6 +270,34 @@ Object.assign(S, { users:null, teamErr:null, invited:null, permsTarget:null, tim
 Object.assign(S, { views: {} });
 const viewState = (name, defaults = {}) => { if (!S.views[name]) S.views[name] = Object.assign({}, defaults); return S.views[name]; };
 
+// ── The signed-in identity, read from the server (kanban t_39cea779) ─────────────────────────
+// A session token carries no name/company/level/avatar, and BOTH sign-in paths (`/login` and the
+// in-app form) store only the token plus whatever the login response happened to include. So the
+// console reads GET /auth/me once on boot: that is where the REAL plan name comes from (never the
+// role word "User"), together with the company and the stored picture. Silent on failure — an
+// expired token is answered by the next API call, and a transient error must not blank the screen.
+const refreshMe = async (after) => {
+  if (!API.isLoggedIn) { if (after) after(); return; }
+  try { const r = await API.me(); if (r && r.user) API.setUser(r.user); } catch (e) { /* keep cached */ }
+  if (after) after(); else renderApp();
+};
+// The account's level badge: the SERVER's plan name, falling back to "Free" — never the role word
+// "User" (the FunnelSwift defect this card exists to avoid).
+const planLabel = (u) => (u && (u.plan_name || u.plan)) || 'Free';
+// A picture URL, with a cache-buster ONLY when one is passed (the endpoint itself is no-store, so
+// a plain <img> re-fetches; the buster is for the Profile preview's explicit repaint after upload).
+const avatarSrc = (u, stamp) => u && u.avatar_url ? (u.avatar_url + (stamp ? '?t=' + stamp : '')) : null;
+const initials = (u) => { const s = (u && (u.name || u.email)) || '?'; return s.trim().slice(0, 1).toUpperCase() || '?'; };
+// A round avatar: the stored picture when there is one, otherwise the account's initial.
+const Avatar = ({ u, size, stamp, id }) => {
+  const src = avatarSrc(u, stamp);
+  const px = size || 32;
+  const style = 'width:' + px + 'px;height:' + px + 'px;border-radius:9999px;object-fit:cover;flex:0 0 auto';
+  return html`${src
+    ? html`<img id=${id || ''} src=${src} alt="Profile picture" style=${style} />`
+    : html`<div id=${id || ''} style=${style + ';background:#e0e7ff;color:#3730a3;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:' + Math.round(px * 0.42) + 'px'}>${initials(u)}</div>`}`;
+};
+
 const statusBadge = (s) => {
   const m = { active:'b-green', pending:'b-amber', running:'b-blue', completed:'b-green', failed:'b-red', draft:'b-gray', deleted:'b-red', paused:'b-gray', won:'b-green', lost:'b-red', open:'b-blue', closed:'b-gray' };
   return html`<span class="badge ${m[String(s).toLowerCase()] || 'b-gray'}">${s || '—'}</span>`;
@@ -267,7 +313,7 @@ const LoginView = () => {
   // a silent no-op (`if(!f.email||!f.password) return;` now read ''). value=${...} makes it visible.
   const f = viewState('login_form', { email: '', password: '' });
   const submit = async (e) => { e.preventDefault(); if(!f.email||!f.password) return; S.loading=true; S.error=null; renderApp();
-    try { const r = await API.login(f.email, f.password); API.setAuth(r.token || r.access_token, r.user || r); f.email=''; f.password=''; S.view='app'; }
+    try { const r = await API.login(f.email, f.password); API.setAuth(r.token || r.access_token, r.user || r); f.email=''; f.password=''; S.view='app'; refreshMe(); }
     catch(err){ S.error=err.message; } S.loading=false; renderApp(); };
   return html`
     <div class="flex items-center justify-center min-h-screen px-4">
@@ -1275,62 +1321,102 @@ const PermsModal = () => {
 };
 
 // ===== Profile =====
+// The fleet account screen (programme card t_2cb77960, this app's card t_39cea779): Name + Company +
+// a Profile picture, the REAL level from /auth/me, and a Change Password block ordered
+// NEW -> CONFIRM -> CURRENT-as-verification. The picture is chosen in a plain file input and
+// uploaded as RAW bytes; `pendingAvatar` is a module local (not reactive) so choosing a file does
+// not re-render the form under the operator's keystrokes.
+let pendingAvatar = null;
+
 const ProfileView = () => {
   const u = API.user || {};
-  // The signup model emails a generated password; this is where the user replaces it (kanban
-  // signup audit). The endpoint has always existed (POST /auth/change-password) but the view
-  // offered no control, so the "change it in profile settings" promise was unreachable.
-  const f = viewState('profile_pw', { current:'', next:'', confirm:'' });
-  const nf = viewState('profile_name', { value: (u.name || u.full_name || '') });
-  const saveName = async () => {
-    const name = (nf.value || '').trim();
+  // Drafts live in the SHARED view objects (guard rule 5): the save handlers call renderApp()
+  // themselves, so a per-render local would be re-initialised mid-save and the value lost.
+  const f = viewState('profile_fields', { name:'', company:'', uid:null });
+  if (f.uid !== (u.id || null)) { f.name = u.name || ''; f.company = u.company || ''; f.uid = u.id || null; }
+  const pw = viewState('profile_pw', { next:'', confirm:'', current:'' });
+  const av = viewState('profile_avatar', { stamp: 0, uploading: false, chosen: '' });
+
+  const saveProfile = async () => {
+    const name = (f.name || '').trim();
     if (!name) return toast('Enter your name','err');
     S.loading = true; renderApp();
     try {
-      const r = await API.updateProfile(name);
-      if (r && r.user) API.setAuth(sessionStorage.getItem('wf_token'), r.user);
-      toast('Profile updated');
-    } catch (err) { toast(err.message || 'Could not update profile','err'); }
+      await API.updateProfile({ name, company: (f.company || '').trim() });
+      await refreshMe(() => {});   // read the server's truth back (name/company/level)
+      toast('Profile saved');
+    } catch (err) { toast(err.message || 'Could not save profile','err'); }
     S.loading = false; renderApp();
   };
+
+  const uploadPicture = async () => {
+    if (!pendingAvatar) return toast('Choose a picture first','err');
+    av.uploading = true; renderApp();
+    try {
+      await API.uploadAvatar(pendingAvatar);
+      pendingAvatar = null; av.chosen = '';
+      av.stamp = av.stamp + 1;      // cache-buster so the NEW face repaints immediately
+      await refreshMe(() => {});    // pick up avatar_url from the server
+      toast('Profile picture updated');
+    } catch (err) { toast(err.message || 'Could not upload picture','err'); }
+    av.uploading = false; renderApp();
+  };
+
   const changePw = async (e) => {
     e.preventDefault();
-    if (!f.current || !f.next) return toast('Enter your current and new password','err');
-    if (f.next.length < 6) return toast('New password must be at least 6 characters','err');
-    if (f.next !== f.confirm) return toast('The two new passwords do not match','err');
+    if (!pw.next || !pw.current) return toast('Enter your new password and your current one','err');
+    if (pw.next.length < 8) return toast('New password must be at least 8 characters','err');
+    if (pw.next !== pw.confirm) return toast('The two new passwords do not match','err');
     S.loading = true; renderApp();
     try {
-      await API.changePassword(f.current, f.next);
-      f.current = ''; f.next = ''; f.confirm = '';
+      await API.changePassword(pw.current, pw.next);
+      pw.current = ''; pw.next = ''; pw.confirm = '';
       toast('Password updated');
     } catch (err) { toast(err.message || 'Could not update password','err'); }
     S.loading = false; renderApp();
   };
+
   return html`
-    <div>
-      <header class="mb-5"><h1 class="text-xl font-extrabold text-gray-900">Profile</h1><p class="text-sm text-gray-500 mt-1">Your account settings</p></header>
+    <div style="padding-bottom:96px">
+      <header class="mb-5"><h1 class="text-xl font-extrabold text-gray-900">Profile</h1><p class="text-sm text-gray-500 mt-1">Your account details and sign-in for this workspace.</p></header>
+
       <div class="card">
+        <h2 class="text-base font-bold text-gray-900 mb-3">Profile picture</h2>
+        <div class="flex items-center gap-4 flex-wrap">
+          <${Avatar} u=${u} size=${72} stamp=${av.stamp} />
+          <div>
+            <input id="profile-picture-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp"
+              onChange=${e=>{ pendingAvatar = (e.target.files && e.target.files[0]) || null; av.chosen = pendingAvatar ? pendingAvatar.name : ''; renderApp(); }} />
+            <div class="text-xs text-gray-500 mt-1">PNG, JPEG, GIF or WebP — up to 2 MB.${av.chosen ? (' Selected: ' + av.chosen) : ''}</div>
+            <button class="btn text-sm mt-2" id="profile-picture-save" onClick=${uploadPicture} disabled=${av.uploading || S.loading}>${av.uploading ? 'Uploading…' : 'Upload picture'}</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="text-base font-bold text-gray-900 mb-3">Account details</h2>
         <div class="space-y-4">
           <div><label class="label">Email</label><div class="font-semibold">${u.email || '—'}</div></div>
-          <div><label class="label">Name</label>
-            <div class="flex gap-2">
-              <input class="input" value=${nf.value} onInput=${e=>nf.value=e.target.value} placeholder="Your name" />
-              <button class="btn text-sm" onClick=${saveName} disabled=${S.loading}>Save</button>
-            </div>
-          </div>
-          <div><label class="label">Account</label><div class="text-sm text-gray-600">${u.aid || u.account_id || u.id || '—'}</div></div>
+          <div><label class="label">Level</label><div><span class="badge b-blue" id="profile-level">${planLabel(u)}</span></div></div>
+          <div><label class="label">Name</label><input class="input" id="profile-name" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="Your name" /></div>
+          <div><label class="label">Company</label><input class="input" id="profile-company" value=${f.company} onInput=${e=>f.company=e.target.value} placeholder="Your company" /></div>
+          <button class="btn text-sm" id="profile-save" onClick=${saveProfile} disabled=${S.loading}>Save changes</button>
         </div>
-        <div class="mt-6 pt-4 border-t flex gap-2"><button class="btn-outline text-sm" onClick=${()=>{API.logout(); window.location.reload();}}>Sign Out</button></div>
       </div>
-      <div class="card mt-5">
+
+      <div class="card">
         <h2 class="text-base font-bold text-gray-900 mb-1">Change password</h2>
         <p class="text-sm text-gray-500 mb-4">We emailed you a password when you signed up. Replace it here with one of your own.</p>
         <form onSubmit=${changePw} class="space-y-3">
-          <div><label class="label">Current password</label><input type="password" class="input" autocomplete="current-password" value=${f.current} onInput=${e=>f.current=e.target.value} /></div>
-          <div><label class="label">New password</label><input type="password" class="input" autocomplete="new-password" value=${f.next} onInput=${e=>f.next=e.target.value} /></div>
-          <div><label class="label">Confirm new password</label><input type="password" class="input" autocomplete="new-password" value=${f.confirm} onInput=${e=>f.confirm=e.target.value} /></div>
-          <button class="btn text-sm" disabled=${S.loading}>${S.loading?spinner():'Update password'}</button>
+          <div><label class="label">New password</label><input type="password" class="input" id="pw-new" autocomplete="new-password" value=${pw.next} onInput=${e=>pw.next=e.target.value} /></div>
+          <div><label class="label">Confirm new password</label><input type="password" class="input" id="pw-confirm" autocomplete="new-password" value=${pw.confirm} onInput=${e=>pw.confirm=e.target.value} /></div>
+          <div><label class="label">Current password</label><input type="password" class="input" id="pw-current" autocomplete="current-password" value=${pw.current} onInput=${e=>pw.current=e.target.value} /><div class="text-xs text-gray-500 mt-1">For your security, confirm the password you signed in with.</div></div>
+          <button class="btn text-sm" id="pw-save" disabled=${S.loading}>${S.loading?spinner():'Update password'}</button>
         </form>
+      </div>
+
+      <div class="card flex gap-2">
+        <button class="btn-outline text-sm" onClick=${()=>{API.logout(); window.location.reload();}}>Sign Out</button>
       </div>
     </div>`;
 };
@@ -1881,7 +1967,13 @@ const App = () => {
           <a class="nav-item" id="guide-link" href="/guide.html" style="text-decoration:none"><span>📖</span> User Guide</a>
         </nav>
         <div class="p-3 border-t border-gray-100">
-          <div class="text-xs text-gray-500 mb-2 truncate">${user.email || 'signed in'}</div>
+          <div class="flex items-center gap-2 mb-2 min-w-0">
+            <${Avatar} u=${user} size=${34} id="header-avatar" />
+            <div class="min-w-0">
+              <div class="text-xs font-semibold text-gray-800 truncate" title=${user.email || ''}>${user.name || user.email || 'signed in'}</div>
+              <span class="badge b-blue" id="ws-level">${planLabel(user)}</span>
+            </div>
+          </div>
           <button class="nav-item text-red-600" onClick=${()=>{API.logout(); window.location.reload();}}>Sign Out</button>
         </div>
       </aside>
@@ -1926,6 +2018,10 @@ renderApp();
   } else if (deepId && API.isLoggedIn) {
     S.current = deepId; renderApp();
   }
+  // Learn the signed-in identity from the server (kanban t_39cea779): the token alone carries no
+  // name/company/level/picture, so this is what puts the REAL plan name in the level badge — never
+  // the role word "User".
+  if (API.isLoggedIn) refreshMe();
 })();
 
 

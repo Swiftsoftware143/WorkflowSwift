@@ -48,6 +48,33 @@ impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for User {
     }
 }
 
+/// The signed-in account as `GET /api/v1/auth/me` answers it (programme card t_2cb77960, this
+/// app's card t_39cea779).
+///
+/// Wider than [`UserResponse`] by exactly the fields the account screen needs and the raw users
+/// row does not carry: `plan_name` (the REAL tier, never the role word "User"), the optional
+/// `username`/`company` the Profile screen edits, and `avatar_url` when a picture exists. Optional
+/// fields are skipped when absent so a caller that reads `user.company === undefined` sees "not
+/// set" rather than an explicit null.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeResponse {
+    pub id: Uuid,
+    pub aid: Uuid,
+    pub email: String,
+    pub name: String,
+    pub role: String,
+    pub is_active: bool,
+    pub last_login_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub company: Option<String>,
+    pub plan_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserResponse {
     pub id: Uuid,

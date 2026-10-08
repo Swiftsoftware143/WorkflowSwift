@@ -28,6 +28,9 @@
 //!   live, with NO credential, against 127.0.0.1:8085:
 //!    22 of those 24 are DELIBERATE   -> 12 [`PUBLIC_ROUTES`] + 10 [`INTERNAL_ROUTES`]
 //!     2 of them were NOT             ->  `/api/v1/bridge-tasks`, `/api/v1/bridge-results`
+//!
+//!   (+1 from kanban t_39cea779: `/api/v1/auth/avatar/{user_id}`, the account-picture READ, joins
+//!    [`PUBLIC_ROUTES`] — an `<img src>` carries no token — for 13 public + 10 internal = 23.)
 //! ```
 //!
 //! # What this app's contribution is
@@ -115,6 +118,13 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // The shipped Chrome extension's own zip. It is distributed to end users who have no account
     // yet; it contains no tenant data.
     "/api/v1/extension.zip",
+    // --- the account picture READ --------------------------------------------------------------
+    // An `<img src="/api/v1/auth/avatar/<uuid>">` carries no token, so this one route is public by
+    // construction (card t_39cea779). It is narrow by design: one user's stored bytes, keyed by an
+    // unguessable uuid, under the content type sniffed at upload time; 404 when there is no picture.
+    // The authenticated POST twin (`/api/v1/auth/avatar`) is NOT here and must never be — the tests
+    // below pin both directions.
+    "/api/v1/auth/avatar/{user_id}",
     // --- bridge liveness ping ------------------------------------------------------------------
     // Returns the constant `{"status":"bridge-ok"}` and reads nothing. The two bridge LISTINGS that
     // used to sit beside it are NOT here: they return host filesystem contents and every caller
@@ -366,12 +376,44 @@ mod tests {
             "/api/v1/bridge-ping",
             "/api/v1/webhooks/stripe",
             "/api/v1/webhooks/paypal",
+            "/api/v1/auth/avatar/user-one",
         ] {
             assert!(is_public_route(path), "{} must stay anonymous", path);
         }
         // A POST is not made public by its path matching a GET-only entry in spirit: the lists are
         // paths, not method sets, and the boundary sees methods too — pinned in boundary.rs.
         assert!(is_public_route("/api/v1/webhooks/stripe"));
+    }
+
+    /// The account picture: the READ is public, the UPLOAD twin is NOT (card t_39cea779). An
+    /// `<img src>` cannot carry a token, so the GET must be anonymous; but the POST writes bytes
+    /// under the caller's own session and must never be. Both directions are pinned, and the
+    /// template is segment-exact so a deeper path is not caught by it either way.
+    #[test]
+    fn the_avatar_read_is_public_and_the_upload_is_not() {
+        assert!(is_public_route("/api/v1/auth/avatar/user-one"));
+        assert!(
+            !is_public_route("/api/v1/auth/avatar"),
+            "the upload twin must never be anonymous"
+        );
+        assert!(
+            !is_public_route("/api/v1/auth/avatar/x/extra"),
+            "the template must not swallow a deeper path"
+        );
+        // ...and both routes are really mounted, so neither assertion is vacuous. (`mounted` compares
+        // LITERALS, so the read is looked up with its `{user_id}` spelling, exactly as the allowlist
+        // entry carries it.)
+        assert!(mounted("/api/v1/auth/avatar").is_some());
+        assert!(mounted("/api/v1/auth/avatar/{user_id}").is_some());
+    }
+
+    /// The fleet profile surface registers the fleet spelling of the password change beside this
+    /// app's original one (card t_39cea779), so the contract path is really wired.
+    #[test]
+    fn the_fleet_password_path_is_mounted() {
+        assert!(mounted("/api/v1/auth/password").is_some());
+        assert!(mounted("/api/v1/auth/profile").is_some());
+        assert!(mounted("/api/v1/auth/me").is_some());
     }
 
     #[test]
@@ -446,12 +488,14 @@ mod tests {
     /// from the code without a test failing.
     #[test]
     fn the_census_shape_is_what_the_docs_say() {
-        assert_eq!(super::PUBLIC_ROUTES.len(), 12, "PUBLIC_ROUTES size");
+        assert_eq!(super::PUBLIC_ROUTES.len(), 13, "PUBLIC_ROUTES size");
         assert_eq!(super::INTERNAL_ROUTES.len(), 10, "INTERNAL_ROUTES size");
-        // The 24 anonymous placements the census found, minus the 2 moved to the protected router.
+        // The 22 deliberate anonymous placements the census found, minus the 2 moved to the
+        // protected router, plus `/api/v1/auth/avatar/{user_id}` (the account-picture READ, card
+        // t_39cea779) which was never anonymous before it existed.
         assert_eq!(
             super::PUBLIC_ROUTES.len() + super::INTERNAL_ROUTES.len(),
-            22
+            23
         );
     }
 }

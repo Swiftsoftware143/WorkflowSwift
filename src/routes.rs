@@ -15,7 +15,12 @@ pub fn create_router(state: AppState) -> Router {
         crate::rate_limit::BodyReadDeadline::from_secs(state.config.body_read_deadline_secs);
 
     // Public auth routes (no auth needed)
-    let auth_public = Router::new()
+    //
+    // The four password routes carry the load-shedding layer; the public avatar READ is merged in
+    // BESIDE them, NOT under that layer (card t_39cea779). An `<img src>` must not consume a
+    // password-auth permit, and the in-flight ceiling exists for Argon2/mail work the image route
+    // never does.
+    let auth_password_routes = Router::new()
         .route("/login", post(auth::login))
         .route("/register", post(auth::register))
         .route("/forgot-password", post(auth::forgot_password))
@@ -27,19 +32,33 @@ pub fn create_router(state: AppState) -> Router {
         // (kanban t_92bafdf8). This admits at most AUTH_IN_FLIGHT_CAP concurrent requests into
         // the four and answers 429 immediately to anything above, so the queue can no longer
         // grow and legitimate traffic is never parked behind a flood. It is mounted here, on
-        // the public auth routes only: /health, the webhooks and every other public route are
-        // untouched.
+        // the four public password routes only: the avatar READ below, /health, the webhooks
+        // and every other public route are untouched.
         .layer(axum::middleware::from_fn_with_state(
             state.auth_in_flight.clone(),
             crate::rate_limit::password_auth_shed_middleware,
         ));
+
+    let auth_public = Router::new()
+        .merge(auth_password_routes)
+        // The account picture, served to a bare `<img src>` that carries no token (card
+        // t_39cea779). Anonymous by construction and narrow by design: it returns one user's
+        // stored bytes keyed by an unguessable uuid, under the content type sniffed at upload
+        // time, and 404s when there is no picture. The authenticated UPLOAD twin
+        // (`POST /auth/avatar`) stays on `auth_protected` — see route_policy's tests.
+        .route("/avatar/{user_id}", get(auth::get_avatar));
 
     // Protected auth route
     let auth_protected = Router::new()
         .route("/me", get(auth::me))
         .route("/me/usage", get(auth::get_usage))
         .route("/change-password", post(auth::change_password))
-        .route("/profile", put(auth::update_profile));
+        // The fleet contract's spelling of the same handler (card t_39cea779). Kept alongside
+        // this app's original POST path so no existing caller breaks.
+        .route("/password", put(auth::change_password))
+        .route("/profile", put(auth::update_profile))
+        // The picture UPLOAD: raw image bytes, private (card t_39cea779).
+        .route("/avatar", post(auth::upload_avatar));
 
     // Resource sub-routers
 
@@ -871,6 +890,17 @@ pub fn create_router(state: AppState) -> Router {
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::rate_limit::pre_auth_rate_limit_middleware,
+        ))
+        // OUTERMOST, and last for that reason (card t_39cea779). `body_read_deadline` above reads
+        // the body through the same `Bytes` extractor, so the limit it applies is the request's
+        // `DefaultBodyLimit` extension — and that extension only exists if the layer that inserts
+        // it runs BEFORE the deadline. A per-route `DefaultBodyLimit` inside the route (or on
+        // `auth_protected`) would sit INSIDE this router's layers and never be seen, which is
+        // exactly the trap that made a 2 MB+ profile picture answer an unreadable text/plain 413.
+        // Raised just above the avatar cap so a body that is merely OVER the cap reaches the
+        // handler's own JSON 400 instead.
+        .layer(axum::extract::DefaultBodyLimit::max(
+            crate::auth::MAX_AVATAR_BYTES + 64 * 1024,
         ));
 
     // Public routes that READ a request body, and therefore carry the body-read deadline
