@@ -775,6 +775,33 @@ struct EmailTemplateRow {
 /// and carried the RETIRED `export` step type in the same arm (kanban t_88082a4c).
 pub const EMAIL_PROVIDERS: &[&str] = &["smtp", "mailgun", "sendgrid", "sendiio"];
 
+/// The app's OWN support address. David (2026-10-08): the reply-to/support address in a
+/// transactional mail is ALWAYS `support@` the app's own main domain — never the platform's
+/// or a sibling company's. WorkflowSwift mail carried none at all, so [`with_support_footer`]
+/// adds this to every message that leaves the app.
+pub const SUPPORT_EMAIL: &str = "support@workflowswift.com";
+
+/// Append the app's support line to one body.
+///
+/// Applied at the single funnel every transport shares ([`send_email_request`]), so a body that
+/// came from the authoritative `email_templates` row carries the address exactly like a
+/// hardcoded fallback body does, and a template added later inherits it. An EMPTY body stays
+/// empty (the `html_body` "" means "no HTML part" and must not become a footer-only part), and
+/// a body that already carries the address is returned untouched.
+fn with_support_footer(body: &str, html: bool) -> String {
+    if body.is_empty() || body.contains(SUPPORT_EMAIL) {
+        return body.to_string();
+    }
+    if html {
+        format!(
+            "{}\n<p style=\"font-size:13px;color:#6b7280;text-align:center;\">Need help? Contact <a href=\"mailto:{}\">{}</a></p>",
+            body, SUPPORT_EMAIL, SUPPORT_EMAIL
+        )
+    } else {
+        format!("{}\n\nNeed help? Contact {}\n", body, SUPPORT_EMAIL)
+    }
+}
+
 /// Send one message through whichever provider the admin selected in
 /// Admin > Settings > Email. Providers: `smtp` | `mailgun` | `sendgrid` | `sendiio`.
 ///
@@ -795,11 +822,15 @@ async fn send_email_request(
         );
     }
 
+    // Every transactional body leaves with the app's own support address on it.
+    let text_body = with_support_footer(text_body, false);
+    let html_body = with_support_footer(html_body, true);
+
     match cfg.provider.as_str() {
-        "smtp" | "mail" => send_via_smtp(cfg, to, subject, text_body, html_body).await,
-        "sendgrid" => send_via_sendgrid(cfg, to, subject, text_body, html_body).await,
-        "sendiio" => send_via_sendiio(cfg, to, subject, text_body, html_body).await,
-        _ => send_via_mailgun(cfg, to, subject, text_body, html_body).await,
+        "smtp" | "mail" => send_via_smtp(cfg, to, subject, &text_body, &html_body).await,
+        "sendgrid" => send_via_sendgrid(cfg, to, subject, &text_body, &html_body).await,
+        "sendiio" => send_via_sendiio(cfg, to, subject, &text_body, &html_body).await,
+        _ => send_via_mailgun(cfg, to, subject, &text_body, &html_body).await,
     }
 }
 
