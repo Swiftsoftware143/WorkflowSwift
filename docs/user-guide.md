@@ -259,6 +259,21 @@ real and settable through `PUT /api/v1/accounts`.
 - **Incoming webhook**: `POST /api/v1/incoming` is what other Swift tools push leads to. It is
   protected by an internal key.
 
+## Tag → free account
+
+When a lead is given one of this app's **&lt;App&gt; — Free** system tags in FunnelSwift (for example
+`WorkflowSwift — Free`), FunnelSwift asks WorkflowSwift to create a **free account** for that lead,
+using the lead's own name and email. WorkflowSwift then emails the new user their login details, so
+they can sign in and upgrade here whenever they are ready.
+
+The switch is in the admin console under **Admin → Settings → Tag → free account**
+(`admin_settings.provision_from_tags_enabled`). It **ships ON**, so a tagged lead gets an account
+immediately; turn it off and the receiver refuses the request
+(`403 refused / provisioning_disabled`) and creates nothing. Tagging the same lead twice does **not**
+create a duplicate account — the second attempt is recognised by email and ignored. The entry plan is
+chosen next to the switch. The account is created here, in the destination app, so the lead signs in
+at the app they actually want and upgrades on this app's own plans.
+
 ## Chrome extension — Swift Market Intel
 
 - **Download**: `https://workflowswift.com/swift-market-intel-extension-1.2.0.zip`

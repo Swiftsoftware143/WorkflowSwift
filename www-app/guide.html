@@ -165,6 +165,7 @@
       <a href="#plans-and-limits" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Plans and limits</a>
       <a href="#custom-branding" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Custom branding</a>
       <a href="#integrations" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Integrations</a>
+      <a href="#tag-free-account" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Tag → free account</a>
       <a href="#chrome-extension-swift-market-intel" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Chrome extension — Swift Market Intel</a>
       <a href="#support" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Support</a>
     </nav>
@@ -481,6 +482,18 @@
       <li><strong>Incoming webhook</strong>: <code>POST /api/v1/incoming</code> is what other Swift tools push leads to. It is
         protected by an internal key.</li>
       </ul>
+      <h2 id="tag-free-account">Tag → free account</h2>
+      <p>When a lead is given one of this app's <strong>&lt;App&gt; — Free</strong> system tags in FunnelSwift (for example
+      <code>WorkflowSwift — Free</code>), FunnelSwift asks WorkflowSwift to create a <strong>free account</strong> for that lead,
+      using the lead's own name and email. WorkflowSwift then emails the new user their login details, so
+      they can sign in and upgrade here whenever they are ready.</p>
+      <p>The switch is in the admin console under <strong>Admin → Settings → Tag → free account</strong>
+      (<code>admin_settings.provision_from_tags_enabled</code>). It <strong>ships ON</strong>, so a tagged lead gets an account
+      immediately; turn it off and the receiver refuses the request
+      (<code>403 refused / provisioning_disabled</code>) and creates nothing. Tagging the same lead twice does <strong>not</strong>
+      create a duplicate account — the second attempt is recognised by email and ignored. The entry plan is
+      chosen next to the switch. The account is created here, in the destination app, so the lead signs in
+      at the app they actually want and upgrades on this app's own plans.</p>
       <h2 id="chrome-extension-swift-market-intel">Chrome extension — Swift Market Intel</h2>
       <ul>
       <li><strong>Download</strong>: <code>https://workflowswift.com/swift-market-intel-extension-1.2.0.zip</code>
