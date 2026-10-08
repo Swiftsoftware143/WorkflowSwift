@@ -54,6 +54,28 @@ nav .container{display:flex;align-items:center;justify-content:space-between}
 .hero p{font-size:clamp(1rem, 2.5vw, 1.25rem);color:rgba(255,255,255,0.6);max-width:640px;margin-bottom:36px;font-weight:400}
 .hero-actions{display:flex;gap:16px;flex-wrap:wrap}
 
+/* kanban t_59ebec46 — SHORT WINDOWS: the hero must not fill the viewport.
+   MEASURED 2026-10-08 at 800x600 on the public page with the consent banner up
+   (`#cookie-banner`, position:fixed;bottom:0;z-index:99999, 98px tall -> y=502..600):
+   the hero's own min-height:90vh + vertical centring parked its "Start Free →" CTA at
+   y=548..604, inside the banner band, so document.elementFromPoint at the button's own
+   centre returned a <p> inside the banner and a real click landed on the banner: the
+   button did nothing. Shrinking the banner cannot fix it — a bottom-anchored banner
+   would have to be under ~24px tall to clear a y=548 CTA, i.e. impossible — and raising
+   the CTA's z-index above the banner is explicitly forbidden, so the hero itself has to
+   stop intruding into the bottom band. Below 760px of viewport height the hero becomes
+   content-sized and top-aligned (min-height:auto) with a tightened badge/h1/paragraph,
+   which lands the CTA at y=388..444 at 800x600 — 77px clear of the compacted banner, and still
+   clear down to ~525px of height. Above 760px the hero is byte-for-byte the old rule
+   (this breakpoint is where the old geometry clears the banner on its own: measured
+   HIT at 800x760, blocked at 800x740 and below). */
+@media (max-height:760px){
+  .hero{min-height:auto;padding:36px 0 32px}
+  .hero-badge{margin-bottom:14px}
+  .hero h1{font-size:clamp(1.75rem,5.5vw,2.75rem);margin-bottom:12px}
+  .hero p{margin-bottom:20px}
+}
+
 /* Features */
 .features{padding:100px 0;border-top:1px solid rgba(255,255,255,0.06)}
 .features h2{text-align:center;font-size:clamp(1.8rem,4vw,2.8rem);margin-bottom:16px}
@@ -225,12 +247,15 @@ footer a:hover{color:#DC2626}
   }
 }
 </script>
-<!-- Cookie Consent Banner -->
-<div id="cookie-banner" style="position:fixed;bottom:0;left:0;right:0;background:#0f172a;color:#e2e8f0;z-index:99999;padding:16px 24px;font-family:system-ui,sans-serif;font-size:13px;box-shadow:0 -4px 20px rgba(0,0,0,.4);display:none">
-  <div style="max-width:1100px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
+<!-- Cookie Consent Banner — compacted (kanban t_59ebec46, fleet-consistent with the ADASwift arm
+     t_d4a63841): the fixed bar's own height is the band it can cover, so 16px/13px/1.5 gave a 98px
+     bar at 800x600 and a 162px one at 390 wide (measured). Measured after: 79px at 800x600, 139px at
+     390 — the hero CTA keeps 77px / 22px of clearance instead of 58px / touching.-->
+<div id="cookie-banner" style="position:fixed;bottom:0;left:0;right:0;background:#0f172a;color:#e2e8f0;z-index:99999;padding:10px 24px;font-family:system-ui,sans-serif;font-size:13px;box-shadow:0 -4px 20px rgba(0,0,0,.4);display:none">
+  <div style="max-width:1100px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
     <div style="flex:1;min-width:250px">
-      <strong style="font-size:14px">🍪 Cookie Consent</strong>
-      <p style="margin:4px 0 0;color:#94a3b8;line-height:1.5">We use cookies for analytics, security, and to improve your experience. By continuing, you agree to our <a href="/privacy.html" style="color:#38bdf8">Privacy Policy</a> and <a href="/terms.html" style="color:#38bdf8">Terms of Service</a>.</p>
+      <strong style="font-size:13px">🍪 Cookie Consent</strong>
+      <p style="margin:3px 0 0;color:#94a3b8;font-size:12px;line-height:1.45">We use cookies for analytics, security, and to improve your experience. By continuing, you agree to our <a href="/privacy.html" style="color:#38bdf8">Privacy Policy</a> and <a href="/terms.html" style="color:#38bdf8">Terms of Service</a>.</p>
     </div>
     <div style="display:flex;gap:8px;flex-shrink:0">
       <button onclick="acceptCookies()" style="background:#2563eb;color:#fff;border:none;padding:8px 20px;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px">Accept All</button>
