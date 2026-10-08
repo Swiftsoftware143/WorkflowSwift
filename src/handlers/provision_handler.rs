@@ -156,11 +156,16 @@ fn generate_password() -> String {
 }
 
 /// A fabricated address must never mint an account (design §3.1 rule 5). The old CoreSwift
-/// `fs-provision-…@placeholder` fallback is exactly what this refuses.
+/// `fs-provision-…@placeholder` fallback is exactly what this refuses. t_a8bd2860: an RFC 2606 /
+/// RFC 6761 RESERVED address (`someone@example.com`, `.invalid`, `.test`, `.example`, `.local`,
+/// `localhost`) is equally fabricated — it can never receive the credentials mail, so minting on
+/// it would leave a real, permanent orphan login. Delegate that half to the app's canonical
+/// predicate in `security::email_addr`.
 fn looks_like_placeholder(email: &str) -> bool {
     email.contains("placeholder")
         || email.starts_with("fs-provision")
         || email.ends_with(".invalid")
+        || crate::security::email_addr::is_reserved_address(email)
 }
 
 // The slug helper moved to `crate::auth::signup::unique_account_slug` (kanban t_bf9e00fe):
@@ -434,7 +439,15 @@ mod tests {
         assert!(looks_like_placeholder("fs-provision-x@example.com"));
         assert!(looks_like_placeholder("someone@probe.invalid"));
         assert!(looks_like_placeholder("placeholder@example.com"));
-        assert!(!looks_like_placeholder("owner@acme.example.com"));
+        // t_a8bd2860: an RFC 2606 reserved documentation domain is equally undeliverable.
+        assert!(looks_like_placeholder("someone@example.com"));
+        assert!(looks_like_placeholder("someone@example.net"));
+        assert!(looks_like_placeholder("someone@example.org"));
+        assert!(looks_like_placeholder("a@sub.example.com"));
+        assert!(looks_like_placeholder("x@foo.test"));
+        assert!(looks_like_placeholder("x@host.local"));
+        // A routable domain whose LABEL merely looks reserved stays allowed.
+        assert!(!looks_like_placeholder("owner@acme.test.swiftsoftware.net"));
         assert!(!looks_like_placeholder("david@swiftsoftware.dev"));
     }
 }

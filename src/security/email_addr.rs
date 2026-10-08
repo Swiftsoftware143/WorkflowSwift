@@ -81,6 +81,48 @@ pub fn lookup_key(raw: &str) -> String {
     raw.trim().to_lowercase()
 }
 
+/// Domains RFC 2606 reserves for DOCUMENTATION (t_a8bd2860): mail addressed here can never be
+/// delivered by any conforming resolver, so an account minted on one is permanently unreachable.
+const RESERVED_DOC_DOMAINS: &[&str] = &["example.com", "example.net", "example.org"];
+
+/// Special-use TLDs (RFC 2606 / RFC 6761) that never resolve in public DNS.
+const RESERVED_TLDS: &[&str] = &["invalid", "test", "example", "local", "localhost"];
+
+/// Why `domain` provably cannot receive mail, or `None` when it might.
+///
+/// Names the DOMAIN, never the whole address (the fleet log convention keeps a recipient's local
+/// part out of log lines). This is about *provably undeliverable*, never about guessing intent:
+/// a routable domain whose LABEL merely looks reserved (`user@test.swiftsoftware.net`) is allowed.
+pub fn reserved_domain_reason(domain: &str) -> Option<String> {
+    let domain = domain.trim().trim_end_matches('.').to_ascii_lowercase();
+    for d in RESERVED_DOC_DOMAINS {
+        if domain == *d || domain.ends_with(&format!(".{d}")) {
+            return Some(format!(
+                "the domain '{domain}' is reserved for documentation by RFC 2606 — it can never \
+                 receive mail"
+            ));
+        }
+    }
+    let tld = domain.rsplit('.').next().unwrap_or("");
+    if RESERVED_TLDS.contains(&tld) {
+        return Some(format!(
+            "'.{tld}' is a special-use TLD (RFC 2606/6761), so a '{domain}' recipient can never \
+             receive mail"
+        ));
+    }
+    None
+}
+
+/// Does this address sit on a domain that provably cannot receive the credentials mail?
+/// The account-creation doors call this BEFORE minting (design §3.1 rule 5): a reserved address
+/// must never become a real, unreachable login.
+pub fn is_reserved_address(email: &str) -> bool {
+    match email.rsplit_once('@') {
+        Some((_, domain)) => reserved_domain_reason(domain).is_some(),
+        None => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,5 +198,33 @@ mod tests {
         assert_eq!(lookup_key("  Zaarhub@gmail.com "), "zaarhub@gmail.com");
         // A malformed value has no failure arm here — it just matches nothing.
         assert_eq!(lookup_key("bad"), "bad");
+    }
+
+    #[test]
+    fn reserved_documentation_and_special_use_domains_are_flagged() {
+        for bad in [
+            "someone@example.com",
+            "a@example.net",
+            "b@example.org",
+            "c@sub.example.com",
+            "d@foo.invalid",
+            "e@foo.test",
+            "f@foo.example",
+            "g@host.local",
+            "h@localhost",
+        ] {
+            assert!(is_reserved_address(bad), "{bad} must be flagged reserved");
+        }
+        // Routable addresses whose LABEL merely looks reserved stay allowed.
+        for ok in [
+            "david@swiftsoftware.dev",
+            "owner@acme.test.swiftsoftware.net",
+            "a@real.example.io",
+        ] {
+            assert!(
+                !is_reserved_address(ok),
+                "{ok} must NOT be flagged reserved"
+            );
+        }
     }
 }
