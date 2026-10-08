@@ -20,6 +20,21 @@ use crate::error::AppError;
 use crate::handlers::industry_handler;
 use crate::AppState;
 
+/// The first password the server mints when a signup supplies none (David's NAME + EMAIL model).
+/// 16 chars of OS-RNG entropy; the glyph set drops look-alikes (`0O1lI`) so the emailed value is
+/// easy to retype. Never logged.
+pub fn generate_temp_password() -> String {
+    use rand::Rng;
+    const CHARSET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#";
+    let mut rng = rand::thread_rng();
+    (0..16)
+        .map(|_| {
+            let idx = rng.gen_range(0..CHARSET.len());
+            CHARSET[idx] as char
+        })
+        .collect()
+}
+
 /// Everything [`create_account`] needs.
 ///
 /// `email` MUST already be normalised (`crate::security::email_addr::normalize`) — this function

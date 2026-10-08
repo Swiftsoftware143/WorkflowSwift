@@ -22,17 +22,25 @@ pub async fn register(
     State(state): State<AppState>,
     Json(req): Json<RegisterRequest>,
 ) -> ApiResult<impl IntoResponse> {
-    // Validate input
-    if req.email.is_empty() || req.password.is_empty() || req.name.is_empty() {
+    // David's signup model (as IncentiveSwift/FunnelSwift ship): the page collects NAME + EMAIL
+    // only, so `password` may arrive empty. The server then mints one and emails it; the user
+    // confirms their address by signing in with it. A caller that still supplies one is honoured
+    // and validated exactly as before.
+    if req.email.is_empty() || req.name.is_empty() {
         return Err(AppError::Validation(
-            "Name, email, and password are required".to_string(),
+            "Name and email are required".to_string(),
         ));
     }
-    if req.password.len() < 6 {
+    if !req.password.is_empty() && req.password.len() < 6 {
         return Err(AppError::Validation(
             "Password must be at least 6 characters".to_string(),
         ));
     }
+    let password = if req.password.is_empty() {
+        super::signup::generate_temp_password()
+    } else {
+        req.password.clone()
+    };
 
     // ── Address boundary (kanban t_09e76b27) ────────────────────────────────────────────────
     // FIRST, before any SELECT and long before any INSERT. `users.email` is both the login identity
@@ -56,7 +64,7 @@ pub async fn register(
     // (argon2_hash). Hashing is 19 MiB of CPU that never awaits, so done inline here it
     // would park a tokio worker for the whole hash and `register` needs no credential
     // to reach.
-    let password_hash = argon2_hash(req.password.clone()).await?;
+    let password_hash = argon2_hash(password.clone()).await?;
 
     // ── ONE writer (design §3.1 rule 4, kanban t_ede5f6ed) ──────────────────────────────────
     // The account itself is minted by `crate::auth::signup::create_account`, the SAME function the
@@ -69,8 +77,9 @@ pub async fn register(
             email: &email,
             name: &req.name,
             password_hash: &password_hash,
-            // The public signup does not mail back the password the user just chose.
-            password_plain: None,
+            // The server-minted (or caller-supplied) plaintext, so the `welcome` template can
+            // carry the credential line the signup now depends on.
+            password_plain: Some(&password),
             account_name: req.account_name.as_deref(),
             account_slug: req.account_slug.as_deref(),
             plan_slug: req.plan_slug.as_deref().unwrap_or("free"),

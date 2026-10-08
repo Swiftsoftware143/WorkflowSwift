@@ -108,6 +108,9 @@ pub struct TokenResponse {
 pub struct RegisterRequest {
     pub name: String,
     pub email: String,
+    /// OPTIONAL: the signup page collects NAME + EMAIL only (David's model), so a missing
+    /// `password` deserialises to `""`; the server then mints one and emails it.
+    #[serde(default)]
     pub password: String,
     pub account_name: Option<String>,
     pub account_slug: Option<String>,

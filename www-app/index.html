@@ -147,7 +147,7 @@ const API = (() => {
     return d;
   };
   return {
-    register: (name, email, password) => fetch(base + '/auth/register', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, email, password}) }).then(handle),
+    register: (name, email) => fetch(base + '/auth/register', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, email}) }).then(handle),
     login: (email, password) => fetch(base + '/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, password}) }).then(handle),
     get: (p) => fetch(base + p, { headers: headers() }).then(handle),
     post: (p, b) => fetch(base + p, { method:'POST', headers: headers(), body: b === undefined ? undefined : JSON.stringify(b) }).then(handle),
@@ -286,11 +286,25 @@ const RegisterView = () => {
   // kanban t_7e48aeb7 — same class, create-only: the draft lives in the SHARED object and is seeded ON
   // OPEN (the "Create Free Account" button clears S.formSeeded), so a renderApp() while the form is on
   // screen cannot reset it to the literals; value=${...} makes the shared state visible.
-  const f = viewState('register_form', { name: '', email: '', password: '' });
-  if (!S.formSeeded) { f.name=''; f.email=''; f.password=''; S.formSeeded = true; }
-  const submit = async (e) => { e.preventDefault(); if(!f.name||!f.email||!f.password) return; S.loading=true; S.error=null; renderApp();
-    try { const r = await API.register(f.name, f.email, f.password); API.setAuth(r.token || r.access_token, r.user || r); f.name=''; f.email=''; f.password=''; S.view='pick'; S.pickingIndustry=true; }
+  const f = viewState('register_form', { name: '', email: '' });
+  if (!S.formSeeded) { f.name=''; f.email=''; S.signupSent=false; S.signupEmail=''; S.formSeeded = true; }
+  // David's signup model (as IncentiveSwift/FunnelSwift ship): NAME + EMAIL only. The server mints
+  // the login credentials and emails them, so there is NO auto-login — the user confirms their
+  // address by signing in with the password we sent (the real two-step check).
+  const submit = async (e) => { e.preventDefault(); if(!f.name||!f.email) return; S.loading=true; S.error=null; renderApp();
+    try { await API.register(f.name, f.email); S.signupSent=true; S.signupEmail=f.email; f.name=''; f.email=''; }
     catch(err){ S.error=err.message; } S.loading=false; renderApp(); };
+  if (S.signupSent) {
+    return html`
+    <div class="flex items-center justify-center min-h-screen px-4">
+      <div class="card w-full max-w-md text-center">
+        <div class="text-4xl mb-3">📧</div>
+        <h1 class="text-2xl font-extrabold text-gray-900">Check your email</h1>
+        <p class="text-sm text-gray-500 mt-3">We created your account and emailed your login details to <strong>${S.signupEmail}</strong>. Sign in with the password we sent — you can change it any time in your profile settings.</p>
+        <button class="btn w-full mt-6" onClick=${()=>{ S.signupSent=false; S.showRegister=false; S.error=null; renderApp(); }}>Go to Sign In</button>
+      </div>
+    </div>`;
+  }
   return html`
     <div class="flex items-center justify-center min-h-screen px-4">
       <div class="card w-full max-w-md">
@@ -298,7 +312,7 @@ const RegisterView = () => {
         <form onSubmit=${submit} class="space-y-5">
           <div><label class="label">Full Name</label><input type="text" class="input" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="Jane Doe" required /></div>
           <div><label class="label">Email</label><input type="email" class="input" value=${f.email} onInput=${e=>f.email=e.target.value} placeholder="you@company.com" required /></div>
-          <div><label class="label">Password</label><input type="password" class="input" value=${f.password} onInput=${e=>f.password=e.target.value} placeholder="••••••••" minlength="6" autocomplete="new-password" required /></div>
+          <p class="text-xs text-gray-500">No password to choose — we'll email your login details so you confirm your address by signing in.</p>
           ${S.error && html`<div class="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3 flex items-center gap-2"><span>⚠️</span> ${S.error}</div>`}
           <button type="submit" class="btn w-full" disabled=${S.loading}>${S.loading?'Creating...':'Create Free Account'}</button>
         </form>
