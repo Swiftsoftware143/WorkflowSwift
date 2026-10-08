@@ -93,6 +93,31 @@
 <body>
 <div id="app"></div>
 
+<script>
+/* Inline guide content (fleet standard; the in-app counterpart of /guide.html). One entry per
+   console screen. This is a preact SPA that switches views in JS without moving the path or hash,
+   so renderApp tells the widget which screen is open via window.inlineGuidePage(view). */
+window.appGuidePages = {
+  dashboard:     { title: "Dashboard", desc: "Your workspace at a glance \u2014 workflows, leads and activity in one place.", actions: ["Scan recent activity", "Jump into a workflow"] },
+  workflows:     { title: "Workflows", desc: "The automations you have built. Each one is a multi-step flow that takes a lead from first contact to a result.", actions: ["Create a workflow", "Open one to edit it"] },
+  builder:       { title: "Builder", desc: "Where you put a workflow together step by step \u2014 add steps, choose what each one does, and connect them.", actions: ["Add a step", "Edit a step's settings", "Save and run"] },
+  templates:     { title: "Templates", desc: "Ready-made workflow blueprints you can start from instead of building from nothing.", actions: ["Preview a template", "Use it as the start of a new workflow"] },
+  renditions:    { title: "Renditions", desc: "The generated media versions of a workflow's output \u2014 the finished files it produces.", actions: ["Open a rendition", "Check what has finished"] },
+  instances:     { title: "Instances", desc: "Individual runs of a workflow \u2014 one per lead going through it. This is the history of what actually ran.", actions: ["See which runs succeeded", "Open a run to see its steps"] },
+  automations:   { title: "Automations", desc: "What starts a workflow on its own \u2014 a schedule, a new lead, or an event.", actions: ["Add an automation", "Pause one"] },
+  leads:         { title: "Leads", desc: "The people your workflows have captured, with where each one is in the process.", actions: ["Search your leads", "Open a lead's history"] },
+  prospecting:   { title: "Prospecting", desc: "Find new prospects that match who you want to reach, then start a workflow on them.", actions: ["Run a search", "Save the results"] },
+  "brand-monitor": { title: "Brand Monitor", desc: "Watch where your brand is mentioned so nothing important is missed.", actions: ["Set what to watch", "Review recent mentions"] },
+  competitors:   { title: "Competitors", desc: "Keep an eye on the competitors you follow and what they are doing.", actions: ["Add a competitor", "Review their activity"] },
+  credits:       { title: "Credits", desc: "Your usage balance. Some actions spend credits, so this is where you see what is left.", actions: ["Check your balance", "See what has been spent"] },
+  "api-keys":    { title: "API Keys", desc: "Keys that let other tools call WorkflowSwift for you. Treat them like passwords.", actions: ["Create a key", "Revoke one you no longer use"] },
+  "provider-keys": { title: "Provider Keys", desc: "The credentials for the outside services your workflows use. Stored here so a step can reach them.", actions: ["Add a provider key", "Update one that expired"] },
+  team:          { title: "Team", desc: "The people who share this workspace and what each of them is allowed to do.", actions: ["Invite someone", "Change a role"] },
+  tickets:       { title: "Tickets", desc: "Support requests \u2014 yours to us, and any raised inside the workspace.", actions: ["Open a ticket", "Check a reply"] },
+  profile:       { title: "Profile", desc: "Your account details and sign-in for this workspace.", actions: ["Update your name and password"] }
+};
+</script>
+<script src="/inline-guide-widget.js"></script>
 <script type="module">
 import { h, render } from 'https://esm.sh/preact@10.26.4';
 import htm from 'https://esm.sh/htm@3.1.1';
@@ -209,6 +234,9 @@ const renderApp = () => {
   if (__rendering) { __pendingRender = true; return; }
   __rendering = true;
   try { render(html`<${App} />`, root); } finally { __rendering = false; }
+  // Keep the inline guide on the screen the tenant is looking at (the widget cannot follow a SPA by
+  // path/hash). Only when signed in, so the sign-in screen shows no screen's guide.
+  if (window.inlineGuidePage && API.isLoggedIn && S.current) window.inlineGuidePage(S.current);
   if (__pendingRender) { __pendingRender = false; renderApp(); }
 };
 const toast = (msg, type) => { S.toast = { msg, type: type==='err'?'t-err':'t-ok' }; renderApp(); setTimeout(() => { S.toast = null; renderApp(); }, 3000); };
