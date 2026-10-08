@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::state::AppState;
 
-/// Default From address — used only when the admin has not set one in
+/// Default From ADDRESS — used only when the admin has not set one in
 /// Admin > Settings > Email. Not a credential, so it is safe as a constant.
 ///
 /// It must live on the domain the provider actually sends through
@@ -21,11 +21,22 @@ use crate::state::AppState;
 /// any other domain fails DMARC alignment at a strict receiver. Measured on the live domain — a
 /// message From `swiftsoftware143@yahoo.com` sent through `mail.workflowswift.com` was accepted
 /// and then failed with remote code `554 reason=espblock` (yahoo.com publishes `p=reject`), while
-/// the same message From `noreply@mail.workflowswift.com` was delivered (`250 ok dirdel`).
-const DEFAULT_EMAIL_FROM: &str = "noreply@mail.workflowswift.com";
+/// the same message from this domain was delivered (`250 ok dirdel`).
+///
+/// The address is **hyphenated** (`no-reply@`): that is the fleet's sender-identity convention
+/// (references/mail-identity-conventions-2026-10-08.md, kanban t_68d95177). It used to be the
+/// unhyphenated `noreply@`, which only ever reached the wire on a config with an empty
+/// `from_address` (the `smtp` / `sendgrid` arms are "configured" without one).
+const DEFAULT_EMAIL_FROM_ADDRESS: &str = "no-reply@mail.workflowswift.com";
+
+/// Default From DISPLAY NAME — the other half of the same fallback identity, matching the
+/// `from_name` half of the `admin_settings.email` row. System mail is never a bare address: an
+/// install with no `from_name` sends as `"WorkflowSwift Help Desk" <no-reply@mail.workflowswift.com>`
+/// (owner's rule, 2026-10-08). Never a shared literal across apps — each app names its own product.
+const DEFAULT_EMAIL_FROM_NAME: &str = "WorkflowSwift Help Desk";
 
 /// The organisation-level domain of an address or From header:
-/// `WorkflowSwift <noreply@mail.workflowswift.com>` -> `workflowswift.com`.
+/// `WorkflowSwift Help Desk <no-reply@mail.workflowswift.com>` -> `workflowswift.com`.
 /// Used only to warn about DMARC-alignment-breaking From addresses.
 fn org_domain(value: &str) -> String {
     let host = match value.rfind('@') {
@@ -531,18 +542,31 @@ async fn get_email_config(state: &AppState) -> Option<EmailConfig> {
     Some(config)
 }
 
-/// From header — `Name <addr>` when a name is set, else the bare address.
-fn from_header(cfg: &EmailConfig) -> String {
-    let addr = if cfg.from_address.is_empty() {
-        DEFAULT_EMAIL_FROM.to_string()
+/// The `(address, display name)` pair this transport sends as.
+///
+/// Each half falls back INDEPENDENTLY to the app's own default when the admin left it blank,
+/// because the two halves are two row fields (`from_address` / `from_name`): an install that set
+/// only one of them keeps the half it set and gets the app identity for the other. An install
+/// with both blank therefore sends the full default identity rather than a bare address.
+fn from_identity(cfg: &EmailConfig) -> (String, String) {
+    let addr = if cfg.from_address.trim().is_empty() {
+        DEFAULT_EMAIL_FROM_ADDRESS.to_string()
     } else {
         cfg.from_address.clone()
     };
-    if cfg.from_name.is_empty() {
-        addr
+    let name = if cfg.from_name.trim().is_empty() {
+        DEFAULT_EMAIL_FROM_NAME.to_string()
     } else {
-        format!("{} <{}>", cfg.from_name, addr)
-    }
+        cfg.from_name.clone()
+    };
+    (addr, name)
+}
+
+/// From header — always `Name <addr>`: both halves fall back to the app identity, so the header is
+/// a parseable mailbox and never ships a bare default address.
+fn from_header(cfg: &EmailConfig) -> String {
+    let (addr, name) = from_identity(cfg);
+    format!("{} <{}>", name, addr)
 }
 
 /// Fallback hardcoded templates (used when DB template not found)
@@ -872,7 +896,7 @@ async fn send_via_mailgun(
     // A From on a domain that is not the sending domain's organisation fails DMARC alignment at a
     // strict receiver: the provider accepts the message and the *recipient* rejects it, so the
     // only symptom is a 554 in the provider's event log. Warn loudly instead of shipping mail into
-    // that hole (the same check is why `DEFAULT_EMAIL_FROM` lives on mail.workflowswift.com).
+    // that hole (the same check is why `DEFAULT_EMAIL_FROM_ADDRESS` lives on mail.workflowswift.com).
     let from_domain = org_domain(&from);
     if !from_domain.is_empty() && !mailgun_url_sends_as(&cfg.api_url, &from_domain) {
         eprintln!(
@@ -911,6 +935,24 @@ async fn send_via_mailgun(
     Ok(())
 }
 
+/// The SendGrid v3 request body. Carries the SAME two-half identity the mailgun/SMTP arms build
+/// (`from_identity`), so a config with no `from_address` posts the hyphenated default address with
+/// the app's display name — it used to post the bare, unhyphenated address and an empty name.
+fn sendgrid_body(
+    cfg: &EmailConfig,
+    to: &str,
+    subject: &str,
+    content: &serde_json::Value,
+) -> serde_json::Value {
+    let (sender, sender_name) = from_identity(cfg);
+    json!({
+        "personalizations": [{"to": [{"email": to}]}],
+        "from": {"email": sender, "name": sender_name},
+        "subject": subject,
+        "content": [content],
+    })
+}
+
 /// SendGrid v3 `/mail/send` — Bearer key, JSON body.
 /// `api_url` may be left blank; the provider's endpoint is then used.
 async fn send_via_sendgrid(
@@ -932,18 +974,7 @@ async fn send_via_sendgrid(
         json!({"type": "text/html", "value": html_body})
     };
 
-    let sender = if cfg.from_address.is_empty() {
-        DEFAULT_EMAIL_FROM
-    } else {
-        cfg.from_address.as_str()
-    };
-
-    let body = json!({
-        "personalizations": [{"to": [{"email": to}]}],
-        "from": {"email": sender, "name": cfg.from_name},
-        "subject": subject,
-        "content": [content],
-    });
+    let body = sendgrid_body(cfg, to, subject, &content);
 
     post_json(
         &url,
@@ -1041,10 +1072,28 @@ async fn send_via_smtp(
 mod tests {
     use super::*;
 
+    /// An `EmailConfig` carrying only the two identity halves — every other field is irrelevant to
+    /// the From the transport builds. `provider` / `smtp_host` are set by the one test that needs a
+    /// SEND to actually be attemptable.
+    fn cfg_with(from_address: &str, from_name: &str) -> EmailConfig {
+        EmailConfig {
+            provider: "mailgun".to_string(),
+            api_url: "https://api.mailgun.net/v3/mail.workflowswift.com/messages".to_string(),
+            api_key: "key".to_string(),
+            from_address: from_address.to_string(),
+            from_name: from_name.to_string(),
+            smtp_host: String::new(),
+            smtp_port: 587,
+            smtp_username: String::new(),
+            smtp_password: String::new(),
+            smtp_encryption: "none".to_string(),
+        }
+    }
+
     #[test]
     fn org_domain_reads_the_domain_of_a_from_header() {
         assert_eq!(
-            org_domain("WorkflowSwift <noreply@mail.workflowswift.com>"),
+            org_domain("WorkflowSwift Help Desk <no-reply@mail.workflowswift.com>"),
             "workflowswift.com"
         );
         // The From that shipped before this fix: same organisation as the sending domain is NOT
@@ -1061,7 +1110,7 @@ mod tests {
         // What the app stores today: aligned, so no warning.
         assert!(mailgun_url_sends_as(
             url,
-            &org_domain("WorkflowSwift <noreply@mail.workflowswift.com>")
+            &org_domain("WorkflowSwift Help Desk <no-reply@mail.workflowswift.com>")
         ));
         // What it stored while this card was open: Mailgun accepted it and Yahoo answered
         // `554 espblock`, because yahoo.com is not a domain this endpoint signs for.
@@ -1096,7 +1145,209 @@ mod tests {
     #[test]
     fn default_from_is_aligned_with_the_mailgun_sending_domain() {
         let url = "https://api.mailgun.net/v3/mail.workflowswift.com/messages";
-        assert!(mailgun_url_sends_as(url, &org_domain(DEFAULT_EMAIL_FROM)));
+        assert!(mailgun_url_sends_as(
+            url,
+            &org_domain(DEFAULT_EMAIL_FROM_ADDRESS)
+        ));
+        // The default identity as a whole — name included — must ALSO be aligned, because a From
+        // whose domain drifted (the card's whole point) would mail into the DMARC hole silently.
+        assert!(mailgun_url_sends_as(
+            url,
+            &org_domain(&from_header(&cfg_with("", "")))
+        ));
+    }
+
+    /// A config with no `from_address` is reachable on the `smtp` and `sendgrid` arms (they need a
+    /// host / a key, not a From), and it must send the owner's identity — never the retired bare,
+    /// unhyphenated default (kanban t_98ffd5fa).
+    #[test]
+    fn the_default_identity_is_the_app_help_desk_with_a_hyphenated_address() {
+        let cfg = cfg_with("", "");
+        assert_eq!(
+            from_header(&cfg),
+            "WorkflowSwift Help Desk <no-reply@mail.workflowswift.com>"
+        );
+        // The SMTP arm feeds exactly this string into `Message::builder().from(..)`, which has to
+        // PARSE it: a malformed default would fail every SMTP send at runtime, not merely look
+        // wrong in a log.
+        let mailbox: lettre::message::Mailbox = from_header(&cfg)
+            .parse()
+            .expect("the default From must parse as a mailbox");
+        assert_eq!(mailbox.email.to_string(), "no-reply@mail.workflowswift.com");
+        assert_eq!(mailbox.name.as_deref(), Some("WorkflowSwift Help Desk"));
+        // The unhyphenated form David asked to retire must be gone, both as the whole address and
+        // as the local part.
+        assert!(!from_header(&cfg).contains("noreply@"));
+    }
+
+    /// The identity is TWO row fields, so each half falls back on its own: setting only one keeps
+    /// the half that was set and supplies the app identity for the other. The live config sets
+    /// both, and that case must be untouched.
+    #[test]
+    fn each_half_of_the_from_identity_falls_back_on_its_own() {
+        assert_eq!(
+            from_header(&cfg_with("billing@acme.example", "Acme Billing")),
+            "Acme Billing <billing@acme.example>",
+            "both halves set: nothing is invented"
+        );
+        assert_eq!(
+            from_header(&cfg_with("", "Acme Billing")),
+            "Acme Billing <no-reply@mail.workflowswift.com>",
+            "address blank: the hyphenated default, the admin's own display name kept"
+        );
+        assert_eq!(
+            from_header(&cfg_with("billing@acme.example", "")),
+            "WorkflowSwift Help Desk <billing@acme.example>",
+            "name blank: the app's own display name supplies it"
+        );
+        // Whitespace is not a value: a row saved with spaces must not produce a broken header.
+        assert_eq!(
+            from_header(&cfg_with("   ", "  ")),
+            "WorkflowSwift Help Desk <no-reply@mail.workflowswift.com>"
+        );
+    }
+
+    /// The premise that makes the default reachable at all — neither arm requires a `from_address`.
+    #[test]
+    fn smtp_and_sendgrid_are_configured_without_a_from_address() {
+        let mut smtp = cfg_with("", "");
+        smtp.provider = "smtp".to_string();
+        smtp.smtp_host = "smtp.example.com".to_string();
+        assert!(
+            smtp.is_configured(),
+            "provider=smtp needs a host, not a From"
+        );
+
+        let mut sendgrid = cfg_with("", "");
+        sendgrid.provider = "sendgrid".to_string();
+        sendgrid.api_key = "SG.test".to_string();
+        assert!(
+            sendgrid.is_configured(),
+            "provider=sendgrid needs a key, not a From"
+        );
+    }
+
+    /// The SendGrid arm used to post `{"email": noreply@…, "name": ""}`. It must carry the SAME
+    /// two-half identity the mailgun/SMTP arms build.
+    #[test]
+    fn the_sendgrid_arm_carries_the_default_identity_too() {
+        let body = sendgrid_body(
+            &cfg_with("", ""),
+            "dana@example.com",
+            "Hello",
+            &json!({"type": "text/plain", "value": "hi"}),
+        );
+        assert_eq!(body["from"]["email"], "no-reply@mail.workflowswift.com");
+        assert_eq!(body["from"]["name"], "WorkflowSwift Help Desk");
+        assert_eq!(
+            body["personalizations"][0]["to"][0]["email"],
+            "dana@example.com"
+        );
+        // And with the config the live row carries, the row's own two halves still win.
+        let row = sendgrid_body(
+            &cfg_with("no-reply@mail.workflowswift.com", "WorkflowSwift Help Desk"),
+            "dana@example.com",
+            "Hello",
+            &json!({"type": "text/plain", "value": "hi"}),
+        );
+        assert_eq!(row["from"]["name"], "WorkflowSwift Help Desk");
+    }
+
+    /// The SMTP arm end to end, over a real socket: the default From must arrive as the `From:`
+    /// header on the wire. This is the only instrument that runs `from_header` -> `parse` ->
+    /// lettre's serialiser -> a socket, so it is the one that can fail if the default stops being
+    /// a valid mailbox. Plain sink, no STARTTLS — the same shape an `smtp_encryption = none`
+    /// transport (`builder_dangerous`) speaks. AUTH is advertised because this arm always sets
+    /// credentials, and lettre refuses to send when the server offers no mechanism it can use.
+    #[tokio::test]
+    async fn the_smtp_arm_puts_the_default_identity_on_the_wire() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("smtp sink listener");
+        let port = listener.local_addr().unwrap().port();
+
+        let sink = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("one connection");
+            let (rd, mut wr) = stream.into_split();
+            let mut rd = BufReader::new(rd);
+            let mut message: Vec<u8> = Vec::new();
+            let mut in_data = false;
+            let mut line: Vec<u8> = Vec::new();
+            wr.write_all(b"220 workflowswift-smtp-sink ESMTP\r\n")
+                .await
+                .unwrap();
+            wr.flush().await.unwrap();
+            loop {
+                line.clear();
+                if rd.read_until(b'\n', &mut line).await.unwrap_or(0) == 0 {
+                    break;
+                }
+                if in_data {
+                    if line == b".\r\n" || line == b".\n" {
+                        in_data = false;
+                        wr.write_all(b"250 OK queued as <probe>\r\n").await.unwrap();
+                        wr.flush().await.unwrap();
+                    } else {
+                        message.extend_from_slice(&line);
+                    }
+                    continue;
+                }
+                let up = String::from_utf8_lossy(&line).to_ascii_uppercase();
+                // TWO capability lines, the LAST unhyphenated: a lone "250-..." is a continuation
+                // and a real client waits for the final line forever.
+                let reply: &[u8] = if up.starts_with("EHLO") || up.starts_with("HELO") {
+                    b"250-workflowswift-smtp-sink\r\n250-AUTH PLAIN LOGIN\r\n250 SIZE 10485760\r\n"
+                } else if up.starts_with("DATA") {
+                    in_data = true;
+                    b"354 End data with <CR><LF>.<CR><LF>\r\n"
+                } else if up.starts_with("QUIT") {
+                    b"221 Bye\r\n"
+                } else {
+                    b"250 OK\r\n"
+                };
+                wr.write_all(reply).await.unwrap();
+                wr.flush().await.unwrap();
+                if up.starts_with("QUIT") {
+                    break;
+                }
+            }
+            String::from_utf8_lossy(&message).to_string()
+        });
+
+        let mut cfg = cfg_with("", "");
+        cfg.provider = "smtp".to_string();
+        cfg.smtp_host = "127.0.0.1".to_string();
+        cfg.smtp_port = port;
+
+        send_via_smtp(&cfg, "dana@example.com", "Identity probe", "body text", "")
+            .await
+            .expect("the smtp arm must accept the default identity");
+
+        let wire = tokio::time::timeout(std::time::Duration::from_secs(10), sink)
+            .await
+            .expect("the sink must see the send before the deadline")
+            .expect("sink task");
+        // Read the header back and PARSE it rather than string-matching the raw bytes: lettre
+        // quotes a display name that contains spaces (`From: "WorkflowSwift Help Desk" <...>`),
+        // which is the same mailbox the unquoted form denotes. What must hold is the identity the
+        // recipient sees, and that the wire value is a valid mailbox.
+        let from_line = wire
+            .lines()
+            .find(|l| l.starts_with("From: "))
+            .expect("a From header on the wire");
+        let wired: lettre::message::Mailbox = from_line["From: ".len()..]
+            .trim()
+            .parse()
+            .expect("the wire From must re-parse as a mailbox");
+        assert_eq!(wired.email.to_string(), "no-reply@mail.workflowswift.com");
+        assert_eq!(wired.name.as_deref(), Some("WorkflowSwift Help Desk"));
+        assert!(
+            !wire.contains("noreply@mail.workflowswift.com"),
+            "the retired unhyphenated default reached the wire:\n{}",
+            wire
+        );
     }
 
     #[test]
