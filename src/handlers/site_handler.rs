@@ -927,7 +927,13 @@ fn default_site_settings() -> serde_json::Value {
         "keywords": "workflow automation, data visualization, no-code, business process automation, dashboards, workflow builder",
         "og_title": "WorkflowSwift — Automate Everything. Visualize Everything.",
         "og_description": "Build visual workflows, dynamic dashboards, and connect your tools without code.",
-        "og_image_url": "",
+        // The share image the SERVED page carries (`<meta property="og:image">`, added with the
+        // other social-preview tags). It is here as the byte string the page already carries, like
+        // every other value in this object, so an install with NO row renders the published homepage
+        // byte-for-byte. It was `""` while the served page, the repo copy AND the live row all
+        // carried the URL: the blank default DELETED the tag on every render, which is what made
+        // `a_reconciled_row_leaves_the_live_homepage_byte_for_byte` red at HEAD (kanban t_79a4a151).
+        "og_image_url": "https://workflowswift.com/assets/og-workflowswift.png",
         "favicon_url": "",
         "canonical_url": "https://workflowswift.com/",
         "ga_id": "",
@@ -1002,20 +1008,46 @@ mod tests {
         if rendered != before {
             let a: Vec<&str> = before.lines().collect();
             let b: Vec<&str> = rendered.lines().collect();
-            let mut shown = 0;
-            for (i, _) in a.iter().enumerate().filter(|(i, _)| a.get(*i) != b.get(*i)) {
-                eprintln!(
-                    "line {}: served={:?} rendered={:?}",
+            // Surface WHICH side moved instead of only that they differ: up to eight divergent
+            // lines, both sides (kanban t_79a4a151). A line present on one side only is called out,
+            // because that is the signature of a blank row value DELETING a served tag.
+            let mut detail = String::new();
+            let mut shown = 0usize;
+            for i in 0..a.len().max(b.len()) {
+                if a.get(i) == b.get(i) {
+                    continue;
+                }
+                let (s, r) = (a.get(i).copied(), b.get(i).copied());
+                let one_sided = matches!((s, r), (Some(x), _) if x.trim().is_empty())
+                    || matches!((s, r), (_, Some(x)) if x.trim().is_empty());
+                let note = if one_sided {
+                    " (a tag is present on ONE side only — the other side is empty)"
+                } else {
+                    ""
+                };
+                detail.push_str(&format!(
+                    "\n  line {}: served={:?} rendered={:?}{}",
                     i + 1,
-                    a.get(i),
-                    b.get(i)
-                );
+                    s,
+                    r,
+                    note
+                ));
                 shown += 1;
-                if shown > 8 {
+                if shown >= 8 {
+                    detail.push_str("\n  … (further divergent lines not shown)");
                     break;
                 }
             }
-            panic!("the code defaults no longer render the served homepage byte-for-byte");
+            panic!(
+                "the code defaults no longer render the served homepage byte-for-byte\n  \
+                 served:   /opt/swift/nginx/www/workflowswift/index.html ({} line(s))\n  \
+                 rendered: inject_site_settings(served, default_site_settings()) ({} line(s))\n  \
+                 {} divergent line(s):{}",
+                a.len(),
+                b.len(),
+                shown,
+                detail
+            );
         }
     }
 
@@ -1054,7 +1086,11 @@ mod tests {
     #[test]
     fn a_blank_og_image_does_not_inject_a_tag_and_og_type_is_never_deleted() {
         let html = "<head><meta property=\"og:type\" content=\"website\"></head><body></body>";
-        let out = inject_site_settings(html, &default_site_settings());
+        // The reconciled default carries the served share image, so this test asks for a BLANK one
+        // explicitly — the blank arm is what must not inject an empty `<meta … content="">`.
+        let mut s = default_site_settings();
+        s["og_image_url"] = json!("");
+        let out = inject_site_settings(html, &s);
         assert!(
             !out.contains("og:image"),
             "a blank og_image_url must not inject an empty tag"
@@ -1062,6 +1098,13 @@ mod tests {
         assert!(
             out.contains("<meta property=\"og:type\" content=\"website\">"),
             "og:type is served copy the settings row has no key for"
+        );
+        // …and the reconciled default (the URL the served page carries) DOES emit the tag, so a
+        // fresh install reproduces the published homepage's share image (kanban t_79a4a151).
+        let out = inject_site_settings(html, &default_site_settings());
+        assert!(
+            out.contains("og:image"),
+            "the reconciled og_image_url must emit the served share-image tag: {out}"
         );
     }
 
@@ -1116,56 +1159,157 @@ mod tests {
 
     // ── kanban t_e8bfd1f3: the REST of the homepage editors ──
 
-    /// Every homepage editor the Site Configuration panel renders moves EXACTLY the served line(s)
-    /// it owns. Measured on the REAL published page, so a reader that reached a sibling element — a
-    /// second `<h2>`, the features subtitle, the legal-links paragraph — fails here.
-    #[test]
-    fn every_homepage_editor_moves_only_its_own_region() {
-        let Some(served) = served_index() else { return };
-        let shipped = default_site_settings();
-        let cases: Vec<(&str, &str, Vec<usize>)> = vec![
-            ("logo_text", "ProbeBrand", vec![80]),
-            ("nav_cta_text", "PROBE-NAV-CTA", vec![85]),
-            ("button_text", "PROBE-PRIMARY", vec![97]),
-            ("secondary_button_text", "PROBE-SECONDARY", vec![98]),
-            ("features_heading", "PROBE-FEATURES-H2", vec![105]),
-            ("cta_heading", "PROBE-CTA-H2", vec![191]),
-            ("cta_text", "PROBE-CTA-P", vec![192]),
-            ("footer_text", "PROBE-FOOTER", vec![199]),
-        ];
-        for (field, probe, want) in cases {
-            let mut s = shipped.clone();
-            s["homepage"][field] = json!(probe);
-            let out = inject_site_settings(&served, &s);
-            let moved: Vec<usize> = served
-                .lines()
-                .zip(out.lines())
-                .enumerate()
-                .filter(|(_, (a, b))| a != b)
-                .map(|(i, _)| i + 1)
-                .collect();
-            assert_eq!(moved, want, "homepage.{field} moved the wrong region");
-            assert!(
-                out.contains(probe),
-                "homepage.{field} never reached the page"
-            );
-        }
-        // The sign-in URL owns TWO served lines: the nav's plain link (84) and the hero's outline
-        // button (98) — the page offers one destination twice.
-        let mut s = shipped.clone();
-        s["homepage"]["sign_in_url"] = json!("https://example.com/probe-signin");
-        let out = inject_site_settings(&served, &s);
-        let moved: Vec<usize> = served
+    /// The 1-based served lines that differ from a render, with both sides.
+    fn moved_lines<'a>(served: &'a str, out: &'a str) -> Vec<(usize, &'a str, &'a str)> {
+        served
             .lines()
             .zip(out.lines())
             .enumerate()
             .filter(|(_, (a, b))| a != b)
-            .map(|(i, _)| i + 1)
-            .collect();
+            .map(|(i, (a, b))| (i + 1, a, b))
+            .collect()
+    }
+
+    /// The value of the first `href="…"` on a line.
+    fn href_of(line: &str) -> Option<&str> {
+        let at = line.find("href=\"")? + "href=\"".len();
+        let len = line[at..].find('"')?;
+        Some(&line[at..at + len])
+    }
+
+    /// Assert that injecting `probe` for `field` moved EXACTLY its own region: `owned` served
+    /// line(s), each of them a line that carried this field's SHIPPED value (and, where two lines
+    /// could carry it, `anchor`), and the page restored byte-for-byte by swapping the probe back.
+    /// Every failure names the field and prints both sides of the offending line(s).
+    fn assert_own_region(
+        served: &str,
+        out: &str,
+        field: &str,
+        probe: &str,
+        shipped_value: &str,
+        owned: usize,
+        anchor: Option<&str>,
+    ) {
         assert_eq!(
-            moved,
-            vec![84, 98],
-            "homepage.sign_in_url moved the wrong regions"
+            served.lines().count(),
+            out.lines().count(),
+            "homepage.{field} changed the page's line count — an editor may only swap bytes in place"
+        );
+        let moved = moved_lines(served, out);
+        assert_eq!(
+            moved.len(),
+            owned,
+            "homepage.{field} moved {} served line(s), not {owned}: moved {:?}",
+            moved.len(),
+            moved.iter().map(|(n, _, _)| *n).collect::<Vec<usize>>()
+        );
+        for (n, before, after) in &moved {
+            assert!(
+                after.contains(probe),
+                "homepage.{field} never reached served line {n}: {after:?}"
+            );
+            assert!(
+                before.contains(shipped_value),
+                "homepage.{field} moved served line {n}, which does not carry this editor's \
+                 shipped value ({shipped_value:?}) — that is NOT this field's region: {before:?}"
+            );
+            if let Some(a) = anchor {
+                assert!(
+                    before.contains(a),
+                    "homepage.{field} moved served line {n}, which carries no {a} — that is NOT \
+                     this field's region: {before:?}"
+                );
+            }
+        }
+        let restored = out.replace(probe, shipped_value);
+        if restored != served {
+            let back = moved_lines(served, &restored);
+            panic!(
+                "homepage.{field} changed more than its own value — swapping {probe:?} back for \
+                 {shipped_value:?} does not reproduce the served page; still divergent: {:?}",
+                back.iter()
+                    .map(|(n, b, a)| format!("line {n}: served={b:?} restored={a:?}"))
+                    .collect::<Vec<String>>()
+            );
+        }
+    }
+
+    /// Every homepage editor the Site Configuration panel renders moves EXACTLY the served line(s)
+    /// it owns. Measured on the REAL published page, so a reader that reached a sibling element — a
+    /// second `<h2>`, the features subtitle, the legal-links paragraph — fails here.
+    ///
+    /// NO absolute line numbers (kanban t_79a4a151): the page legitimately GREW — the four
+    /// social-preview tags (`<meta property="og:image">`, `og:image:width`, `og:image:height`,
+    /// `<meta name="twitter:image">`) landed at lines 18-21 — and the coordinates this test used to
+    /// carry (logo_text at 80, …) went stale, turning the suite red with no code change at all. The
+    /// region is now pinned by what it IS: the moved served line must be one that carried THIS
+    /// field's shipped value, and swapping the probe back must reproduce the served page
+    /// byte-for-byte. The whole-page coordinate check is
+    /// `a_reconciled_row_leaves_the_live_homepage_byte_for_byte`.
+    #[test]
+    fn every_homepage_editor_moves_only_its_own_region() {
+        let Some(served) = served_index() else { return };
+        let shipped = default_site_settings();
+        // (field, probe, how many served lines this editor owns, an optional structural anchor the
+        // moved line must carry). The anchor is only needed where the value leg cannot tell two
+        // lines apart on its own: `logo_text`'s shipped value is the bare wordmark `WorkflowSwift`,
+        // which the FOOTER's line carries too.
+        let cases: Vec<(&str, &str, usize, Option<&str>)> = vec![
+            ("logo_text", "ProbeBrand", 1, Some("class=\"logo\"")),
+            ("nav_cta_text", "PROBE-NAV-CTA", 1, None),
+            ("button_text", "PROBE-PRIMARY", 1, None),
+            ("secondary_button_text", "PROBE-SECONDARY", 1, None),
+            ("features_heading", "PROBE-FEATURES-H2", 1, None),
+            ("cta_heading", "PROBE-CTA-H2", 1, None),
+            ("cta_text", "PROBE-CTA-P", 1, None),
+            ("footer_text", "PROBE-FOOTER", 1, None),
+        ];
+        for (field, probe, owned, anchor) in cases {
+            let mut s = shipped.clone();
+            s["homepage"][field] = json!(probe);
+            let out = inject_site_settings(&served, &s);
+            assert!(
+                out.contains(probe),
+                "homepage.{field} never reached the page"
+            );
+            let value = shipped["homepage"][field].as_str().unwrap();
+            assert_own_region(&served, &out, field, probe, value, owned, anchor);
+        }
+        // The sign-in URL owns TWO served lines: the nav's plain link and the hero's outline button
+        // — the page offers one destination twice. Its shipped row value is BLANK ("leave the
+        // shipped /login hrefs alone"), so the hrefs it moves are read out of the moved lines
+        // themselves: each line must be its own served bytes with ONLY the href swapped, and both
+        // must be the SAME destination.
+        let mut s = shipped.clone();
+        s["homepage"]["sign_in_url"] = json!("https://example.com/probe-signin");
+        let out = inject_site_settings(&served, &s);
+        assert_eq!(
+            served.lines().count(),
+            out.lines().count(),
+            "homepage.sign_in_url changed the page's line count"
+        );
+        let moved = moved_lines(&served, &out);
+        assert_eq!(
+            moved.len(),
+            2,
+            "homepage.sign_in_url owns two served lines (the nav link and the hero button); it \
+             moved {:?}",
+            moved.iter().map(|(n, _, _)| *n).collect::<Vec<usize>>()
+        );
+        let mut hrefs: Vec<String> = Vec::new();
+        for (n, before, after) in &moved {
+            let href = href_of(before)
+                .unwrap_or_else(|| panic!("served line {n} carries no href: {before:?}"));
+            assert_eq!(
+                *after,
+                before.replace(href, "https://example.com/probe-signin"),
+                "homepage.sign_in_url must swap ONLY the href on served line {n}"
+            );
+            hrefs.push(href.to_string());
+        }
+        assert_eq!(
+            hrefs[0], hrefs[1],
+            "the two sign-in entry points must point at ONE destination"
         );
     }
 
