@@ -390,7 +390,8 @@ nothing.
 The switch is in the admin console under **Admin → Settings → Tag → free account**:
 
 - **Enable auto-provisioning from tags** — `admin_settings.provision_from_tags_enabled`. Ships
-  **off**; while it is off the receiver answers `403` and creates nothing.
+  **ON** (code default — a fresh install has the door open), so a tagged lead gets an account
+  immediately; turn it off here and the receiver answers `403` and creates nothing.
 - **Entry plan** — `admin_settings.provision_entry_plan_slug`, default `free`. Only free tiers are
   listed; a paid plan is refused.
 
