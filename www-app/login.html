@@ -3,13 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Login — Workflowswift</title>
+<title>Sign in — Workflowswift</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:linear-gradient(135deg,#1e1b4b,#312e81);display:flex;justify-content:center;align-items:center;min-height:100vh}
 .c{background:#fff;border-radius:12px;padding:40px;width:380px;max-width:95vw;box-shadow:0 12px 40px rgba(0,0,0,.3);text-align:center}
 .c h1{font-size:22px;color:#1e1b4b;margin-bottom:4px}
-.c p.sub{font-size:13px;color:#64748b;margin-bottom:24px}
+.c p.sub{font-size:13px;color:#64748b;margin-bottom:20px}
+.tabs{display:flex;margin-bottom:20px;border-bottom:1px solid #e2e8f0}
+.tab{flex:1;padding:10px;cursor:pointer;font-size:14px;font-weight:600;color:#94a3b8;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab.on{color:#6366f1;border-bottom-color:#6366f1}
+.pane{display:none}.pane.on{display:block}
 .c input{width:100%;padding:12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;margin-bottom:12px;display:block;outline:none}
 .c input:focus{border-color:#6366f1;box-shadow:0 0 0 2px rgba(99,102,241,.15)}
 .c button{width:100%;padding:12px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}
@@ -18,6 +22,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:linear-g
 .msg{padding:10px;border-radius:6px;font-size:13px;margin-top:12px;display:none}
 .msg.e{background:#fee2e2;color:#991b1b;display:block}
 .msg.i{color:#6366f1;display:block}
+.msg.ok{background:#dcfce7;color:#166534;display:block;text-align:left;line-height:1.5}
+.note{font-size:12px;color:#94a3b8;text-align:left;margin-bottom:12px;line-height:1.5}
 .lk{margin-top:16px;font-size:12px;border-top:1px solid #f1f5f9;padding-top:14px}
 .lk a{color:#6366f1}
 </style>
@@ -26,13 +32,43 @@ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:linear-g
 <div class="c">
 <h1>Workflowswift</h1>
 <p class="sub">Lead Generation &amp; Affiliate Marketing</p>
-<input id="e" type="email" placeholder="Email">
-<input id="p" type="password" placeholder="Password">
-<button id="b" onclick="L()">Sign In</button>
-<div id="m" class="msg"></div>
+
+<div class="tabs">
+  <div class="tab on" id="tabLogin">Sign in</div>
+  <div class="tab" id="tabRegister">Create account</div>
+</div>
+
+<div class="pane on" id="paneLogin">
+  <input id="e" type="email" placeholder="Email" autocomplete="email">
+  <input id="p" type="password" placeholder="Password" autocomplete="current-password">
+  <button id="b" onclick="L()">Sign In</button>
+  <div id="m" class="msg"></div>
+</div>
+
+<div class="pane" id="paneRegister">
+  <input id="rn" type="text" placeholder="Full name" autocomplete="name">
+  <input id="re" type="email" placeholder="you@company.com" autocomplete="email">
+  <p class="note">No password to choose &mdash; we'll email your login details so you can confirm your address by signing in.</p>
+  <button id="rb" onclick="R()">Create Free Account</button>
+  <div id="rm" class="msg"></div>
+</div>
+
 <div class="lk"><a href="https://admin.workflowswift.com/">Admin Portal</a></div>
 </div>
 <script>
+var TAB_L=document.getElementById('tabLogin'),TAB_R=document.getElementById('tabRegister');
+var PANE_L=document.getElementById('paneLogin'),PANE_R=document.getElementById('paneRegister');
+function swap(isLogin){
+  TAB_L.classList.toggle('on',isLogin);TAB_R.classList.toggle('on',!isLogin);
+  PANE_L.classList.toggle('on',isLogin);PANE_R.classList.toggle('on',!isLogin);
+  document.title=(isLogin?'Sign in':'Create account')+' — Workflowswift';
+}
+TAB_L.onclick=function(){swap(true)};
+TAB_R.onclick=function(){swap(false)};
+// The marketing site's Sign-up links 301 here with ?register=1, so open that tab directly.
+try{ if(new URLSearchParams(window.location.search).get('register')) swap(false); }catch(e){}
+
+/* ---- Sign in (unchanged behaviour: token stored out of band, then /app) ---- */
 function L(){
 var e=document.getElementById("e").value.trim(),p=document.getElementById("p").value,m=document.getElementById("m"),b=document.getElementById("b");
 if(!e||!p){m.className="msg e";m.textContent="Enter email and password";return}
@@ -42,15 +78,26 @@ fetch("/api/v1/auth/login",{method:"POST",headers:{"Content-Type":"application/j
 .then(function(d){var t=d.token||d.access_token;
 if(!t){m.className="msg e";m.textContent="Login response carried no session token";b.disabled=false;return}
 try{localStorage.setItem("ws_fs_token",t);sessionStorage.setItem("wf_token",t)}catch(ex){}
-/* Hand the session over OUT OF BAND.
-   This used to be window.location.href="/app?token="+encodeURIComponent(t), which put
-   the 24h bearer token in the URL: it landed in the nginx/Cloudflare access log, in the
-   browser history, and in the Referer header of every request the app then made.
-   app.workflowswift.com/login and app.workflowswift.com/app are the SAME origin, so the
-   storages above are already visible to the SPA - no URL transport is needed.
-   location.replace() also keeps /login out of the back-button history. */
+/* The session is handed over OUT OF BAND: /login and /app are the same origin, so the storages
+   above are already visible to the SPA, and the bearer token is never put in the URL. */
 window.location.replace("/app")})
 .catch(function(err){m.className="msg e";m.textContent=err.message;b.disabled=false});
+}
+
+/* ---- Create account: NAME + EMAIL only. The server mints the password and emails it, so there
+   is NO auto-login here - the user confirms their address by signing in with the password sent. */
+function R(){
+var n=document.getElementById("rn").value.trim(),e=document.getElementById("re").value.trim(),m=document.getElementById("rm"),b=document.getElementById("rb");
+if(!e){m.className="msg e";m.textContent="Enter your email address";return}
+b.disabled=true;b.textContent="Creating account...";
+fetch("/api/v1/auth/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:n||e.split("@")[0],email:e})})
+.then(function(r){return r.json().then(function(d){return{r:r,d:d}})})
+.then(function(x){
+  if(!x.r.ok){m.className="msg e";m.textContent=(x.d&&(x.d.error||x.d.message))||"Registration failed. Please try again.";b.disabled=false;b.textContent="Create Free Account";return}
+  m.className="msg ok";m.innerHTML="<strong>Account created!</strong><br>Check your email &mdash; we sent your login details to "+e.replace(/[<>&]/g,"")+". You can change your password any time in your profile settings.";
+  b.textContent="Check your email";
+})
+.catch(function(err){m.className="msg e";m.textContent="Network error. Please try again.";b.disabled=false;b.textContent="Create Free Account"});
 }
 </script>
 </body>
