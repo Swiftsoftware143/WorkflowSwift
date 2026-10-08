@@ -149,6 +149,7 @@ const API = (() => {
   return {
     register: (name, email) => fetch(base + '/auth/register', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, email}) }).then(handle),
     login: (email, password) => fetch(base + '/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, password}) }).then(handle),
+    changePassword: (current_password, new_password) => fetch(base + '/auth/change-password', { method:'POST', headers: headers(), body: JSON.stringify({ current_password, new_password }) }).then(handle),
     get: (p) => fetch(base + p, { headers: headers() }).then(handle),
     post: (p, b) => fetch(base + p, { method:'POST', headers: headers(), body: b === undefined ? undefined : JSON.stringify(b) }).then(handle),
     put: (p, b) => fetch(base + p, { method:'PUT', headers: headers(), body: JSON.stringify(b) }).then(handle),
@@ -1275,6 +1276,23 @@ const PermsModal = () => {
 // ===== Profile =====
 const ProfileView = () => {
   const u = API.user || {};
+  // The signup model emails a generated password; this is where the user replaces it (kanban
+  // signup audit). The endpoint has always existed (POST /auth/change-password) but the view
+  // offered no control, so the "change it in profile settings" promise was unreachable.
+  const f = viewState('profile_pw', { current:'', next:'', confirm:'' });
+  const changePw = async (e) => {
+    e.preventDefault();
+    if (!f.current || !f.next) return toast('Enter your current and new password','err');
+    if (f.next.length < 6) return toast('New password must be at least 6 characters','err');
+    if (f.next !== f.confirm) return toast('The two new passwords do not match','err');
+    S.loading = true; renderApp();
+    try {
+      await API.changePassword(f.current, f.next);
+      f.current = ''; f.next = ''; f.confirm = '';
+      toast('Password updated');
+    } catch (err) { toast(err.message || 'Could not update password','err'); }
+    S.loading = false; renderApp();
+  };
   return html`
     <div>
       <header class="mb-5"><h1 class="text-xl font-extrabold text-gray-900">Profile</h1><p class="text-sm text-gray-500 mt-1">Your account settings</p></header>
@@ -1285,6 +1303,16 @@ const ProfileView = () => {
           <div><label class="label">Account</label><div class="text-sm text-gray-600">${u.aid || u.account_id || u.id || '—'}</div></div>
         </div>
         <div class="mt-6 pt-4 border-t flex gap-2"><button class="btn-outline text-sm" onClick=${()=>{API.logout(); window.location.reload();}}>Sign Out</button></div>
+      </div>
+      <div class="card mt-5">
+        <h2 class="text-base font-bold text-gray-900 mb-1">Change password</h2>
+        <p class="text-sm text-gray-500 mb-4">We emailed you a password when you signed up. Replace it here with one of your own.</p>
+        <form onSubmit=${changePw} class="space-y-3">
+          <div><label class="label">Current password</label><input type="password" class="input" autocomplete="current-password" value=${f.current} onInput=${e=>f.current=e.target.value} /></div>
+          <div><label class="label">New password</label><input type="password" class="input" autocomplete="new-password" value=${f.next} onInput=${e=>f.next=e.target.value} /></div>
+          <div><label class="label">Confirm new password</label><input type="password" class="input" autocomplete="new-password" value=${f.confirm} onInput=${e=>f.confirm=e.target.value} /></div>
+          <button class="btn text-sm" disabled=${S.loading}>${S.loading?spinner():'Update password'}</button>
+        </form>
       </div>
     </div>`;
 };
