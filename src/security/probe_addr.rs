@@ -16,13 +16,19 @@
 //! a signup addressed into the harness class is created normally but its mail is never sent, so a
 //! probe can never reach an inbox.
 //!
-//! WHAT IS *NOT* HERE, AND WHY
+//! RESERVED CLASS — SUPPRESSED TOO (changed 2026-10-09)
 //!
-//! The RFC 2606 / 6761 class (`example.com/.net/.org`, `*.invalid`, `*.test`, `*.local`,
-//! `localhost`) is deliberately NOT suppressed. Those names cannot resolve to a mailbox, so a send
-//! to them can only bounce — and that is exactly the address class the content-level harnesses use
-//! on purpose, pointing the provider at a local SMTP sink and reading the credential message off
-//! the wire. Suppressing that class would delete the only harness that can prove a send still works.
+//! The RFC 2606 / 6761 names (`example.com/.net/.org`, `*.invalid`, `*.test`) are suppressed as
+//! well: they cannot resolve to a mailbox, so a send can only bounce — measured on this app's own
+//! domain as `accepted` then `failed` — and every such bounce burns the sending domain's
+//! reputation (kanban t_e4d94bd9). The fleet-dev domains were withheld first; this extends the
+//! same withholding to the reserved names a probe reaches for.
+//!
+//! ONE DELIBERATE EXCEPTION — `*.local` / `localhost`. Those stay OPEN because the content-level
+//! harnesses point the provider at a local SMTP sink and sign up as `cr1sink<hex>@probe.local` to
+//! read the credential message off the wire; suppressing `.local` would delete the only harness
+//! that can prove a send still works. Only the fleet's own `swiftsoftware.local` identity is
+//! listed, never the bare `local` TLD.
 
 /// The fleet's own harness domains. Every one of them is fleet-controlled: a message addressed here
 /// can only land in a fleet mailbox, never in a customer's.
