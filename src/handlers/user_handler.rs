@@ -216,6 +216,7 @@ pub async fn invite_user(
     // Send invite email
     let result = email::send_email(
         &state,
+        Some(aid),
         &email,
         "team_invite",
         &json!({

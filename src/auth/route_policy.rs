@@ -125,6 +125,14 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // The authenticated POST twin (`/api/v1/auth/avatar`) is NOT here and must never be — the tests
     // below pin both directions.
     "/api/v1/auth/avatar/{user_id}",
+    // --- the account's email-branding LOGO READ (kanban t_c3cfe7ba) -----------------------------
+    // Same shape as the avatar read above: a mail client renders `<img src="/api/v1/branding/logo/
+    // <uuid>">` with no credential, so this route is public by construction. Narrow by design —
+    // one account's stored bytes, keyed by an unguessable uuid, under the content type sniffed at
+    // upload time; 404 when there is no logo. The authenticated read/write twins
+    // (`/api/v1/settings/branding` and `/api/v1/settings/branding/logo`) are NOT here and must
+    // never be.
+    "/api/v1/branding/logo/{account_id}",
     // --- bridge liveness ping ------------------------------------------------------------------
     // Returns the constant `{"status":"bridge-ok"}` and reads nothing. The two bridge LISTINGS that
     // used to sit beside it are NOT here: they return host filesystem contents and every caller
@@ -488,14 +496,15 @@ mod tests {
     /// from the code without a test failing.
     #[test]
     fn the_census_shape_is_what_the_docs_say() {
-        assert_eq!(super::PUBLIC_ROUTES.len(), 13, "PUBLIC_ROUTES size");
+        assert_eq!(super::PUBLIC_ROUTES.len(), 14, "PUBLIC_ROUTES size");
         assert_eq!(super::INTERNAL_ROUTES.len(), 10, "INTERNAL_ROUTES size");
         // The 22 deliberate anonymous placements the census found, minus the 2 moved to the
         // protected router, plus `/api/v1/auth/avatar/{user_id}` (the account-picture READ, card
-        // t_39cea779) which was never anonymous before it existed.
+        // t_39cea779) and `/api/v1/branding/logo/{account_id}` (the email-branding logo READ, card
+        // t_c3cfe7ba), neither of which was anonymous before it existed.
         assert_eq!(
             super::PUBLIC_ROUTES.len() + super::INTERNAL_ROUTES.len(),
-            23
+            24
         );
     }
 }

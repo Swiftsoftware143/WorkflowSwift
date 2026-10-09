@@ -1541,7 +1541,7 @@ async fn deliver_credentials(
                 "plan_name": _purchasable_type,
                 "app_url": app_url,
             });
-            email::send_email(state, email, "purchase_confirmed", &vars).await
+            email::send_email(state, Some(user.aid), email, "purchase_confirmed", &vars).await
         } else {
             // User exists but has no usable password — mint one, send it, and only then store the
             // hash. Storing first would leave the row looking like "credentials delivered" if the
@@ -1557,7 +1557,7 @@ async fn deliver_credentials(
                 "password": password,
                 "url": app_url,
             });
-            let sent = email::send_email(state, email, "welcome", &vars).await;
+            let sent = email::send_email(state, Some(user.aid), email, "welcome", &vars).await;
 
             if sent.is_ok() {
                 sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
@@ -1618,7 +1618,7 @@ async fn deliver_credentials(
             "password": password,
             "url": app_url,
         });
-        let sent = email::send_email(state, email, "welcome", &vars).await;
+        let sent = email::send_email(state, Some(account_id), email, "welcome", &vars).await;
 
         if sent.is_ok() {
             // Only now is the password worth storing — the customer has it in their inbox.

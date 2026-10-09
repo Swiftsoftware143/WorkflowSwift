@@ -456,7 +456,7 @@ pub async fn deliver(
                 "subject": subject,
                 "app_url": "https://app.workflowswift.com",
             });
-            crate::email::send_email(state, &addr, "workflow_notify", &vars).await
+            crate::email::send_email(state, Some(aid), &addr, "workflow_notify", &vars).await
         } else {
             let body = if message.is_empty() {
                 "WorkflowSwift notification".to_string()

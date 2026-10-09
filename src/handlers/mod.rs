@@ -17,6 +17,7 @@ pub mod workflow_handler;
 pub mod admin_settings_handler;
 pub mod agent_handler;
 pub mod brand_monitor_handler;
+pub mod branding_handler;
 pub mod bridge_handler;
 pub mod checkout_handler;
 pub mod competitor_watch_handler;

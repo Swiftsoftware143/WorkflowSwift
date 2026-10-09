@@ -1284,6 +1284,7 @@ pub async fn admin_create_account(
     // Send welcome email
     let email_result = crate::email::send_email(
         &state,
+        Some(account_id),
         &email,
         "welcome",
         &json!({
@@ -1625,7 +1626,9 @@ pub async fn test_email_settings(
         "app_url": "https://app.workflowswift.com"
     });
 
-    match crate::email::send_email(&state, &to, "email_test", &vars).await {
+    // The operator's diagnostic renders no template and resolves the GLOBAL provider, so it is
+    // deliberately NOT branded (`None`): there is no account context here (see the branding skill).
+    match crate::email::send_email(&state, None, &to, "email_test", &vars).await {
         Ok(_) => Ok(Json(json!({ "status": "sent", "to": to }))),
         Err(e) => Ok(Json(json!({ "status": "error", "detail": e }))),
     }

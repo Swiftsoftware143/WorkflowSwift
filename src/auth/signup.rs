@@ -250,7 +250,8 @@ pub async fn create_account(
     if let Some(pw) = a.password_plain {
         welcome_vars["password"] = serde_json::json!(pw);
     }
-    let _ = crate::email::send_email(state, a.email, "welcome", &welcome_vars).await;
+    let _ =
+        crate::email::send_email(state, Some(account_id), a.email, "welcome", &welcome_vars).await;
 
     // Auto-generate API keys for the new user.
     use crate::handlers::integration_center_handler;

@@ -511,7 +511,7 @@ pub const MAX_AVATAR_BYTES: usize = 2 * 1024 * 1024;
 /// Identify an image by its MAGIC BYTES, never by a caller-supplied content type or filename
 /// (FunnelSwift t_ff948669's decision, reused here). Returns the content type to store, or `None`
 /// for anything that is not one of the four accepted formats.
-fn sniff_image(b: &[u8]) -> Option<&'static str> {
+pub(crate) fn sniff_image(b: &[u8]) -> Option<&'static str> {
     if b.len() >= 8 && b.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
         return Some("image/png");
     }
@@ -661,7 +661,7 @@ pub async fn forgot_password(
         // reset token is already in the DB either way. The failure is surfaced where an admin
         // looks instead — `send_email` records last_send_ok/last_send_error/last_send_template in
         // the `admin_settings.email` row the Email Provider panel renders (t_b28d3432).
-        match send_reset_email(&state, &user.email, &token).await {
+        match send_reset_email(&state, Some(user.aid), &user.email, &token).await {
             Ok(_) => tracing::info!("Password reset email sent to {}", user.email),
             Err(e) => tracing::error!(
                 "Failed to send password reset email to {}: {}",

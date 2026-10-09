@@ -816,6 +816,19 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/provider-categories", provider_category_routes)
         .nest("/step-types", step_type_category_routes)
         .nest("/user-keys", user_key_routes)
+        // Per-account email branding (kanban t_c3cfe7ba). Authenticated: the caller's OWN account
+        // is taken from the token, so there is no id in the path to spoof. `logo_url` is written
+        // only by the logo endpoints; `put_branding` preserves it when the panel echoes name/colour.
+        .route(
+            "/settings/branding",
+            get(handlers::branding_handler::get_branding)
+                .put(handlers::branding_handler::put_branding),
+        )
+        .route(
+            "/settings/branding/logo",
+            post(handlers::branding_handler::upload_logo)
+                .delete(handlers::branding_handler::delete_logo),
+        )
         .route(
             "/impersonate",
             post(crate::handlers::admin_settings_handler::admin_impersonate),
@@ -1013,6 +1026,15 @@ pub fn create_router(state: AppState) -> Router {
     let public_routes = Router::new()
         .nest("/auth", auth_public)
         .route("/health", get(health_check))
+        // The account's email-branding logo, served to a bare `<img src>` in a mail client that
+        // carries no credential (kanban t_c3cfe7ba). Anonymous by construction and narrow by
+        // design: one account's stored bytes, keyed by an unguessable uuid, under the content type
+        // sniffed at upload time; 404 when there is no logo. The authenticated read/write twins
+        // (`/settings/branding*`) stay on `protected_routes`.
+        .route(
+            "/branding/logo/{account_id}",
+            get(handlers::branding_handler::get_logo),
+        )
         .route(
             "/extension.zip",
             get(handlers::extension_download_handler::download_extension),

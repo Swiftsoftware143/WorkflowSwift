@@ -13,6 +13,45 @@ use uuid::Uuid;
 
 use crate::state::AppState;
 
+use crate::branding::{self, Branding};
+
+/// Prepend an account's branding header to a rendered `(text, html)` pair (kanban t_c3cfe7ba).
+///
+/// Additive by construction: `branding` is `None` for an account with nothing configured, and the
+/// pair is returned untouched — so every unbranded account's mail is byte-identical to before this
+/// module existed. A text part cannot carry an image, so it opens with the brand NAME; the HTML part
+/// opens with the header block (the logo, or the name when there is no logo). When there is no HTML
+/// part at all, one is built from the ESCAPED text so the header has somewhere to live.
+fn apply_branding(branding: Option<&Branding>, text: String, html: String) -> (String, String) {
+    let Some(b) = branding else {
+        return (text, html);
+    };
+    let text_out = format!("{}{}", b.text_header(), text);
+    let header = b.header_html(b.resolve_logo_url(branding::APP_URL).as_deref());
+    let html_out = if !html.is_empty() {
+        format!("{header}{html}")
+    } else {
+        format!(
+            "{header}<div style=\"white-space:pre-wrap;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111827\">{}</div>",
+            branding::escape_html(&text)
+        )
+    };
+    (text_out, html_out)
+}
+
+/// The transport call every send funnels through, with branding applied.
+async fn send_branded(
+    cfg: &EmailConfig,
+    to: &str,
+    subject: &str,
+    text_body: &str,
+    html_body: &str,
+    branding: Option<&Branding>,
+) -> Result<(), String> {
+    let (t, h) = apply_branding(branding, text_body.to_string(), html_body.to_string());
+    send_email_request(cfg, to, subject, &t, &h).await
+}
+
 /// Default From ADDRESS — used only when the admin has not set one in
 /// Admin > Settings > Email. Not a credential, so it is safe as a constant.
 ///
@@ -172,6 +211,7 @@ fn render_template(template: &str, vars: &serde_json::Value, context: &str) -> S
 /// This is the preferred method — pass `AppState` to get access to DB and config.
 async fn send_email_inner(
     state: &AppState,
+    aid: Option<Uuid>,
     to: &str,
     template_type: &str,
     vars: &serde_json::Value,
@@ -205,6 +245,13 @@ async fn send_email_inner(
     .ok()
     .flatten();
 
+    // Load the account's branding ONCE (kanban t_c3cfe7ba). `None` for no account / nothing set,
+    // which is what keeps every unbranded account's mail byte-identical to before this feature.
+    let branding = match aid {
+        Some(a) => crate::branding::load(&state.db, a).await,
+        None => None,
+    };
+
     match template {
         Some(t) => {
             // Use DB template
@@ -230,14 +277,22 @@ async fn send_email_inner(
             let use_html = t.is_html.unwrap_or(true);
 
             if use_html && !html_body.is_empty() {
-                send_email_request(&cfg, to, &subject, &text_body, &html_body).await
+                send_branded(
+                    &cfg,
+                    to,
+                    &subject,
+                    &text_body,
+                    &html_body,
+                    branding.as_ref(),
+                )
+                .await
             } else {
-                send_email_request(&cfg, to, &subject, &text_body, "").await
+                send_branded(&cfg, to, &subject, &text_body, "", branding.as_ref()).await
             }
         }
         None => {
             // Fallback to hardcoded template
-            send_email_fallback(&cfg, to, template_type, vars).await
+            send_email_fallback(&cfg, to, template_type, vars, branding.as_ref()).await
         }
     }
 }
@@ -253,11 +308,12 @@ async fn send_email_inner(
 /// `record_send_outcome` puts the failure where an admin actually looks.
 pub async fn send_email(
     state: &AppState,
+    aid: Option<Uuid>,
     to: &str,
     template_type: &str,
     vars: &serde_json::Value,
 ) -> Result<(), String> {
-    let result = send_email_inner(state, to, template_type, vars).await;
+    let result = send_email_inner(state, aid, to, template_type, vars).await;
     record_send_outcome(state, template_type, &result).await;
     result
 }
@@ -575,6 +631,7 @@ async fn send_email_fallback(
     to: &str,
     template_type: &str,
     vars: &serde_json::Value,
+    branding: Option<&Branding>,
 ) -> Result<(), String> {
     let app_url = vars
         .get("app_url")
@@ -666,7 +723,7 @@ async fn send_email_fallback(
                 )
             };
 
-            send_email_request(cfg, to, &subject, &text_body, &html_body).await
+            send_branded(cfg, to, &subject, &text_body, &html_body, branding).await
         }
         "purchase_confirmed" => {
             let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
@@ -704,7 +761,7 @@ async fn send_email_fallback(
                 "Hello {},\n\nYour payment for {} has been confirmed. Thank you!\n\nYou can access your account at {}.\n\nBest regards,\nThe WorkflowSwift Team",
                 name, plan_name, app_url
             );
-            send_email_request(cfg, to, &subject, &text_body, &html_body).await
+            send_branded(cfg, to, &subject, &text_body, &html_body, branding).await
         }
         "password_reset" => {
             let token = vars.get("token").and_then(|v| v.as_str()).unwrap_or("");
@@ -732,7 +789,15 @@ async fn send_email_fallback(
                 token
             );
 
-            send_email_request(cfg, to, "Password Reset Request", &text_body, &html_body).await
+            send_branded(
+                cfg,
+                to,
+                "Password Reset Request",
+                &text_body,
+                &html_body,
+                branding,
+            )
+            .await
         }
         // A Notify step's mail (kanban t_d3ff37ef). The recipient is ALWAYS one of the account's
         // own people — `crate::notify` resolves it and refuses anything else BEFORE this is
@@ -754,24 +819,40 @@ async fn send_email_fallback(
                  <p style=\"font-size:13px;color:#9ca3af\">- WorkflowSwift</p></body></html>"
             );
             let text_body = format!("Hi {name},\n\nA workflow you own sent you this notification:\n\n{message}\n\n- WorkflowSwift");
-            send_email_request(cfg, to, subject, &text_body, &html_body).await
+            send_branded(cfg, to, subject, &text_body, &html_body, branding).await
         }
         _ => {
             let text_body = format!("WorkflowSwift Notification:\n\n{}", vars);
-            send_email_request(cfg, to, "WorkflowSwift Notification", &text_body, "").await
+            send_branded(
+                cfg,
+                to,
+                "WorkflowSwift Notification",
+                &text_body,
+                "",
+                branding,
+            )
+            .await
         }
     }
 }
 
 /// Compatibility wrapper — used by password reset flow which has no AppState
 /// Attempts DB template first, falls back to inline.
-pub async fn send_reset_email(state: &AppState, to: &str, token: &str) -> Result<(), String> {
+pub async fn send_reset_email(
+    state: &AppState,
+    aid: Option<Uuid>,
+    to: &str,
+    token: &str,
+) -> Result<(), String> {
     let vars = json!({
         "token": token,
         "name": "there",
         "app_url": "https://app.workflowswift.com",
     });
-    send_email(state, to, "password_reset", &vars).await
+    // `aid` is the resetting user's account, passed in by `forgot_password` so the reset mail can
+    // carry that account's branding (kanban t_c3cfe7ba). It used to be dropped, which is the same
+    // shape as the fleet's `Uuid::nil()` trap: a reset mail could never be branded.
+    send_email(state, aid, to, "password_reset", &vars).await
 }
 
 // ---- Data types ----
