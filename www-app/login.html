@@ -46,8 +46,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:linear-g
 </div>
 
 <div class="pane" id="paneRegister">
-  <input id="rn" type="text" placeholder="Full name" autocomplete="name">
-  <input id="re" type="email" placeholder="you@company.com" autocomplete="email">
+  <input id="rn" name="name" type="text" placeholder="Full name" autocomplete="name">
+  <input id="re" name="email" type="email" placeholder="you@company.com" autocomplete="email">
   <p class="note">No password to choose &mdash; we'll email your login details so you can confirm your address by signing in.</p>
   <button id="rb" onclick="R()">Create Free Account</button>
   <div id="rm" class="msg"></div>
@@ -88,9 +88,10 @@ window.location.replace("/app")})
    is NO auto-login here - the user confirms their address by signing in with the password sent. */
 function R(){
 var n=document.getElementById("rn").value.trim(),e=document.getElementById("re").value.trim(),m=document.getElementById("rm"),b=document.getElementById("rb");
+if(!n){m.className="msg e";m.textContent="Enter your full name";return}
 if(!e){m.className="msg e";m.textContent="Enter your email address";return}
 b.disabled=true;b.textContent="Creating account...";
-fetch("/api/v1/auth/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:n||e.split("@")[0],email:e})})
+fetch("/api/v1/auth/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:n,email:e})})
 .then(function(r){return r.json().then(function(d){return{r:r,d:d}})})
 .then(function(x){
   if(!x.r.ok){m.className="msg e";m.textContent=(x.d&&(x.d.error||x.d.message))||"Registration failed. Please try again.";b.disabled=false;b.textContent="Create Free Account";return}
