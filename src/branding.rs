@@ -155,20 +155,28 @@ impl Branding {
 /// A read failure is NOT fatal to a send: an email that cannot read its branding still goes out with
 /// the app's own identity, exactly as every mail did before this module existed.
 pub async fn load(pool: &PgPool, account_id: Uuid) -> Option<Branding> {
-    let stored: Option<Value> =
-        sqlx::query_scalar("SELECT (settings -> $2) FROM accounts WHERE id = $1")
-            .bind(account_id)
-            .bind(SETTINGS_KEY)
-            .fetch_optional(pool)
-            .await
-            .unwrap_or_else(|e| {
-                tracing::warn!(
-                    account = %account_id,
-                    error = %e,
-                    "email branding could not be read — sending with the app's own identity"
-                );
-                None
-            });
+    // The scalar MUST be typed `Option<Value>`: `settings -> 'email_branding'` is SQL NULL both for
+    // an account with no `settings` row and for one that simply has not set branding, and sqlx would
+    // otherwise fail the decode ("unexpected null; try decoding as an `Option`") on EVERY send to an
+    // unbranded account — logging a false read-failure warning. `fetch_optional` then yields
+    // `Option<Option<Value>>`, and `flatten` collapses "no row" and "NULL column" into one `None`
+    // (kanban t_c3cfe7ba measured this against the live WorkflowSwift container, 2026-10-09).
+    let stored: Option<Value> = sqlx::query_scalar::<_, Option<Value>>(
+        "SELECT (settings -> $2) FROM accounts WHERE id = $1",
+    )
+    .bind(account_id)
+    .bind(SETTINGS_KEY)
+    .fetch_optional(pool)
+    .await
+    .unwrap_or_else(|e| {
+        tracing::warn!(
+            account = %account_id,
+            error = %e,
+            "email branding could not be read — sending with the app's own identity"
+        );
+        None
+    })
+    .flatten();
     // An unreadable row means "unbranded" here: `?` on the Option, not on the read error.
     Branding::from_value(stored.as_ref()?)
 }
