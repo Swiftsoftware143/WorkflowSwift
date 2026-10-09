@@ -317,7 +317,7 @@ pub async fn send_email(
     // A probe that signs up with a fleet-dev domain (`swiftsoftware.dev/.net`) is created normally but
     // its mail is withheld: the address is routable, so a send can only land in a fleet mailbox or
     // bounce (measured 2026-10-09 on mail.workflowswift.com: `accepted` then `bounced` 552), and every
-    // such send burns a delivery on the domain's sending reputation. The RFC-2606 class
+    // such send burns a delivery on the domain's sending reputation. The RFC-2606 class is now ALSO suppressed (changed 2026-10-09 after measuring real provider attempts)
     // (.local/.test/.invalid/example.*) is deliberately NOT suppressed — content harnesses point the
     // provider at a local sink and read the message off the wire, so silencing it would delete proof.
     if let Some(domain) = crate::security::probe_addr::harness_domain(to) {
