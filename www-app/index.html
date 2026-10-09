@@ -156,6 +156,9 @@ const API = (() => {
     // still attached (the route is private); Content-Type is only a hint — the server sniffs the
     // bytes and ignores this header (kanban t_39cea779).
     uploadAvatar: (blob) => fetch(base + '/auth/avatar', { method:'POST', headers: { ...(token ? { 'Authorization': 'Bearer ' + token } : {}), 'Content-Type': blob.type || 'application/octet-stream' }, body: blob }).then(handle),
+    // Per-account email branding (kanban t_c3cfe7ba). The logo, like the avatar, is RAW image bytes.
+    uploadBrandingLogo: (blob) => fetch(base + '/settings/branding/logo', { method:'POST', headers: { ...(token ? { 'Authorization': 'Bearer ' + token } : {}), 'Content-Type': blob.type || 'application/octet-stream' }, body: blob }).then(handle),
+    deleteBrandingLogo: () => fetch(base + '/settings/branding/logo', { method:'DELETE', headers: headers() }).then(handle),
     get: (p) => fetch(base + p, { headers: headers() }).then(handle),
     post: (p, b) => fetch(base + p, { method:'POST', headers: headers(), body: b === undefined ? undefined : JSON.stringify(b) }).then(handle),
     put: (p, b) => fetch(base + p, { method:'PUT', headers: headers(), body: JSON.stringify(b) }).then(handle),
@@ -1336,6 +1339,41 @@ const ProfileView = () => {
   if (f.uid !== (u.id || null)) { f.name = u.name || ''; f.company = u.company || ''; f.uid = u.id || null; }
   const pw = viewState('profile_pw', { next:'', confirm:'', current:'' });
   const av = viewState('profile_avatar', { stamp: 0, uploading: false, chosen: '' });
+  // Email branding (kanban t_c3cfe7ba): the account's logo + brand name appear at the top of every
+  // transactional email. Loaded once per session from the account's own settings document.
+  const bd = viewState('profile_branding', { name:'', color:'', logoUrl:'', chosen:null, loaded:false, uploading:false, stamp:0 });
+  if (!bd.loaded) {
+    bd.loaded = true;
+    API.get('/settings/branding').then(v => {
+      bd.name = (v && v.brand_name) || ''; bd.color = (v && v.brand_color) || ''; bd.logoUrl = (v && v.logo_url) || '';
+      renderApp();
+    }).catch(() => {});
+  }
+  const saveBranding = async () => {
+    S.loading = true; renderApp();
+    try {
+      const v = await API.put('/settings/branding', { brand_name: (bd.name||'').trim(), brand_color: (bd.color||'').trim() });
+      bd.name = (v && v.brand_name) || ''; bd.color = (v && v.brand_color) || ''; bd.logoUrl = (v && v.logo_url) || '';
+      toast('Branding saved');
+    } catch (err) { toast(err.message || 'Could not save branding','err'); }
+    S.loading = false; renderApp();
+  };
+  const uploadBrandLogo = async () => {
+    if (!bd.chosen) return toast('Choose a logo first','err');
+    bd.uploading = true; renderApp();
+    try {
+      const v = await API.uploadBrandingLogo(bd.chosen);
+      bd.logoUrl = (v && v.logo_url) || ''; bd.stamp = bd.stamp + 1; bd.chosen = null;
+      toast('Logo updated');
+    } catch (err) { toast(err.message || 'Could not upload logo','err'); }
+    bd.uploading = false; renderApp();
+  };
+  const removeBrandLogo = async () => {
+    S.loading = true; renderApp();
+    try { await API.deleteBrandingLogo(); bd.logoUrl = ''; bd.stamp = bd.stamp + 1; toast('Logo removed'); }
+    catch (err) { toast(err.message || 'Could not remove logo','err'); }
+    S.loading = false; renderApp();
+  };
 
   const saveProfile = async () => {
     const name = (f.name || '').trim();
@@ -1401,6 +1439,30 @@ const ProfileView = () => {
           <div><label class="label">Name</label><input class="input" id="profile-name" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="Your name" /></div>
           <div><label class="label">Company</label><input class="input" id="profile-company" value=${f.company} onInput=${e=>f.company=e.target.value} placeholder="Your company" /></div>
           <button class="btn text-sm" id="profile-save" onClick=${saveProfile} disabled=${S.loading}>Save changes</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="text-base font-bold text-gray-900 mb-1">Email branding</h2>
+        <p class="text-sm text-gray-500 mb-4">Your logo and brand name appear at the top of every email this workspace sends.</p>
+        <div class="flex items-center gap-4 flex-wrap mb-4">
+          <div>
+            ${bd.logoUrl
+              ? html`<img id="branding-logo-preview" src=${bd.logoUrl + (bd.logoUrl.indexOf('?') >= 0 ? '&' : '?') + 'cb=' + bd.stamp} alt=${bd.name || 'Brand logo'} style="max-height:56px;max-width:220px;border:1px solid #e5e7eb;border-radius:6px;padding:4px;background:#fff" />`
+              : html`<div class="text-xs text-gray-400" id="branding-logo-empty">No logo yet</div>`}
+          </div>
+          <div>
+            <input id="branding-logo-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp"
+              onChange=${e=>{ bd.chosen = (e.target.files && e.target.files[0]) || null; renderApp(); }} />
+            <div class="text-xs text-gray-500 mt-1">PNG, JPEG, GIF or WebP — up to 2 MB.${bd.chosen ? (' Selected: ' + bd.chosen.name) : ''}</div>
+            <button class="btn text-sm mt-2" id="branding-logo-save" onClick=${uploadBrandLogo} disabled=${bd.uploading || S.loading}>${bd.uploading ? 'Uploading…' : 'Upload logo'}</button>
+            ${bd.logoUrl ? html`<button class="btn-outline text-sm mt-2 ml-2" id="branding-logo-remove" onClick=${removeBrandLogo} disabled=${S.loading}>Remove</button>` : ''}
+          </div>
+        </div>
+        <div class="space-y-4">
+          <div><label class="label">Brand display name</label><input class="input" id="branding-name" value=${bd.name} onInput=${e=>bd.name=e.target.value} placeholder="e.g. Giraudy Capital" /></div>
+          <div><label class="label">Brand colour</label><input class="input" id="branding-color" value=${bd.color} onInput=${e=>bd.color=e.target.value} placeholder="#4f46e5" /></div>
+          <button class="btn text-sm" id="branding-save" onClick=${saveBranding} disabled=${S.loading}>Save branding</button>
         </div>
       </div>
 
