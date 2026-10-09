@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Sign in — Workflowswift</title>
+<title>Sign in — WorkflowSwift</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:linear-gradient(135deg,#1e1b4b,#312e81);display:flex;justify-content:center;align-items:center;min-height:100vh}
@@ -30,8 +30,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:linear-g
 </head>
 <body>
 <div class="c">
-<h1>Workflowswift</h1>
-<p class="sub">Lead Generation &amp; Affiliate Marketing</p>
+<h1>WorkflowSwift</h1>
+<p class="sub">Automate Everything. Visualize Everything.</p>
 
 <div class="tabs">
   <div class="tab on" id="tabLogin">Sign in</div>
@@ -61,7 +61,7 @@ var PANE_L=document.getElementById('paneLogin'),PANE_R=document.getElementById('
 function swap(isLogin){
   TAB_L.classList.toggle('on',isLogin);TAB_R.classList.toggle('on',!isLogin);
   PANE_L.classList.toggle('on',isLogin);PANE_R.classList.toggle('on',!isLogin);
-  document.title=(isLogin?'Sign in':'Create account')+' — Workflowswift';
+  document.title=(isLogin?'Sign in':'Create account')+' — WorkflowSwift';
 }
 TAB_L.onclick=function(){swap(true)};
 TAB_R.onclick=function(){swap(false)};
