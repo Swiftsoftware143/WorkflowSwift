@@ -621,8 +621,8 @@ function renderProfile(c){
 // ── EMAIL BRANDING (per-account identity on transactional email) ────────────────────
 // The per-account email-branding backend (kanban t_c3cfe7ba) shipped with NO screen in this
 // console: GET|PUT /api/v1/settings/branding carries brand_name/brand_color, the logo BYTES
-// go to POST|DELETE /api/v1/settings/branding/logo as the RAW image body (this app's avatar
-// convention — no multipart), and the public GET /api/v1/branding/logo/{account_id} streams it
+// go to POST|DELETE /api/v1/settings/branding/logo as `multipart/form-data` (field `file`), the
+// fleet-wide upload convention; the public GET /api/v1/branding/logo/{account_id} streams it
 // back for a mail client's <img src>. A backend route with no UI is a defect.
 async function renderBranding(c){
   c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">&#127912; Email Branding</h2><div id="bdata"><p class="text-gray-400">Loading...</p></div></div>';
@@ -670,7 +670,7 @@ async function renderBranding(c){
   fileIn.onchange=async()=>{
     const f=fileIn.files&&fileIn.files[0];if(!f)return;
     if(f.size>2*1024*1024){showMsg('That image is larger than 2 MB','error');fileIn.value='';return}
-    const res=await fetch(API+'/settings/branding/logo',{method:'POST',headers:{'Authorization':'Bearer '+TOKEN,'Content-Type':f.type||'application/octet-stream'},body:f});
+    const fd=new FormData();fd.append('file',f,f.name||'logo');const res=await fetch(API+'/settings/branding/logo',{method:'POST',headers:{'Authorization':'Bearer '+TOKEN},body:fd});
     const j=await res.json().catch(()=>({}));
     if(!res.ok){showMsg('Upload failed: '+(j.message||j.error||('HTTP '+res.status)),'error');fileIn.value='';return}
     showMsg('Logo uploaded','success');renderApp();

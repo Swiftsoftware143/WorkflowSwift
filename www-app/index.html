@@ -152,12 +152,13 @@ const API = (() => {
     me: () => fetch(base + '/auth/me', { headers: headers() }).then(handle),
     changePassword: (current_password, new_password) => fetch(base + '/auth/password', { method:'PUT', headers: headers(), body: JSON.stringify({ current_password, new_password }) }).then(handle),
     updateProfile: (patch) => fetch(base + '/auth/profile', { method:'PUT', headers: headers(), body: JSON.stringify(patch) }).then(handle),
-    // The profile picture is RAW image bytes, not JSON: no multipart envelope. The bearer token is
-    // still attached (the route is private); Content-Type is only a hint — the server sniffs the
-    // bytes and ignores this header (kanban t_39cea779).
-    uploadAvatar: (blob) => fetch(base + '/auth/avatar', { method:'POST', headers: { ...(token ? { 'Authorization': 'Bearer ' + token } : {}), 'Content-Type': blob.type || 'application/octet-stream' }, body: blob }).then(handle),
-    // Per-account email branding (kanban t_c3cfe7ba). The logo, like the avatar, is RAW image bytes.
-    uploadBrandingLogo: (blob) => fetch(base + '/settings/branding/logo', { method:'POST', headers: { ...(token ? { 'Authorization': 'Bearer ' + token } : {}), 'Content-Type': blob.type || 'application/octet-stream' }, body: blob }).then(handle),
+    // The profile picture is sent as `multipart/form-data` (field name `file`, the image as the
+    // only part) — the FLEET-WIDE upload convention every other app's console uses (kanban
+    // t_39cea779). The server takes the first non-empty part and sniffs its magic bytes; the part
+    // name is not significant, and the bearer token is still attached (the route is private).
+    uploadAvatar: (blob) => { const fd = new FormData(); fd.append('file', blob, blob.name || 'avatar'); return fetch(base + '/auth/avatar', { method:'POST', headers: { ...(token ? { 'Authorization': 'Bearer ' + token } : {}) }, body: fd }).then(handle); },
+    // Per-account email branding (kanban t_c3cfe7ba). The logo uses the same multipart envelope.
+    uploadBrandingLogo: (blob) => { const fd = new FormData(); fd.append('file', blob, blob.name || 'logo'); return fetch(base + '/settings/branding/logo', { method:'POST', headers: { ...(token ? { 'Authorization': 'Bearer ' + token } : {}) }, body: fd }).then(handle); },
     deleteBrandingLogo: () => fetch(base + '/settings/branding/logo', { method:'DELETE', headers: headers() }).then(handle),
     get: (p) => fetch(base + p, { headers: headers() }).then(handle),
     post: (p, b) => fetch(base + p, { method:'POST', headers: headers(), body: b === undefined ? undefined : JSON.stringify(b) }).then(handle),
