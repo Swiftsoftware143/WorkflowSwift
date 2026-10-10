@@ -865,7 +865,7 @@
       <li>The container runs with <code>network_mode: host</code> and publishes nothing — the API binds
         <code>127.0.0.1:8085</code> on the host, behind nginx/Cloudflare.</li>
       <li>The binary is <strong>image-baked</strong> (no bind mount): restarting the container re-runs the same
-        binary. Deploy with <code>/opt/swift/bin/deploy-workflowswift.sh</code>, which rebuilds the image,
+        binary. Deploy with the WorkflowSwift deploy script, which rebuilds the image,
         force-recreates the container and verifies sha256 parity against the repo build.</li>
       <li><code>sqlx::migrate!</code> embeds migrations in the binary, so a new <code>migrations/*.sql</code> file only takes
         effect at the next deploy — read it before it can run.</li>

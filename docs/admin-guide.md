@@ -410,7 +410,7 @@ Both are read by the receiver and written through `GET|PUT /api/v1/admin/provisi
 - The container runs with `network_mode: host` and publishes nothing — the API binds
   `127.0.0.1:8085` on the host, behind nginx/Cloudflare.
 - The binary is **image-baked** (no bind mount): restarting the container re-runs the same
-  binary. Deploy with `/opt/swift/bin/deploy-workflowswift.sh`, which rebuilds the image,
+  binary. Deploy with the WorkflowSwift deploy script, which rebuilds the image,
   force-recreates the container and verifies sha256 parity against the repo build.
 - `sqlx::migrate!` embeds migrations in the binary, so a new `migrations/*.sql` file only takes
   effect at the next deploy — read it before it can run.
