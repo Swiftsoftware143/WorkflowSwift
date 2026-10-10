@@ -119,8 +119,8 @@ window.appGuidePages = {
 </script>
 <script src="/inline-guide-widget.js?v=8a094f0b"></script>
 <script type="module">
-import { h, render } from 'https://esm.sh/preact@10.26.4';
-import htm from 'https://esm.sh/htm@3.1.1';
+import { h, render } from './vendor/preact.js';
+import htm from './vendor/htm.js';
 const html = htm.bind(h);
 const root = document.getElementById('app');
 
