@@ -114,6 +114,7 @@ function renderApp(){
   const main=h('div',{className:'main'},content());
   if(IMPERSONATION)main.insertBefore(impersonationBanner(),main.firstChild);
   document.body.appendChild(main);
+  if(window.inlineGuidePage)window.inlineGuidePage(app.tab+':'+app.sub);
 }
 
 function impersonationBanner(){
@@ -1204,4 +1205,50 @@ function boot(){ if(TOKEN)renderApp();else renderLogin(); }
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
 </script>
 <link rel="stylesheet" href="/tw.css">
-</head><body></body></html>
+</head><body><script>
+// Inline guide (fleet standard). Keyed by this console's own navigation keys (tab:sub);
+// renderApp() below re-points the guide after every render because this console rebuilds
+// document.body and switches views in JS with no path or hash change.
+window.appGuidePages = {
+  "dashboard:overview": { title: "Dashboard - Overview", desc: "This account at a glance: workflows, leads and recent activity. The numbers come from your own data.", actions: ["See recent runs", "Open Workflows to build or edit one"] },
+  "dashboard:brand-monitor": { title: "Brand Monitor", desc: "Mentions of your brand that the platform has picked up, so you can watch what is being said.", actions: ["Review a mention", "Add a brand to watch"] },
+  "dashboard:competitor-watch": { title: "Competitor Watch", desc: "The competitors this account tracks.", actions: ["Add a competitor", "Open a competitor's record"] },
+  "dashboard:prospecting": { title: "Prospecting", desc: "Potential customers the platform has surfaced for this account.", actions: ["Review a prospect", "Move a prospect into your CRM"] },
+  "workflows:all-workflows": { title: "Workflows", desc: "The workflows this account runs: each one is a series of steps that run in order.", actions: ["Create a workflow", "Open a workflow to edit its steps", "Run a workflow"] },
+  "workflows:instances": { title: "Workflow Instances", desc: "Every run of a workflow, with the status of each and how long it took.", actions: ["See a run's steps", "Retry a failed run"] },
+  "workflows:templates": { title: "Templates", desc: "Reusable workflow blueprints you can start a new workflow from.", actions: ["Preview a template", "Create a workflow from a template"] },
+  "automation:automations": { title: "Automations", desc: "Rules that run without anyone watching: when something happens, do something.", actions: ["Create an automation", "Enable or disable one"] },
+  "automation:agents": { title: "Agents", desc: "The AI agents attached to this account and what they are set up to do.", actions: ["Open an agent", "Edit an agent's instructions"] },
+  "automation:workspaces": { title: "Workspaces", desc: "The workspaces this account has, so work can be kept separate.", actions: ["Open a workspace"] },
+  "crm:leads": { title: "Leads", desc: "People who have shown interest, with the tag and stage they are on.", actions: ["Filter leads", "Open a lead", "Move a lead on"] },
+  "tags:tags": { title: "Tags", desc: "The labels that decide what a lead gets. A tag can be the trigger that provisions a free account in another SwiftSoftware product.", actions: ["Create a tag", "Assign a tag", "Set what a tag provisions"] },
+  "tags:tag-groups": { title: "Tag Groups", desc: "Related tags grouped so a rule or an audience can target several at once.", actions: ["Create a group", "Add tags to it"] },
+  "integrations:integration-targets": { title: "Integration Targets", desc: "Where this account's data is delivered: the destinations an integration pushes to.", actions: ["Add a target", "Edit a destination"] },
+  "integrations:destination-values": { title: "Destination Values", desc: "The specific values (lists, boards, campaigns) sent to each destination.", actions: ["Map a destination value", "Change a mapping"] },
+  "integrations:provider-keys": { title: "Provider Keys", desc: "Your own API keys for the third-party services this app uses. Keys are stored encrypted and are never shown again in full.", actions: ["Save a provider key", "See which providers are connected", "Replace or remove a key"] },
+  "integrations:api-keys": { title: "API Keys", desc: "The keys this app issues so other systems can call it on this account's behalf.", actions: ["Create a key", "Copy a key once at creation", "Revoke a key"] },
+  "integrations:n8n-proxy": { title: "n8n Proxy", desc: "The link to the automation engine: what it can call here and how it authenticates.", actions: ["Review the configuration"] },
+  "integrations:bridge": { title: "Bridge", desc: "The connection that lets this app talk to the other SwiftSoftware apps.", actions: ["Check the bridge status"] },
+  "support:tickets": { title: "Tickets", desc: "Support requests raised on this account, with the status of each.", actions: ["Open a ticket", "Update its status"] },
+  "profile:my-profile": { title: "My Profile", desc: "Your own profile: name, company, email, password and picture. What you set here is what appears across the console.", actions: ["Set your name, company and picture", "Change your password"] },
+  "profile:team": { title: "Team", desc: "The people who can sign in to this account, and the role each one holds.", actions: ["Invite a team member", "Change a member's role"] },
+  "profile:plans-credits": { title: "Plans & Credits", desc: "The plan this account is on and the credits it has. A plan is a bundle of limits and features.", actions: ["See the current plan", "Buy credits", "Change plan"] },
+  "profile:email-branding": { title: "Email Branding", desc: "Put your own name, colour and logo on the transactional email this app sends for your account, instead of the default WorkflowSwift header.", actions: ["Upload your logo", "Set your brand name and colour"] },
+  "profile:invoices": { title: "Invoices", desc: "The invoices raised on this account.", actions: ["Open an invoice"] },
+  "profile:payments": { title: "Payments", desc: "Payments made on this account, with their provider and status.", actions: ["See a payment's status"] },
+  "profile:checkout-sessions": { title: "Checkout Sessions", desc: "Every payment session this account has started. A read-only history of what was attempted.", actions: ["Match a session to a plan change"] },
+  "comms:webhooks": { title: "Webhooks", desc: "Outgoing notifications: when something happens here, we POST it to a URL you control.", actions: ["Add a webhook URL", "Choose the events it receives", "Review recent deliveries"] },
+  "admin:usage": { title: "Usage", desc: "How much of this account's allowance has been used.", actions: ["See usage against the plan's limits"] },
+  "admin:settings": { title: "Settings", desc: "This app's own configuration for your account, including the mail server and the other integration slots.", actions: ["Set the mail server credentials", "Check whether email is configured"] },
+  "admin:users": { title: "Users", desc: "Every user on this install, with their role and status.", actions: ["Search for a user", "Change a user's role"] },
+  "admin:accounts": { title: "Accounts", desc: "Every account (workspace) on this install. Select rows to delete the ones you no longer want.", actions: ["Search for an account", "Delete the selected accounts"] },
+  "admin:portfolio-companies": { title: "Portfolio Companies", desc: "The portfolio companies this install tracks.", actions: ["Add or edit a portfolio company"] },
+  "admin:plans": { title: "Plans", desc: "Manage subscription plans and what each one grants.", actions: ["Create or edit a plan", "Turn features on or off per plan"] },
+  "admin:surfaces": { title: "Surfaces", desc: "The surfaces (screens or placements) that content can be published to.", actions: ["Add a surface", "Edit a surface"] },
+  "admin:email-templates": { title: "Email Templates", desc: "The emails this app sends. Edit the subject and body without touching code.", actions: ["Preview a template", "Edit a template"] },
+  "admin:industry-sources": { title: "Industry Sources", desc: "The sources used to classify industries and surface content for them.", actions: ["Review a source"] },
+  "admin:site-config": { title: "Site Configuration", desc: "The public site settings: titles, social links, analytics and the legal pages.", actions: ["Edit the site copy", "Save the configuration"] }
+};
+</script>
+<script src="/inline-guide-widget.js"></script>
+</body></html>
