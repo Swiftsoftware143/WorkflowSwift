@@ -927,6 +927,156 @@ pub async fn admin_delete_account(
     ))
 }
 
+/// The portfolio accounts are kept by rule (never deleted from any panel): SwiftImpact, ZaarHub
+/// and Giraudy Capital each hold an account in EVERY app, plus whatever the platform itself flags.
+///
+/// This app carries NO `is_portfolio` column to read that from — measured on the live schema
+/// 2026-10-10, `accounts` is (id, name, account_slug, is_active, created_at, updated_at,
+/// industry_slug, footer_year, footer_company, retention_days, retention_purge_at,
+/// active_industry_sources, icon, payment_provider, hexomatic_key, sort_order, plan_id, settings),
+/// and `portfolio_companies` here is a per-account CHILD table, not a tenant marker — so the marker
+/// is read off the name/slug exactly as the CoreSwift leg does.
+const PORTFOLIO_ACCOUNT_MARKERS: [&str; 3] = ["swiftimpact", "zaarhub", "giraudy"];
+
+/// This app's OWN workspace — the one account carrying the app's own name. It is not recreatable
+/// from the panel, so it is refused by rule. Matched by EXACT slug, never as a substring, so the
+/// probe workspaces (`workflowswift-verify-probe`, `workflowswift-…`) stay deletable.
+const PLATFORM_ACCOUNT_SLUG: &str = "workflowswift";
+
+/// POST /api/v1/admin/accounts/bulk-delete — retire several accounts in one call (kanban t_265ce9f9).
+///
+/// This is the same operation as `DELETE /api/v1/admin/accounts/{id}` below, batched: that route
+/// ALREADY hard-deletes an account and everything hanging off it (measured on the live DB
+/// 2026-10-10: all 47 foreign keys referencing `accounts` are `ON DELETE CASCADE`, so no
+/// hand-rolled child sweep is needed), and it retires the account's `WFS <uuid>` n8n mirrors FIRST,
+/// refusing the whole wipe when they cannot be retired. This arm keeps both properties and answers
+/// PER ID, so one refused or missing id cannot sink the batch — the panel shows the reason next to
+/// the row that was kept.
+///
+/// Three deletes are refused by rule and cannot be forced from the panel:
+///   * the account the caller is SIGNED IN AS — that is a lockout, not a cleanup;
+///   * a portfolio company (a name/slug carrying a portfolio marker);
+///   * this app's own workspace (`account_slug = 'workflowswift'`).
+pub async fn admin_bulk_delete_accounts(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<impl IntoResponse> {
+    require_admin(&claims)?;
+
+    let raw_ids = req
+        .get("ids")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let caller = Uuid::parse_str(claims.aid.trim()).ok();
+    let mut deleted: Vec<String> = Vec::new();
+    let mut failed: Vec<serde_json::Value> = Vec::new();
+
+    for v in raw_ids {
+        let raw = v.as_str().unwrap_or_default().trim().to_string();
+        let id = match Uuid::parse_str(&raw) {
+            Ok(u) => u,
+            Err(_) => {
+                failed.push(json!({"id": raw, "error": "not a valid id"}));
+                continue;
+            }
+        };
+
+        if Some(id) == caller {
+            failed.push(json!({
+                "id": raw,
+                "error": "refusing to delete the account you are signed in as"
+            }));
+            continue;
+        }
+
+        let row: Option<(String, String)> =
+            sqlx::query_as("SELECT name, account_slug FROM accounts WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&state.db)
+                .await?;
+
+        let (name, slug) = match row {
+            Some(r) => r,
+            None => {
+                failed.push(json!({"id": raw, "error": "account not found"}));
+                continue;
+            }
+        };
+
+        let hay = format!("{} {}", name, slug).to_lowercase();
+        if let Some(hit) = PORTFOLIO_ACCOUNT_MARKERS.iter().find(|m| hay.contains(*m)) {
+            failed.push(json!({
+                "id": raw,
+                "error": format!("refusing to delete a portfolio company ({})", hit)
+            }));
+            continue;
+        }
+
+        if slug.trim().eq_ignore_ascii_case(PLATFORM_ACCOUNT_SLUG) {
+            failed.push(json!({
+                "id": raw,
+                "error": format!(
+                    "refusing to delete this app's own workspace ({})",
+                    PLATFORM_ACCOUNT_SLUG
+                )
+            }));
+            continue;
+        }
+
+        // HARD delete, so the n8n mirrors have to be retired FIRST — the same rule the single-id
+        // route applies, and for the same reason (a `WFS <uuid>` orphan is a silent, permanent
+        // leak). Refuse this id when they cannot be retired; the rest of the batch still runs.
+        if let Err(e) =
+            crate::handlers::workflow_handler::retire_account_n8n_mirrors(&state, id).await
+        {
+            failed.push(json!({
+                "id": raw,
+                "error": format!(
+                    "refusing to delete account {}: its n8n `WFS <uuid>` mirrors must be retired first and could not be ({})",
+                    id, e
+                )
+            }));
+            continue;
+        }
+
+        sqlx::query("DELETE FROM n8n_account_config WHERE aid = $1")
+            .bind(id)
+            .execute(&state.db)
+            .await
+            .ok();
+
+        match sqlx::query("DELETE FROM accounts WHERE id = $1")
+            .bind(id)
+            .execute(&state.db)
+            .await
+        {
+            Ok(r) if r.rows_affected() == 0 => {
+                failed.push(json!({"id": raw, "error": "account not found"}))
+            }
+            Ok(_) => deleted.push(raw),
+            Err(e) => failed.push(json!({"id": raw, "error": e.to_string()})),
+        }
+    }
+
+    let status = if failed.is_empty() {
+        "deleted"
+    } else if deleted.is_empty() {
+        "failed"
+    } else {
+        "partial"
+    };
+
+    Ok(Json(json!({
+        "status": status,
+        "deleted": deleted.len(),
+        "deleted_ids": deleted,
+        "failed": failed,
+    })))
+}
+
 /// PUT /api/v1/admin/accounts/:id/retention — override account retention
 pub async fn admin_set_account_retention(
     State(state): State<AppState>,

@@ -164,7 +164,7 @@ const tabs=[
   {id:'support',label:'🎫 Support',subs:['Tickets']},
   {id:'profile',label:'👤 Profile & Account',subs:['My Profile','Team','Plans & Credits','Email Branding','Invoices','Payments','Checkout Sessions']},
   {id:'comms',label:'📧 Communications',subs:['Webhooks']},
-  {id:'admin',label:'🛠️ Admin',subs:['Usage','Settings','Users','Portfolio Companies','Plans','Surfaces','Email Templates','Industry Sources','Site Config']},
+  {id:'admin',label:'🛠️ Admin',subs:['Usage','Settings','Users','Accounts','Portfolio Companies','Plans','Surfaces','Email Templates','Industry Sources','Site Config']},
 ];
 
 function sidebar(){
@@ -243,6 +243,7 @@ function content(){
     if(s==='usage')renderAdminUsage(c);
     else if(s==='settings')renderAdminSettings(c);
     else if(s==='users')renderAdminUsers(c);
+    else if(s==='accounts')renderAdminAccounts(c);
     else if(s==='portfolio-companies')renderAdminPortfolio(c);
     else if(s==='plans')renderAdminPlans(c);
     else if(s==='surfaces')renderSurfaces(c);
@@ -913,6 +914,80 @@ function renderAdminUsers(c){
   // Surfaces editors already use, so an operator can actually create a tenant here.
   const addBtn=c.querySelector('#addTenant');
   if(addBtn)addBtn.onclick=()=>showForm('account','Tenant',['name','email','account_name','plan_slug'],'/admin/accounts/create',null,()=>renderPage());
+}
+
+// ── Accounts: the platform-wide list + the bulk retire write (kanban t_265ce9f9) ──────────────
+// The read is the same platform-gated list the Users (Tenants) panel already uses
+// (GET /admin/accounts). Selection is a per-row checkbox plus a select-all header; the ONE write is
+// POST /admin/accounts/bulk-delete, which answers PER ID — a row the backend refuses (the account
+// you are signed in as, a portfolio company, this app's own workspace, or one whose `WFS <id>` n8n
+// mirrors cannot be retired) keeps its reason on screen instead of vanishing behind a generic
+// failure. The single-account DELETE (/admin/accounts/{id}) is the same operation for one row; this
+// panel is the batch form of it, so the operator no longer needs a psql session to clear junk.
+function renderAdminAccounts(c){
+  c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Accounts</h2>'+
+    '<button class="btn btn-danger btn-sm" id="accDel" disabled>Delete selected</button></div>'+
+    '<p class="text-xs text-gray-400 mb-4">Every account on this platform. Tick rows and press <b>Delete selected</b> to remove them permanently, with all their data. Three are refused by rule and cannot be forced here: the account you are signed in as, a portfolio company (SwiftImpact / ZaarHub / Giraudy) and this app\'s own workspace — the reason is kept next to the row that was kept.</p>'+
+    '<div id="accdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
+  const btn=c.querySelector('#accDel');
+  // Refusals from the last write, rendered ONCE on the re-render that follows it.
+  let reasons=[];
+  const box=()=>Array.from(c.querySelectorAll('.acc-chk'));
+  const sync=()=>{
+    const picked=box().filter(b=>b.checked);
+    btn.disabled=picked.length===0;
+    btn.textContent=picked.length?('Delete selected ('+picked.length+')'):'Delete selected';
+    const a=c.querySelector('#accAll');
+    if(a)a.checked=box().length>0&&picked.length===box().length;
+  };
+  const load=()=>api('/admin/accounts').then(d=>{
+    const items=(d&&d.accounts)||(d&&d.items)||[];
+    const el=c.querySelector('#accdata');
+    if(!items.length){el.innerHTML='<p class="text-gray-400 text-sm">No accounts yet.</p>';sync();return}
+    el.innerHTML='<table class="table"><thead><tr><th style="width:32px"><input type="checkbox" id="accAll" title="Select all"></th><th>Name</th><th>Slug</th><th>Plan</th><th>Active</th><th>Created</th><th></th></tr></thead><tbody>'+
+      items.map(i=>{
+        // The API answers the tier nested as plan:{name,slug}; the flat spellings stay as fallback.
+        const cur=(i.plan&&(i.plan.slug||i.plan.name))||i.plan_slug||i.plan_name||'';
+        const aid=i.id||i.account_id||'';
+        return '<tr data-acc="'+aid+'">'+
+        '<td><input type="checkbox" class="acc-chk" value="'+aid+'"></td>'+
+        '<td class="acc-name"><strong>'+(i.name||'-')+'</strong></td>'+
+        '<td>'+(i.account_slug||i.slug||'-')+'</td>'+
+        '<td>'+(cur||'-')+'</td>'+
+        '<td><span class="badge '+(i.is_active?'bg-green-100 text-green-700':'bg-red-100 text-red-700')+'">'+(i.is_active?'Active':'Inactive')+'</span></td>'+
+        '<td class="text-xs text-gray-400">'+((i.created_at||'').slice(0,10))+'</td>'+
+        '<td class="text-right"><button class="btn btn-sm btn-ghost" onclick="event.preventDefault();startImpersonation(\''+aid+'\')">Impersonate</button></td>'+
+      '</tr>'}).join('')+'</tbody></table>';
+    const a=el.querySelector('#accAll');
+    if(a)a.addEventListener('change',()=>{box().forEach(b=>{b.checked=a.checked});sync()});
+    box().forEach(b=>b.addEventListener('change',sync));
+    // The reason a row was KEPT — written into that row's name cell, so it is not a generic toast.
+    reasons.forEach(f=>{
+      const note=document.createElement('div');
+      note.className='text-xs text-red-600';
+      note.textContent=f.error;
+      const row=el.querySelector('tr[data-acc="'+f.id+'"]');
+      const cell=row&&row.querySelector('td.acc-name');
+      if(cell)cell.appendChild(note);
+      else el.appendChild(note);
+    });
+    reasons=[];
+    sync();
+  });
+  btn.onclick=async()=>{
+    const ids=box().filter(b=>b.checked).map(b=>b.value).filter(Boolean);
+    if(!ids.length)return;
+    if(!confirm('Delete '+ids.length+' account(s)? This permanently removes the account and all of its data. This cannot be undone.'))return;
+    btn.disabled=true;
+    const r=await api('/admin/accounts/bulk-delete',{method:'POST',body:JSON.stringify({ids})});
+    if(!r){showMsg('Delete failed: '+LAST_ERR,'error');load();return}
+    const failed=(r&&r.failed)||[];
+    reasons=failed;
+    const n=(r&&typeof r.deleted==='number')?r.deleted:0;
+    showMsg(n+' account(s) deleted'+(failed.length?(' — '+failed.length+' refused or not found'):''),failed.length?'error':'success');
+    load();
+  };
+  load();
 }
 
 function renderAdminPortfolio(c){

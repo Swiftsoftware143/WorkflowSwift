@@ -724,6 +724,12 @@ pub fn create_router(state: AppState) -> Router {
             "/accounts",
             get(handlers::admin_settings_handler::admin_list_accounts),
         )
+        // The BULK arm of the wipe below (kanban t_265ce9f9). Registered as its own literal route,
+        // so `/accounts/bulk-delete` can never be read as `/accounts/{id}`.
+        .route(
+            "/accounts/bulk-delete",
+            post(handlers::admin_settings_handler::admin_bulk_delete_accounts),
+        )
         .route(
             "/accounts/{id}",
             delete(handlers::admin_settings_handler::admin_delete_account),
