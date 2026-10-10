@@ -162,7 +162,7 @@ const tabs=[
   {id:'tags',label:'🏷️ Tags & Labels',subs:['Tags','Tag Groups']},
   {id:'integrations',label:'🔌 Integrations',subs:['Integration Targets','Destination Values','Provider Keys','API Keys','n8n Proxy','Bridge']},
   {id:'support',label:'🎫 Support',subs:['Tickets']},
-  {id:'profile',label:'👤 Profile & Account',subs:['My Profile','Team','Plans & Credits','Invoices','Payments','Checkout Sessions']},
+  {id:'profile',label:'👤 Profile & Account',subs:['My Profile','Team','Plans & Credits','Email Branding','Invoices','Payments','Checkout Sessions']},
   {id:'comms',label:'📧 Communications',subs:['Webhooks']},
   {id:'admin',label:'🛠️ Admin',subs:['Usage','Settings','Users','Portfolio Companies','Plans','Surfaces','Email Templates','Industry Sources','Site Config']},
 ];
@@ -224,6 +224,7 @@ function content(){
     if(s==='tickets')renderCRUD(c,'tickets','Ticket',['title','status','priority'],'/tickets');
   }else if(t==='profile'){
     if(s==='my-profile')renderProfile(c);
+    else if(s==='email-branding')renderBranding(c);
     else if(s==='team')renderCRUD(c,'team','Team Member',['name','email','role'],'/users');
     else if(s==='plans-credits')renderPlansCredits(c);
     else if(s==='invoices')renderList(c,'invoices','Invoice','/invoices');
@@ -614,6 +615,76 @@ function renderProfile(c){
         <div><label class="text-xs text-gray-500">Account</label><p class="font-semibold">${d.account_name||d.user?.account_name||'-'}</p></div>
       </div>`;
   });
+}
+
+// ── EMAIL BRANDING (per-account identity on transactional email) ────────────────────
+// The per-account email-branding backend (kanban t_c3cfe7ba) shipped with NO screen in this
+// console: GET|PUT /api/v1/settings/branding carries brand_name/brand_color, the logo BYTES
+// go to POST|DELETE /api/v1/settings/branding/logo as the RAW image body (this app's avatar
+// convention — no multipart), and the public GET /api/v1/branding/logo/{account_id} streams it
+// back for a mail client's <img src>. A backend route with no UI is a defect.
+async function renderBranding(c){
+  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">&#127912; Email Branding</h2><div id="bdata"><p class="text-gray-400">Loading...</p></div></div>';
+  const host=c.querySelector('#bdata');
+  const d=await api('/settings/branding');
+  if(d===null&&LAST_ERR){host.innerHTML='<p class="text-red-400">Could not load branding: '+LAST_ERR+'</p>';return}
+  const doc=d||{};
+  const branded=!!(doc.brand_name||doc.logo_url);
+  host.innerHTML='';
+  const badge=h('span',{className:'badge',style:branded?'background:#d1fae5;color:#065f46':'background:#fef3c7;color:#92400e'},branded?'branded':'not branded');
+  const head=h('div',{className:'flex items-center gap-3 mb-2'},h('span',{className:'font-semibold'},'Your branding on transactional email'),badge);
+  host.appendChild(head);
+  host.appendChild(h('p',{className:'text-sm text-gray-500 mb-4'},'This is what your customers see at the top of the workflow and account emails sent for your account. Leave it empty to send with WorkflowSwift\'s own identity.'));
+
+  const wrap=h('div',{className:'grid grid-cols-2 gap-6'});
+  const left=h('div',{}),right=h('div',{});
+  wrap.appendChild(left);wrap.appendChild(right);host.appendChild(wrap);
+
+  const nameIn=h('input',{className:'input mb-3',placeholder:'e.g. Acme Corp',maxlength:'60'});nameIn.value=doc.brand_name||'';
+  left.appendChild(h('label',{className:'text-xs text-gray-500'},'Brand display name'));
+  left.appendChild(nameIn);
+  const colorIn=h('input',{className:'input'});colorIn.value=/^#[0-9a-fA-F]{3,8}$/.test(doc.brand_color||'')?doc.brand_color:'#4f46e5';
+  const picker=h('input',{type:'color',style:'width:44px;height:34px;padding:2px;border:1px solid #cbd5e1;border-radius:8px;background:#fff'});
+  picker.value=/^#[0-9a-fA-F]{6}$/.test(colorIn.value)?colorIn.value:'#4f46e5';
+  picker.oninput=()=>{colorIn.value=picker.value};
+  colorIn.oninput=()=>{if(/^#[0-9a-fA-F]{6}$/.test(colorIn.value.trim()))picker.value=colorIn.value.trim()};
+  left.appendChild(h('label',{className:'text-xs text-gray-500 mt-2'},'Brand colour'));
+  left.appendChild(h('div',{className:'flex items-center gap-2'},picker,colorIn));
+  left.appendChild(h('p',{className:'text-xs text-gray-400 mt-1'},'A hex colour such as #4f46e5. It draws the rule under your logo.'));
+  const saveBtn=h('button',{className:'btn btn-primary mt-4'},'Save branding');
+  saveBtn.onclick=async()=>{
+    saveBtn.disabled=true;saveBtn.textContent='Saving...';
+    const r=await api('/settings/branding',{method:'PUT',body:JSON.stringify({brand_name:nameIn.value.trim(),brand_color:colorIn.value.trim()})});
+    saveBtn.disabled=false;saveBtn.textContent='Save branding';
+    if(r){showMsg('Email branding saved','success');renderApp();}else showMsg('Save failed: '+LAST_ERR,'error');
+  };
+  left.appendChild(saveBtn);
+
+  right.appendChild(h('label',{className:'text-xs text-gray-500'},'Logo'));
+  const box=h('div',{style:'border:1px dashed #cbd5e1;border-radius:10px;height:110px;display:flex;align-items:center;justify-content:center;background:#f8fafc;overflow:hidden'});
+  if(doc.logo_url){const img=h('img',{alt:doc.brand_name||'Your logo',style:'max-width:100%;max-height:100%'});img.src=doc.logo_url;box.appendChild(img);}
+  else box.appendChild(h('span',{className:'text-xs text-gray-400'},'No logo yet'));
+  right.appendChild(box);
+  const fileIn=h('input',{type:'file',accept:'image/png,image/jpeg,image/webp,image/gif',style:'display:none'});
+  fileIn.onchange=async()=>{
+    const f=fileIn.files&&fileIn.files[0];if(!f)return;
+    if(f.size>2*1024*1024){showMsg('That image is larger than 2 MB','error');fileIn.value='';return}
+    const res=await fetch(API+'/settings/branding/logo',{method:'POST',headers:{'Authorization':'Bearer '+TOKEN,'Content-Type':f.type||'application/octet-stream'},body:f});
+    const j=await res.json().catch(()=>({}));
+    if(!res.ok){showMsg('Upload failed: '+(j.message||j.error||('HTTP '+res.status)),'error');fileIn.value='';return}
+    showMsg('Logo uploaded','success');renderApp();
+  };
+  right.appendChild(fileIn);
+  const pickBtn=h('button',{className:'btn btn-ghost btn-sm mt-2'},doc.logo_url?'Replace logo':'Upload logo');
+  pickBtn.onclick=()=>fileIn.click();
+  const btns=h('div',{className:'flex gap-2'},pickBtn);
+  if(doc.logo_url){
+    const rmBtn=h('button',{className:'btn btn-ghost btn-sm'},'Remove');
+    rmBtn.onclick=async()=>{if(!confirm('Remove your email logo?'))return;const r=await api('/settings/branding/logo',{method:'DELETE'});if(r){showMsg('Logo removed','success');renderApp();}else showMsg('Remove failed: '+LAST_ERR,'error');};
+    btns.appendChild(rmBtn);
+  }
+  right.appendChild(btns);
+  right.appendChild(h('p',{className:'text-xs text-gray-400 mt-2'},'PNG, JPEG, WebP or GIF, up to 2 MB.'));
 }
 
 function renderPlansCredits(c){
