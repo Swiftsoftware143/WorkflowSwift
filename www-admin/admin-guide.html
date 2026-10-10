@@ -375,6 +375,18 @@
       <td>Delete the account and its data (cascades). The account's n8n <code>WFS &lt;uuid&gt;</code> workflow mirrors are retired <strong>first</strong>; if they cannot be retired (n8n unreachable or refusing) the whole delete is <strong>refused with 502</strong> — an orphaned mirror is permanent, while a retryable 502 is not.</td>
       </tr>
       <tr>
+      <td><code>/api/v1/admin/accounts/bulk-delete</code></td>
+      <td>POST</td>
+      <td>The batch form of the row above (<code>{"ids":[...]}</code>). It answers <strong>per id</strong>
+      — <code>{status, deleted, deleted_ids, failed:[{id,error}]}</code> — so one refused or missing id cannot sink the
+      batch. Three deletes are refused by rule and cannot be forced: the account you are signed in as, a portfolio
+      company (a name/slug carrying <code>swiftimpact</code>/<code>zaarhub</code>/<code>giraudy</code>), and this app's
+      own workspace (<code>account_slug</code> exactly <code>workflowswift</code>). Same mirror rule as the single
+      delete: an account whose <code>WFS &lt;uuid&gt;</code> mirrors cannot be retired is refused with its reason.
+      Admin &rarr; <strong>Accounts</strong> is the panel: per-row checkbox, select-all header, and one
+      <em>Delete selected</em> button that stays disabled until a row is picked.</td>
+      </tr>
+      <tr>
       <td><code>/api/v1/admin/accounts/{id}/retention</code></td>
       <td>PUT</td>
       <td>Per-account retention override</td>
