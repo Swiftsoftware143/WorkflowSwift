@@ -163,7 +163,7 @@
       <a href="#dashboard-data-cards-brand-monitor-competitor-watch" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Dashboard: Data Cards, Brand Monitor, Competitor Watch</a>
       <a href="#keys-two-different-things" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Keys: two different things</a>
       <a href="#plans-and-limits" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Plans and limits</a>
-      <a href="#custom-branding" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Custom branding</a>
+      <a href="#custom-branding" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Email branding</a>
       <a href="#integrations" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Integrations</a>
       <a href="#tag-free-account" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Tag → free account</a>
       <a href="#chrome-extension-swift-market-intel" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Chrome extension — Swift Market Intel</a>
@@ -452,14 +452,26 @@
       </tr>
       </tbody>
       </table>
-      <h2 id="custom-branding">Custom branding</h2>
-      <p>Not available. There is no branding editor, and no page or email in this app renders a per-tenant
-      logo or colour. The <code>logo_url</code>, <code>branding_name</code>, <code>primary_color</code> and <code>accent_color</code> columns that
-      used to sit on your account were <strong>dropped on 2026-10-02</strong> (migration 077, kanban t_731bf864) —
-      nothing read or wrote them — so the database no longer carries the capability either. The "Custom
-      Branding" plan feature that promised white-labelling was retired the same day (kanban t_413b4aab)
-      for exactly that reason. The footer text on your account (<code>footer_year</code> / <code>footer_company</code>) <em>is</em>
-      real and settable through <code>PUT /api/v1/accounts</code>.</p>
+      <h2 id="custom-branding">Email branding</h2>
+      <p><strong>Available, per account.</strong> Open the console and go to <strong>👤 Profile &amp; Account →
+      Email Branding</strong>, then set:</p>
+      <ul>
+        <li><strong>Logo</strong> — upload a PNG, JPEG, WebP or GIF up to 2 MB. Once one is set there is a
+          <strong>Replace</strong> and a <strong>Remove</strong> button too.</li>
+        <li><strong>Brand display name</strong> — up to 60 characters, printed above the message.</li>
+        <li><strong>Brand colour</strong> — a hex colour such as <code>#4f46e5</code>; it draws the rule under your logo.</li>
+      </ul>
+      <p>Press <strong>Save branding</strong>. From then on every transactional email this account sends — the
+      welcome / login-credentials mail, team invitations, password resets, purchase confirmations and workflow
+      notifications — opens with your logo and name. The logo is served from your own account's public URL
+      (<code>GET /api/v1/branding/logo/{account_id}</code>), which is what lets a mail client load it, and the mail keeps the
+      WorkflowSwift look until you set a name or a logo, because branding is per account.</p>
+      <div class="note">The older <em>account-level</em> white-label fields were a different thing and are still retired:
+        the <code>logo_url</code>, <code>branding_name</code>, <code>primary_color</code> and <code>accent_color</code> columns were
+        <strong>dropped on 2026-10-02</strong> (migration 077, kanban t_731bf864) and the "Custom Branding" plan feature was
+        retired the same day (kanban t_413b4aab). The Email Branding screen above is the supported way to brand your mail.
+        The footer text on your account (<code>footer_year</code> / <code>footer_company</code>) <em>is</em> real and settable through
+        <code>PUT /api/v1/accounts</code>.</div>
       <h2 id="integrations">Integrations</h2>
       <ul>
       <li><strong>CoreSwift spoke</strong>: <code>GET /integrations/coreswift/status</code> reports whether your CoreSwift key is

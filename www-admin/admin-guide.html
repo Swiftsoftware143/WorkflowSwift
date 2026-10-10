@@ -213,7 +213,12 @@
         <code>primary_color</code>, <code>accent_color</code>) have no writer, no reader and no renderer, and this app has no
         per-tenant public page to white-label in the first place. <strong>The columns themselves were then
         dropped</strong> (<code>077_drop_account_branding_columns.sql</code>, kanban t_731bf864), together with the equally
-        unused <code>custom_domain</code>; they had 0 non-null values across all 8 accounts.</li>
+        unused <code>custom_domain</code>; they had 0 non-null values across all 8 accounts.
+        <br><strong>Not to be confused with per-account email branding</strong> (kanban t_c3cfe7ba), which is live:
+        <code>Profile &amp; Account → Email Branding</code> in the console writes <code>brand_name</code> / <code>brand_color</code>
+        into the account's <code>settings.email_branding</code> document and stores the logo bytes in <code>account_logos</code>
+        (served by the public <code>GET /api/v1/branding/logo/{account_id}</code>), and <code>src/email.rs</code> applies that
+        header to every transactional send for the account. Only the old account-level white-label columns above were dropped.</li>
       <li><code>audit_logs</code> — the <code>audit_logs</code> table holds <strong>0 rows</strong> and is written by nothing; its only
         reader (<code>GET /dashboard/activity</code>) was deleted by kanban t_3a8ccd2a.</li>
       <li><code>custom_reports</code> — there is no report table, handler, route or console surface anywhere.</li>

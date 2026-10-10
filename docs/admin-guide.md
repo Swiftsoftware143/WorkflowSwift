@@ -42,6 +42,11 @@ paid tier up, and each named a software capability the crate does not have:
   per-tenant public page to white-label in the first place. **The columns themselves were then
   dropped** (`077_drop_account_branding_columns.sql`, kanban t_731bf864), together with the equally
   unused `custom_domain`; they had 0 non-null values across all 8 accounts.
+  **Not to be confused with per-account email branding** (kanban t_c3cfe7ba), which is live:
+  `Profile & Account -> Email Branding` writes `brand_name` / `brand_color` into the account's
+  `settings.email_branding` document and stores the logo bytes in `account_logos` (served by the
+  public `GET /api/v1/branding/logo/{account_id}`); `src/email.rs` applies that header to every
+  transactional send for the account. Only the old account-level white-label columns above were dropped.
 - `audit_logs` — the `audit_logs` table holds **0 rows** and is written by nothing; its only
   reader (`GET /dashboard/activity`) was deleted by kanban t_3a8ccd2a.
 - `custom_reports` — there is no report table, handler, route or console surface anywhere.
@@ -113,7 +118,9 @@ account list. A second, nullable `slug` column used to sit beside it and was **d
 `logo_url` / `branding_name` / `primary_color` / `accent_color` branding columns and the unused
 `custom_domain` were **dropped** on 2026-10-02 (migration 077, kanban t_731bf864): nothing in this
 app wrote or rendered them, so the schema no longer advertises white-label branding. The plan flag
-that sold it (`custom_branding`) had already been retired by kanban t_413b4aab. Users (`users.aid`)
+that sold it (`custom_branding`) had already been retired by kanban t_413b4aab. (Per-account EMAIL
+branding is a separate, live feature — `Profile & Account -> Email Branding`, kanban t_c3cfe7ba.)
+Users (`users.aid`)
 belong to one tenant; `users.role` is `admin` / `member` (`perm_is_super_admin` marks the platform
 operator).
 
