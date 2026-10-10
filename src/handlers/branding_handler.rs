@@ -6,8 +6,9 @@
 //! * `GET  /api/v1/settings/branding` — authenticated, returns the caller's OWN branding document.
 //! * `PUT  /api/v1/settings/branding` — authenticated, writes `brand_name` / `brand_color`, and
 //!   PRESERVES the stored `logo_url` when the caller omits it.
-//! * `POST /api/v1/settings/branding/logo` — authenticated, the raw image bytes (this app's avatar
-//!   idiom: the body IS the image, no multipart envelope), the caller's OWN account.
+//! * `POST /api/v1/settings/branding/logo` — authenticated, the image as EITHER `multipart/form-data`
+//!   (the fleet idiom, first non-empty part) OR the RAW body (this app's historical avatar idiom),
+//!   the caller's OWN account.
 //! * `DELETE /api/v1/settings/branding/logo` — same, removes the logo.
 //! * `GET  /api/v1/branding/logo/:account_id` — PUBLIC by design (`auth::route_policy::PUBLIC_ROUTES`):
 //!   a mail client renders `<img src>` with no credential of any kind, so a logo that needed a token
@@ -23,8 +24,8 @@
 
 use axum::{
     body::{Body, Bytes},
-    extract::{Extension, Path, State},
-    http::header,
+    extract::{Extension, FromRequest, Multipart, Path, Request, State},
+    http::{header, HeaderMap},
     response::Response,
     Json,
 };
@@ -129,16 +130,58 @@ pub async fn put_branding(
 
 /// `POST /api/v1/settings/branding/logo` — store the caller's account logo and return its URL.
 ///
-/// The body IS the image (this app's avatar convention): no multipart envelope, no filename, no
-/// caller-declared content type is trusted. Format is decided by the bytes; a non-image and an empty
-/// body are refused 400, and a body over [`MAX_AVATAR_BYTES`] is refused 400 as well. One row per
-/// account (upsert), so re-uploading replaces the logo rather than accumulating rows.
+/// TWO body shapes, ONE handler (fleet-normalised 2026-10-10). The other three apps take the logo as
+/// `multipart/form-data`; this app historically took it as the RAW body. A client that used the
+/// fleet's form idiom got a 400 "Unsupported logo" here, so the handler now reads BOTH:
+/// `multipart/form-data` takes the first non-empty file part, anything else is the body verbatim.
+/// The format is decided by the bytes in either arm (never a caller-declared content type), a
+/// non-image and an empty body are refused 400, and a body over [`MAX_AVATAR_BYTES`] is refused 400
+/// as well. One row per account (upsert), so re-uploading replaces the logo rather than accumulating
+/// rows.
 pub async fn upload_logo(
     Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
-    body: Bytes,
+    headers: HeaderMap,
+    request: Request,
 ) -> ApiResult<Json<Value>> {
     let aid = account_id(&claims)?;
+
+    let content_type_header = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    let body: Vec<u8> = if content_type_header.starts_with("multipart/form-data") {
+        let mut multipart = Multipart::from_request(request, &state)
+            .await
+            .map_err(|e| AppError::BadRequest(format!("Invalid multipart body: {e}")))?;
+        let mut picked: Option<Bytes> = None;
+        while let Some(field) = multipart
+            .next_field()
+            .await
+            .map_err(|e| AppError::BadRequest(format!("Invalid multipart body: {e}")))?
+        {
+            let data = field
+                .bytes()
+                .await
+                .map_err(|e| AppError::BadRequest(format!("Could not read the logo: {e}")))?;
+            if !data.is_empty() {
+                picked = Some(data);
+                break;
+            }
+        }
+        picked
+            .ok_or_else(|| AppError::BadRequest("No logo data received".to_string()))?
+            .to_vec()
+    } else {
+        axum::body::to_bytes(request.into_body(), MAX_AVATAR_BYTES + 1)
+            .await
+            .map_err(|e| AppError::BadRequest(format!("Could not read the logo: {e}")))?
+            .to_vec()
+    };
+    let body = Bytes::from(body);
+
     if body.is_empty() {
         return Err(AppError::BadRequest("No logo data received".to_string()));
     }
