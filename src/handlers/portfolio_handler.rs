@@ -53,17 +53,40 @@ pub async fn create_portfolio_company(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .unwrap_or_else(|| name.to_lowercase().replace(' ', "-"));
+    // The console's Add Company form collects a website, an email and a description. This handler
+    // used to read only `name`/`slug`, so all three were dropped on the floor: the operator filled
+    // them in, got a 201 and never learned they were never stored (the DB has the columns).
+    let domain = req
+        .get("domain")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let email = req
+        .get("email")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let description = req
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO portfolio_companies (id, aid, name, slug) VALUES ($1, $2, $3, $4)")
+    sqlx::query("INSERT INTO portfolio_companies (id, aid, name, slug, domain, email, description) VALUES ($1, $2, $3, $4, $5, $6, $7)")
         .bind(id)
         .bind(aid)
         .bind(&name)
         .bind(&slug)
+        .bind(&domain)
+        .bind(&email)
+        .bind(&description)
         .execute(&state.db)
         .await?;
     Ok((
         StatusCode::CREATED,
-        Json(json!({"id": id.to_string(), "name": name, "slug": slug})),
+        Json(
+            json!({"id": id.to_string(), "name": name, "slug": slug, "domain": domain, "email": email, "description": description}),
+        ),
     ))
 }
 
@@ -74,12 +97,15 @@ pub async fn get_portfolio_company(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let company_id = Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid ID".into()))?;
-    let row = sqlx::query("SELECT id::text, name, slug, settings::text, created_at::text FROM portfolio_companies WHERE id = $1 AND aid = $2")
+    // The console's Portfolio panel shows the company's website/email/description; GET-by-id used
+    // to return only id/name/slug, so a client that pre-filled an edit form from this route saw
+    // three fields blank that the list route returns.
+    let row = sqlx::query("SELECT id::text, name, slug, email, description, domain, settings::text, created_at::text FROM portfolio_companies WHERE id = $1 AND aid = $2")
         .bind(company_id).bind(aid)
         .fetch_optional(&state.db).await?
         .ok_or(AppError::NotFound("Company not found".into()))?;
     Ok(Json(
-        json!({"id": row.try_get::<&str,_>("id").unwrap_or(""), "name": row.try_get::<&str,_>("name").unwrap_or(""), "slug": row.try_get::<&str,_>("slug").unwrap_or("")}),
+        json!({"id": row.try_get::<&str,_>("id").unwrap_or(""), "name": row.try_get::<&str,_>("name").unwrap_or(""), "slug": row.try_get::<&str,_>("slug").unwrap_or(""), "email": row.try_get::<&str,_>("email").unwrap_or(""), "description": row.try_get::<&str,_>("description").unwrap_or(""), "domain": row.try_get::<&str,_>("domain").unwrap_or("")}),
     ))
 }
 
@@ -91,13 +117,49 @@ pub async fn update_portfolio_company(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let company_id = Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid ID".into()))?;
-    if let Some(name) = req.get("name").and_then(|v| v.as_str()) {
-        sqlx::query("UPDATE portfolio_companies SET name = $1, updated_at = NOW() WHERE id = $2 AND aid = $3")
-            .bind(name).bind(company_id).bind(aid).execute(&state.db).await?;
-    }
-    if let Some(slug) = req.get("slug").and_then(|v| v.as_str()) {
-        sqlx::query("UPDATE portfolio_companies SET slug = $1, updated_at = NOW() WHERE id = $2 AND aid = $3")
-            .bind(slug).bind(company_id).bind(aid).execute(&state.db).await?;
+    // One statement so `rows_affected` is the honest "did anything change" signal (and so a partial
+    // write cannot leave `name` updated but `description` not). COALESCE keeps the fleet's convention
+    // that an absent field is "not submitted" — the console skips blank inputs on purpose, so a blank
+    // box can never clear a stored value. A PUT for an id this account does not own used to answer
+    // 200 {"status":"updated"} while updating 0 rows; the console told the operator "Saved!" for a
+    // company that was never touched.
+    let name = req
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let slug = req
+        .get("slug")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let domain = req
+        .get("domain")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let email = req
+        .get("email")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let description = req
+        .get("description")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let result = sqlx::query(
+        "UPDATE portfolio_companies SET name = COALESCE($1, name), slug = COALESCE($2, slug), \
+         domain = COALESCE($3, domain), email = COALESCE($4, email), \
+         description = COALESCE($5, description), updated_at = NOW() \
+         WHERE id = $6 AND aid = $7",
+    )
+    .bind(&name)
+    .bind(&slug)
+    .bind(&domain)
+    .bind(&email)
+    .bind(&description)
+    .bind(company_id)
+    .bind(aid)
+    .execute(&state.db)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound("Company not found".into()));
     }
     Ok(Json(json!({"status": "updated"})))
 }
@@ -193,10 +255,15 @@ pub async fn delete_portfolio_company(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let company_id = Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid ID".into()))?;
-    sqlx::query("DELETE FROM portfolio_companies WHERE id = $1 AND aid = $2")
+    let result = sqlx::query("DELETE FROM portfolio_companies WHERE id = $1 AND aid = $2")
         .bind(company_id)
         .bind(aid)
         .execute(&state.db)
         .await?;
+    // "Deleted" for an id that was never there (or belongs to another account) told the operator the
+    // row was gone when nothing happened.
+    if result.rows_affected() == 0 {
+        return Err(AppError::NotFound("Company not found".into()));
+    }
     Ok(Json(json!({"status": "deleted"})))
 }
