@@ -618,6 +618,15 @@ function renderBridge(c){
 // guide (MYPROFILE_HELP below) tells the operator "Set your name, company and picture" and
 // "Change your password", so a documented surface the screen does not offer is the defect this
 // closes. A backend route with no UI is a defect — the same rule ADASwift's console applied.
+// The Role line below printed `me.role` verbatim, so an operator read the database's own enum
+// (`super_admin`, `company_admin`, `team_member`, ...) — the same defect CoreSwift's panel fixed
+// with roleLabel, and the same one this app's own tenant console avoids. This is the last place
+// in the fleet that showed a raw role enum; a missing role is an em-dash, never a made-up word.
+const ROLE_LABELS={owner:'Owner',admin:'Admin',super_admin:'Super admin',agency_admin:'Agency admin',
+  client_admin:'Client admin',company_admin:'Company admin',team_member:'Team member',
+  member:'Member',user:'Member',viewer:'Viewer'};
+// Unknown values are shown as-is (honest, never an invented role); a missing one is an em-dash.
+const roleLabel=r=>{const s=String(r==null?'':r).trim();if(!s)return '—';return ROLE_LABELS[s.toLowerCase()]||s};
 function renderProfile(c){
   c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">My Profile</h2><div id="pdata"><p class="text-gray-400">Loading...</p></div></div>';
   const host=c.querySelector('#pdata');
@@ -676,7 +685,7 @@ function renderProfile(c){
     right.appendChild(h('label',{className:'text-xs text-gray-500'},'Email'));
     right.appendChild(h('p',{className:'font-semibold mb-3'},me.email||'-'));
     right.appendChild(h('label',{className:'text-xs text-gray-500'},'Role'));
-    right.appendChild(h('p',{className:'font-semibold mb-3'},me.role||'-'));
+    right.appendChild(h('p',{className:'font-semibold mb-3'},roleLabel(me.role)));
     right.appendChild(h('label',{className:'text-xs text-gray-500'},'Plan'));
     right.appendChild(h('p',{className:'font-semibold mb-4'},me.plan_name||'Free'));
 
