@@ -39,6 +39,11 @@ let TOKEN=localStorage.getItem('ws_token')||'';
 // tenant-scoped 15-minute JWT POST /impersonate minted, so every panel call acts as that
 // tenant. Stop calls POST /stop-impersonation for real and restores the admin token.
 let IMPERSONATION=null;
+// This account's own /auth/me payload, read once per page load. It carries `perm_is_super_admin`,
+// the SAME flag the backend's admin middleware enforces, so the console can stop showing the
+// operator-only Admin tab to a tenant user whose calls under it would all answer 403.
+let ME=null;
+function showAdminTab(){return !!(ME&&ME.perm_is_super_admin)&&!IMPERSONATION;}
 let app={tab:'dashboard',sub:'overview',data:{}};
 // Last failed request's server message. api() otherwise swallows the body (returns null),
 // so a refused write (e.g. the 403 on surface CRUD for non-admins, or the Duplicate slug
@@ -61,16 +66,24 @@ async function api(path,opts={}){
   return r.json();
 }
 
+async function loadMe(){
+  // One read of who we are, so the sidebar knows whether the Admin tab is ours. api() answers null
+  // (and switches to the login screen) on a 401.
+  const r=await api('/auth/me');
+  if(r&&r.user)ME=r.user;
+}
+
 async function login(email,pw){
   const r=await fetch(API+'/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password:pw})});
   if(!r.ok){alert('Login failed');return}
   const d=await r.json();
   TOKEN=d.access_token||'';
   localStorage.setItem('ws_token',TOKEN);
+  await loadMe();
   renderApp();
 }
 
-function logout(){TOKEN='';localStorage.removeItem('ws_token');renderLogin()}
+function logout(){TOKEN='';ME=null;localStorage.removeItem('ws_token');renderLogin()}
 
 function h(tag,props={},...children){
   const el=document.createElement(tag);
@@ -171,7 +184,12 @@ function sidebar(){
   const nav=h('div',{className:'py-4'});
   nav.appendChild(h('div',{className:'px-4 py-2 text-lg font-bold text-gray-800'},'WorkflowSwift'));
   nav.appendChild(h('div',{className:'px-4 text-xs text-gray-400 mb-4'},'Admin Dashboard'));
-  tabs.forEach(t=>{
+  // The Admin tab is the operator surface: every sub under it calls /admin/* (or the admin-level
+  // CRUDs), all of which answer 403 "Admin access required" to a tenant user. Same rule the
+  // ADASwift / FunnelSwift / CoreSwift consoles adopted: an operator-only screen is not offered to
+  // a non-operator. showAdminTab() also hides it while impersonating a tenant, whose token is not an
+  // admin token.
+  tabs.filter(t=>t.id!=='admin'||showAdminTab()).forEach(t=>{
     const btn=h('button',{className:'tab-btn'+(app.tab===t.id?' active':''),onclick:()=>{app.tab=t.id;app.sub=t.subs[0];renderApp()}},t.label);
     nav.appendChild(btn);
     if(app.tab===t.id){
@@ -240,6 +258,14 @@ function content(){
     // Admin -> Email Templates panel (`/admin/email-templates`) is the one surface for them.
     if(s==='webhooks')renderCRUD(c,'webhooks','Webhook',['name','url','is_active'],'/webhooks',['name','url','is_active']);
   }else if(t==='admin'){
+    // Defence in depth for the sidebar gate above: a deep link / stale app.tab must not reach an
+    // operator-only screen either. Every Admin sub calls /admin/* and answers 403 for a non-operator.
+    if(!showAdminTab()){
+      c.appendChild(h('div',{className:'card'},
+        h('h2',{className:'text-xl font-bold mb-4'},'Access Denied'),
+        h('p',{className:'text-sm text-gray-500'},'The Admin screens are available to the platform operator only.')));
+      return c;
+    }
     if(s==='usage')renderAdminUsage(c);
     else if(s==='settings')renderAdminSettings(c);
     else if(s==='users')renderAdminUsers(c);
@@ -1421,7 +1447,7 @@ function renderSiteConfig(c){
 // document.body is still null — renderApp()/renderLogin() both start with
 // document.body.innerHTML='' and threw "Cannot set properties of null", leaving
 // admin.workflowswift.com a blank page for every account. Wait for the DOM instead.
-function boot(){ if(TOKEN)renderApp();else renderLogin(); }
+function boot(){ if(TOKEN){ loadMe().then(()=>{ if(TOKEN) renderApp(); }); } else renderLogin(); }
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
 </script>
 <link rel="stylesheet" href="/tw.css">

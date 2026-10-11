@@ -320,7 +320,7 @@ pub async fn me(
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
 
     let row = sqlx::query(
-        "SELECT id, aid, email, name, role, is_active, last_login_at, created_at, username, company \
+        "SELECT id, aid, email, name, role, is_active, last_login_at, created_at, username, company, perm_is_super_admin \
          FROM users WHERE id = $1",
     )
     .bind(user_id)
@@ -369,6 +369,9 @@ pub async fn me(
             .try_get("company")
             .map_err(|e| AppError::Internal(e.to_string()))?,
         plan_name,
+        perm_is_super_admin: row
+            .try_get("perm_is_super_admin")
+            .map_err(|e| AppError::Internal(e.to_string()))?,
         avatar_url: if has_avatar {
             Some(format!("/api/v1/auth/avatar/{user_id}"))
         } else {

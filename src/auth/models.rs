@@ -66,6 +66,11 @@ pub struct MeResponse {
     pub is_active: bool,
     pub last_login_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    /// The SAME flag the admin middleware enforces (`claims.perm_is_super_admin`, set from
+    /// `users.perm_is_super_admin`). The admin console needs it to know whether the operator
+    /// surface is its own: without it the console offered its Admin tab to a tenant user whose
+    /// every call under it answered 403 "Admin access required".
+    pub perm_is_super_admin: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
