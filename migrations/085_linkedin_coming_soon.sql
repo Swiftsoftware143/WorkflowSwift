@@ -1,0 +1,47 @@
+-- 085_linkedin_coming_soon.sql
+-- WorkflowSwift: `linkedin` is offered in the integration catalogue with a key input, but NO code
+-- path in this app can ever spend a LinkedIn credential — so a tenant can save one that nothing
+-- reads. Same defect class as sam_gov (t_b7c628b1 / 083) and the five rows in 084 (t_9141dd7e).
+-- Cards t_9141dd7e and t_b7c628b1 both NAMED `linkedin` as a known neighbour of that class and
+-- left it uncarded on purpose ("flagged, not touched … so the board can card them deliberately").
+-- This file is that follow-up.
+--
+-- MEASURED ON THE LIVE APP + LIVE DATABASE 2026-10-11 (cron `default`, off-peak):
+--   * GET /available-providers -> 200, `linkedin` present, name "LinkedIn API", coming_soon = false
+--     (all 20 rows served; only sam_gov + the five from 084 carried the flag).
+--   * POST /provider-keys {"provider":"linkedin","api_key":"…"} with a real tenant session ->
+--     **HTTP 200** {"action":"updated","message":"Provider key for 'linkedin' has been stored"} —
+--     a stored credential with no reader in this app. (Removed again: the tenant's key list was
+--     returned to [] afterwards, so nothing was left behind.)
+--   * `linkedin` appears in NONE of the vocabularies a step resolves a provider from:
+--       crate::ai_llm::AI_PROVIDERS          openai, anthropic, deepseek, …
+--       crate::email::EMAIL_PROVIDERS        smtp, mailgun, sendgrid, sendiio
+--       crate::sms::SMS_PROVIDERS            twilio, vonage
+--       crate::execution::NOTIFY_CHANNELS    webhook, email, sms
+--       integration_destinations             coreswift, funnelswift, incentiveswift
+--     Its ONLY hit in the whole crate is a display string —
+--     `https://linkedin.com/company/{}` in handlers/prospecting_handler.rs — a URL the prospecting
+--     screen prints, not a dispatch arm. (mailchimp, the other row that card flagged, is NOT in this
+--     table at all: POST /provider-keys {"provider":"mailchimp"} already answers 400 "not an
+--     integration this app offers", so there is nothing to label there.)
+--
+-- WHY coming_soon AND NOT is_active = false:
+--   David's standing rule is LABEL, DON'T HIDE. The row keeps is_active = true (visible) and gains
+--   coming_soon = true, which the mechanism shipped in 083 already enforces in BOTH doors:
+--   list_available_providers serves the flag (www-app/integrations.html renders a non-interactive
+--   card — no key input, no Connect/Test control) and upsert_provider_key refuses the row with 400.
+--   No code change is needed per row.
+--
+-- REVERSAL (deliberate, one line): a row returns to connectable with
+--   UPDATE available_providers SET coming_soon = false WHERE key = 'linkedin';
+-- and it then needs the missing half named — a real LinkedIn dispatch arm (or removal from the
+-- catalogue) plus, if the generic dispatch path were used, an integration_provider_presets row
+-- carrying the provider's base_url.
+--
+-- ADDITIVE + IDEMPOTENT: `coming_soon` already exists (083) and defaults to false, so every other
+-- provider renders byte-identically, and this file is a no-op if it ever runs twice. `provider_keys`
+-- holds 0 rows in total, so no tenant is affected. No BEGIN/COMMIT — the runner wraps each file.
+
+UPDATE available_providers
+   SET coming_soon = true
+ WHERE key = 'linkedin';
