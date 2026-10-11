@@ -610,17 +610,91 @@ function renderBridge(c){
   });
 }
 
+// ── MY PROFILE (fleet profile contract) ─────────────────────────────────────────────
+// The backend has carried the whole profile surface since card t_39cea779 — PUT /auth/profile
+// (name/username/company), POST /auth/avatar (multipart picture) and PUT /auth/password
+// (current + new) — and the tenant SPA exercises it, but THIS console's My Profile screen was
+// read-only: name and email as text, no picture, no company, no password box. The console's own
+// guide (MYPROFILE_HELP below) tells the operator "Set your name, company and picture" and
+// "Change your password", so a documented surface the screen does not offer is the defect this
+// closes. A backend route with no UI is a defect — the same rule ADASwift's console applied.
 function renderProfile(c){
   c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">My Profile</h2><div id="pdata"><p class="text-gray-400">Loading...</p></div></div>';
+  const host=c.querySelector('#pdata');
   api('/auth/me').then(d=>{
-    if(!d){c.querySelector('#pdata').innerHTML='<p class="text-red-400">Failed.</p>';return}
-    c.querySelector('#pdata').innerHTML=`
-      <div class="grid grid-cols-2 gap-4">
-        <div><label class="text-xs text-gray-500">Name</label><p class="font-semibold">${d.name||d.user?.name||'-'}</p></div>
-        <div><label class="text-xs text-gray-500">Email</label><p class="font-semibold">${d.email||d.user?.email||'-'}</p></div>
-        <div><label class="text-xs text-gray-500">Role</label><p class="font-semibold">${d.role||d.user?.role||'-'}</p></div>
-        <div><label class="text-xs text-gray-500">Account</label><p class="font-semibold">${d.account_name||d.user?.account_name||'-'}</p></div>
-      </div>`;
+    if(!d){host.innerHTML='<p class="text-red-400">Could not load your profile: '+escHtml(LAST_ERR||'request failed')+'</p>';return}
+    const me=(d&&d.user)||d||{};
+    host.innerHTML='';
+    const wrap=h('div',{className:'grid grid-cols-2 gap-6'});
+    const left=h('div',{}),right=h('div',{});
+    wrap.appendChild(left);wrap.appendChild(right);host.appendChild(wrap);
+
+    // ── picture + name + company (the editable half) ──
+    left.appendChild(h('label',{className:'text-xs text-gray-500'},'Profile picture'));
+    const picRow=h('div',{className:'flex items-center gap-3 mt-1 mb-3'});
+    if(me.avatar_url){
+      const im=h('img',{alt:'Profile picture',style:'width:72px;height:72px;border-radius:50%;object-fit:cover;border:1px solid #e5e7eb;flex:none'});
+      im.src=me.avatar_url;picRow.appendChild(im);
+    }else{
+      picRow.appendChild(h('span',{style:'width:72px;height:72px;border-radius:50%;background:#4f46e5;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:24px;flex:none'},(me.name||me.email||'U').charAt(0).toUpperCase()));
+    }
+    const fileIn=h('input',{type:'file',accept:'image/png,image/jpeg,image/webp,image/gif',style:'display:none'});
+    const pickBtn=h('button',{className:'btn btn-ghost btn-sm'},me.avatar_url?'Replace picture':'Upload picture');
+    pickBtn.onclick=()=>fileIn.click();
+    fileIn.onchange=async()=>{
+      const f=fileIn.files&&fileIn.files[0];if(!f)return;
+      if(f.size>2*1024*1024){showMsg('That image is larger than 2 MB','error');fileIn.value='';return}
+      const fd=new FormData();fd.append('file',f,f.name||'picture');
+      try{
+        const res=await fetch(API+'/auth/avatar',{method:'POST',headers:TOKEN?{'Authorization':'Bearer '+TOKEN}:{},body:fd});
+        const j=await res.json().catch(()=>({}));
+        if(!res.ok)throw new Error(j.message||j.error||('HTTP '+res.status));
+        showMsg('Profile picture updated','success');renderApp();
+      }catch(e){showMsg('Upload failed: '+e.message,'error');fileIn.value=''}
+    };
+    picRow.appendChild(h('div',{},pickBtn,h('p',{className:'text-xs text-gray-400'},'PNG, JPEG, WebP or GIF, up to 2 MB.'),fileIn));
+    left.appendChild(picRow);
+
+    left.appendChild(h('label',{className:'text-xs text-gray-500'},'Name'));
+    const nameIn=h('input',{className:'input mb-3',maxlength:'200'});nameIn.value=me.name||'';
+    left.appendChild(nameIn);
+    left.appendChild(h('label',{className:'text-xs text-gray-500'},'Company'));
+    const compIn=h('input',{className:'input mb-3',maxlength:'200'});compIn.value=me.company||'';
+    left.appendChild(compIn);
+    const saveBtn=h('button',{className:'btn btn-primary'},'Update profile');
+    saveBtn.onclick=async()=>{
+      const name=nameIn.value.trim(),company=compIn.value.trim();
+      if(!name){showMsg('Name cannot be empty','error');return}
+      saveBtn.disabled=true;saveBtn.textContent='Saving...';
+      const r=await api('/auth/profile',{method:'PUT',body:JSON.stringify({name,company})});
+      saveBtn.disabled=false;saveBtn.textContent='Update profile';
+      if(r){showMsg('Profile updated','success');renderApp();}else showMsg('Save failed: '+(LAST_ERR||'request failed'),'error');
+    };
+    left.appendChild(saveBtn);
+
+    // ── read-only identity + the password box ──
+    right.appendChild(h('label',{className:'text-xs text-gray-500'},'Email'));
+    right.appendChild(h('p',{className:'font-semibold mb-3'},me.email||'-'));
+    right.appendChild(h('label',{className:'text-xs text-gray-500'},'Role'));
+    right.appendChild(h('p',{className:'font-semibold mb-3'},me.role||'-'));
+    right.appendChild(h('label',{className:'text-xs text-gray-500'},'Plan'));
+    right.appendChild(h('p',{className:'font-semibold mb-4'},me.plan_name||'Free'));
+
+    right.appendChild(h('label',{className:'text-xs text-gray-500'},'Change password'));
+    const curIn=h('input',{className:'input mb-2',type:'password',autocomplete:'current-password',placeholder:'Current password'});
+    const newIn=h('input',{className:'input mb-2',type:'password',autocomplete:'new-password',placeholder:'New password (8+ characters)'});
+    right.appendChild(curIn);right.appendChild(newIn);
+    const pwBtn=h('button',{className:'btn btn-primary'},'Update password');
+    pwBtn.onclick=async()=>{
+      const cur=curIn.value,nw=newIn.value;
+      if(!cur||!nw){showMsg('Enter your current and new password','error');return}
+      if(nw.length<8){showMsg('New password must be at least 8 characters','error');return}
+      pwBtn.disabled=true;pwBtn.textContent='Saving...';
+      const r=await api('/auth/password',{method:'PUT',body:JSON.stringify({current_password:cur,new_password:nw})});
+      pwBtn.disabled=false;pwBtn.textContent='Update password';
+      if(r){showMsg('Password updated','success');curIn.value='';newIn.value='';}else showMsg('Password change failed: '+(LAST_ERR||'request failed'),'error');
+    };
+    right.appendChild(pwBtn);
   });
 }
 
