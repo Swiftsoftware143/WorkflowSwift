@@ -228,7 +228,7 @@ function content(){
     else if(s==='team')renderCRUD(c,'team','Team Member',['name','email','role'],'/users');
     else if(s==='plans-credits')renderPlansCredits(c);
     else if(s==='invoices')renderList(c,'invoices','Invoice','/invoices');
-    else if(s==='payments')renderCRUD(c,'payments','Payment Provider',['provider_type','is_active'],'/payment-providers');
+    else if(s==='payments')renderPaymentProviders(c);
     else if(s==='checkout-sessions')renderCheckoutSessions(c);
   }else if(t==='comms'){
     // The Communications -> Email Templates panel is GONE (kanban t_00e7b709). It called the
@@ -513,6 +513,103 @@ function renderProviderKeys(c){
     else showMsg('Save failed: '+LAST_ERR,'error');
   };
 
+  load();
+}
+
+// --- Payments: Payment Providers (kanban t_cp-pay-ui) ---
+// This panel was `renderCRUD(c,'payments','Payment Provider',['provider_type','is_active'],'/payment-providers')`,
+// and against THIS resource the generic CRUD cannot work — three independent measurements:
+//   * Add posts only provider_type + is_active, but POST /payment-providers refuses a create with no
+//     api_key ("api_key is required when creating a new provider") — measured live: 400.
+//   * the generic Edit does GET <ep>/<id> then PUT <ep>/<id>; NEITHER route exists for this resource
+//     (both answer 405 Method Not Allowed) — so Edit could never open or save.
+//   * the generic Del sends the row's `id` (a uuid), while DELETE /payment-providers/{provider_type}
+//     matches on provider_type — so Delete raised "not found" for every row.
+// Same rule the API Keys panel below already follows: a resource that is not a CRUD row gets its own
+// renderer. The fields are the handler's own ones. A blank secret is the "not submitted" signal the
+// handler keys on, so an edit that leaves both secret boxes empty KEEPS the stored credential rather
+// than wiping it (the failure class fixed on the FunnelSwift console today).
+function renderPaymentProviders(c){
+  const PSLOTS=[['stripe','Stripe'],['paypal','PayPal'],['square','Square'],['paddle','Paddle']];
+  const pname=(p)=>{const i=PSLOTS.findIndex(s=>s[0]===p);return i>=0?PSLOTS[i][1]:(p||'')};
+  c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-2"><h2 class="text-xl font-bold">Payment Providers</h2>'
+    +'<button class="btn btn-primary btn-sm" id="pp_add">+ Add provider</button></div>'
+    +'<p class="text-xs text-gray-400 mb-4">The payment accounts this install can take money through at checkout. A platform administrator manages them here; the secret key and the webhook signing secret are stored encrypted and are never shown back.</p>'
+    +'<div id="ppdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
+  const list=c.querySelector('#ppdata');
+
+  const form=(row)=>{
+    const isEdit=!!row;
+    const val=(k,d)=>((row&&row[k]!==undefined&&row[k]!==null)?String(row[k]):(d===undefined?'':d));
+    const modal=h('div',{className:'modal-overlay'});
+    modal.onclick=(e)=>{if(e.target===modal)modal.remove()};
+    const box=h('div',{className:'modal-box'});
+    box.innerHTML='<h2 class="text-lg font-bold mb-4">'+(isEdit?'Edit':'Add')+' payment provider</h2><form id="ppf">'
+      +'<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">Provider</label>'
+      +'<select class="input" name="provider_type"'+(isEdit?' disabled':'')+'>'
+      +PSLOTS.map(s=>'<option value="'+s[0]+'"'+(val('provider_type')===s[0]?' selected':'')+'>'+s[1]+'</option>').join('')
+      +'</select></div>'
+      +'<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">Label (what this install calls it)</label>'
+      +'<input class="input" name="label" value="'+escHtml(val('label',''))+'"></div>'
+      +'<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">Secret key'+(isEdit?' &mdash; leave blank to keep the stored key':'')+'</label>'
+      +'<input class="input" type="password" name="api_key" autocomplete="new-password" placeholder="'+(isEdit?'(unchanged)':'sk_live_... / sk_test_...')+'"></div>'
+      +'<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">Webhook signing secret'+(isEdit?' &mdash; leave blank to keep the stored secret':'')+'</label>'
+      +'<input class="input" type="password" name="webhook_secret" autocomplete="new-password" placeholder="'+(isEdit?'(unchanged)':'whsec_...')+'"></div>'
+      +'<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">Publishable key</label>'
+      +'<input class="input" name="publishable_key" value="'+escHtml(val('publishable_key',''))+'"></div>'
+      +'<div class="mb-2 flex items-center gap-2"><input type="checkbox" id="pp_test"'+(isEdit&&row.is_test_mode===false?'':' checked')+'>'
+      +'<label for="pp_test" class="text-sm">Test mode (use the provider\'s sandbox)</label></div>'
+      +'<div class="mb-1 flex items-center gap-2"><input type="checkbox" id="pp_active"'+(isEdit&&row.is_active?' checked':'')+'>'
+      +'<label for="pp_active" class="text-sm">Active (offer this provider at checkout)</label></div>'
+      +'</form><div class="flex justify-end gap-2 mt-4"><button class="btn btn-ghost" id="pp_cancel">Cancel</button><button class="btn btn-primary" id="pp_save">Save</button></div>';
+    modal.appendChild(box);document.body.appendChild(modal);
+    const q=(n)=>box.querySelector('[name='+n+']');
+    box.querySelector('#pp_cancel').onclick=()=>modal.remove();
+    box.querySelector('#pp_save').onclick=async()=>{
+      const body={
+        provider_type:isEdit?row.provider_type:q('provider_type').value,
+        label:q('label').value.trim(),
+        publishable_key:q('publishable_key').value.trim(),
+        is_test_mode:box.querySelector('#pp_test').checked,
+        is_active:box.querySelector('#pp_active').checked,
+      };
+      const k=q('api_key').value.trim();if(k)body.api_key=k;
+      const w=q('webhook_secret').value.trim();if(w)body.webhook_secret=w;
+      if(!isEdit&&!body.api_key){showMsg('The secret key is required when adding a provider — the API refuses a create without it.','error');return}
+      const r=await api('/payment-providers',{method:'POST',body:JSON.stringify(body)});
+      if(r){showMsg(r.status==='created'?('Added '+pname(body.provider_type)):('Updated '+pname(body.provider_type)));modal.remove();load();}
+      else showMsg('Save failed: '+LAST_ERR,'error');
+    };
+  };
+
+  const load=async()=>{
+    const d=await api('/payment-providers');
+    const items=(d&&d.providers)||[];
+    if(!items.length){
+      list.innerHTML='<p class="text-gray-400 text-sm">No payment provider is configured yet. Add one above and checkout will offer it; until then checkout should refuse rather than pretend to charge.</p>';
+      return;
+    }
+    list.innerHTML='<table class="table"><thead><tr><th>Provider</th><th>Label</th><th>Secret key</th><th>Mode</th><th>Active</th><th></th></tr></thead><tbody>'
+      +items.map(p=>'<tr><td><strong>'+escHtml(pname(p.provider_type))+'</strong>'
+        +'<span class="text-xs text-gray-400 ml-2">'+escHtml(p.provider_type||'')+'</span></td>'
+        +'<td>'+escHtml(p.label||'')+'</td>'
+        +'<td>'+(p.key_status==='configured'?'stored':'not set')+'</td>'
+        +'<td>'+(p.is_test_mode?'Test':'Live')+'</td>'
+        +'<td>'+(p.is_active?'Yes':'No')+'</td>'
+        +'<td class="text-right"><button class="btn btn-sm btn-ghost" data-edit="'+escHtml(p.provider_type||'')+'">Edit</button> '
+        +'<button class="btn btn-sm btn-danger" data-del="'+escHtml(p.provider_type||'')+'">Remove</button></td></tr>').join('')
+      +'</tbody></table>';
+    list.querySelectorAll('button[data-edit]').forEach(b=>b.onclick=()=>form(items.find(x=>x.provider_type===b.getAttribute('data-edit'))));
+    list.querySelectorAll('button[data-del]').forEach(b=>b.onclick=async()=>{
+      const p=b.getAttribute('data-del');
+      if(!confirm('Remove the '+pname(p)+' configuration? Checkout will stop offering it.'))return;
+      const r=await api('/payment-providers/'+encodeURIComponent(p),{method:'DELETE'});
+      showMsg(r?('Removed '+pname(p)):('Remove failed: '+LAST_ERR),r?undefined:'error');
+      load();
+    });
+  };
+
+  c.querySelector('#pp_add').onclick=()=>form(null);
   load();
 }
 
@@ -1324,7 +1421,7 @@ window.appGuidePages = {
   "profile:plans-credits": { title: "Plans & Credits", desc: "The plan this account is on and the credits it has. A plan is a bundle of limits and features.", actions: ["See the current plan", "Buy credits", "Change plan"] },
   "profile:email-branding": { title: "Email Branding", desc: "Put your own name, colour and logo on the transactional email this app sends for your account, instead of the default WorkflowSwift header.", actions: ["Upload your logo", "Set your brand name and colour"] },
   "profile:invoices": { title: "Invoices", desc: "The invoices raised on this account.", actions: ["Open an invoice"] },
-  "profile:payments": { title: "Payments", desc: "Payments made on this account, with their provider and status.", actions: ["See a payment's status"] },
+  "profile:payments": { title: "Payment Providers", desc: "The payment accounts this install can take money through at checkout, and whether each is in test or live mode. A platform administrator manages them here.", actions: ["Add a payment provider", "Switch a provider between test and live", "Remove a provider from checkout"] },
   "profile:checkout-sessions": { title: "Checkout Sessions", desc: "Every payment session this account has started. A read-only history of what was attempted.", actions: ["Match a session to a plan change"] },
   "comms:webhooks": { title: "Webhooks", desc: "Outgoing notifications: when something happens here, we POST it to a URL you control.", actions: ["Add a webhook URL", "Choose the events it receives", "Review recent deliveries"] },
   "admin:usage": { title: "Usage", desc: "How much of this account's allowance has been used.", actions: ["See usage against the plan's limits"] },
