@@ -197,17 +197,17 @@ function content(){
 
   if(t==='dashboard'){
     if(s==='overview')renderDashboardOverview(c);
-    else if(s==='brand-monitor')renderCRUD(c,'brand-monitor','Brand Monitor',['name','query','active'],'/dashboard/brand-monitor');
-    else if(s==='competitor-watch')renderCRUD(c,'competitor-watch','Competitor',['name','url','active'],'/dashboard/competitor-watch');
-    else if(s==='prospecting')renderCRUD(c,'prospecting','Prospect',['name','industry','status'],'/dashboard/prospecting');
+    else if(s==='brand-monitor')renderCRUD(c,'brand-monitor','Brand Monitor',['name','query','active'],'/dashboard/brand-monitor',false);
+    else if(s==='competitor-watch')renderCRUD(c,'competitor-watch','Competitor',['name','url','active'],'/dashboard/competitor-watch',false);
+    else if(s==='prospecting')renderCRUD(c,'prospecting','Prospect',['name','industry','status'],'/dashboard/prospecting',false);
   }else if(t==='workflows'){
     if(s==='all-workflows')renderCRUD(c,'workflows','Workflow',['name','status','created_at'],'/workflows');
     else if(s==='instances')renderCRUD(c,'instances','Instance',['workflow_id','status','created_at'],'/instances');
     else if(s==='templates')renderCRUD(c,'templates','Template',['name','category','is_public'],'/templates');
   }else if(t==='automation'){
     if(s==='automations')renderCRUD(c,'automations','Automation',['name','trigger_type','enabled'],'/automations');
-    else if(s==='agents')renderCRUD(c,'agents','Agent',['name','provider','is_active'],'/agents');
-    else if(s==='workspaces')renderCRUD(c,'workspaces','Workspace',['name','created_at'],'/workspaces');
+    else if(s==='agents')renderCRUD(c,'agents','Agent',['name','provider','is_active'],'/agents',false);
+    else if(s==='workspaces')renderCRUD(c,'workspaces','Workspace',['name','created_at'],'/workspaces',false);
   }else if(t==='crm'){
     if(s==='leads')renderCRUD(c,'leads','Lead',['name','status','source'],'/leads');
   }else if(t==='tags'){
@@ -225,7 +225,7 @@ function content(){
   }else if(t==='profile'){
     if(s==='my-profile')renderProfile(c);
     else if(s==='email-branding')renderBranding(c);
-    else if(s==='team')renderCRUD(c,'team','Team Member',['name','email','role'],'/users');
+    else if(s==='team')renderCRUD(c,'team','Team Member',['name','email','role'],{list:'/users',create:'/users/invite',del:'/users'},false);
     else if(s==='plans-credits')renderPlansCredits(c);
     else if(s==='invoices')renderList(c,'invoices','Invoice','/invoices');
     else if(s==='payments')renderPaymentProviders(c);
@@ -247,7 +247,7 @@ function content(){
     else if(s==='portfolio-companies')renderAdminPortfolio(c);
     else if(s==='plans')renderAdminPlans(c);
     else if(s==='surfaces')renderSurfaces(c);
-    else if(s==='email-templates')renderCRUD(c,'admin-email-templates','Email Template',['name','subject'],'/admin/email-templates');
+    else if(s==='email-templates')renderCRUD(c,'admin-email-templates','Email Template',['name','subject'],'/admin/email-templates',['name','subject']);
     else if(s==='industry-sources')renderIndustrySources(c);
     else if(s==='site-config')renderSiteConfig(c);
   }
@@ -290,33 +290,58 @@ function unwrapOne(d){
 // ['name'] as before. Sections whose real shape is name/slug/description (surfaces) pass it
 // so an edit can actually change the slug/description, not just the name.
 async function renderCRUD(container,key,label,fields,ep,editFields,extraAction){
+  // `ep` is normally the resource path. It may also be {list,create,del} when a resource's list and
+  // its create live at different paths (Team: GET /users, POST /users/invite).
+  const EP=(typeof ep==='string')?{list:ep,create:ep,del:ep}:ep;
+  // `editFields === false` means this resource has NO update route, so no Edit button is rendered —
+  // a button that cannot do anything is worse than no button. Measured live on this app's own API:
+  // GET and PUT <ep>/{id} both answer 405 Method Not Allowed for the brand-monitor, competitor-watch,
+  // prospecting, agents, workspaces and Team panels; admin/email-templates serves PUT but no
+  // GET-by-id, so its Edit could open only once the form stopped fetching the row.
+  const canEdit=editFields!==false;
+  const ef=(editFields&&editFields!==false)?editFields:['name'];
   container.innerHTML=`<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">${label}s</h2><button class="btn btn-primary btn-sm" id="addBtn">+ Add</button></div><div id="list"><p class="text-gray-400 text-sm">Loading...</p></div></div>`;
-  const data=await api(ep);
+  const data=await api(EP.list);
   const items=unwrapList(data);
   const list=container.querySelector('#list');
+  const openAdd=()=>showForm(key,label,fields,EP,null,()=>renderPage());
   if(!items.length){
     list.innerHTML='<p class="text-gray-400 text-sm">No items yet.</p>';
-    container.querySelector('#addBtn').onclick=()=>showForm(key,label,fields,ep,null,()=>renderPage());
+    container.querySelector('#addBtn').onclick=openAdd;
     return;
   }
   let cols=fields;
   if(!cols.length&&items[0])cols=Object.keys(items[0]).filter(k=>k!=='id'&&k!=='aid'&&k!=='updated_at'&&k!=='created_at').slice(0,5);
-  const ef=(editFields||['name']).join(',');
   const thead=cols.map(f=>`<th>${f.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase())}</th>`).join('');
   const tbody=items.map(it=>'<tr>'+cols.map(f=>`<td>${String(it[f]===undefined||it[f]===null?'':it[f])}</td>`).join('')+
-    `<td class="text-right">`+(extraAction?`<button class="btn btn-sm btn-ghost" onclick="event.preventDefault();${extraAction.fn}('${rowId(it)}')">${extraAction.label}</button>`:'')+`<button class="btn btn-sm btn-ghost" onclick="event.preventDefault();editIt('${key}','${label}','${ep}','${rowId(it)}','${ef}')">Edit</button>`+
-    `<button class="btn btn-sm btn-danger" onclick="event.preventDefault();delIt('${key}','${label}','${ep}','${rowId(it)}')">Del</button></td></tr>`).join('');
+    `<td class="text-right">`+(extraAction?`<button class="btn btn-sm btn-ghost" data-extra="${escHtml(rowId(it))}">${extraAction.label}</button>`:'')
+    +(canEdit?`<button class="btn btn-sm btn-ghost" data-edit="${escHtml(rowId(it))}">Edit</button>`:'')
+    +`<button class="btn btn-sm btn-danger" data-del="${escHtml(rowId(it))}">Del</button></td></tr>`).join('');
   list.innerHTML=`<table class="table"><thead><tr>${thead}<th style="width:140px"></th></tr></thead><tbody>${tbody}</tbody></table>`;
-  container.querySelector('#addBtn').onclick=()=>showForm(key,label,cols,ep,null,()=>renderPage());
+  // Bound by DATA attribute (no inline onclick string) and handed the ROW OBJECT the list already
+  // has, so opening Edit never issues GET <ep>/{id} — the route six of these panels do not serve.
+  list.querySelectorAll('button[data-edit]').forEach(b=>b.onclick=(ev)=>{ev.preventDefault();
+    const id=b.getAttribute('data-edit');const it=items.find(x=>String(rowId(x))===String(id));
+    showForm(key,label,ef,EP,id,renderPage,it);});
+  list.querySelectorAll('button[data-del]').forEach(b=>b.onclick=(ev)=>{ev.preventDefault();
+    delIt(key,label,EP.del,b.getAttribute('data-del'));});
+  if(extraAction)list.querySelectorAll('button[data-extra]').forEach(b=>b.onclick=(ev)=>{ev.preventDefault();
+    window[extraAction.fn](b.getAttribute('data-extra'));});
+  container.querySelector('#addBtn').onclick=openAdd;
 }
 
 function renderPage(){renderApp()}
-window.editIt=function(key,label,ep,id,ef){showForm(key,label,ef?ef.split(','):['name'],ep,id,renderPage)}
+window.editIt=function(key,label,ep,id,ef,row){showForm(key,label,ef?ef.split(','):['name'],ep,id,renderPage,row)}
 window.delIt=async function(key,label,ep,id){if(!confirm('Delete?'))return;const r=await api(ep+'/'+id,{method:'DELETE'});showMsg(r?'Deleted':('Delete failed: '+LAST_ERR),r?undefined:'error');renderPage()}
 
-async function showForm(key,label,fields,ep,id,cb){
-  const data=id?await api(ep+'/'+id):null;
-  const item=unwrapOne(data);
+async function showForm(key,label,fields,ep,id,cb,row){
+  const EP=(typeof ep==='string')?{list:ep,create:ep}:ep;
+  // Prefer the row the caller already has from the list; only fall back to GET <ep>/{id} when the
+  // caller has none (the portfolio panel passes its row in). admin/email-templates has PUT but no
+  // GET-by-id, so this is also what lets its Edit open at all.
+  let item=row||null;
+  if(!item&&id)item=unwrapOne(await api(EP.list+'/'+id));
+  if(!item)item={};
   const modal=h('div',{className:'modal-overlay',onclick:function(e){if(e.target===modal)modal.remove()}});
   const box=h('div',{className:'modal-box'});
   box.innerHTML=`<h2 class="text-lg font-bold mb-4">${id?'Edit':'Add'} ${label}</h2><form id="mf">`+
@@ -327,7 +352,7 @@ async function showForm(key,label,fields,ep,id,cb){
     // Skip blank inputs: an empty string is not "unset" server-side — POST /surfaces would
     // store slug='' instead of slugifying the name, and PUT uses COALESCE (blank can't clear).
     const body={};box.querySelectorAll('#mf input').forEach(inp=>{if(String(inp.value).trim()!=='')body[inp.name]=inp.value});
-    const r=await api(id?ep+'/'+id:ep,{method:id?'PUT':'POST',body:JSON.stringify(body)});
+    const r=await api(id?(EP.list+'/'+id):EP.create,{method:id?'PUT':'POST',body:JSON.stringify(body)});
     if(r)showMsg('Saved!');else showMsg('Error saving: '+LAST_ERR,'error');
     if(r){modal.remove();if(cb)cb();}
   };
@@ -1065,24 +1090,18 @@ function renderAdminUsers(c){
     const plans=(((pd&&(pd.plans||pd.items))||[])).filter(p=>p&&p.is_active!==false&&p.slug).map(p=>p.slug);
     const el=c.querySelector('#audata');
     if(!items.length){el.innerHTML='<p class="text-gray-400 text-sm">No tenants yet.</p>';return}
-    el.innerHTML=`<table class="table"><thead><tr><th>Name</th><th>Slug</th><th>Plan</th><th>Change plan</th><th>Active</th><th>Created</th><th></th></tr></thead><tbody>`+
-      items.map(i=>{
-        // The API returns the tier nested as plan:{name,slug}; the flat plan_name/plan_slug
-        // spellings are kept as a fallback so this cell cannot silently render '-' again.
-        const cur=(i.plan&&(i.plan.slug||i.plan.name))||i.plan_slug||i.plan_name||'';
-        const choices=plans.length?plans:(cur?[cur]:['free']);
-        const opts=choices.map(s=>`<option value="${s}"${s===cur?' selected':''}>${s}</option>`).join('');
-        const aid=i.id||i.account_id||'';
-        return `<tr>
-        <td><strong>${i.name||'-'}</strong>${i.email?`<div class="text-xs text-gray-400">${i.email}</div>`:''}</td>
-        <td>${i.account_slug||i.slug||'-'}</td>
-        <td>${cur||'-'}</td>
-        <td><select data-plan-for="${aid}" style="min-width:110px">${opts}</select>
-            <button class="btn btn-sm btn-primary" data-set-plan="${aid}">Set</button></td>
-        <td><span class="badge ${i.is_active?'bg-green-100 text-green-700':'bg-red-100 text-red-700'}">${i.is_active?'Active':'Inactive'}</span></td>
-        <td class="text-xs text-gray-400">${(i.created_at||'').slice(0,10)}</td>
-        <td class="text-right"><button class="btn btn-sm btn-ghost" onclick="event.preventDefault();startImpersonation('${aid}')">Impersonate</button></td>
-      </tr>`}).join('')+'</tbody></table>';
+    el.innerHTML=`<table class="table"><thead><tr><th>Name</th><th>Website</th><th>Industry</th><th style="width:140px"></th></tr></thead><tbody>`+
+      items.map(i=>`<tr><td><strong>${i.name}</strong></td><td>${i.website||'-'}</td><td>${i.industry||'-'}</td><td class="text-right">
+        <button class="btn btn-sm btn-ghost" data-pe="${escHtml(String(i.id))}">Edit</button>
+        <button class="btn btn-sm btn-danger" data-pd="${escHtml(String(i.id))}">Del</button>
+      </td></tr>`).join('')+'</tbody></table>';
+    // GET /portfolio-companies/{id} answers 404, so the old get-then-fill opened a BLANK Edit form
+    // over a real company. The row in hand is the form's data.
+    el.querySelectorAll('button[data-pe]').forEach(b=>b.onclick=(ev)=>{ev.preventDefault();
+      const it=items.find(x=>String(x.id)===b.getAttribute('data-pe'));
+      showForm('portfolio','Portfolio Company',['name','website','industry','description','account_slug'],'/portfolio-companies',it.id,renderPage,it);});
+    el.querySelectorAll('button[data-pd]').forEach(b=>b.onclick=(ev)=>{ev.preventDefault();
+      delIt('portfolio','Portfolio Company','/portfolio-companies',b.getAttribute('data-pd'));});
     el.querySelectorAll('button[data-set-plan]').forEach(b=>b.onclick=async()=>{
       const id=b.getAttribute('data-set-plan');
       const sel=el.querySelector('select[data-plan-for="'+id+'"]');
