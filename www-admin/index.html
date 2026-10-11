@@ -444,10 +444,16 @@ function renderIntegrationTargets(c){
 /// integration_provider_presets (migration 045 + the preset seed), the AI providers in
 /// src/handlers/user_integration_handler.rs, and the email providers in the admin email
 /// settings. Keep this list and that union in step.
+// 2026-10-11 programme run: this list is validated against `available_providers` by
+// POST /provider-keys, and three of its old entries could never be saved —
+// `mailchimp` (no transport in EMAIL_PROVIDERS and nothing reads it) and `webhook` (a per-step
+// Notify CHANNEL whose URL lives in the step config, not a stored provider key) are gone, and
+// `coreswift_crm` was corrected to the catalogue's real key `coreswift`. `gemini` and `sendgrid`
+// stayed: both ARE callable (AI_PROVIDERS / EMAIL_PROVIDERS) and gained catalogue rows in 086.
 const PROVIDER_SLOTS = [
   ['openai','OpenAI'], ['anthropic','Anthropic'], ['deepseek','DeepSeek'], ['gemini','Google Gemini'],
-  ['mailgun','Mailgun'], ['sendgrid','SendGrid'], ['sendiio','Sendiio'], ['mailchimp','Mailchimp'],
-  ['n8n','n8n'], ['coreswift_crm','CoreSwift CRM'], ['webhook','Custom Webhook'], ['smtp','SMTP'],
+  ['mailgun','Mailgun'], ['sendgrid','SendGrid'], ['sendiio','Sendiio'],
+  ['n8n','n8n'], ['coreswift','CoreSwift CRM'], ['smtp','SMTP'],
 ];
 
 // Written out by hand because the generic renderCRUD form CANNOT work for a credential:
