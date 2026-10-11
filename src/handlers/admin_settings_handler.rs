@@ -1328,6 +1328,34 @@ pub async fn admin_create_account(
         ));
     }
 
+    // Resolve the plan BEFORE anything is created. The old order inserted the account + user and
+    // SENT the welcome mail first, then looked the slug up and silently skipped `account_plans`
+    // when it matched no plan — so a mistyped plan_slug answered 201 "created" with
+    // email_sent=true over a tenant owned by NO plan (measured live 2026-10-11: HTTP 201,
+    // account + user rows, 0 account_plans rows). Refuse instead, naming the slugs that exist,
+    // and create nothing.
+    let plan_id: Uuid = match sqlx::query_scalar::<_, Uuid>(
+        "SELECT id FROM plan_tiers WHERE slug = $1 AND is_active = true",
+    )
+    .bind(&plan_slug)
+    .fetch_optional(&state.db)
+    .await?
+    {
+        Some(id) => id,
+        None => {
+            let valid: Vec<String> = sqlx::query_scalar(
+                "SELECT slug FROM plan_tiers WHERE is_active = true ORDER BY slug",
+            )
+            .fetch_all(&state.db)
+            .await?;
+            return Err(AppError::Validation(format!(
+                "unknown plan_slug '{}' — valid plans are: {}",
+                plan_slug,
+                valid.join(", ")
+            )));
+        }
+    };
+
     // Create the account.
     // `slug` is NOT named here any more (kanban t_27bd3765): the column was dropped by
     // migrations/078_drop_accounts_slug_column.sql, and naming it would make this handler a
@@ -1356,29 +1384,20 @@ pub async fn admin_create_account(
     .execute(&state.db)
     .await?;
 
-    // Resolve plan_id from slug or use default
-    let plan_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM plan_tiers WHERE slug = $1 AND is_active = true")
-            .bind(&plan_slug)
-            .fetch_optional(&state.db)
-            .await?;
-
-    // Assign plan to account (via account_plans if found). Plain INSERT, not
+    // Assign the plan to the account. Plain INSERT, not
     // `ON CONFLICT (aid, plan_id)`: the live account_plans table has no unique or exclusion
     // constraint on (aid, plan_id) — only its PK on id — so that clause made every call to
     // this handler a 500 ("no unique or exclusion constraint matching the ON CONFLICT
     // specification"). account_id here is a brand-new Uuid, so there is nothing to conflict
     // with; this mirrors what `register` already does (auth/handlers.rs).
-    if let Some(pid) = plan_id {
-        sqlx::query(
-            r#"INSERT INTO account_plans (aid, plan_id, status, started_at)
-               VALUES ($1, $2, 'active', NOW())"#,
-        )
-        .bind(account_id)
-        .bind(pid)
-        .execute(&state.db)
-        .await?;
-    }
+    sqlx::query(
+        r#"INSERT INTO account_plans (aid, plan_id, status, started_at)
+           VALUES ($1, $2, 'active', NOW())"#,
+    )
+    .bind(account_id)
+    .bind(plan_id)
+    .execute(&state.db)
+    .await?;
 
     // Set industry if provided
     if !industry_slug.is_empty() {
