@@ -1,0 +1,41 @@
+-- 083_provider_coming_soon.sql
+-- WorkflowSwift: a provider the app CANNOT actually call must be offered as "Coming Soon",
+-- not as a working integration (kanban t_b7c628b1).
+--
+-- WHAT WAS WRONG (measured live 2026-10-11, not inherited):
+--   `GET /api/v1/available-providers` answered 200 with NO auth and listed all 20 rows of this
+--   table, `sam_gov` ("SAM.gov") among them, and /opt/swift/nginx/www-app/workflowswift/
+--   integrations.html drew a fully interactive "Connect SAM.gov" card from that list. But
+--   api.sam.gov is unreachable from this box on EVERY path, with and without a key:
+--     curl https://api.sam.gov/opportunities/v2/search?limit=1 -> 404, 0 bytes, server:
+--     istio-envoy, upstream 2ms; same blank 404 for /entity-information/v3/entities,
+--     /data-services/v1/entityManagement, /docs and the API root, and with ?api_key=<bogus>.
+--   IPv6 (the only family api.sam.gov resolves to here) fails to connect at all (curl 7).
+--   Controls from the SAME box on the SAME run: https://sam.gov/ 200, https://api.github.com/
+--   200, https://api.data.gov/ 200, api.anthropic.com/openai/deepseek/twilio/mailgun/yelp all
+--   answer with real bytes. So a tenant's valid key could not make it work: the defect is that
+--   the provider is OFFERED, not that it is unconfigured.
+--
+-- WHY A NEW COLUMN AND NOT `is_active = false`:
+--   (a) `is_active` was IGNORED by that handler — it selected every row with no filter — so
+--       setting it false hid nothing (the handler is fixed in the same commit, below).
+--   (b) David's standing rule is LABEL, DON'T HIDE: an unbuilt feature stays VISIBLE, marked
+--       Coming Soon and non-interactive, rather than disappearing from the page. `coming_soon`
+--       is that label; `is_active = false` would be a silent deletion.
+--   sam_gov therefore keeps is_active = true (visible) and gains coming_soon = true.
+--
+-- ENFORCED IN TWO PLACES, because the endpoint is only one door:
+--   * src/handlers/provider_keys_handler.rs::list_available_providers now emits `is_active`-filtered
+--     rows plus a `coming_soon` flag, so the served page can label and disable the card.
+--   * src/handlers/provider_keys_handler.rs::upsert_provider_key now REFUSES with 400 any provider
+--     that is unknown, inactive, or coming_soon. Before this, that handler accepted ANY provider
+--     string — a crafted POST could still have stored a sam_gov key even with the card gone.
+--
+-- ADDITIVE: the column defaults to false, so every other provider renders byte-identically and
+-- `provider_keys` has 0 rows today (nothing to back-fill, no tenant is broken now — this was latent).
+
+ALTER TABLE available_providers ADD COLUMN IF NOT EXISTS coming_soon boolean NOT NULL DEFAULT false;
+
+-- The row that was measured unreachable. `sam.gov` (the portal) answers 200 from this box; only
+-- api.sam.gov does not, so this is the API-side reachability, not egress.
+UPDATE available_providers SET coming_soon = true WHERE key = 'sam_gov';

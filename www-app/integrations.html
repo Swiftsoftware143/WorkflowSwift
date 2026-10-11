@@ -22,6 +22,10 @@ label{font-size:12px;font-weight:600;color:#475569;display:block;margin:14px 0 4
 .badge{display:inline-block;padding:2px 10px;border-radius:999px;font-size:11px;font-weight:600}
 .badge.ok{background:#dcfce7;color:#166534}.badge.no{background:#f1f5f9;color:#475569}
 .badge.rec{background:#dbeafe;color:#1d4ed8;margin-left:6px}
+/* A provider this app cannot actually call yet stays VISIBLE but is labelled and inert
+   (WorkflowSwift kanban t_b7c628b1 — David's rule is label, don't hide). */
+.badge.soon{background:#fef3c7;color:#92400e}
+.card.soon{background:#fffbeb;border:1px solid #fde68a}
 .msg{padding:10px 14px;border-radius:8px;font-size:13px;margin:12px 0;display:none}
 .msg.ok{background:#dcfce7;color:#166534;display:block}.msg.err{background:#fee2e2;color:#991b1b;display:block}
 .muted{color:#64748b;font-size:13px}
@@ -98,14 +102,33 @@ function metadataInputs(p){
 function cardHtml(p){
   var k = keyFor(p.key), on = !!(k && k.is_active !== false && k.api_key);
   var pinned = p.key === PINNED_KEY;
+  // `coming_soon` is served by /available-providers for a provider this app cannot actually
+  // call yet (WorkflowSwift kanban t_b7c628b1: api.sam.gov answers a blank 404 on every path
+  // from this box, with and without a key). The card stays VISIBLE — labelled, never hidden —
+  // and carries NO key input and NO Connect/Test control, so a tenant cannot commit a
+  // credential to something that cannot work. The API refuses the same provider too, so a
+  // hand-rolled POST cannot get round it.
+  var soon = !!p.coming_soon;
   var meta = metadataInputs(p);
-  var h = '<div class="card' + (pinned?' pinned':'') + '" data-provider="'+esc(p.key)+'">';
+  var h = '<div class="card' + (pinned?' pinned':'') + (soon?' soon':'') + '" data-provider="'+esc(p.key)+'">';
   h += '<div style="display:flex;justify-content:space-between;align-items:center">';
   h += '<h2 style="font-size:16px;font-weight:600;margin:0">'+esc(p.name)+(pinned?'<span class="badge rec">Recommended</span>':'')+'</h2>';
-  h += '<span class="badge '+(on?'ok':'no')+'">'+(on?'Connected':'Not connected')+'</span></div>';
+  h += soon ? '<span class="badge soon">Coming Soon</span>'
+            : '<span class="badge '+(on?'ok':'no')+'">'+(on?'Connected':'Not connected')+'</span>';
+  h += '</div>';
   h += '<p class="muted" style="margin:8px 0 0">'+esc(p.description||'')+'</p>';
 
-  if (on) {
+  if (soon) {
+    h += '<p class="muted" style="margin:10px 0 0">Not live yet — there is nothing to connect, so no key is needed (and none can be saved here). '
+       + 'This card turns into a working integration on the day it ships.</p>';
+    if (k) {
+      // Defensive only: a key stored before this provider was labelled. Never leave an account
+      // holding a credential it cannot use with no way to remove it.
+      h += '<div style="margin-top:14px"><button class="btn red sm disc-btn">Disconnect</button></div>';
+    } else {
+      h += '<div style="margin-top:14px"><button class="btn gray sm" disabled title="Coming soon">Connect '+esc(p.name)+'</button></div>';
+    }
+  } else if (on) {
     h += '<div style="margin-top:12px" class="muted">Key on file: <b>'+esc(k.api_key)+'</b>'
        + (k.base_url? ' · '+esc(k.base_url) : '') + '</div>';
     h += '<div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">'
@@ -139,7 +162,10 @@ function render(){
   var box = document.getElementById('cards');
   if (!CATALOGUE.length) { box.innerHTML = '<div class="card"><span class="muted">No integrations available yet.</span></div>'; return; }
   var pinned = CATALOGUE.filter(function(p){return p.key===PINNED_KEY;});
-  var rest = CATALOGUE.filter(function(p){return p.key!==PINNED_KEY;});
+  var rest = CATALOGUE.filter(function(p){return p.key!==PINNED_KEY;})
+    // Providers that are not live yet sink to the bottom: a tenant should meet the working
+    // integrations first, and the labelled-but-inert ones after them (kanban t_b7c628b1).
+    .sort(function(a,b){ return (a.coming_soon?1:0) - (b.coming_soon?1:0); });
   box.innerHTML = pinned.concat(rest).map(cardHtml).join('');
   box.querySelectorAll('.card[data-provider]').forEach(wire);
 }

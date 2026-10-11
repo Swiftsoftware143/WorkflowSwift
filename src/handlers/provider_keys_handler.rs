@@ -119,6 +119,38 @@ pub async fn upsert_provider_key(
         ));
     }
 
+    // The provider has to be one this app actually offers, and one it can actually use
+    // (kanban t_b7c628b1). Before this, the handler accepted ANY string: `{"provider":"sam_gov"}`
+    // stored a key for a provider api.sam.gov cannot serve from this box (blank 404 on every path,
+    // with and without a key — migrations/083_provider_coming_soon.sql), and `{"provider":"xyz"}`
+    // stored a key no reader ever looks up. Keys are stored lower-case because every reader
+    // (`execution.rs`, `integration_dispatch_handler.rs`) looks the row up by the catalogue key.
+    let provider = provider.trim().to_ascii_lowercase();
+    match sqlx::query_as::<_, (bool, bool)>(
+        "SELECT is_active, coming_soon FROM available_providers WHERE key = $1",
+    )
+    .bind(&provider)
+    .fetch_optional(&state.db)
+    .await?
+    {
+        None => {
+            return Err(AppError::BadRequest(format!(
+                "'{provider}' is not an integration this app offers"
+            )))
+        }
+        Some((false, _)) => {
+            return Err(AppError::BadRequest(format!(
+                "'{provider}' is not available"
+            )))
+        }
+        Some((_, true)) => {
+            return Err(AppError::BadRequest(format!(
+                "'{provider}' is Coming Soon and cannot be connected yet"
+            )))
+        }
+        Some((true, false)) => {}
+    }
+
     let base_url = req
         .get("base_url")
         .and_then(|v| v.as_str())
@@ -150,7 +182,7 @@ pub async fn upsert_provider_key(
     )
     .bind(Uuid::new_v4())
     .bind(aid)
-    .bind(provider)
+    .bind(&provider)
     .bind(&encrypted_key)
     .bind(base_url)
     .bind(&metadata)
@@ -167,13 +199,15 @@ pub async fn upsert_provider_key(
     };
 
     // Invalidate cache
-    state.provider_key_cache.invalidate(&claims.aid, provider);
+    state.provider_key_cache.invalidate(&claims.aid, &provider);
+
+    let message = format!("Provider key for '{provider}' has been stored");
 
     Ok(Json(json!({
         "status": "success",
         "action": action,
         "provider": provider,
-        "message": format!("Provider key for '{}' has been stored", provider),
+        "message": message,
     })))
 }
 
@@ -214,12 +248,28 @@ pub async fn list_available_providers(
     State(state): State<AppState>,
 ) -> ApiResult<impl IntoResponse> {
     let rows = sqlx::query(
-        r#"SELECT key, name, description, requires_base_url, requires_metadata::text, icon
+        r#"SELECT key, name, description, requires_base_url, requires_metadata::text, icon, coming_soon
            FROM available_providers
+           WHERE is_active
            ORDER BY name ASC"#,
     )
     .fetch_all(&state.db)
     .await?;
+
+    // Two things this list owes the served page (kanban t_b7c628b1):
+    //
+    //  * `WHERE is_active` — this handler used to select EVERY row, so the column was a lie:
+    //    flipping `is_active = false` hid nothing from the tenant dropdown. An inactive provider
+    //    is now not offered at all.
+    //  * `coming_soon` — a provider this app cannot actually call stays VISIBLE (David's rule is
+    //    label, don't hide) but is flagged, and www-app/integrations.html renders it as a
+    //    non-interactive "Coming Soon" card. `sam_gov` is the first: api.sam.gov answers a blank
+    //    404 on every path from this box, with and without a key, while sam.gov, api.github.com
+    //    and api.data.gov all answer 200 from the same host — see
+    //    migrations/083_provider_coming_soon.sql.
+    //
+    // The flag alone is not the guard: upsert_provider_key refuses the same rows, because a page
+    // that merely hides a card is not a rule.
 
     let providers: Vec<serde_json::Value> = rows
         .iter()
@@ -238,6 +288,7 @@ pub async fn list_available_providers(
                 "requires_base_url": requires_base_url,
                 "requires_metadata": metadata,
                 "icon": row.try_get::<Option<&str>, _>("icon").unwrap_or(None),
+                "coming_soon": row.try_get::<bool, _>("coming_soon").unwrap_or(false),
             })
         })
         .collect();
