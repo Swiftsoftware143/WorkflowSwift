@@ -1,0 +1,53 @@
+-- 087_openclaw_coming_soon.sql
+-- WorkflowSwift: `openclaw` is offered in the integration catalogue with a key input, but NO code
+-- path in this app can ever spend an OpenClaw credential — so a tenant can save one that nothing
+-- reads. Same defect class as sam_gov (t_b7c628b1 / 083), the five rows in 084 (t_9141dd7e) and
+-- `linkedin` in 085 (t_eb871518). This file is the next follow-up in that thread.
+--
+-- MEASURED ON THE LIVE APP + LIVE DATABASE 2026-10-11 (cron `default`, off-peak):
+--   * GET /available-providers -> 200, `openclaw` present, name "OpenClaw (Engine)",
+--     description "Your own OpenClaw instance for workflow reasoning", coming_soon = false
+--     (all 22 rows served; only the 083/084/085 seven carried the flag).
+--   * POST /provider-keys {"provider":"openclaw","api_key":"…"} with a real tenant session ->
+--     **HTTP 200** {"action":"updated","message":"Provider key for 'openclaw' has been stored"} —
+--     a stored credential with no reader in this app. (Removed again: the tenant's key list was
+--     returned to 0 rows afterwards, so nothing was left behind.)
+--   * `openclaw` is DECLARED RETIRED BY THIS APP'S OWN CODE, not inferred here —
+--     `src/execution.rs::RETIRED_STEP_TYPES` names it: "`research` / `openclaw` — retired before
+--     this list existed (kanban t_fe60cdf5; nothing in this app performs either)"; the n8n mirror
+--     says the same at `src/n8n_converter.rs` ("`openclaw` → RETIRED: nothing in this app performs
+--     it — a pass-through that names the gap"); and `src/handlers/workflow_handler.rs` refuses it
+--     by name. It is in NO step provider vocabulary a credential can be resolved from:
+--       crate::ai_llm::AI_PROVIDERS          openai, anthropic, deepseek, gemini
+--       crate::email::EMAIL_PROVIDERS        smtp, mailgun, sendgrid, sendiio
+--       crate::sms::SMS_PROVIDERS            twilio, vonage
+--       crate::execution::NOTIFY_CHANNELS    webhook, email, sms
+--       integration_destinations             coreswift, funnelswift, incentiveswift
+--       integration_provider_presets         coreswift, coreswift_crm, mailchimp, mailgun, n8n,
+--                                            sendgrid, sendiio, webhook   (none is openclaw)
+--     The generic dispatch path resolves a provider's destination ONLY from
+--     `integration_provider_presets` (handlers/integration_dispatch_handler.rs,
+--     integration_center_handler.rs), and there is no `openclaw` row there, so no step can reach it.
+--     The row was seeded by 029 (before the OpenClaw → Hermes rename) and categorised 'automation'
+--     by 036; nothing has read it since.
+--
+-- WHY coming_soon AND NOT is_active = false:
+--   David's standing rule is LABEL, DON'T HIDE. The row keeps is_active = true (visible) and gains
+--   coming_soon = true, which the mechanism shipped in 083 already enforces in BOTH doors:
+--   list_available_providers serves the flag (the console renders a non-interactive card — no key
+--   input, no Connect/Test control) and upsert_provider_key refuses the row with 400
+--   "... is Coming Soon and cannot be connected yet". No code change is needed per row.
+--
+-- REVERSAL (deliberate, one line): a row returns to connectable with
+--   UPDATE available_providers SET coming_soon = false WHERE key = 'openclaw';
+-- and it then needs the missing half named — a real OpenClaw dispatch arm (or removal from the
+-- catalogue) plus, if the generic dispatch path were used, an integration_provider_presets row
+-- carrying the provider's base_url.
+--
+-- ADDITIVE + IDEMPOTENT: `coming_soon` already exists (083) and defaults to false, so every other
+-- provider renders byte-identically, and this file is a no-op if it ever runs twice. `provider_keys`
+-- holds 0 rows in total, so no tenant is affected. No BEGIN/COMMIT — the runner wraps each file.
+
+UPDATE available_providers
+   SET coming_soon = true
+ WHERE key = 'openclaw';
