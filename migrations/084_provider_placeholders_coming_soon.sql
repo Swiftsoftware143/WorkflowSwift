@@ -1,0 +1,50 @@
+-- 084_provider_placeholders_coming_soon.sql
+-- WorkflowSwift: five more offered providers are NOT built into this app, so they must be offered
+-- as "Coming Soon" instead of as working integrations (kanban t_9141dd7e, follow-up to t_b7c628b1).
+--
+-- MEASURED 2026-10-11 on the LIVE app + live database (audits/t_9141dd7e/00-provider-placeholder-decisions.md):
+--   facebook, google_places, letterman, nexweave, yelp each have ZERO references in this app's
+--   `src/` or its served front ends (`grep -rIl <key> src/ www-app/` -> 0 files each; for contrast
+--   mailgun 3, sendiio 2, hexomatic 5, twilio 1, n8n 31, coreswift 14). None of the five has a row
+--   in `integration_provider_presets` (8 rows: coreswift, coreswift_crm, mailchimp, mailgun, n8n,
+--   sendgrid, sendiio, webhook) or in `integration_destinations` (18 rows, all for coreswift /
+--   funnelswift / incentiveswift), and no step type resolves them as a provider:
+--   `step_type_provider_source` answers from AI_PROVIDERS, EMAIL_PROVIDERS, the destination
+--   catalogue and the notify channels only.
+--
+--   Reachability is NOT the problem here (unlike sam_gov): graph.facebook.com answers 400,
+--   places.googleapis.com 404, api.yelp.com 301, letterman.ai 302, nexweave.com 301 — real bytes
+--   from this box. They are simply not built.
+--
+--   Nothing in the product sells them either: no plan tier (`plan_tiers.features`, all four) names
+--   a provider, no marketing page, no user guide. Where the capability DOES ship it ships as a
+--   different, working surface: the market-intel browser extension scrapes Facebook Marketplace /
+--   Yelp / Google Maps client-side (no API key), and video generation is the `render_*` step, which
+--   requires the TENANT'S OWN `provider` + `endpoint` (BYO), so a key-only catalogue row could
+--   never satisfy it.
+--
+--   BEFORE (re-measured live): all five were ordinary rows (is_active = t, coming_soon = f) and a
+--   real tenant's `POST /provider-keys {"provider":"yelp"}` answered **200** and stored a credential
+--   that no code path in this app ever reads — the same defect class as sam_gov: an offered
+--   provider that cannot work.
+--
+-- WHY coming_soon AND NOT is_active = false:
+--   David's standing rule is LABEL, DON'T HIDE. All five keep is_active = true (visible) and gain
+--   coming_soon = true, which the mechanism shipped in 083 + t_b7c628b1 already enforces in both
+--   doors: list_available_providers serves the flag and www-app/integrations.html renders a
+--   non-interactive card (no key input, no Connect/Test control), while upsert_provider_key refuses
+--   the row with 400. No code change is needed per row.
+--
+-- REVERSAL (deliberate, one line): a row returns to connectable with
+--   UPDATE available_providers SET coming_soon = false WHERE key = '<key>';
+-- and it then needs the missing half named in the decision file — a workflow step that spends the
+-- credential (plus an integration_provider_presets row carrying the provider's base_url for the
+-- generic dispatch path).
+--
+-- ADDITIVE + IDEMPOTENT: `coming_soon` already exists (083) and defaults to false, so every other
+-- provider renders byte-identically, and this file is a no-op if it ever runs twice. `provider_keys`
+-- holds 0 rows in total, so no tenant is affected. No BEGIN/COMMIT — the runner wraps each file.
+
+UPDATE available_providers
+   SET coming_soon = true
+ WHERE key IN ('facebook', 'google_places', 'letterman', 'nexweave', 'yelp');
