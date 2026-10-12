@@ -362,16 +362,22 @@ pub async fn create_account(
 
         // Grant the plan's initial monthly credits, when it declares any. The free tier declares
         // none (`features->>'credits_monthly'` is absent), so this is a no-op there and a real
-        // grant on a plan that does — the same behaviour for both doors. `?`, not `.ok()` /
-        // `unwrap_or(None)`: inside the transaction a swallowed error aborts the unit anyway and
-        // only resurfaces as an opaque failure at COMMIT.
+        // grant on a plan that does — the same behaviour for both doors.
+        //
+        // `Option<i32>` (not `i32`) is load-bearing, and this is a REAL defect the transaction
+        // surfaced: every plan_tiers row in this app has NO `credits_monthly`, so the cast returns
+        // SQL NULL and decoding it into a bare `i32` errors with `unexpected null; try decoding as
+        // an Option`. `.unwrap_or(None)` used to SWALLOW that error on every single signup and
+        // silently read "no credits" — with `?` (required inside the transaction) the same error
+        // would fail every signup, so the column is decoded as what it can be: NULLABLE.
         let credits: Option<i32> = sqlx::query_scalar(
             r#"SELECT (features->>'credits_monthly')::integer
                FROM plan_tiers WHERE id = $1"#,
         )
         .bind(pid)
         .fetch_optional(&mut *tx)
-        .await?;
+        .await?
+        .flatten();
 
         if let Some(amt) = credits {
             if amt > 0 {
