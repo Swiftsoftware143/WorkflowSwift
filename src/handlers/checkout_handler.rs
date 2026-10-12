@@ -1618,6 +1618,11 @@ async fn deliver_credentials(
                 "email": user.email,
                 "password": password,
                 "url": app_url,
+                // The live `welcome` template (both halves) writes the login link as
+                // `{{app_url}}`, so a message that carries only `url` renders the placeholder
+                // VERBATIM — the buyer gets "Please log in at {{app_url}}" and an href that is not
+                // a URL. Measured off the wire, kanban t_9563b405.
+                "app_url": app_url,
             });
             let sent = email::send_email(state, Some(user.aid), email, "welcome", &vars).await;
 
@@ -1761,6 +1766,9 @@ async fn deliver_credentials(
             "email": email,
             "password": password,
             "url": app_url,
+            // Same reason as the branch above: the live `welcome` template's login link is
+            // `{{app_url}}`, so the variable must carry that name too (kanban t_9563b405).
+            "app_url": app_url,
         });
         let sent = email::send_email(state, Some(account_id), email, "welcome", &vars).await;
 
