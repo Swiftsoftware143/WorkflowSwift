@@ -602,6 +602,10 @@ pub async fn admin_create_plan(
     let max_workflows = limit_i32(&limit_map, "max_workflows");
     let max_users = limit_i32(&limit_map, "max_users");
     let retention_days = limit_i32(&limit_map, "retention_days");
+    // The hourly outbound Notify cap. It was settable ONLY by the update route, so the panel's Add
+    // form silently dropped it on a new tier while its Edit twin honoured it — one field, two
+    // behaviours. Read the same way as its siblings here (kanban t_d3ff37ef introduced the cap).
+    let max_notify_per_hour = req_i32(&req, "max_notify_per_hour");
     let can_deploy_n8n =
         flag_bool(&limit_map, "n8n_deploy").or(flag_bool(&limit_map, "can_deploy_n8n"));
     let has_api_access =
@@ -614,8 +618,8 @@ pub async fn admin_create_plan(
 
     let plan = sqlx::query(
         r#"INSERT INTO plan_tiers (id, name, slug, description, price_monthly, price_yearly, features, is_active, sort_order, payment_provider,
-                                  max_workflows, max_users, retention_days, can_deploy_n8n, has_api_access)
-           VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15)
+                                  max_workflows, max_users, retention_days, can_deploy_n8n, has_api_access, max_notify_per_hour)
+           VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16)
            RETURNING id, name, slug"#,
     )
     .bind(Uuid::new_v4())
@@ -633,6 +637,7 @@ pub async fn admin_create_plan(
     .bind(retention_days)
     .bind(can_deploy_n8n)
     .bind(has_api_access)
+    .bind(max_notify_per_hour)
     .fetch_one(&state.db)
     .await?;
 
