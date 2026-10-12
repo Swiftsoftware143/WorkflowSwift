@@ -234,10 +234,19 @@ pub async fn create_account(
     // SAME 409 the pre-check answers, having written nothing. Different addresses hash to different
     // keys, so unrelated signups never wait on each other. A transaction-wide lock is released by
     // the commit or the rollback of this unit — there is no unlock statement to leak.
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-        .bind(a.email)
-        .execute(&mut *tx)
-        .await?;
+    //
+    // `::text` is load-bearing, not decoration: the obvious `sqlx::query("SELECT
+    // pg_advisory_xact_lock(...)").execute(&mut *tx)` FAILS the whole signup with
+    // `Database error error=error occurred while decoding column 0: unexpected null; try decoding
+    // as an Option` — sqlx's `execute()` on a void-returning SELECT tries to decode the void column
+    // (measured live on this app 2026-10-12, 8/8 concurrent signups answered 500 with nothing
+    // written). Casting the void result to text yields a decodable empty string (verified in psql:
+    // non-null, length 0) while the lock is still taken.
+    let _lock: String =
+        sqlx::query_scalar("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))::text")
+            .bind(a.email)
+            .fetch_one(&mut *tx)
+            .await?;
 
     // The real duplicate rule, decided ATOMICALLY under that lock: the `email_taken` above is only
     // a fast path (it cannot see a transaction that has not committed), so a racing loser is
