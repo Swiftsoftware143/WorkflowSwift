@@ -1769,7 +1769,7 @@ const StepModal = () => {
               ${channels.map(c => html`<option key=${c} value=${c}>${chanLabel[c] || c}</option>`)}
             </select>
             ${channels.length <= 1
-              ? html`<div class="text-xs text-gray-500 mt-1">Only Webhook is available — configure a mail or SMS provider under Admin &gt; Settings to offer those channels.</div>`
+              ? html`<div class="text-xs text-gray-500 mt-1">Only Webhook is available — configure a mail or SMS provider under Admin > Settings to offer those channels.</div>`
               : null}
           </div>
           ${d.channel === 'webhook'
