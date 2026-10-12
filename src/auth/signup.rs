@@ -14,6 +14,7 @@
 //! the caller's contact address, so no request can name a tenant to write into.
 
 use chrono::Utc;
+use sqlx::PgConnection;
 use uuid::Uuid;
 
 use crate::error::AppError;
@@ -78,12 +79,29 @@ pub struct NewAccountIds {
 /// reachable without a credential and must not be spent on a duplicate) can refuse BEFORE hashing,
 /// while [`create_account`] still checks again before its first write.
 pub async fn email_taken(db: &sqlx::PgPool, email: &str) -> Result<bool, AppError> {
+    let mut conn = db.acquire().await?;
+    email_taken_on(&mut conn, email).await
+}
+
+/// The same question, asked ON A CONNECTION — which is what [`create_account`] needs: its re-check
+/// must run on the TRANSACTION it is about to write in, so it sees whatever was committed between
+/// the cheap pre-check and the transaction's own lock (kanban t_10b8fba6).
+///
+/// An error PROPAGATES here (the pre-check's `unwrap_or(0)` did not): inside a transaction a
+/// swallowed error aborts the unit anyway and only resurfaces later as an opaque failure at COMMIT.
+async fn email_taken_on(conn: &mut PgConnection, email: &str) -> Result<bool, AppError> {
     let n = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE lower(email) = $1")
         .bind(email)
-        .fetch_one(db)
-        .await
-        .unwrap_or(0);
+        .fetch_one(&mut *conn)
+        .await?;
     Ok(n > 0)
+}
+
+/// The ONE refusal every account door answers for an address that is already a login: the same 409
+/// the `email_taken` pre-check returns, whether the caller was refused by the pre-check or lost the
+/// race and was refused by the account writer itself.
+fn duplicate_email() -> AppError {
+    AppError::Duplicate("A user with this email already exists".to_string())
 }
 
 /// The slug the public signup has always derived from a workspace name: lowercased, spaces →
@@ -97,37 +115,37 @@ fn derived_slug(name: &str) -> String {
         .collect()
 }
 
-async fn slug_taken(db: &sqlx::PgPool, slug: &str) -> Result<bool, AppError> {
+async fn slug_taken(conn: &mut PgConnection, slug: &str) -> Result<bool, AppError> {
     Ok(sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM accounts WHERE account_slug = $1)",
     )
     .bind(slug)
-    .fetch_one(db)
+    .fetch_one(&mut *conn)
     .await?)
 }
 
-/// Is this the `accounts.account_slug` UNIQUE index (`tenants_slug_key`) firing?
-fn is_unique_violation(e: &sqlx::Error) -> bool {
-    matches!(e, sqlx::Error::Database(db) if db.code().as_deref() == Some("23505"))
-}
-
-/// Insert the workspace row. Split out so [`create_account`] can tell the UNIQUE index apart
-/// from any other failure and answer a 409 instead of a 500.
+/// Insert the workspace row, telling "this slug is taken" apart from any other failure WITHOUT
+/// aborting the unit: a bare INSERT would raise 23505 on `tenants_slug_key`
+/// (`UNIQUE (account_slug)`) and in Postgres a failed statement poisons the WHOLE transaction
+/// (`25P02 current transaction is aborted`), so the retry in [`create_account`] could never run
+/// inside the transaction that function now writes in. `ON CONFLICT ... DO NOTHING` answers
+/// `rows_affected() == 0` instead, which leaves the unit healthy for the next candidate slug.
 async fn insert_account(
-    db: &sqlx::PgPool,
+    conn: &mut PgConnection,
     id: Uuid,
     name: &str,
     slug: &str,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO accounts (id, name, account_slug, is_active) VALUES ($1, $2, $3, true)",
+) -> Result<u64, sqlx::Error> {
+    let r = sqlx::query(
+        "INSERT INTO accounts (id, name, account_slug, is_active) VALUES ($1, $2, $3, true) \
+         ON CONFLICT (account_slug) DO NOTHING",
     )
     .bind(id)
     .bind(name)
     .bind(slug)
-    .execute(db)
+    .execute(&mut *conn)
     .await?;
-    Ok(())
+    Ok(r.rows_affected())
 }
 
 /// A workspace slug that is not already taken. `accounts.account_slug` is UNIQUE, so a name that
@@ -137,6 +155,14 @@ async fn insert_account(
 /// doors (kanban t_ede5f6ed, t_bf9e00fe) — `provision_handler` calls it directly, and the public
 /// signup calls it when its derived slug is taken.
 pub async fn unique_account_slug(db: &sqlx::PgPool, name: &str) -> Result<String, AppError> {
+    let mut conn = db.acquire().await?;
+    unique_account_slug_on(&mut conn, name).await
+}
+
+/// [`unique_account_slug`] on a CONNECTION, so [`create_account`] can retry a taken candidate
+/// inside the transaction it will insert in: the check and the INSERT must run on the SAME session
+/// to be able to see the transaction's own uncommitted work (kanban t_10b8fba6).
+async fn unique_account_slug_on(conn: &mut PgConnection, name: &str) -> Result<String, AppError> {
     let base: String = name
         .to_lowercase()
         .replace(' ', "-")
@@ -151,7 +177,7 @@ pub async fn unique_account_slug(db: &sqlx::PgPool, name: &str) -> Result<String
     for _ in 0..5 {
         let short = &Uuid::new_v4().to_string()[..8];
         let candidate = format!("{base}-{short}");
-        if !slug_taken(db, &candidate).await? {
+        if !slug_taken(&mut *conn, &candidate).await? {
             return Ok(candidate);
         }
     }
@@ -159,6 +185,11 @@ pub async fn unique_account_slug(db: &sqlx::PgPool, name: &str) -> Result<String
 }
 
 /// Create an account. Refuses (without writing anything) if the address is already a login.
+///
+/// The WHOLE account — its `accounts` row, its seeded tags, its owner `users` row, its
+/// `account_plans` row, that plan's first-month credits and the industry/dashboard seed — is ONE
+/// transaction, committed only once the account is COMPLETE and BEFORE the credentials mail
+/// (measured defect, kanban t_10b8fba6).
 pub async fn create_account(
     state: &AppState,
     a: NewAccount<'_>,
@@ -166,17 +197,55 @@ pub async fn create_account(
     let db = &state.db;
 
     // The duplicate check runs BEFORE the first INSERT: the old order created the account and only
-    // then refused a duplicate address, so a retried signup left an orphan workspace behind.
+    // then refused a duplicate address, so a retried signup left an orphan workspace behind. It is
+    // only a FAST PATH (it cannot see a transaction that has not committed yet) — the atomic
+    // refusal is decided inside the transaction below.
     if email_taken(db, a.email).await? {
-        return Err(AppError::Duplicate(
-            "A user with this email already exists".to_string(),
-        ));
+        return Err(duplicate_email());
     }
 
     let account_name = a
         .account_name
         .map(str::to_string)
         .unwrap_or_else(|| format!("{}'s Workspace", a.name));
+    // ── ONE transaction over the WHOLE account (measured defect, kanban t_10b8fba6) ─────────
+    // Every row below used to be written as its own statement on its own pooled connection, so a
+    // failure anywhere after the `accounts` INSERT left a HALF-WRITTEN account behind — a workspace
+    // with NO owner (the empty "…'s Workspace" rows in the operator's account list), or a workspace
+    // whose tags / plan row / dashboard never landed — while the caller got
+    // `500 {"error":"Database error"}` and every retry minted another one. The transaction makes a
+    // failed signup write NOTHING; it is committed once, below, only when the account is COMPLETE.
+    let mut tx = db.begin().await?;
+
+    // ── ONE address, ONE login: the guard this app's `users` index cannot give ──────────────
+    // The fleet's other apps make the address unique with `users_email_key UNIQUE (email)` and let
+    // the loser's INSERT raise 23505. THIS app's index is `users_aid_email_key UNIQUE (aid, email)`
+    // (verified against `pg_constraint`, 2026-10-12), and `aid` is a BRAND-NEW account id on every
+    // call — so two racing signups of ONE address never collide on it and BOTH mint an account.
+    // Measured live on this app before this fix: eight concurrent
+    // `POST /api/v1/auth/register` with ONE address answered SEVEN `201`s and left SEVEN accounts
+    // and SEVEN `users` rows for that one address — after which the app's hardened login refuses
+    // the ambiguity (401), so the customer who just signed up cannot log in at all, and the
+    // operator's list carries seven copies of "…'s Workspace".
+    //
+    // A transaction-wide advisory lock on the normalised address serialises the writers of ONE
+    // address instead: the winner commits, and every racer arriving after it takes the lock,
+    // re-checks under it (READ COMMITTED, so the re-check sees the winner) and is refused with the
+    // SAME 409 the pre-check answers, having written nothing. Different addresses hash to different
+    // keys, so unrelated signups never wait on each other. A transaction-wide lock is released by
+    // the commit or the rollback of this unit — there is no unlock statement to leak.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(a.email)
+        .execute(&mut *tx)
+        .await?;
+
+    // The real duplicate rule, decided ATOMICALLY under that lock: the `email_taken` above is only
+    // a fast path (it cannot see a transaction that has not committed), so a racing loser is
+    // refused here — before the first write — and the transaction never writes anything at all.
+    if email_taken_on(&mut tx, a.email).await? {
+        return Err(duplicate_email());
+    }
+
     // ── Workspace slug (kanban t_bf9e00fe) ──────────────────────────────────────────────
     // `accounts.account_slug` is UNIQUE (`tenants_slug_key`). An EXPLICIT slug is the caller's
     // own choice, so a taken one stays a refusal (409, below) and is never silently renamed. A
@@ -184,48 +253,64 @@ pub async fn create_account(
     // `<name>` when it is free — exactly what the public signup has always minted — and the same
     // retried, suffixed shape the tag door uses when it is not.
     let explicit_slug = a.account_slug.is_some();
-    let mut account_slug = match a.account_slug {
-        Some(slug) => slug.to_string(),
-        None => {
-            let base = derived_slug(a.name);
-            if slug_taken(db, &base).await? {
-                unique_account_slug(db, a.name).await?
-            } else {
-                base
-            }
-        }
-    };
-
     let account_id = Uuid::new_v4();
-    if let Err(e) = insert_account(db, account_id, &account_name, &account_slug).await {
-        if is_unique_violation(&e) {
-            if explicit_slug {
-                return Err(AppError::Duplicate(
-                    "That workspace name is taken \u{2014} try another".to_string(),
-                ));
+    let mut account_slug: Option<String> = None;
+    for attempt in 0..4 {
+        let candidate = if attempt == 0 {
+            match a.account_slug {
+                Some(slug) => slug.to_string(),
+                None => {
+                    let base = derived_slug(a.name);
+                    if slug_taken(&mut tx, &base).await? {
+                        unique_account_slug_on(&mut tx, a.name).await?
+                    } else {
+                        base
+                    }
+                }
             }
-            // A derived slug lost the race between the check above and this INSERT: one bounded
-            // retry on the suffixed shape, which the index cannot be holding yet.
-            account_slug = unique_account_slug(db, a.name).await?;
-            insert_account(db, account_id, &account_name, &account_slug).await?;
         } else {
-            return Err(AppError::from(e));
+            // A derived slug lost the race between the check above and its INSERT: a FRESH suffixed
+            // candidate every pass, so a taken value is never retried verbatim.
+            unique_account_slug_on(&mut tx, a.name).await?
+        };
+        if insert_account(&mut tx, account_id, &account_name, &candidate).await? == 1 {
+            account_slug = Some(candidate);
+            break;
+        }
+        // The INSERT wrote nothing: the slug is held by another account. An EXPLICIT one is the
+        // caller's own choice and stays a refusal, never a silent rename.
+        if explicit_slug {
+            return Err(AppError::Duplicate(
+                "That workspace name is taken \u{2014} try another".to_string(),
+            ));
         }
     }
+    let account_slug = account_slug.ok_or_else(|| {
+        AppError::Internal(format!(
+            "create_account: no free accounts.account_slug for '{}'",
+            account_name
+        ))
+    })?;
 
-    // Seed default tags for this account.
+    // Seed default tags for this account. `?`, not `.ok()` (changed with the transaction, kanban
+    // t_10b8fba6): inside a transaction a swallowed error ABORTS the unit anyway and only surfaces
+    // later as an opaque failure at COMMIT, so the real error is propagated here instead.
     for tag_name in ["active", "archived", "priority"] {
         sqlx::query("INSERT INTO tags (id, aid, name) VALUES ($1, $2, $3)")
             .bind(Uuid::new_v4())
             .bind(account_id)
             .bind(tag_name)
-            .execute(db)
-            .await
-            .ok();
+            .execute(&mut *tx)
+            .await?;
     }
 
     let user_id = Uuid::new_v4();
     let now = Utc::now();
+    // The owner row. The `users_aid_email_key` arm is KEPT even though the advisory lock above is
+    // what makes ONE address ONE login in this app: it is the mapping that turns a UNIQUE violation
+    // into the SAME 409 the pre-check returns instead of the 500 a bare `?` produced. (A wrong
+    // literal here would leave the arm unreachable and silently keep the 500 — verified against
+    // `pg_constraint` on 2026-10-12.)
     sqlx::query(
         r#"INSERT INTO users (id, aid, email, password_hash, name, role, is_active, created_at, updated_at)
            VALUES ($1, $2, $3, $4, $5, $6, true, $7, $7)"#,
@@ -237,11 +322,130 @@ pub async fn create_account(
     .bind(a.name)
     .bind(a.role)
     .bind(now)
-    .execute(db)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| {
+        if let sqlx::Error::Database(ref db_err) = e {
+            if db_err.constraint() == Some("users_aid_email_key") {
+                return duplicate_email();
+            }
+        }
+        AppError::from(e)
+    })?;
+
+    // Assign the plan, or leave the account on no row (the entitlement resolver then falls back to
+    // the first active tier). `plan_tiers.slug` is the plan identity in this app.
+    let plan_id: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM plan_tiers WHERE slug = $1 AND is_active = true")
+            .bind(a.plan_slug)
+            .fetch_optional(&mut *tx)
+            .await?;
+
+    if let Some(pid) = plan_id {
+        sqlx::query(
+            r#"INSERT INTO account_plans (aid, plan_id, status, started_at)
+               VALUES ($1, $2, 'active', NOW())"#,
+        )
+        .bind(account_id)
+        .bind(pid)
+        .execute(&mut *tx)
+        .await?;
+
+        // Grant the plan's initial monthly credits, when it declares any. The free tier declares
+        // none (`features->>'credits_monthly'` is absent), so this is a no-op there and a real
+        // grant on a plan that does — the same behaviour for both doors. `?`, not `.ok()` /
+        // `unwrap_or(None)`: inside the transaction a swallowed error aborts the unit anyway and
+        // only resurfaces as an opaque failure at COMMIT.
+        let credits: Option<i32> = sqlx::query_scalar(
+            r#"SELECT (features->>'credits_monthly')::integer
+               FROM plan_tiers WHERE id = $1"#,
+        )
+        .bind(pid)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        if let Some(amt) = credits {
+            if amt > 0 {
+                sqlx::query(
+                    r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
+                       VALUES ($1, $2, $3, 'grant', 'Welcome credits: first month of ' || (
+                         SELECT name FROM plan_tiers WHERE id = $4
+                       ))"#,
+                )
+                .bind(Uuid::new_v4())
+                .bind(account_id)
+                .bind(amt)
+                .bind(pid)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+    }
+
+    // Seed the industry dashboard. `template_categories` is the source of truth for a real
+    // industry slug; an unknown one just leaves the account without a dashboard, as before.
+    let industry_slug = a.industry_slug;
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM template_categories WHERE slug = $1 AND is_active = true)",
+    )
+    .bind(industry_slug)
+    .fetch_one(&mut *tx)
     .await?;
 
+    let mut dashboard_id: Option<Uuid> = None;
+    if exists {
+        sqlx::query("UPDATE accounts SET industry_slug = $1 WHERE id = $2")
+            .bind(industry_slug)
+            .bind(account_id)
+            .execute(&mut *tx)
+            .await?;
+
+        // Use the human-readable category name for the dashboard, not the slug.
+        let industry_name: String =
+            sqlx::query_scalar("SELECT name FROM template_categories WHERE slug = $1")
+                .bind(industry_slug)
+                .fetch_optional(&mut *tx)
+                .await?
+                .unwrap_or_else(|| industry_slug.to_string());
+
+        let did = Uuid::new_v4();
+        let dashboard_name = format!("{} Dashboard", industry_name);
+        sqlx::query(
+            r#"INSERT INTO dashboards (id, aid, name, description)
+               VALUES ($1, $2, $3, $4)"#,
+        )
+        .bind(did)
+        .bind(account_id)
+        .bind(&dashboard_name)
+        .bind(format!("Your {} dashboard", industry_name))
+        .execute(&mut *tx)
+        .await?;
+
+        // Also register in account_industries (for multi-industry support).
+        sqlx::query(
+            r#"INSERT INTO account_industries (aid, industry_slug, dashboard_id)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (aid, industry_slug) DO NOTHING"#,
+        )
+        .bind(account_id)
+        .bind(industry_slug)
+        .bind(did)
+        .execute(&mut *tx)
+        .await?;
+
+        dashboard_id = Some(did);
+    }
+
+    // ── The account is COMPLETE: ONE commit, here ─────────────────────────────────────────
+    // Committed only NOW, and BEFORE the credentials mail and every other published side effect
+    // below: a mail is an outcome of a committed account, and the mail path reads the account back
+    // through the pool, so it could never see an uncommitted transaction. Everything above is ONE
+    // unit of work — any failure rolls the WHOLE account back, so a failed signup writes NOTHING.
+    tx.commit().await?;
+
     // Welcome / credentials mail — the app's existing `welcome` template, best-effort (the same
-    // discipline the public signup used: a mail failure never fails the account).
+    // discipline the public signup used: a mail failure never fails the account). Swallowing the
+    // error is safe again here: the account is already committed.
     let mut welcome_vars = serde_json::json!({
         "name": a.name,
         "email": a.email,
@@ -260,115 +464,13 @@ pub async fn create_account(
     // Provision n8n tenant config for this account.
     crate::n8n_provision::provision_n8n_for_account(db, account_id).await;
 
-    // Assign the plan, or leave the account on no row (the entitlement resolver then falls back to
-    // the first active tier). `plan_tiers.slug` is the plan identity in this app.
-    let plan_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM plan_tiers WHERE slug = $1 AND is_active = true")
-            .bind(a.plan_slug)
-            .fetch_optional(db)
-            .await?;
-
-    if let Some(pid) = plan_id {
-        sqlx::query(
-            r#"INSERT INTO account_plans (aid, plan_id, status, started_at)
-               VALUES ($1, $2, 'active', NOW())"#,
-        )
-        .bind(account_id)
-        .bind(pid)
-        .execute(db)
-        .await
-        .ok();
-
-        // Grant the plan's initial monthly credits, when it declares any. The free tier declares
-        // none (`features->>'credits_monthly'` is absent), so this is a no-op there and a real
-        // grant on a plan that does — the same behaviour for both doors.
-        let credits: Option<i32> = sqlx::query_scalar(
-            r#"SELECT (features->>'credits_monthly')::integer
-               FROM plan_tiers WHERE id = $1"#,
-        )
-        .bind(pid)
-        .fetch_optional(db)
-        .await
-        .unwrap_or(None);
-
-        if let Some(amt) = credits {
-            if amt > 0 {
-                sqlx::query(
-                    r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
-                       VALUES ($1, $2, $3, 'grant', 'Welcome credits: first month of ' || (
-                         SELECT name FROM plan_tiers WHERE id = $4
-                       ))"#,
-                )
-                .bind(Uuid::new_v4())
-                .bind(account_id)
-                .bind(amt)
-                .bind(pid)
-                .execute(db)
-                .await
-                .ok();
-            }
-        }
-    }
-
-    // Seed the industry dashboard. `template_categories` is the source of truth for a real
-    // industry slug; an unknown one just leaves the account without a dashboard, as before.
-    let industry_slug = a.industry_slug;
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM template_categories WHERE slug = $1 AND is_active = true)",
-    )
-    .bind(industry_slug)
-    .fetch_one(db)
-    .await
-    .unwrap_or(false);
-
-    if exists {
-        sqlx::query("UPDATE accounts SET industry_slug = $1 WHERE id = $2")
-            .bind(industry_slug)
-            .bind(account_id)
-            .execute(db)
-            .await?;
-
-        // Use the human-readable category name for the dashboard, not the slug.
-        let industry_name: String =
-            sqlx::query_scalar("SELECT name FROM template_categories WHERE slug = $1")
-                .bind(industry_slug)
-                .fetch_optional(db)
-                .await?
-                .unwrap_or_else(|| industry_slug.to_string());
-
-        let dashboard_id = Uuid::new_v4();
-        let dashboard_name = format!("{} Dashboard", industry_name);
-        sqlx::query(
-            r#"INSERT INTO dashboards (id, aid, name, description)
-               VALUES ($1, $2, $3, $4)"#,
-        )
-        .bind(dashboard_id)
-        .bind(account_id)
-        .bind(&dashboard_name)
-        .bind(format!("Your {} dashboard", industry_name))
-        .execute(db)
-        .await?;
-
-        industry_handler::seed_default_widgets_internal(
-            state,
-            account_id,
-            dashboard_id,
-            industry_slug,
-        )
-        .await;
-
-        // Also register in account_industries (for multi-industry support).
-        sqlx::query(
-            r#"INSERT INTO account_industries (aid, industry_slug, dashboard_id)
-               VALUES ($1, $2, $3)
-               ON CONFLICT (aid, industry_slug) DO NOTHING"#,
-        )
-        .bind(account_id)
-        .bind(industry_slug)
-        .bind(dashboard_id)
-        .execute(db)
-        .await
-        .ok();
+    // The new dashboard's default widgets — seeded AFTER the commit (with the rest of the side
+    // effects, kanban t_10b8fba6): it is a post-commit seed, never part of the account's own unit
+    // of work. `dashboard_id` is `None` when the industry slug matched no active
+    // `template_categories` row — such an account simply has no dashboard, exactly as before.
+    if let Some(did) = dashboard_id {
+        industry_handler::seed_default_widgets_internal(state, account_id, did, industry_slug)
+            .await;
     }
 
     Ok(NewAccountIds {
