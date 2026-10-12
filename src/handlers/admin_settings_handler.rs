@@ -485,7 +485,7 @@ pub async fn admin_list_plans(
                 price_yearly::text as price_yearly, features, checkout_url,
                 is_active, sort_order, created_at,
                 max_workflows, max_users, retention_days, can_deploy_n8n, has_api_access,
-                payment_provider
+                payment_provider, max_notify_per_hour
          FROM plan_tiers ORDER BY sort_order ASC NULLS LAST",
     )
     .fetch_all(&state.db)
@@ -523,6 +523,13 @@ pub async fn admin_list_plans(
         let can_deploy_n8n = plan_limits::resolve_tier_flag(&state.db, id, "n8n_deploy").await?;
         let has_api_access = plan_limits::resolve_tier_flag(&state.db, id, "api_access").await?;
         let payment_provider: Option<String> = row.try_get("payment_provider").ok();
+        // The hourly Notify cap is the ONE entitlement the gate reads from the legacy COLUMN
+        // (`notify::per_hour_cap`: plan_tiers.max_notify_per_hour, else the install-wide
+        // admin_settings.limits.notify_per_hour, else DEFAULT_NOTIFY_PER_HOUR), so report that
+        // column -- NULL means "no plan-specific cap", which is what the panel's blank box
+        // means too. It was absent from this response, so the Edit form rendered the field
+        // blank for a tier whose cap WAS stored and an operator could not see it.
+        let max_notify_per_hour: Option<i32> = row.try_get("max_notify_per_hour").ok();
 
         // Get feature_limits for this plan
         let limits =
@@ -556,6 +563,7 @@ pub async fn admin_list_plans(
             "can_deploy_n8n": can_deploy_n8n,
             "has_api_access": has_api_access,
             "payment_provider": payment_provider,
+            "max_notify_per_hour": max_notify_per_hour,
             "feature_limits": limits_map
         }));
     }
