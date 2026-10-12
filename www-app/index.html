@@ -119,8 +119,12 @@ window.appGuidePages = {
 </script>
 <script src="/inline-guide-widget.js?v=8a094f0b"></script>
 <script type="module">
-import { h, render } from './vendor/preact.js';
-import htm from './vendor/htm.js';
+// ABSOLUTE specifiers (was './vendor/…'). The vhost's SPA fallback serves this shell at ANY path,
+// so a relative specifier resolved against the REQUEST path — a signed-in visitor at /dashboard/
+// requested /dashboard/vendor/preact.js and /dashboard/vendor/htm.js, both 404, the module never
+// executed and the page rendered BLANK (measured 2026-10-12). Root-absolute paths work at every path.
+import { h, render } from '/vendor/preact.js';
+import htm from '/vendor/htm.js';
 const html = htm.bind(h);
 const root = document.getElementById('app');
 
