@@ -300,10 +300,41 @@ pub async fn remove_user(
         ));
     }
 
+    // Every table that references `users(id)` with `delete_rule = NO ACTION` must be cleared
+    // first, or the DELETE below raises 23503 and the team screen's Remove button answers 500.
+    // Measured live 2026-10-12: a member who had ever asked for a password reset made
+    // `DELETE /api/v1/users/{id}` answer `{"code":500,"error":true,"message":"Database error"}`
+    // (`password_resets_user_id_fkey` in the log) while a member with no such row removed
+    // cleanly (200). Read from `information_schema.referential_constraints`; `password_resets`
+    // is the only NOT-NULL one, so its rows are DELETEd (a pending reset for a removed user is
+    // meaningless) and the rest are set NULL — unassigned work, and the audit trail kept with no
+    // actor. One transaction: the member and their pending state go together or not at all.
+    let mut tx = state.db.begin().await?;
+    sqlx::query("DELETE FROM password_resets WHERE user_id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE audit_logs SET user_id = NULL WHERE user_id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE compliance_checks SET checked_by = NULL WHERE checked_by = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE workflow_instances SET assigned_to = NULL WHERE assigned_to = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE workflow_instance_steps SET assigned_to = NULL WHERE assigned_to = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("DELETE FROM users WHERE id = $1")
         .bind(id)
-        .execute(&state.db)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
 
     Ok(Json(json!({"message": "User removed"})))
 }
