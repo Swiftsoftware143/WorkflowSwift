@@ -1466,32 +1466,32 @@ fn delivery_failure(e: String) -> AppError {
     }
 }
 
-/// The plan a checkout session's new account must be seated on, resolved IN-APP (kanban t_9563b405).
+/// The plan a checkout session's new account must be seated on, expressed as `plan_tiers.slug` —
+/// the plan identity `auth::signup::create_account` takes (kanban t_9563b405, t_6d58f5be).
 ///
 /// A plan purchase carries `purchasable_id` = the `plan_tiers` row the buyer checked out; it is
 /// re-read here rather than trusted, so an id that is no longer an ACTIVE tier cannot seat an
-/// entitlement this app does not sell. Anything else — a non-plan purchase, or a plan that no
-/// longer resolves — seats the SAME default the public signup seats (`plan_tiers.slug = 'free'`,
-/// the value `auth::handlers::register` defaults to), and only an app with NO active tier at all
-/// seats no row: that is the one case where there is genuinely nothing to seat.
-///
-/// Runs on the caller's connection, i.e. inside the account's transaction, so the entitlement is
-/// part of the same unit of work as the account it belongs to.
-async fn checkout_plan_id(
-    conn: &mut sqlx::PgConnection,
+/// entitlement this app does not sell. Anything else — a non-plan purchase, or a plan that no longer
+/// resolves — seats the SAME default the public signup seats (`plan_tiers.slug = 'free'`, the value
+/// `auth::handlers::register` defaults to), and only an app with NO active tier at all ends up
+/// seating nothing: the writer writes no `account_plans` row for a slug that resolves to no active
+/// tier, which is the one case where there is genuinely nothing to seat.
+async fn checkout_plan_slug(
+    db: &sqlx::PgPool,
     purchasable_type: &str,
     purchasable_id: Option<Uuid>,
-) -> Result<Option<Uuid>, String> {
+) -> Result<String, String> {
     if purchasable_type == "plan" {
         if let Some(pid) = purchasable_id {
-            let resolved: Option<Uuid> =
-                sqlx::query_scalar("SELECT id FROM plan_tiers WHERE id = $1 AND is_active = true")
-                    .bind(pid)
-                    .fetch_optional(&mut *conn)
-                    .await
-                    .map_err(|e| format!("Failed to resolve the purchased plan: {}", e))?;
-            if let Some(id) = resolved {
-                return Ok(Some(id));
+            let resolved: Option<String> = sqlx::query_scalar(
+                "SELECT slug FROM plan_tiers WHERE id = $1 AND is_active = true",
+            )
+            .bind(pid)
+            .fetch_optional(db)
+            .await
+            .map_err(|e| format!("Failed to resolve the purchased plan: {}", e))?;
+            if let Some(slug) = resolved {
+                return Ok(slug);
             }
             tracing::warn!(
                 plan_id = %pid,
@@ -1501,23 +1501,25 @@ async fn checkout_plan_id(
         }
     }
 
-    let default: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM plan_tiers WHERE slug = 'free' AND is_active = true LIMIT 1",
+    let default: Option<String> = sqlx::query_scalar(
+        "SELECT slug FROM plan_tiers WHERE slug = 'free' AND is_active = true LIMIT 1",
     )
-    .fetch_optional(&mut *conn)
+    .fetch_optional(db)
     .await
     .map_err(|e| format!("Failed to resolve the default plan: {}", e))?;
-    if default.is_some() {
-        return Ok(default);
+    if let Some(slug) = default {
+        return Ok(slug);
     }
 
-    sqlx::query_scalar(
-        "SELECT id FROM plan_tiers WHERE is_active = true \
+    let any: Option<String> = sqlx::query_scalar(
+        "SELECT slug FROM plan_tiers WHERE is_active = true \
          ORDER BY sort_order ASC, created_at ASC LIMIT 1",
     )
-    .fetch_optional(&mut *conn)
+    .fetch_optional(db)
     .await
-    .map_err(|e| format!("Failed to resolve the default plan: {}", e))
+    .map_err(|e| format!("Failed to resolve the default plan: {}", e))?;
+    // No active tier at all: `free` names nothing and the writer then seats no `account_plans` row.
+    Ok(any.unwrap_or_else(|| "free".to_string()))
 }
 
 /// Deliver login credentials or purchase confirmation to the customer.
@@ -1525,9 +1527,12 @@ async fn checkout_plan_id(
 /// 1. Look up user by email
 /// 2. If user exists with password → send "purchase_confirmed"
 /// 3. If user exists without password → generate password, hash, update, send "welcome"
-/// 4. If user doesn't exist → create account + plan row + user in ONE transaction, committed
-///    before the mail ("get the mail out" is what the 5xx retry below exists for — kanban
-///    t_9563b405), send "welcome"
+/// 4. If user doesn't exist → the ONE account writer (`auth::signup::create_account`) mints the
+///    WHOLE account on the plan the session paid for — its tags, industry dashboard,
+///    `account_industries` row, n8n tenant config and API keys included — in ONE transaction
+///    committed before the mail, and the welcome mail IS the credential
+///    (`CredentialDelivery::AfterTheSend`; "get the mail out" is what the 5xx retry below
+///    exists for — kanban t_9563b405, t_6d58f5be)
 ///
 /// `Err` means the customer did **not** get their mail — for cases 3 and 4 the password it just
 /// generated exists only in that message, so a caller must treat the error as a failed delivery
@@ -1638,157 +1643,70 @@ async fn deliver_credentials(
             sent
         }
     } else {
-        // ── New user — create account + plan row + user, then send credentials ─────────────────
+        // ── No user for this address → the ONE account writer mints the WHOLE account ─────────
         //
-        // ── ONE transaction over the account, committed BEFORE the mail (kanban t_9563b405) ────
-        // The `accounts` and `users` INSERTs below used to run as two separate statements on two
-        // pooled connections, so the account row committed ON ITS OWN: a failure in the `users`
-        // INSERT — or a process restart between the two — left a ZERO-USER ACCOUNT behind, the
-        // orphan-workspace class kanban t_10b8fba6 closed in `auth::signup::create_account`, minted
-        // here by a PAID door, where the payment provider's own webhook retry then minted ANOTHER
-        // one. One transaction removes that state entirely: the account, its plan row and its owner
-        // user all land, or none of them does.
+        // DECISION (recorded here, as the card asks): this arm used to write its own
+        // `INSERT INTO accounts` + `INSERT INTO users`, so a PAYING customer got an account with
+        // none of the shape the ONE writer `auth::signup::create_account` mints — no default tags,
+        // no industry dashboard (nothing to land on), no `account_industries` row, no n8n tenant
+        // config and no API keys — plus two drifts of its own: `role = 'staff'`, a value no route
+        // in this app recognises, and an `accounts.name` that was the raw customer name rather than
+        // the writer's derivation. MEASURED live before this card (run pre1, leg L1: tags 0 /
+        // dashboards 0 / account_industries 0 / n8n_account_config 0 / user_api_keys 0, role
+        // 'staff', name 't6d58f5be Buyer'). The arm now calls the ONE writer with the plan the
+        // session paid for, exactly as the tag/provision door does, so the account a paid buyer
+        // gets IS the account a signup gets.
         //
-        // The commit is placed BEFORE the welcome mail on purpose. The mail IS the credential, and
-        // the committed row deliberately carries `password_hash = ''` — the marker the
-        // `has_password == false` branch above reads — so a provider retry after a failed send
-        // re-issues a FRESH password to this SAME account instead of minting a second one. The
-        // post-mail `UPDATE users SET password_hash` is a separate, deliberate step and NOT part of
-        // the account's unit of work.
-        let account_id = Uuid::new_v4();
-        let user_id = Uuid::new_v4();
+        // The credential contract is the ONE thing that differs between the doors, and it is
+        // EXPRESSED rather than bypassed: `CredentialDelivery::AfterTheSend` commits
+        // `password_hash = ''` — the marker the `has_password == false` branch above reads — sends
+        // the welcome mail (the only copy of the password), and stores the hash only once the send
+        // is out. A refused send comes back as `Err` with the account, and its whole shape, already
+        // committed, which is what the payment provider's retry then completes: a FRESH password to
+        // the SAME account (kanban t_9563b405), landing on a workspace that is complete (this card).
         let password = generate_temp_password();
-        let hash = hash_password(&password)
+        let password_hash = hash_password(&password)
             .await
             .map_err(|e| format!("Password hashing failed: {}", e))?;
-        let slug = format!("cust-{}", &user_id.to_string()[..8]);
+        let plan_slug = checkout_plan_slug(&state.db, purchasable_type, purchasable_id).await?;
 
-        let mut tx =
-            state.db.begin().await.map_err(|e| {
-                format!("Failed to open the credential-delivery transaction: {}", e)
-            })?;
-
-        // Create account
-        sqlx::query(
-            "INSERT INTO accounts (id, name, account_slug, is_active) VALUES ($1, $2, $3, true)",
+        let ids = crate::auth::signup::create_account(
+            state,
+            crate::auth::signup::NewAccount {
+                email,
+                name,
+                password_hash: &password_hash,
+                password_plain: Some(&password),
+                // `None` on both: the writer's own derivation (`"<name>'s Workspace"`, plus a
+                // collision-retried slug) — the shape the public signup mints.
+                account_name: None,
+                account_slug: None,
+                plan_slug: &plan_slug,
+                // The public signup's own default industry, so the buyer lands on the dashboard a
+                // signing-up customer gets.
+                industry_slug: "site-flipping",
+                // The writer's owner role. The literal this arm used to write, `staff`, is in no
+                // role vocabulary this app accepts (`handlers::user_handler`: user / company_admin
+                // / admin / super_admin / agency_admin / team_member).
+                role: "user",
+                credential_delivery: crate::auth::signup::CredentialDelivery::AfterTheSend,
+            },
         )
-        .bind(account_id)
-        .bind(name)
-        .bind(&slug)
-        .execute(&mut *tx)
         .await
-        .map_err(|e| format!("Failed to create account: {}", e))?;
+        .map_err(|e| format!("Failed to mint the account for the paid checkout: {}", e))?;
 
-        // ── Seat the plan this session was FOR, resolved IN-APP (kanban t_9563b405) ─────────────
-        // This arm used to write NO `account_plans` row at all, so a customer who PAID for a plan
-        // landed on an account with no entitlement: `features::resolve_plan_id` fell through to the
-        // first active tier (the free one) and every gate in the product answered as free, while
-        // the operator's own list showed a paid session. Every other door in this app mints the
-        // plan row WITH the account (the public signup and the tag/provision door, both
-        // `auth::signup`), and that row is what makes an account **upgradeable in place**. DECISION
-        // (recorded here, as the card asks): the plan is resolved from THIS session — `plan_tiers`
-        // id the buyer checked out — re-read against the live catalogue so an id that is no longer
-        // an active tier cannot seat an entitlement the app does not sell, and a session that is
-        // not a plan purchase seats the same default the public signup seats.
-        let plan_id = checkout_plan_id(&mut tx, purchasable_type, purchasable_id).await?;
-        if let Some(pid) = plan_id {
-            sqlx::query(
-                r#"INSERT INTO account_plans (aid, plan_id, status, started_at)
-                   VALUES ($1, $2, 'active', NOW())"#,
-            )
-            .bind(account_id)
-            .bind(pid)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| format!("Failed to seat the purchased plan: {}", e))?;
+        tracing::info!(
+            account = %ids.account_id,
+            user = %ids.user_id,
+            email = %email,
+            plan = %plan_slug,
+            "paid checkout minted an account on the plan the session was opened for, with the ONE \
+             writer's whole shape"
+        );
 
-            // The plan's first-month credits, granted exactly as the signup writer grants them so a
-            // paying buyer gets what the plan advertises. No live plan in this app declares
-            // `credits_monthly` (measured 2026-10-12), so this is normally a no-op — and the column
-            // is NULLABLE, decoded as `Option<i32>` + `flatten()` and never a bare `i32`: that
-            // decode error is what the t_10b8fba6 transaction surfaced on this app.
-            let credits: Option<i32> = sqlx::query_scalar(
-                r#"SELECT (features->>'credits_monthly')::integer FROM plan_tiers WHERE id = $1"#,
-            )
-            .bind(pid)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(|e| format!("Failed to read the purchased plan's credits: {}", e))?
-            .flatten();
-
-            if let Some(amt) = credits {
-                if amt > 0 {
-                    sqlx::query(
-                        r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
-                           VALUES ($1, $2, $3, 'grant', 'Welcome credits: first month of ' || (
-                             SELECT name FROM plan_tiers WHERE id = $4
-                           ))"#,
-                    )
-                    .bind(Uuid::new_v4())
-                    .bind(account_id)
-                    .bind(amt)
-                    .bind(pid)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|e| format!("Failed to grant the purchased plan's credits: {}", e))?;
-                }
-            }
-        }
-
-        // Create user linked to account — deliberately WITHOUT a usable password yet.
-        //
-        // The generated password exists only in the welcome mail, so it must not become the stored
-        // credential before the mail is actually out. An empty `password_hash` is the marker for
-        // "these credentials were never delivered": `login` answers 401 for it, and a retry of the
-        // checkout webhook lands in the `has_password == false` branch above, mints a fresh
-        // password and sends it. Committing the hash here would make the retry send a *receipt* to
-        // a buyer who never received credentials.
-        sqlx::query(
-            r#"INSERT INTO users (id, aid, email, password_hash, name, role, is_active)
-               VALUES ($1, $2, $3, '', $4, 'staff', true)"#,
-        )
-        .bind(user_id)
-        .bind(account_id)
-        .bind(email)
-        .bind(name)
-        .execute(&mut *tx)
-        .await
-        .map_err(|e| format!("Failed to create user: {}", e))?;
-
-        // ── The account is COMPLETE: ONE commit, here, BEFORE the mail ────────────────────────
-        tx.commit()
-            .await
-            .map_err(|e| format!("Failed to commit the new account: {}", e))?;
-
-        // Send welcome email with credentials
-        let vars = json!({
-            "name": name,
-            "email": email,
-            "password": password,
-            "url": app_url,
-            // Same reason as the branch above: the live `welcome` template's login link is
-            // `{{app_url}}`, so the variable must carry that name too (kanban t_9563b405).
-            "app_url": app_url,
-        });
-        let sent = email::send_email(state, Some(account_id), email, "welcome", &vars).await;
-
-        if sent.is_ok() {
-            // Only now is the password worth storing — the customer has it in their inbox.
-            sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
-                .bind(&hash)
-                .bind(user_id)
-                .execute(&state.db)
-                .await
-                .map_err(|e| format!("Failed to store password: {}", e))?;
-        } else {
-            tracing::error!(
-                "Credentials for new account {} were NOT delivered — leaving password_hash empty \
-                 so the webhook retry re-issues them",
-                user_id
-            );
-        }
-
-        sent
+        // The credential outcome is `create_account`'s own return value — `Ok` here means the mail,
+        // and therefore the buyer's password, is out.
+        Ok(())
     }
 }
 

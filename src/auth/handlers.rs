@@ -87,6 +87,9 @@ pub async fn register(
             plan_slug: req.plan_slug.as_deref().unwrap_or("free"),
             industry_slug: req.industry_slug.as_deref().unwrap_or("site-flipping"),
             role: "user",
+            // The account is usable without the mail: the caller owns this hash, and
+            // `register` hands the session back in its response (kanban t_6d58f5be).
+            credential_delivery: super::signup::CredentialDelivery::WithTheAccount,
         },
     )
     .await?;

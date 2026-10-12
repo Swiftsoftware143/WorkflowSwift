@@ -282,6 +282,9 @@ pub async fn provision_free_account(
             plan_slug: &plan_slug,
             industry_slug: "site-flipping",
             role: "user",
+            // The marketing-side provisioning has already been reported to the caller, so a
+            // mail failure must never fail the account (kanban t_6d58f5be).
+            credential_delivery: crate::auth::signup::CredentialDelivery::WithTheAccount,
         },
     )
     .await

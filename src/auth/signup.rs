@@ -1,8 +1,10 @@
 //! ONE writer for a self-serve account (design §3.1 rule 4, kanban t_ede5f6ed).
 //!
-//! Both doors that create an account — the public `POST /api/v1/auth/register` and the
-//! fleet-internal `POST /api/v1/internal/provision-free-account` (FunnelSwift tag → free account) —
-//! call [`create_account`]. Sharing ONE implementation is what makes the account a tag mints the
+//! Every door that creates an account — the public `POST /api/v1/auth/register`, the
+//! fleet-internal `POST /api/v1/internal/provision-free-account` (FunnelSwift tag → free
+//! account) and the paid-checkout credential delivery
+//! (`handlers::checkout_handler::deliver_credentials`, kanban t_6d58f5be) — call
+//! [`create_account`]. Sharing ONE implementation is what makes the account a tag mints the
 //! SAME shape the marketing signup mints: own `accounts` row, its seeded tags, an owner `users` row,
 //! a real `account_plans` row on the in-app plan, that plan's first-month credits, and the
 //! industry/dashboard seed. That shape is what makes the minted account log-in-able and
@@ -36,6 +38,30 @@ pub fn generate_temp_password() -> String {
         .collect()
 }
 
+/// How the owner's credential reaches the customer — the ONE thing the account doors in this app do
+/// differently, expressed as a value the ONE writer owns instead of a bypass (kanban t_6d58f5be).
+///
+/// It is a CONTRACT, not a flag: it decides what the COMMITTED `users` row carries and whether a
+/// failed welcome mail is a failure of the CALL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialDelivery {
+    /// The caller owns the credential and the account is usable without the mail: the public signup
+    /// (the user typed — or will reset — the password) and the tag/provision door (a provisioning
+    /// the marketing side has already reported must not fail because a mail could not be sent). The
+    /// row is written WITH its hash and the welcome mail is best-effort — a send failure is logged,
+    /// never returned.
+    WithTheAccount,
+    /// The MAIL IS the credential — nobody, this process included, keeps the plaintext (the paid
+    /// checkout's brand-new buyer). Two things follow, and both are measured behaviour:
+    ///   * the COMMITTED row carries `password_hash = ''`, the `has_password == false` marker the
+    ///     paid delivery reads, so a provider retry after a failed send re-issues a FRESH password
+    ///     to this SAME account instead of minting a second one (kanban t_9563b405);
+    ///   * the hash is stored only AFTER the send is out, and a failed send is RETURNED, never
+    ///     swallowed: the caller (the checkout webhook) turns it into a 5xx so the payment provider
+    ///     retries — the buyer's only way back in.
+    AfterTheSend,
+}
+
 /// Everything [`create_account`] needs.
 ///
 /// `email` MUST already be normalised (`crate::security::email_addr::normalize`) — this function
@@ -45,6 +71,9 @@ pub struct NewAccount<'a> {
     /// The login identity. Normalised, validated, and the idempotency key of both doors.
     pub email: &'a str,
     pub name: &'a str,
+    /// An Argon2 hash — the caller hashes, so the plaintext never enters this module. WHAT
+    /// THE COMMITTED ROW CARRIES depends on `credential_delivery` below: this value, or the
+    /// empty marker while a mail that has not gone out yet is the only copy of the credential.
     pub password_hash: &'a str,
     /// The plaintext password, used ONLY for the welcome template's `{{password}}` placeholder.
     /// `None` keeps the historical public-signup behaviour: the user chose (or will reset) their
@@ -61,6 +90,10 @@ pub struct NewAccount<'a> {
     pub industry_slug: &'a str,
     /// The owner user's role. The public signup mints `user`; the tag door mints the same.
     pub role: &'a str,
+    /// When the owner's credential reaches the customer, and therefore what the COMMITTED
+    /// `users` row carries and whether a failed welcome mail fails this call (kanban
+    /// t_6d58f5be).
+    pub credential_delivery: CredentialDelivery,
 }
 
 /// The rows that were written. `account_id` is this app's notion of "the account".
@@ -190,6 +223,11 @@ async fn unique_account_slug_on(conn: &mut PgConnection, name: &str) -> Result<S
 /// `account_plans` row, that plan's first-month credits and the industry/dashboard seed — is ONE
 /// transaction, committed only once the account is COMPLETE and BEFORE the credentials mail
 /// (measured defect, kanban t_10b8fba6).
+///
+/// The post-commit side effects — the API keys, the n8n tenant config and the dashboard's
+/// default widgets — run for EVERY door and BEFORE any delivery refusal is returned: the
+/// shape a workspace would otherwise be missing is exactly what a retry of the DELIVERY does
+/// not re-seed (kanban t_6d58f5be).
 pub async fn create_account(
     state: &AppState,
     a: NewAccount<'_>,
@@ -315,6 +353,15 @@ pub async fn create_account(
 
     let user_id = Uuid::new_v4();
     let now = Utc::now();
+    // ── What the COMMITTED `users` row carries (kanban t_6d58f5be) ──────────────────────────
+    // The ONE place the two credential contracts differ, decided ONCE here instead of by each
+    // door writing its own user row: with `AfterTheSend` the mail IS the credential, so the
+    // committed row carries the empty marker and the real hash is stored only after the send
+    // is out (below).
+    let committed_password_hash = match a.credential_delivery {
+        CredentialDelivery::WithTheAccount => a.password_hash,
+        CredentialDelivery::AfterTheSend => "",
+    };
     // The owner row. The `users_aid_email_key` arm is KEPT even though the advisory lock above is
     // what makes ONE address ONE login in this app: it is the mapping that turns a UNIQUE violation
     // into the SAME 409 the pre-check returns instead of the 500 a bare `?` produced. (A wrong
@@ -327,7 +374,7 @@ pub async fn create_account(
     .bind(user_id)
     .bind(account_id)
     .bind(a.email)
-    .bind(a.password_hash)
+    .bind(committed_password_hash)
     .bind(a.name)
     .bind(a.role)
     .bind(now)
@@ -458,19 +505,62 @@ pub async fn create_account(
     // unit of work — any failure rolls the WHOLE account back, so a failed signup writes NOTHING.
     tx.commit().await?;
 
-    // Welcome / credentials mail — the app's existing `welcome` template, best-effort (the same
-    // discipline the public signup used: a mail failure never fails the account). Swallowing the
-    // error is safe again here: the account is already committed.
+    // Welcome / credentials mail — the app's existing `welcome` template.
+    //
+    // WHAT THE MAIL MEANS depends on the door, and `credential_delivery` is that difference
+    // expressed once (kanban t_6d58f5be): for `WithTheAccount` it is a courtesy the committed
+    // account does not depend on (a send failure is logged, never returned), while for
+    // `AfterTheSend` the message IS the credential — the committed row deliberately carries
+    // `password_hash = ''`, so the hash may only be stored once the customer actually has the
+    // password, and a failed send must reach the caller.
+    let app_url = "https://app.workflowswift.com";
     let mut welcome_vars = serde_json::json!({
         "name": a.name,
         "email": a.email,
-        "app_url": "https://app.workflowswift.com",
+        // Both names for the same value: the live template's login link reads
+        // `{{app_url}}`, and the paid door used to pass `{{url}}` (kanban t_9563b405) —
+        // one var set now covers both.
+        "app_url": app_url,
+        "url": app_url,
     });
     if let Some(pw) = a.password_plain {
         welcome_vars["password"] = serde_json::json!(pw);
     }
-    let _ =
+    let welcome =
         crate::email::send_email(state, Some(account_id), a.email, "welcome", &welcome_vars).await;
+
+    let mut credential_error: Option<AppError> = None;
+    match a.credential_delivery {
+        // Best-effort: the account is committed and its owner can already sign in.
+        CredentialDelivery::WithTheAccount => {
+            if let Err(e) = welcome {
+                tracing::warn!(%account_id, error = %e, "welcome mail could not be delivered");
+            }
+        }
+        CredentialDelivery::AfterTheSend => match welcome {
+            Ok(()) => {
+                // ONLY NOW is the password worth storing — the customer has it in their inbox.
+                sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+                    .bind(a.password_hash)
+                    .bind(user_id)
+                    .execute(db)
+                    .await?;
+            }
+            Err(e) => {
+                tracing::error!(
+                    %account_id,
+                    %user_id,
+                    error = %e,
+                    "credentials were NOT delivered — the committed row keeps the empty \
+                     password_hash marker so the caller's retry re-issues them to THIS account"
+                );
+                credential_error = Some(AppError::Internal(format!(
+                    "the credential mail could not be delivered: {}",
+                    e
+                )));
+            }
+        },
+    }
 
     // Auto-generate API keys for the new user.
     use crate::handlers::integration_center_handler;
@@ -486,6 +576,15 @@ pub async fn create_account(
     if let Some(did) = dashboard_id {
         industry_handler::seed_default_widgets_internal(state, account_id, did, industry_slug)
             .await;
+    }
+
+    // The delivery refusal is reported LAST, once the account and its whole shape are in
+    // place: what a caller retries is the DELIVERY, not the mint, and a retry (which only
+    // re-issues the password) must land on a COMPLETE workspace (kanban t_6d58f5be). The
+    // account above is committed either way — this value says only that the credential mail
+    // still has to go out.
+    if let Some(e) = credential_error {
+        return Err(e);
     }
 
     Ok(NewAccountIds {
