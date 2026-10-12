@@ -64,6 +64,39 @@ fn flag_bool(map: &serde_json::Map<String, serde_json::Value>, key: &str) -> Opt
     })
 }
 
+/// Lenient top-level i32 read from a RAW request body.
+///
+/// The admin console's forms submit every input as TEXT, so the strict `as_i64()` these two plan
+/// handlers used before made a typed limit a silent no-op: the `COALESCE` in the UPDATE kept the
+/// stored value and the panel reported "Saved!". Measured 2026-10-12: `PUT /api/v1/admin/plans/{id}`
+/// with `{"max_workflows":"50"}` left the column untouched, so a tier's limits could be set once at
+/// creation and never changed from the console.
+fn req_i32(req: &serde_json::Value, key: &str) -> Option<i32> {
+    req.get(key).and_then(|v| {
+        v.as_i64()
+            .map(|n| n as i32)
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse::<i32>().ok()))
+    })
+}
+
+/// Lenient top-level bool read from a RAW request body — same reason as [`req_i32`].
+/// A value that is neither true-ish nor false-ish is treated as ABSENT (`None`) so the UPDATE's
+/// `COALESCE` leaves the stored flag alone instead of mis-reading a typo as `false`.
+fn req_bool(req: &serde_json::Value, key: &str) -> Option<bool> {
+    req.get(key).and_then(|v| {
+        if let Some(b) = v.as_bool() {
+            return Some(b);
+        }
+        v.as_str()
+            .map(|s| s.trim().to_ascii_lowercase())
+            .and_then(|s| match s.as_str() {
+                "true" | "yes" | "on" | "1" | "enabled" => Some(true),
+                "false" | "no" | "off" | "0" | "disabled" => Some(false),
+                _ => None,
+            })
+    })
+}
+
 /// Field-name hints that mark a stored value as a secret.
 const SECRET_HINTS: [&str; 8] = [
     "password",
@@ -558,14 +591,9 @@ pub async fn admin_create_plan(
             .map(|s| s.to_string())
             .or_else(|| v.as_f64().map(|n| format!("{:.2}", n)))
     });
-    let is_active = req
-        .get("is_active")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-    let sort_order = req
-        .get("sort_order")
-        .and_then(|v| v.as_i64())
-        .map(|v| v as i32);
+    // Lenient: the admin panel posts form inputs as strings ("true"/"false", "50").
+    let is_active = req_bool(&req, "is_active").unwrap_or(true);
+    let sort_order = req_i32(&req, "sort_order");
 
     // Every canonical limit/flag the admin sent, in ONE place, so the stored
     // features JSONB is exactly what the API enforcement reads back.
@@ -649,31 +677,20 @@ pub async fn admin_update_plan_full(
             .map(|s| s.to_string())
             .or_else(|| v.as_f64().map(|n| format!("{:.2}", n)))
     });
-    let is_active = req.get("is_active").and_then(|v| v.as_bool());
-    let sort_order = req
-        .get("sort_order")
-        .and_then(|v| v.as_i64())
-        .map(|v| v as i32);
-    let max_workflows = req
-        .get("max_workflows")
-        .and_then(|v| v.as_i64())
-        .map(|v| v as i32);
-    let max_users = req
-        .get("max_users")
-        .and_then(|v| v.as_i64())
-        .map(|v| v as i32);
-    let retention_days = req
-        .get("retention_days")
-        .and_then(|v| v.as_i64())
-        .map(|v| v as i32);
-    let can_deploy_n8n = req.get("can_deploy_n8n").and_then(|v| v.as_bool());
-    let has_api_access = req.get("has_api_access").and_then(|v| v.as_bool());
+    // Lenient reads (`req_i32`/`req_bool`): the admin panel submits every field as TEXT, and the
+    // previous strict `as_i64()`/`as_bool()` made a typed limit a silent no-op — the `COALESCE`
+    // below kept the stored value, so a tier's price and limits could be set once at creation and
+    // never changed from the console (measured 2026-10-12).
+    let is_active = req_bool(&req, "is_active");
+    let sort_order = req_i32(&req, "sort_order");
+    let max_workflows = req_i32(&req, "max_workflows");
+    let max_users = req_i32(&req, "max_users");
+    let retention_days = req_i32(&req, "retention_days");
+    let can_deploy_n8n = req_bool(&req, "can_deploy_n8n");
+    let has_api_access = req_bool(&req, "has_api_access");
     // The hourly outbound Notify cap (kanban t_d3ff37ef). -1 = unlimited, the same convention the
     // sibling caps use; it is read live by `crate::notify::per_hour_cap`.
-    let max_notify_per_hour = req
-        .get("max_notify_per_hour")
-        .and_then(|v| v.as_i64())
-        .map(|v| v as i32);
+    let max_notify_per_hour = req_i32(&req, "max_notify_per_hour");
     let payment_provider = req
         .get("payment_provider")
         .and_then(|v| v.as_str())
