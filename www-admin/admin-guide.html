@@ -276,7 +276,8 @@
       </tbody>
       </table>
       <p><strong>Where enforcement happens:</strong> <code>src/features.rs</code> resolves the account's plan
-      (<code>account_plans</code> → <code>accounts.plan_id</code> → lowest-<code>sort_order</code> active tier, so an account with no
+      (<code>account_plans</code> → <code>accounts.plan_id</code> → the cheapest ACTIVE tier by price,
+      <code>price_monthly</code> then <code>name</code> — the free tier — so an account with no
       plan falls back to the free tier rather than being unlimited) and applies
       <code>enforce_feature_limit</code> / <code>enforce_plan_flag</code> at the API. Wired gates include: workflow creation
       (<code>max_workflows</code>), templates (<code>max_templates</code>), instance creation (<code>max_instances</code>), team growth

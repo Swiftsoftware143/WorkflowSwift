@@ -80,7 +80,8 @@ boundary is refused with `402`. A key that is absent is treated as *not configur
 | `/api/v1/admin/feature-definitions` | GET | The 16 canonical feature keys, their value type, default and category |
 
 **Where enforcement happens:** `src/features.rs` resolves the account's plan
-(`account_plans` → `accounts.plan_id` → lowest-`sort_order` active tier, so an account with no
+(`account_plans` → `accounts.plan_id` → the cheapest ACTIVE tier by price, `price_monthly` then
+`name` — the free tier, so an account with no
 plan falls back to the free tier rather than being unlimited) and applies
 `enforce_feature_limit` / `enforce_plan_flag` at the API. Wired gates include: workflow creation
 (`max_workflows`), templates (`max_templates`), instance creation (`max_instances`), team growth
