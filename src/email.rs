@@ -818,6 +818,13 @@ async fn send_email_fallback(
         }
         "password_reset" => {
             let token = vars.get("token").and_then(|v| v.as_str()).unwrap_or("");
+            // The customer must be TOLD where to enter the code (fixed 2026-10-13, cron `default`):
+            // this mail used to hand over a 36-character code with no destination at all, so someone
+            // who had forgotten their password had to guess where the reset form lives.
+            let app_url = vars
+                .get("app_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("https://app.workflowswift.com");
 
             let html_body = format!(
                 r#"<!DOCTYPE html>
@@ -830,16 +837,18 @@ async fn send_email_fallback(
 <p style="font-size:16px;color:#374151;">You have requested a password reset.</p>
 <div style="background:#fef2f2;padding:20px;border-radius:8px;margin:25px 0;text-align:center;border:2px dashed #dc2626;">
 <p style="font-size:32px;font-weight:bold;letter-spacing:6px;color:#dc2626;margin:0;font-family:monospace;">{token}</p></div>
+<p style="font-size:14px;color:#374151;">Open <a href="{app_url}/login" style="color:#dc2626;">{app_url}/login</a> and click <strong>Forgot password?</strong>, then enter the code above to choose a new password.</p>
 <p style="font-size:14px;color:#6b7280;">Code expires in <strong>1 hour</strong>.</p>
 <p style="font-size:14px;color:#9ca3af;margin-top:25px;">If you did not request this, ignore this email.</p>
 <p style="font-size:14px;color:#9ca3af;text-align:center;margin-top:30px;">- The WorkflowSwift Team</p>
 </td></tr></table></body></html>"#,
-                token = token
+                token = token,
+                app_url = app_url
             );
 
             let text_body = format!(
-                "Your password reset code is: {}\n\nThis code expires in 1 hour.\n\nIf you did not request this password reset, please ignore this email.\n\n- WorkflowSwift",
-                token
+                "Your password reset code is: {}\n\nOpen {}/login and click \"Forgot password?\", then enter the code above to choose a new password.\n\nThis code expires in 1 hour.\n\nIf you did not request this password reset, please ignore this email.\n\n- WorkflowSwift",
+                token, app_url
             );
 
             send_branded(
