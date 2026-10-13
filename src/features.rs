@@ -10,8 +10,8 @@
 //! Value semantics: `-1`, a missing value, or the string `"unlimited"` means unlimited;
 //! `0` means "not included in this plan"; anything else is a hard cap.
 //!
-//! Plan resolution: an active `account_plans` row, else `accounts.plan_id`, else the
-//! lowest `sort_order` active tier (the free tier). Accounts with no plan must NOT be
+//! Plan resolution: an active `account_plans` row, else `accounts.plan_id`, else the CHEAPEST
+//! active tier by price (the free tier) — `resolve_plan_id`. Accounts with no plan must NOT be
 //! unlimited — that made every gate in the product decorative.
 
 use crate::error::AppError;
@@ -145,6 +145,14 @@ fn tier_column_sql(col: &str) -> Option<&'static str> {
 
 /// Resolve the effective plan for an account. Never returns unlimited-by-omission:
 /// a plan-less account falls back to the free tier.
+///
+/// The fallback is the CHEAPEST ACTIVE tier (`price_monthly`, then `name`), not "the first row by
+/// `sort_order`" (kanban t_1fcaacb2). `sort_order` is a DISPLAY pin an operator drags in the admin
+/// Plans tab — it carries no pricing meaning and every `plan_tiers` row was seeded with its own
+/// value, so reading a PLAN GRANT off it meant a display edit could silently re-grant every
+/// plan-less account a different tier's limits. Price is the property the fallback actually means:
+/// the free tier is the plan that costs nothing. Measured live 2026-10-13 the two queries agree —
+/// Free ($0.00, sort_order 0) — and the free tier is the only $0 active tier.
 pub async fn resolve_plan_id(db: &PgPool, aid: Uuid) -> Result<Option<Uuid>, AppError> {
     if let Some(pid) = sqlx::query_scalar::<_, Option<Uuid>>(
         "SELECT plan_id FROM account_plans WHERE aid = $1 AND status = 'active' \
@@ -169,7 +177,8 @@ pub async fn resolve_plan_id(db: &PgPool, aid: Uuid) -> Result<Option<Uuid>, App
     }
 
     Ok(sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM plan_tiers WHERE is_active = true ORDER BY sort_order ASC, created_at ASC LIMIT 1",
+        "SELECT id FROM plan_tiers WHERE is_active = true \
+         ORDER BY price_monthly ASC NULLS LAST, name ASC, created_at ASC LIMIT 1",
     )
     .fetch_optional(db)
     .await?)
