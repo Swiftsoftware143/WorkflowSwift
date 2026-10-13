@@ -76,23 +76,47 @@ pub async fn receive_incoming(
         payload.contact.email.as_deref().unwrap_or("no-email"),
     );
 
-    // Find the first active workflow whose name or description matches the source
-    // Workflows are linked to integration targets via workflow_steps.integration_target_id
-    // The trigger mapping is: workflow name contains source slug, or a step config maps it
+    // Find the first active workflow this source is BOUND to. Three binding mechanisms,
+    // in precedence order (rank 0 wins), all of them scoped to a single workflow row:
+    //
+    //   1. an explicit trigger — `trigger_type = 'incoming'` with the source slug (and, when
+    //      the workflow names one, the campaign slug) in `trigger_config`. This is what the
+    //      customer console's "Trigger source" field writes (www-app/index.html, WfModal);
+    //   2. a step config naming the source (`workflow_steps.config->>'source'` /
+    //      `'campaign_slug'`) — the pre-existing arm, unchanged;
+    //   3. the legacy naming convention: the workflow's NAME or DESCRIPTION containing the
+    //      source slug. Kept so rows bound before the console grew the field keep matching.
+    //
+    // `trigger_config->>'campaign_slug'` is honoured only when the workflow actually sets one,
+    // so a workflow bound to a source without a campaign accepts every push from that source,
+    // while one bound to a specific campaign does not answer a different campaign's push.
     let workflow = sqlx::query_as::<_, WorkflowRow>(
         r#"SELECT id, aid, name, description, category
            FROM workflows
            WHERE is_active = true
            AND (
-               name ILIKE $1
-               OR description ILIKE $1
+               (
+                   trigger_type = 'incoming'
+                   AND trigger_config->>'source' = $2
+                   AND (
+                       COALESCE(trigger_config->>'campaign_slug', '') = ''
+                       OR trigger_config->>'campaign_slug' = $3
+                   )
+               )
                OR id IN (
                    SELECT ws.workflow_id FROM workflow_steps ws
                    WHERE ws.config->>'source' = $2
                       OR ws.config->>'campaign_slug' = $3
                )
+               OR name ILIKE $1
+               OR description ILIKE $1
            )
-           ORDER BY created_at DESC
+           ORDER BY
+               CASE
+                   WHEN trigger_type = 'incoming' AND trigger_config->>'source' = $2 THEN 0
+                   ELSE 1
+               END,
+               created_at DESC
            LIMIT 1"#,
     )
     .bind(format!("%{}%", source))
@@ -114,7 +138,12 @@ pub async fn receive_incoming(
                 "status": "accepted",
                 "matched": false,
                 "message": format!("No active workflow matches source '{}' / slug '{}'", source, slug),
-                "note": "Create a workflow in WorkflowSwift with 'incoming' as trigger source"
+                "note": format!(
+                    "No workflow is bound to this source yet. In WorkflowSwift open Workflows, \
+                     create a workflow, set its Trigger source to '{}' and save — pushes from '{}' \
+                     then start it. (Putting '{}' in the workflow name also binds it.)",
+                    source, source, source
+                )
             })));
         }
     };

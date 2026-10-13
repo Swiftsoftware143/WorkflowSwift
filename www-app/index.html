@@ -1538,17 +1538,31 @@ const WfModal = () => {
   // lives in the SHARED view object, re-seeded FROM THE ROW on every open (openWfModal clears
   // S.formSeeded), so a mid-save renderApp() cannot revert it to the stored row.
   const wf = S.wfEdit || null;
-  const f = viewState('wf_form', { name:'', desc:'', cat:'', surface:'' });
+  const f = viewState('wf_form', { name:'', desc:'', cat:'', surface:'', trigger:'manual', src:'', slug:'' });
   if (!S.formSeeded) {
     f.name = wf ? (wf.name || '') : ''; f.desc = wf ? (wf.description || '') : '';
     f.cat = wf ? (wf.category || '') : ''; f.surface = (wf && wf.surface_id) ? wf.surface_id : '';
+    // kanban t_ca53bdcf — the trigger the receiver actually reads is seeded FROM THE ROW, so
+    // reopening this modal shows the stored binding instead of quietly resetting it to manual.
+    f.trigger = (wf && wf.trigger_type === 'incoming') ? 'incoming' : 'manual';
+    const tc = (wf && wf.trigger_config) || {};
+    f.src = (typeof tc.source === 'string') ? tc.source : '';
+    f.slug = (typeof tc.campaign_slug === 'string') ? tc.campaign_slug : '';
     S.formSeeded = true;
   }
   const surfaces = S.surfaces || [];
-  const save = async () => { if(!f.name) return toast('Name required','err'); S.loading=true; renderApp();
+  const save = async () => { if(!f.name) return toast('Name required','err');
+    if (f.trigger === 'incoming' && !f.src.trim()) return toast('Name the source tool that pushes to this workflow','err');
+    S.loading=true; renderApp();
     try {
       const body = { name: f.name, description: f.desc, category: f.cat };
       if (f.surface) body.surface_id = f.surface;
+      // kanban t_ca53bdcf — the receiver matches trigger_type='incoming' against
+      // trigger_config->>'source', so the field the customer sets here is the field that binds.
+      body.trigger_type = (f.trigger === 'incoming') ? 'incoming' : 'manual';
+      body.trigger_config = (f.trigger === 'incoming')
+        ? { source: f.src.trim(), campaign_slug: f.slug.trim() }
+        : {};
       if (wf) { await API.put('/workflows/' + wf.id, body); toast('Workflow updated'); }
       else { await API.post('/workflows', body); toast('Workflow created'); }
       S.workflows = null; closeModal();
@@ -1563,6 +1577,16 @@ const WfModal = () => {
         <option value="">No surface</option>
         ${surfaces.map(s=>html`<option key=${s.id} value=${s.id}>${s.name}</option>`)}
       </select></div>` : ''}
+    <div class="mb-4"><label class="label">Trigger source</label>
+      <select class="input" value=${f.trigger} onChange=${e=>{f.trigger=e.target.value; renderApp();}}>
+        <option value="manual">Manual — only runs when you run it</option>
+        <option value="incoming">Incoming — starts when another Swift tool pushes a lead</option>
+      </select></div>
+    ${f.trigger === 'incoming' ? html`<div class="mb-4">
+      <div><label class="label">Source tool</label><input class="input" value=${f.src} onInput=${e=>f.src=e.target.value} placeholder="e.g. missedcallrespondr" /></div>
+      <div class="mt-3"><label class="label">Campaign slug (optional)</label><input class="input" value=${f.slug} onInput=${e=>f.slug=e.target.value} placeholder="Leave blank to accept every campaign" /></div>
+      <div class="text-xs text-gray-500 mt-1">A lead pushed by another Swift tool starts this workflow when the tool's source matches the box above. The source is the tool's own name — e.g. <code>missedcallrespondr</code>, <code>funnelswift</code> or <code>incentiveswift</code>. A workflow whose NAME contains that source also binds.</div>
+    </div>` : ''}
     <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():(wf?'Save Workflow':'Create Workflow')}</button>
   <//>`; };
 const BrandModal = () => {
