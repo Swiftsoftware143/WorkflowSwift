@@ -187,18 +187,55 @@ fn warn_unsubstituted(rendered: &str, context: &str) -> Vec<String> {
     left
 }
 
-/// Render a template string by replacing {{key}} placeholders with values from `vars`.
-/// Anything left over is reported by [`warn_unsubstituted`] instead of being mailed silently.
+/// Render a template string by replacing the placeholder keys in `vars` — in BOTH brace
+/// conventions — with their values. Anything left over is reported by [`warn_unsubstituted`]
+/// instead of being mailed silently.
+///
+/// BOTH CONVENTIONS, ONE RENDERER (measured live 2026-10-12). `{{key}}` is what the shipped rows
+/// speak, but the admin console's template editor accepts a single-brace body with no placeholder
+/// help and no validation, so a row an operator saved as `Welcome to {app_name}!` mailed the
+/// recipient those literal bytes — including `Password: {password}`, i.e. no credentials at all.
+/// Measured end to end off a local SMTP sink: the ACTIVE single-brace welcome row
+/// (`404dbfc7-c786-4c2a-bf2c-7bd988efafec`) sent the subject `Welcome to {app_name}!` and a body
+/// whose password line was literally `{password}`. The two apps already normalised this way are
+/// IncentiveSwift and MissedCall Respondr.
+///
+/// The substitution is KEY-DRIVEN, never a regex sweep: only `{k}` / `{{k}}` for a `k` present in
+/// the merged map is replaced, so a brace that is NOT a placeholder (JSON in a body, a CSS block)
+/// survives byte-for-byte. App-level facts (`app_name`, `app_url`, `login_url`) are merged in as
+/// defaults so the same template renders the same whichever door sent it; a caller-supplied key
+/// wins.
 fn render_template(template: &str, vars: &serde_json::Value, context: &str) -> String {
     let mut result = template.to_string();
 
-    // Replace {{key}} with JSON string values
+    // The app's own URL, unless the caller knows a better one (the paid door passes the same value
+    // under `app_url`). `app_url` and `login_url` are the two spellings the shipped rows use for
+    // it, so both are bound to the one value.
+    let app_url = vars
+        .get("app_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or(crate::branding::APP_URL);
+
+    let mut merged: serde_json::Map<String, serde_json::Value> = serde_json::Map::new();
+    merged.insert(
+        "app_name".to_string(),
+        serde_json::json!(crate::branding::APP_NAME),
+    );
+    merged.insert("app_url".to_string(), serde_json::json!(app_url));
+    merged.insert("login_url".to_string(), serde_json::json!(app_url));
     if let Some(obj) = vars.as_object() {
+        // Caller-supplied keys WIN, so a door that knows the real account name still overrides.
         for (key, value) in obj {
-            let placeholder = format!("{{{{{}}}}}", key);
-            let replacement = value.as_str().unwrap_or("");
-            result = result.replace(&placeholder, replacement);
+            merged.insert(key.clone(), value.clone());
         }
+    }
+
+    for (key, value) in &merged {
+        let replacement = value.as_str().unwrap_or("");
+        // `{{key}}` FIRST: replacing the single form first would eat the inner braces of a
+        // `{{key}}` placeholder and leave a stray `{}`-wrapped value behind.
+        result = result.replace(&format!("{{{{{}}}}}", key), replacement);
+        result = result.replace(&format!("{{{}}}", key), replacement);
     }
 
     warn_unsubstituted(&result, context);
