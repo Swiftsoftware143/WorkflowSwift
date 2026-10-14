@@ -2358,41 +2358,50 @@ mod tests {
         }
     }
 
-    /// The console is the surface the product sells from: every step type its Builder offers must
+    /// The consoles are the surface the product sells from: every step type the Builder offers must
     /// be executable, or the tenant builds a step that silently does nothing.
+    ///
+    /// BOTH served SPAs are pinned since kanban t_be118f36: the admin console's Templates panel grew
+    /// its own picker (a template is authored WITH its steps, because `POST /templates` requires
+    /// them), and that picker is written in the same shape (`STEP_TYPES` / `STEP_TYPES_EXTRA`, keys
+    /// as `k:'…'`) precisely so this one rule covers it too.
     #[test]
     fn the_console_picker_offers_only_executable_step_types() {
-        let spa = include_str!("../www-app/index.html");
-        let mut offered: Vec<String> = Vec::new();
-        for decl in ["const STEP_TYPES = [", "const STEP_TYPES_EXTRA = ["] {
-            let start = spa
-                .find(decl)
-                .expect("the picker arrays are in the served console");
-            let end = start + spa[start..].find("];").expect("array terminator");
-            for (idx, _) in spa[start..end].match_indices("k:'") {
-                let rest = &spa[start + idx + 3..];
-                if let Some(key) = rest.split('\'').next() {
-                    offered.push(key.to_string());
+        for (name, spa) in [
+            ("www-app", include_str!("../www-app/index.html")),
+            ("www-admin", include_str!("../www-admin/index.html")),
+        ] {
+            let mut offered: Vec<String> = Vec::new();
+            for decl in ["const STEP_TYPES = [", "const STEP_TYPES_EXTRA = ["] {
+                let start = spa.find(decl).unwrap_or_else(|| {
+                    panic!("the picker arrays are in the served {name} console")
+                });
+                let end = start + spa[start..].find("];").expect("array terminator");
+                for (idx, _) in spa[start..end].match_indices("k:'") {
+                    let rest = &spa[start + idx + 3..];
+                    if let Some(key) = rest.split('\'').next() {
+                        offered.push(key.to_string());
+                    }
                 }
             }
-        }
-        offered.sort();
-        offered.dedup();
-        assert!(
-            offered.len() >= 8,
-            "the picker parse found only {} types — the parse is broken: {offered:?}",
-            offered.len()
-        );
-        for t in &offered {
+            offered.sort();
+            offered.dedup();
             assert!(
-                is_executable_step_type(t),
-                "the console offers '{t}' but the engine has no arm for it (kanban t_fe60cdf5)"
+                offered.len() >= 8,
+                "{name}: the picker parse found only {} types — the parse is broken: {offered:?}",
+                offered.len()
+            );
+            for t in &offered {
+                assert!(
+                    is_executable_step_type(t),
+                    "{name} offers '{t}' but the engine has no arm for it (kanban t_fe60cdf5)"
+                );
+            }
+            assert!(
+                !offered.iter().any(|t| t == "research"),
+                "{name}: research is retired and must not be offered"
             );
         }
-        assert!(
-            !offered.iter().any(|t| t == "research"),
-            "research is retired and must not be offered"
-        );
     }
 
     /// The Notify step's channel list is the same kind of vocabulary as the step types, and since
@@ -2453,6 +2462,38 @@ mod tests {
         assert!(is_notify_channel("webhook"));
         assert_eq!(NOTIFY_CHANNELS.to_vec(), vec!["webhook", "email", "sms"]);
         assert_eq!(RETIRED_NOTIFY_CHANNELS.to_vec(), vec!["slack", "telegram"]);
+
+        // The admin console's Templates step editor obeys the same two rules (kanban t_be118f36): its
+        // offline fallback is `webhook` alone, and its Channel select is built from the FETCHED set —
+        // a literal list here would offer `email`/`sms` on an install with no sender, which the write
+        // path refuses with a 422.
+        let admin = include_str!("../www-admin/index.html");
+        assert!(
+            admin.contains("channels:['webhook']"),
+            "the template editor's notify offline fallback must be webhook alone"
+        );
+        assert!(
+            admin.contains("vocab.channels.map(x=>[x,NOTIFY_CHANNEL_LABELS[x]||x])"),
+            "the template editor's Channel select must build its options from GET /notify/channels"
+        );
+        assert!(
+            admin.contains("vocab.scopes.map(x=>[x,NOTIFY_SCOPE_LABELS[x]||x])"),
+            "a sender-backed channel must pick a recipient scope, never a typed address"
+        );
+        let tstart = admin
+            .find("case 'notify': {")
+            .expect("the notify cfgFields arm is in the served admin console");
+        let mut tend = (tstart + 2600).min(admin.len());
+        while tend > tstart && !admin.is_char_boundary(tend) {
+            tend -= 1;
+        }
+        let tarm = &admin[tstart..tend];
+        for retired in ["slack", "telegram", "discord", "sendgrid", "smtp"] {
+            assert!(
+                !tarm.contains(retired),
+                "the template editor must not offer the retired channel '{retired}'"
+            );
+        }
     }
 
     /// The old arm's answer, and the new one, are what the bug was: `classify_step_status` mapped

@@ -6,7 +6,7 @@ use axum::{
 };
 use serde_json::json;
 use sqlx::Row;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use crate::auth::models::Claims;
@@ -21,12 +21,52 @@ pub struct ListTemplatesQuery {
     pub surface: Option<Uuid>,
 }
 
+/// The ids of the templates this account OWNS, for the `is_mine` flag below.
+///
+/// `workflow_templates.aid` is nullable: the platform's own seeded blueprints are `aid IS NULL`
+/// with `is_public = true`, so `GET /templates` returns a mix of "mine" and "public" rows and the
+/// serialised row carries no ownership field at all. The console therefore had no way to tell the
+/// two apart and drew Edit/Del on every row — including the public ones, where `update_template` /
+/// `delete_template` scope by `aid = $2` and answer 404. Measured live: PUT and DELETE on a seeded
+/// public template both 404 (kanban t_be118f36).
+async fn owned_template_ids(db: &sqlx::PgPool, aid: Uuid) -> Result<HashSet<Uuid>, sqlx::Error> {
+    let ids: Vec<Uuid> = sqlx::query_scalar("SELECT id FROM workflow_templates WHERE aid = $1")
+        .bind(aid)
+        .fetch_all(db)
+        .await?;
+    Ok(ids.into_iter().collect())
+}
+
+/// Serialise template rows with the one field the row shape was missing: whether the CALLER's
+/// account owns the row (`is_mine`).
+///
+/// Additive on purpose (kanban t_be118f36): every existing key of `WorkflowTemplate` is preserved
+/// byte for byte, and the account id itself is never exposed — the flag is a boolean computed
+/// server-side, so a public template shared across tenants does not leak the owner's
+/// `workflow_templates.aid` to them. The console gates Edit / Del / Edit-steps on it, so no panel
+/// draws a control the API will refuse with 404.
+fn templates_with_ownership(
+    rows: Vec<WorkflowTemplate>,
+    owned: &HashSet<Uuid>,
+) -> Vec<serde_json::Value> {
+    rows.iter()
+        .map(|t| {
+            let mut v = serde_json::to_value(t).unwrap_or_else(|_| json!({}));
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert("is_mine".to_string(), json!(owned.contains(&t.id)));
+            }
+            v
+        })
+        .collect()
+}
+
 pub async fn list_templates(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Query(query): Query<ListTemplatesQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let owned = owned_template_ids(&state.db, aid).await?;
 
     // Determine which templates this account's plan allows
     let plan_id: Option<Uuid> = sqlx::query_scalar(
@@ -93,7 +133,9 @@ pub async fn list_templates(
                 .fetch_all(&state.db)
                 .await?
             };
-            return Ok(Json(json!({"templates": templates})));
+            return Ok(Json(json!({
+                "templates": templates_with_ownership(templates, &owned)
+            })));
         }
     }
 
@@ -176,7 +218,7 @@ pub async fn list_templates(
     };
 
     Ok(Json(json!({
-        "templates": templates,
+        "templates": templates_with_ownership(templates, &owned),
         "available_public": available_public,
         "plan": plan_info
     })))
