@@ -52,12 +52,24 @@ pub async fn list_industry_sources(
         ).fetch_all(&s.db).await?
     };
 
+    // The keys are the row's OWN column names, which are also the names `CreateSourceRequest`
+    // (POST /api/v1/admin/industry-sources) accepts — so what this read returns is what a caller
+    // can post back.
+    //
+    // They used to be a THIRD vocabulary (`industry` / `name` / `type` / `cadence` / `active`) that
+    // matched neither the table nor the write body, and the only consumer is this app's own admin
+    // console, whose Industry Sources panel is a generic CRUD whose `fields` list is BOTH the table
+    // columns AND the form's input names. Measured live in real Chromium 2026-10-14: the panel
+    // rendered `["", "", "", "/api/v1/satellite/competitors", "", "3", "", "EditDel"]` — the
+    // Industry Slug, Source Name, Source Type, Refresh Cadence and Is Active cells were EMPTY under
+    // headers that claimed them, because `item['industry_slug']` was undefined. Aligning the read
+    // with the write contract fixes the table and the (also blank) Edit prefill in one place.
     let result: Vec<serde_json::Value> = sources
         .into_iter()
         .map(|s| {
             json!({
-                "id": s.0, "industry": s.1, "name": s.2, "type": s.3,
-                "endpoint": s.4, "cadence": s.5, "credit_cost": s.6, "active": s.7
+                "id": s.0, "industry_slug": s.1, "source_name": s.2, "source_type": s.3,
+                "endpoint": s.4, "refresh_cadence": s.5, "credit_cost": s.6, "is_active": s.7
             })
         })
         .collect();

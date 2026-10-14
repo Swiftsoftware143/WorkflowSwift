@@ -412,7 +412,13 @@ async function showForm(key,label,fields,ep,id,cb,row){
     // Skip blank inputs: an empty string is not "unset" server-side — POST /surfaces would
     // store slug='' instead of slugifying the name, and PUT uses COALESCE (blank can't clear).
     const body={};box.querySelectorAll('#mf input,#mf select').forEach(inp=>{if(String(inp.value).trim()!=='')body[inp.name]=inp.value});
-    const r=await api(id?(EP.list+'/'+id):EP.create,{method:id?'PUT':'POST',body:JSON.stringify(body)});
+    // `EP.upsert` marks a resource whose ONLY write is an upsert POST (admin/industry-sources:
+    // POST /admin/industry-sources is `ON CONFLICT (industry_slug, source_name) DO UPDATE`, and its
+    // /{id} route serves DELETE only, so the generic Edit's PUT answered 405 Method Not Allowed -
+    // measured live 2026-10-14, and this file's own rule is that a button which cannot do anything
+    // is worse than no button). Edit saves with the same POST the Add form uses.
+    const upsert=!!EP.upsert;
+    const r=await api((id&&!upsert)?(EP.list+'/'+id):EP.create,{method:(id&&!upsert)?'PUT':'POST',body:JSON.stringify(body)});
     if(r)showMsg('Saved!');else showMsg('Error saving: '+LAST_ERR,'error');
     if(r){modal.remove();if(cb)cb();}
   };
@@ -1304,7 +1310,11 @@ function renderIndustrySources(c){
     showMsg(r?('Seeded '+(r.created??r.count??r.seeded??'the')+' source(s)'):'Seed failed');
     renderPage();
   };
-  renderCRUD(c.querySelector('#isdata'),'industry-sources','Industry Source',['industry_slug','source_name','source_type','endpoint','refresh_cadence','credit_cost','is_active'],'/admin/industry-sources');
+  // `upsert:true` (measured live 2026-10-14): this resource's ONLY write is POST /admin/industry-sources,
+  // an ON CONFLICT (industry_slug, source_name) DO UPDATE. The /{id} route serves DELETE only, so the
+  // generic Edit's PUT answered 405 and the fixed panel offered an Edit that could never save. Edit now
+  // posts the same upsert the Add form does, prefilled from the row.
+  renderCRUD(c.querySelector('#isdata'),'industry-sources','Industry Source',['industry_slug','source_name','source_type','endpoint','refresh_cadence','credit_cost','is_active'],{list:'/admin/industry-sources',create:'/admin/industry-sources',del:'/admin/industry-sources',upsert:true});
 }
 
 // --- Checkout Sessions (GET /checkout/sessions -> {sessions:[...]}) — read-only history ---
