@@ -228,8 +228,16 @@ function content(){
     else if(s==='prospecting')renderCRUD(c,'prospecting','Prospect',['name','industry','status'],'/dashboard/prospecting',false);
   }else if(t==='workflows'){
     if(s==='all-workflows')renderCRUD(c,'workflows','Workflow',['name','status','created_at'],'/workflows');
-    else if(s==='instances')renderCRUD(c,'instances','Instance',['workflow_id','status','created_at'],'/instances');
-    else if(s==='templates')renderCRUD(c,'templates','Template',['name','category','is_public'],'/templates');
+    // kanban t_zz-tickets (instances/templates arm) — measured live 2026-10-14 against this app's
+    // own API: POST /instances answers 405 (the route table serves GET|PUT /instances/{id} only), so
+    // this panel's + Add minted nothing; and `instance_handler::update_instance` reads ONLY
+    // `req.get("status")`, so the default ['name'] Edit box prefilled the instance name and saved it
+    // into a request field nothing looks at — a green 200 and no change. Edit now offers the one
+    // field the route honours. POST /templates requires `steps: Vec<TemplateStep>` (the console's
+    // Add body was refused 422 "missing field `steps`") and there is no step editor in this console,
+    // so Add is withdrawn there too and the gap is carded rather than papered over.
+    else if(s==='instances')renderCRUD(c,'instances','Instance',['workflow_id','status','created_at'],'/instances',['status'],undefined,false);
+    else if(s==='templates')renderCRUD(c,'templates','Template',['name','category','is_public'],'/templates',['name','category','description'],undefined,false);
   }else if(t==='automation'){
     if(s==='automations')renderCRUD(c,'automations','Automation',['name','trigger_type','enabled'],'/automations');
     else if(s==='agents')renderCRUD(c,'agents','Agent',['name','provider','is_active'],'/agents',false);
@@ -306,6 +314,15 @@ function unwrapList(d){
   if(Array.isArray(d))return d;
   if(!d||typeof d!=='object')return [];
   if(Array.isArray(d.items))return d.items;
+  // kanban t_zz-tickets (templates arm) — a NAMED array key must beat "whichever array comes first".
+  // `GET /api/v1/templates` answers ONE envelope, `{templates, available_public, plan}`, and
+  // serde_json serialises the object alphabetically, so the first array in `Object.keys` is
+  // `available_public` — the plan's public-template catalogue (3 rows, fields
+  // id/name/description/category/industry_name). The Templates panel therefore listed the WRONG
+  // collection: the tenant's own `templates` (5 rows, incl. aid-scoped ones) were never shown, and
+  // its "Is Public" column read a key those rows do not carry, so it rendered blank on every row
+  // (measured live 2026-10-14: API `templates` = 5 rows with is_public, panel = 3 rows without it).
+  for(const k of ['templates']) if(Array.isArray(d[k])) return d[k];
   for(const k of Object.keys(d)){ if(Array.isArray(d[k]))return d[k]; }
   return [];
 }
@@ -345,14 +362,21 @@ async function renderCRUD(container,key,label,fields,ep,editFields,extraAction,a
   // GET-by-id, so its Edit could open only once the form stopped fetching the row.
   const canEdit=editFields!==false;
   const ef=(editFields&&editFields!==false)?editFields:['name'];
-  container.innerHTML=`<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">${label}s</h2><button class="btn btn-primary btn-sm" id="addBtn">+ Add</button></div><div id="list"><p class="text-gray-400 text-sm">Loading...</p></div></div>`;
+  // `addFields === false` is the same rule for the CREATE route, and it is measured, not assumed
+  // (2026-10-14): POST /instances answers 405 Method Not Allowed — the route table serves only
+  // GET|PUT /instances/{id} — so the Instances panel's + Add could never write anything; and
+  // POST /templates REQUIRES `steps: Vec<TemplateStep>`, which the console has no editor for, so the
+  // console's Add body ({name,category,description}) answered 422 "missing field `steps`". A button
+  // that cannot do anything is worse than no button — this file's own rule, one arm over.
+  const canAdd=addFields!==false;
+  container.innerHTML=`<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">${label}s</h2>${canAdd?'<button class="btn btn-primary btn-sm" id="addBtn">+ Add</button>':''}</div><div id="list"><p class="text-gray-400 text-sm">Loading...</p></div></div>`;
   const data=await api(EP.list);
   const items=unwrapList(data);
   const list=container.querySelector('#list');
   const openAdd=()=>showForm(key,label,(addFields&&addFields.length)?addFields:fields,EP,null,()=>renderPage());
   if(!items.length){
     list.innerHTML='<p class="text-gray-400 text-sm">No items yet.</p>';
-    container.querySelector('#addBtn').onclick=openAdd;
+    const ab=container.querySelector('#addBtn'); if(ab)ab.onclick=openAdd;
     return;
   }
   let cols=fields;
@@ -389,7 +413,7 @@ async function renderCRUD(container,key,label,fields,ep,editFields,extraAction,a
     delIt(key,label,EP.del,b.getAttribute('data-del'));});
   if(extraAction)list.querySelectorAll('button[data-extra]').forEach(b=>b.onclick=(ev)=>{ev.preventDefault();
     window[extraAction.fn](b.getAttribute('data-extra'));});
-  container.querySelector('#addBtn').onclick=openAdd;
+  const ab=container.querySelector('#addBtn'); if(ab)ab.onclick=openAdd;
 }
 
 function renderPage(){renderApp()}
