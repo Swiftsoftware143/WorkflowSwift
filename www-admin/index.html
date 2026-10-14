@@ -1458,15 +1458,25 @@ function renderAdminSettings(c){
     const v=(d&&d.value)||{};
     const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
     const st=c.querySelector('#estatus');
-    if(st){
-      if(v.last_send_ok===false&&v.last_send_error){
-        st.innerHTML='<div class="mb-4 rounded border p-3 text-sm" style="border-color:#dc2626;background:#fef2f2;color:#991b1b"><strong>Last email send FAILED</strong> &mdash; no user is receiving mail until this is fixed.<br><span class="font-mono text-xs">'+esc(v.last_send_template)+' @ '+esc(v.last_send_at)+'</span><br>'+esc(v.last_send_error)+'</div>';
-      }else if(v.last_send_ok===true){
-        st.innerHTML='<div class="mb-4 rounded border p-3 text-sm" style="border-color:#16a34a;background:#f0fdf4;color:#166534">Last email send succeeded (template '+esc(v.last_send_template)+' at '+esc(v.last_send_at)+').</div>';
+    // ONE renderer, called on load AND after the test press (2026-10-14). Three states, not two: a
+    // WITHHELD send (reserved/test recipient — nothing was attempted) is not a FAILURE and must not
+    // tell the operator to go fix the transport, and it must not read as a success either.
+    const renderStatus=(val)=>{
+      if(!st)return;
+      val=val||{};
+      if(val.last_send_withheld===true){
+        st.innerHTML='<div class="mb-4 rounded border p-3 text-sm" style="border-color:#d97706;background:#fffbeb;color:#92400e"><strong>&#9940; Last email was NOT SENT</strong> &mdash; the recipient is a reserved/test address, so no customer mail was affected.<br><span class="font-mono text-xs">'+esc(val.last_send_template)+' @ '+esc(val.last_send_at)+'</span><br>'+esc(val.last_send_error)+'</div>';
+      }else if(val.last_send_ok===false&&val.last_send_error){
+        st.innerHTML='<div class="mb-4 rounded border p-3 text-sm" style="border-color:#dc2626;background:#fef2f2;color:#991b1b"><strong>Last email send FAILED</strong> &mdash; no user is receiving mail until this is fixed.<br><span class="font-mono text-xs">'+esc(val.last_send_template)+' @ '+esc(val.last_send_at)+'</span><br>'+esc(val.last_send_error)+'</div>';
+      }else if(val.last_send_ok===true){
+        st.innerHTML='<div class="mb-4 rounded border p-3 text-sm" style="border-color:#16a34a;background:#f0fdf4;color:#166534">Last email send succeeded (template '+esc(val.last_send_template)+' at '+esc(val.last_send_at)+').</div>';
       }else{
         st.innerHTML='<div class="mb-4 rounded border p-3 text-sm" style="border-color:#d1d5db;background:#f9fafb;color:#374151">No email has been sent from this install yet &mdash; press <em>Send test email</em> to prove the transport works.</div>';
       }
-    }
+    };
+    window._wfEmailStatus=renderStatus;
+    renderStatus(v);
+
     const f=(id,label,ph,val)=>'<div><label class="text-xs text-gray-500">'+label+'</label><input id="'+id+'" class="input" placeholder="'+(ph||'')+'" value="'+String(val==null?'':val).replace(/"/g,'&quot;')+'"></div>';
     form.innerHTML='<div><label class="text-xs text-gray-500">Provider</label><select id="e_provider" class="input">'
       +['smtp','mailgun','sendgrid','sendiio'].map(p=>'<option value="'+p+'"'+((v.provider||'smtp')===p?' selected':'')+'>'+p+'</option>').join('')
@@ -1499,6 +1509,9 @@ function renderAdminSettings(c){
     c.querySelector('#eresult').textContent='Sending...';
     const r=await api('/admin/settings/email/test',{method:'POST',body:JSON.stringify({to})});
     c.querySelector('#eresult').textContent=r?JSON.stringify(r,null,2):'Request failed.';
+    // Re-read the last-send line: the press just moved it (a withheld recipient is recorded as the
+    // non-send it is), and an operator looking at the panel must see the attempt they just made.
+    try{ const d2=await api('/admin/settings/email'); if(typeof window._wfEmailStatus==='function') window._wfEmailStatus((d2&&d2.value)||{}); }catch(e){}
   };
 
   // ── SMS Provider (kanban t_d3ff37ef) ───────────────────────────────────────────────────────────

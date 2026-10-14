@@ -364,6 +364,11 @@ pub async fn send_email(
             template = %template_type,
             "send suppressed: recipient is a fleet harness address (fleet-dev domain)"
         );
+        // Record the NON-SEND (2026-10-14). The return below is honest about the transport — nothing
+        // was attempted — but recording NOTHING left an older `last_send_ok: true` standing in
+        // `admin_settings.email`, so the admin panel read "Last email send succeeded" for a message
+        // that never left the box (the class fixed on FunnelSwift/ADASwift/MissedCall the same day).
+        record_withheld_send(state, template_type, domain).await;
         return Ok(());
     }
     let result = send_email_inner(state, aid, to, template_type, vars).await;
@@ -398,10 +403,12 @@ async fn record_send_outcome(state: &AppState, template_type: &str, result: &Res
         Ok(()) => {
             obj.insert("last_send_ok".to_string(), json!(true));
             obj.insert("last_send_error".to_string(), json!(null));
+            obj.remove("last_send_withheld");
         }
         Err(e) => {
             obj.insert("last_send_ok".to_string(), json!(false));
             obj.insert("last_send_error".to_string(), json!(e.clone()));
+            obj.remove("last_send_withheld");
         }
     }
     obj.insert(
@@ -419,6 +426,58 @@ async fn record_send_outcome(state: &AppState, template_type: &str, result: &Res
     if let Err(e) = seal_config_secrets(&state.db, &mut cfg).await {
         eprintln!(
             "[email] could not seal admin_settings.email before recording the send outcome: {e}"
+        );
+    }
+
+    let _ =
+        sqlx::query("UPDATE admin_settings SET value = $1, updated_at = NOW() WHERE key = 'email'")
+            .bind(&cfg)
+            .execute(&state.db)
+            .await;
+}
+
+/// Record a message the transport REFUSED to attempt — the recipient is a fleet-harness / reserved
+/// address, so `send_email` returns before any provider request (2026-10-14).
+///
+/// Distinct from a FAILURE: nothing is broken, no customer mail is affected, and the operator must
+/// not be told to go fix the transport. So it writes `last_send_ok=false` **plus**
+/// `last_send_withheld=true`, and the admin panel renders that as "was NOT SENT" rather than
+/// "FAILED". Same discipline as `record_send_outcome`: best-effort (a bookkeeping error must never
+/// fail a send) and it re-seals the credentials before writing the row back.
+async fn record_withheld_send(state: &AppState, template_type: &str, domain: &str) {
+    let row = sqlx::query_scalar::<_, serde_json::Value>(
+        "SELECT value FROM admin_settings WHERE key = 'email'",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
+    let Some(mut cfg) = row else { return };
+    let Some(obj) = cfg.as_object_mut() else {
+        return;
+    };
+
+    obj.insert("last_send_ok".to_string(), json!(false));
+    obj.insert("last_send_withheld".to_string(), json!(true));
+    obj.insert(
+        "last_send_error".to_string(),
+        json!(format!(
+            "withheld: '{domain}' is a fleet-harness / reserved address, so nothing was sent (no provider request)"
+        )),
+    );
+    obj.insert(
+        "last_send_at".to_string(),
+        json!(chrono::Utc::now().to_rfc3339()),
+    );
+    obj.insert(
+        "last_send_template".to_string(),
+        json!(template_type.to_string()),
+    );
+
+    if let Err(e) = seal_config_secrets(&state.db, &mut cfg).await {
+        eprintln!(
+            "[email] could not seal admin_settings.email before recording the withheld send: {e}"
         );
     }
 
