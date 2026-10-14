@@ -167,6 +167,14 @@ async function stopImpersonation(){
 }
 window.startImpersonation=startImpersonation;
 
+// kanban t_zz-tickets — the slug a sub-item's panel actually matches. `content()` compares
+// app.sub against the SLUG ('tickets', 'all-workflows'), but the TAB button used to store the
+// sub's LABEL ('Tickets', 'All Workflows') in app.sub — so clicking any sidebar tab rendered an
+// EMPTY panel until the operator clicked the sub-item underneath it. Measured live 2026-10-14:
+// click '🎫 Support' -> main innerHTML length 11, 0 `.card`, no + Add; click 'Tickets' -> the
+// panel. Same for '⚙️ Workflows' -> 'All Workflows'. One slug function, used by both callers.
+const subSlug=s=>s.toLowerCase().replace(/\s+&?\s*/g,'-').replace(/[^a-z0-9-]/g,'');
+
 const tabs=[
   {id:'dashboard',label:'📊 Dashboard',subs:['Overview','Brand Monitor','Competitor Watch','Prospecting']},
   {id:'workflows',label:'⚙️ Workflows',subs:['All Workflows','Instances','Templates']},
@@ -190,11 +198,11 @@ function sidebar(){
   // a non-operator. showAdminTab() also hides it while impersonating a tenant, whose token is not an
   // admin token.
   tabs.filter(t=>t.id!=='admin'||showAdminTab()).forEach(t=>{
-    const btn=h('button',{className:'tab-btn'+(app.tab===t.id?' active':''),onclick:()=>{app.tab=t.id;app.sub=t.subs[0];renderApp()}},t.label);
+    const btn=h('button',{className:'tab-btn'+(app.tab===t.id?' active':''),onclick:()=>{app.tab=t.id;app.sub=subSlug(t.subs[0]);renderApp()}},t.label);
     nav.appendChild(btn);
     if(app.tab===t.id){
       t.subs.forEach(s=>{
-        const sid=s.toLowerCase().replace(/\s+&?\s*/g,'-').replace(/[^a-z0-9-]/g,'');
+        const sid=subSlug(s);
         const sub=h('button',{className:'sub-item'+(app.sub===sid?' active':''),onclick:()=>{app.sub=sid;renderApp()}},s);
         nav.appendChild(sub);
       });
@@ -239,7 +247,15 @@ function content(){
     else if(s==='n8n-proxy')renderN8N(c);
     else if(s==='bridge')renderBridge(c);
   }else if(t==='support'){
-    if(s==='tickets')renderCRUD(c,'tickets','Ticket',['title','status','priority'],'/tickets');
+    // kanban t_zz-tickets — measured live 2026-10-14 against this app's own API: this panel's form
+    // fields and its first COLUMN were written with a key the handler does not have. The row JSON
+    // from GET|POST /tickets carries `subject` (never `title`), so the first column rendered BLANK
+    // on every row; `handlers::tickets_handler::CreateInput` REQUIRES `subject`, so the console's
+    // own Add body ({title,status,priority}) was refused 422 "missing field `subject`"; and
+    // `UpdateInput` accepts {subject,description,status,priority} — a PUT of {"name":…} answered a
+    // green 200 and changed NOTHING, because no field of that name exists and every column is
+    // COALESCE'd against its current value. All three now use the API's real field names.
+    if(s==='tickets')renderCRUD(c,'tickets','Ticket',['subject','status','priority'],'/tickets',['subject','description','status','priority'],undefined,['subject','description','status','priority']);
   }else if(t==='profile'){
     if(s==='my-profile')renderProfile(c);
     else if(s==='email-branding')renderBranding(c);

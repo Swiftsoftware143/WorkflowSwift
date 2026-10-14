@@ -113,8 +113,15 @@ pub async fn create(
     let status = b.status.clone().unwrap_or_else(|| "open".to_string());
     let priority = b.priority.clone().unwrap_or_else(|| "medium".to_string());
     let source = b.source.clone().unwrap_or_else(|| "manual".to_string());
+    // kanban t_zz-tickets — `tickets.description` is `text NOT NULL DEFAULT ''`, and this INSERT
+    // names the column explicitly, so binding the Option straight through sent SQL NULL and the
+    // column DEFAULT never applied: a ticket created WITHOUT a description — the console's own form
+    // skips blank inputs, and `subject` is the only required field — answered
+    // `500 {"code":500,"error":true,"message":"Database error"}` (measured live 2026-10-14; the same
+    // body WITH a description answered 201). Bind the column's own default instead of NULL.
+    let description = b.description.clone().unwrap_or_default();
     sqlx::query("INSERT INTO tickets (id, aid, subject, description, status, priority, source) VALUES ($1,$2,$3,$4,$5,$6,$7)")
-        .bind(id).bind(aid).bind(&b.subject).bind(&b.description).bind(&status).bind(&priority).bind(&source)
+        .bind(id).bind(aid).bind(&b.subject).bind(&description).bind(&status).bind(&priority).bind(&source)
         .execute(&state.db).await?;
     let row = sqlx::query_as::<_, Ticket>(BY_ID)
         .bind(id)
