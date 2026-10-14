@@ -1523,7 +1523,8 @@ pub async fn admin_list_email_templates(
     require_admin(&claims)?;
 
     let rows = sqlx::query(
-        r#"SELECT id, name, subject, template_type, is_html, is_default, created_at, updated_at
+        r#"SELECT id, name, subject, body, html_body, template_type, is_html, is_default,
+                      created_at, updated_at
            FROM email_templates ORDER BY name ASC"#,
     )
     .fetch_all(&state.db)
@@ -1534,6 +1535,12 @@ pub async fn admin_list_email_templates(
         let id: Uuid = row.try_get("id")?;
         let name: String = row.try_get("name")?;
         let subject: Option<String> = row.try_get("subject").ok();
+        // The WORDING is what this screen exists to change, and the console cannot show an
+        // input it never received (kanban t_ws-mailtpl, measured live 2026-10-14): without
+        // these two the panel's Edit opened with empty body boxes over templates whose
+        // wording is stored and sent.
+        let body: Option<String> = row.try_get("body").ok();
+        let html_body: Option<String> = row.try_get("html_body").ok();
         let template_type: Option<String> = row.try_get("template_type").ok();
         let is_html: Option<bool> = row.try_get("is_html").ok();
         let is_default: Option<bool> = row.try_get("is_default").ok();
@@ -1544,6 +1551,8 @@ pub async fn admin_list_email_templates(
             "id": id.to_string(),
             "name": name,
             "subject": subject,
+            "body": body,
+            "html_body": html_body,
             "template_type": template_type,
             "is_html": is_html,
             "is_default": is_default,
