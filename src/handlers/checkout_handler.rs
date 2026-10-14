@@ -22,8 +22,26 @@ use sqlx::Row;
 
 /// GET /api/v1/payment-providers
 /// List all configured payment providers (keys masked)
-pub async fn list_payment_providers(State(state): State<AppState>) -> ApiResult<impl IntoResponse> {
+///
+/// DECISION (kanban t_592cd45d): this arm used to take `State` alone. The comment that shipped on
+/// the line below it claimed "Only super admin can manage payment providers" — and the POST and
+/// DELETE arms beside it do enforce `perm_is_super_admin` — but this read checked no claims at
+/// all, so ANY authenticated tenant session (any account a signup mints) read the platform-global
+/// `payment_providers` table: `publishable_key`, `is_test_mode`, `key_status` and the raw
+/// `config` JSON of every provider. Measured live before the change: a fresh tenant token on
+/// 127.0.0.1:8085 answered `200 {"providers":[]}`, while the identical shape on ADASwift (which
+/// closed this same defect in t_0f5c7e3a) answered 403. It now mirrors the two arms beside it.
+pub async fn list_payment_providers(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
     // Only super admin can manage payment providers
+    if !claims.perm_is_super_admin.unwrap_or(false) {
+        return Err(AppError::Forbidden(
+            "Only super admins can manage payment providers".into(),
+        ));
+    }
+
     let rows = sqlx::query(
         r#"SELECT id, provider_type, label, is_active,
                   CASE WHEN api_key_encrypted IS NOT NULL AND api_key_encrypted != '' THEN 'configured' ELSE 'not_configured' END as key_status,
