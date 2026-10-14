@@ -688,18 +688,28 @@ const renderTplGrid = () => {
   }
   if (!list.length) { root.innerHTML = '<div class="empty">No templates available.</div>'; return; }
   const cards = list.map(t => {
+    // How many steps the template carries. `steps_count` is server-computed (GET /templates) because
+    // the row shape carries no count and `POST /templates/{id}/install` refuses a template with none
+    // ("Template has no steps. Cannot install an empty template."). Measured live: four of the five
+    // seeded platform blueprints were empty shells, so the Install button drawn on them could only
+    // ever fail — and a button that cannot do anything is worse than no button (kanban t_6c589b6b).
+    const nSteps = Number(t.steps_count||0);
+    const stepsChip = '<span class="chip">'+nSteps+(nSteps===1?' step':' steps')+'</span>';
     if (unlock(t)) {
       return '<div class="card" style="margin-bottom:0">'
         +'<div class="flex items-start justify-between"><h3 class="font-semibold text-gray-800">'+esc(t.name)+'</h3><span class="badge '+(t.is_public?'b-green':'b-gray')+'">'+(t.is_public?'Public':'Private')+'</span></div>'
         +'<p class="text-sm text-gray-500 mt-1 mb-3">'+esc(t.description||'No description')+'</p>'
-        +'<div class="mb-3">'+(t.category?'<span class="chip">'+esc(t.category)+'</span>':'')+'</div>'
-        +'<div class="flex gap-2"><button class="btn text-sm flex-1" data-tpl-install="'+esc(t.id)+'">Install as Workflow</button><button class="btn-outline text-sm flex-1" data-tpl-export="'+esc(t.id)+'|'+esc(t.name)+'">Export JSON</button></div>'
+        +'<div class="mb-3">'+(t.category?'<span class="chip">'+esc(t.category)+'</span>':'')+stepsChip+'</div>'
+        +'<div class="flex gap-2">'+(nSteps
+          ? '<button class="btn text-sm flex-1" data-tpl-install="'+esc(t.id)+'">Install as Workflow</button>'
+          : '<button class="btn text-sm flex-1" disabled title="This template carries no steps yet, so installing it would create an empty workflow">No steps to install</button>')
+        +'<button class="btn-outline text-sm flex-1" data-tpl-export="'+esc(t.id)+'|'+esc(t.name)+'">Export JSON</button></div>'
         +'</div>';
     }
     return '<div class="card" style="margin-bottom:0;opacity:.92">'
       +'<div class="flex items-start justify-between"><h3 class="font-semibold text-gray-800">'+esc(t.name)+'</h3><span class="badge b-gray">Locked</span></div>'
       +'<p class="text-sm text-gray-500 mt-1 mb-3">'+esc(t.description||'No description')+'</p>'
-      +'<div class="mb-3">'+(t.category?'<span class="chip">'+esc(t.category)+'</span>':'')+'<span class="chip">'+(slug?'Not in '+esc(indName||slug):'Upgrade required')+'</span></div>'
+      +'<div class="mb-3">'+(t.category?'<span class="chip">'+esc(t.category)+'</span>':'')+stepsChip+'<span class="chip">'+(slug?'Not in '+esc(indName||slug):'Upgrade required')+'</span></div>'
       +'<div class="flex gap-2"><button class="btn text-sm flex-1" data-tpl-upgrade="1">Upgrade to Unlock</button><button class="btn-outline text-sm flex-1" data-tpl-export="'+esc(t.id)+'|'+esc(t.name)+'">View JSON</button></div>'
       +'</div>';
   }).join('');
@@ -711,7 +721,12 @@ const renderTplGrid = () => {
 const upgradeTemplates = () => { window.open('https://workflowswift.com/#features','_blank'); toast('Upgrade required to unlock this template'); };
 const loadTemplates = async () => { if(S.loading)return; S.loading=true; renderApp(); try { const _r = await API.get('/templates' + (S.tplSurface ? '?surface=' + encodeURIComponent(S.tplSurface) : '')); S.templates = _r.templates || []; S.templateAvail = _r.available_public || []; S.plan = _r.plan || null; } catch(e){ S.templates=[]; S.templateAvail=[]; S.plan=null; } S.loading=false; S.dataVer=(S.dataVer||0)+1; renderApp(); renderTplGrid(); };
 const setTplSurface = (v) => { S.tplSurface = v; S.templates = null; loadTemplates(); };
-const installTemplate = async (id) => { try { await API.post('/templates/'+id+'/install'); toast('Template installed as workflow'); setView('workflows'); S.workflows=null; } catch(e){ toast(e.message,'err'); } };
+// The install body must be a JSON OBJECT, not an empty request: `headers()` always sends
+// `Content-Type: application/json` and the handler extracts `Json<HashMap<..>>`, so a POST with no
+// body is answered 400 "Failed to parse the request body as JSON: EOF while parsing a value at line
+// 1 column 0" — measured live 2026-10-14 with this console's own call. `{}` takes the route's own
+// defaults (the template's name/description) and answers 201 (kanban t_6c589b6b).
+const installTemplate = async (id) => { try { await API.post('/templates/'+id+'/install', {}); toast('Template installed as workflow'); setView('workflows'); S.workflows=null; } catch(e){ toast(e.message,'err'); } };
 const exportTemplate = async (id, name) => { try { const data = await API.get('/templates/'+id+'/export'); const payload = (data && data.template) || data; const blob = new Blob([JSON.stringify(payload,null,2)], { type:'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = (name||'template').replace(/[^A-Za-z0-9._-]/g,'_') + '.workflowswift.json'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url), 4000); toast('Template exported'); } catch(e){ toast(e.message,'err'); } };
 const onTemplateFile = async (ev) => { const file = ev.target.files && ev.target.files[0]; ev.target.value = ''; if(!file) return; try { const text = await file.text(); const j = JSON.parse(text); const payload = (j && j.template) ? j.template : j; await API.post('/templates/import', payload); toast('Template imported'); S.templates=null; loadTemplates(); } catch(e){ toast('Import failed: ' + e.message, 'err'); } };
 

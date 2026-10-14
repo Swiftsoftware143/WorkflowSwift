@@ -318,10 +318,16 @@
         Builder would refuse to build that workflow. (Workflows this platform created itself with another
         first step — the inbound-capture <code>integration</code> — keep running and stay editable; the rule governs
         what the API lets you <em>build</em>.)</li>
-      <li>The gallery's <strong>Government Contracting Lifecycle</strong> template is a 10-stage checklist: its first
-        step is the Data Card every workflow opens with (pick your dashboard widget for it), and each
-        stage after it is a <strong>Manual / Approval</strong> step — the run parks at the stage and you <strong>Approve</strong>
-        or <strong>Reject</strong> it from the instance's run history to move on.</li>
+      <li>Every template in the gallery is a checklist of the same shape. <strong>Government Contracting
+        Lifecycle</strong> is ten stages; <strong>Client Onboarding</strong>, <strong>Lead Generation</strong>,
+        <strong>Newsletter Campaign</strong> and <strong>Project Delivery</strong> are six or seven each. The first
+        step is the Data Card every workflow opens with (pick your dashboard widget for it), each stage after it
+        is a <strong>Manual / Approval</strong> step — the run parks at the stage and you <strong>Approve</strong> or
+        <strong>Reject</strong> it from the instance's run history to move on — and a blueprint that waits on a clock
+        carries a <strong>Delay / Wait</strong> step, which the background worker advances when its due time arrives.</li>
+      <li>A template that carries <strong>no steps cannot be installed</strong>, so the gallery shows it as
+        <code>0 steps</code> and draws no install button (the API refuses it either way:
+        <code>Template has no steps. Cannot install an empty template.</code>).</li>
       <li>A template that is <strong>not included in your plan is locked</strong> — the lock is enforced server-side,
         so the padlock badge is not just decoration.</li>
       </ul>

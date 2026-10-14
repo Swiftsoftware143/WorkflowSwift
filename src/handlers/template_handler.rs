@@ -37,27 +37,68 @@ async fn owned_template_ids(db: &sqlx::PgPool, aid: Uuid) -> Result<HashSet<Uuid
     Ok(ids.into_iter().collect())
 }
 
-/// Serialise template rows with the one field the row shape was missing: whether the CALLER's
-/// account owns the row (`is_mine`).
+/// Serialise template rows with the two fields the row shape was missing: whether the CALLER's
+/// account owns the row (`is_mine`) and how many steps it carries (`steps_count`).
 ///
 /// Additive on purpose (kanban t_be118f36): every existing key of `WorkflowTemplate` is preserved
 /// byte for byte, and the account id itself is never exposed — the flag is a boolean computed
 /// server-side, so a public template shared across tenants does not leak the owner's
 /// `workflow_templates.aid` to them. The console gates Edit / Del / Edit-steps on it, so no panel
 /// draws a control the API will refuse with 404.
+///
+/// `steps_count` is the same rule for the INSTALL action (kanban t_6c589b6b). `install` refuses a
+/// template that carries no steps with a 400 ("Template has no steps. Cannot install an empty
+/// template."), and the row shape carried no count, so the console drew "Install as Workflow" on
+/// every row it was allowed to install — on four of the five seeded platform blueprints that button
+/// could only ever fail. A button that cannot do anything is worse than no button: the console now
+/// draws the install control only where this count is non-zero.
 fn templates_with_ownership(
     rows: Vec<WorkflowTemplate>,
     owned: &HashSet<Uuid>,
+    step_counts: &HashMap<Uuid, i64>,
 ) -> Vec<serde_json::Value> {
     rows.iter()
         .map(|t| {
             let mut v = serde_json::to_value(t).unwrap_or_else(|_| json!({}));
             if let Some(obj) = v.as_object_mut() {
                 obj.insert("is_mine".to_string(), json!(owned.contains(&t.id)));
+                obj.insert(
+                    "steps_count".to_string(),
+                    json!(step_counts.get(&t.id).copied().unwrap_or(0)),
+                );
             }
             v
         })
         .collect()
+}
+
+/// How many steps each of these templates carries, for the `steps_count` flag above.
+///
+/// ONE grouped query for the whole page — never one per row. A template absent from the result
+/// carries zero steps, which is exactly what the console must not offer to install.
+async fn template_step_counts(
+    db: &sqlx::PgPool,
+    ids: &[Uuid],
+) -> Result<HashMap<Uuid, i64>, sqlx::Error> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = sqlx::query(
+        "SELECT template_id, count(*) AS n FROM workflow_template_steps \
+         WHERE template_id = ANY($1) GROUP BY template_id",
+    )
+    .bind(ids)
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .iter()
+        .map(|r| {
+            (
+                r.try_get::<Uuid, _>("template_id").unwrap_or_default(),
+                r.try_get::<i64, _>("n").unwrap_or(0),
+            )
+        })
+        .collect())
 }
 
 pub async fn list_templates(
@@ -78,18 +119,33 @@ pub async fn list_templates(
     .flatten();
 
     // Resolve plan tier so the client can gate on free vs paid (slug + price).
+    //
+    // `plan_tiers.price_monthly` is NUMERIC(10,2) and this crate's sqlx carries no decimal feature,
+    // so `try_get::<Option<f64>, _>("price")` FAILS on it and the `.unwrap_or(None)` that used to sit
+    // here silently turned every account's price into 0.0 — i.e. `is_paid: false` for every tenant,
+    // paid ones included. The console gates the whole Templates gallery on that flag
+    // (`lockAll = !isPaid`), so its install control was withdrawn for EVERY tenant and the gallery
+    // read "Free plan (professional) — upgrade to unlock templates". Measured live 2026-10-14 as a
+    // tenant on the $79 professional tier (kanban t_6c589b6b). Read the column the way the rest of
+    // this app reads it — `price_monthly::text` (kanban t_01fa9bbc, src/models/plan.rs) — and parse
+    // the decimal string. Every other NUMERIC column in the schema is read as text already.
     let plan_info: Option<serde_json::Value> = match plan_id {
         Some(pid) => {
-            sqlx::query("SELECT slug, price_monthly AS price FROM plan_tiers WHERE id = $1")
+            sqlx::query("SELECT slug, price_monthly::text AS price FROM plan_tiers WHERE id = $1")
                 .bind(pid)
                 .fetch_optional(&state.db)
                 .await?
                 .map(|row| {
                     let slug: String = row.try_get("slug").unwrap_or_default();
-                    let price: Option<f64> = row.try_get("price").unwrap_or(None);
+                    let price: f64 = row
+                        .try_get::<Option<String>, _>("price")
+                        .ok()
+                        .flatten()
+                        .and_then(|t| t.trim().parse::<f64>().ok())
+                        .unwrap_or(0.0);
                     json!({
                         "slug": slug,
-                        "is_paid": price.unwrap_or(0.0) > 0.0,
+                        "is_paid": price > 0.0,
                     })
                 })
         }
@@ -133,8 +189,13 @@ pub async fn list_templates(
                 .fetch_all(&state.db)
                 .await?
             };
+            let counts = template_step_counts(
+                &state.db,
+                &templates.iter().map(|t| t.id).collect::<Vec<_>>(),
+            )
+            .await?;
             return Ok(Json(json!({
-                "templates": templates_with_ownership(templates, &owned)
+                "templates": templates_with_ownership(templates, &owned, &counts)
             })));
         }
     }
@@ -217,8 +278,14 @@ pub async fn list_templates(
         vec![]
     };
 
+    let counts = template_step_counts(
+        &state.db,
+        &templates.iter().map(|t| t.id).collect::<Vec<_>>(),
+    )
+    .await?;
+
     Ok(Json(json!({
-        "templates": templates_with_ownership(templates, &owned),
+        "templates": templates_with_ownership(templates, &owned, &counts),
         "available_public": available_public,
         "plan": plan_info
     })))
@@ -798,6 +865,76 @@ pub async fn import_template(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn rust_sources(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                rust_sources(&p, out);
+            } else if p.extension().map(|x| x == "rs").unwrap_or(false) {
+                out.push(p);
+            }
+        }
+    }
+
+    /// A float/NUMERIC column must be decoded as the Rust type its SQL type actually maps to — never
+    /// through a `try_get::<f64>` whose fallback hides the mismatch.
+    ///
+    /// Measured live 2026-10-14 (kanban t_6c589b6b): `plan_tiers.price_monthly` is NUMERIC(10,2) and
+    /// this crate's sqlx features carry no decimal support (`Cargo.toml`: runtime-tokio-rustls,
+    /// postgres, uuid, chrono, json, migrate), so `try_get::<Option<f64>, _>("price")` answered Err
+    /// and the `.unwrap_or(None)` beside it turned the $79 professional tier into price 0.0 — i.e.
+    /// `is_paid: false` for every tenant. The tenant console gates the whole Templates gallery on
+    /// that flag, so its install control was withdrawn for EVERY tenant and the gallery read "Free
+    /// plan (professional) — upgrade to unlock templates". Not one build or test caught it: the
+    /// decode fails at RUNTIME and the caller's own fallback makes the hole look like data.
+    ///
+    /// The rules this pins: a NUMERIC column is read with an explicit `::text` cast and parsed (the
+    /// app's convention, src/models/plan.rs / kanban t_01fa9bbc), and REAL/float4 decodes as `f32`
+    /// (FLOAT8 is what `f64` asks for). A silent `.unwrap_or(None)` on a float decode is the shape
+    /// that hides both mistakes, so no file under src/ may carry one.
+    #[test]
+    fn numeric_columns_are_never_decoded_as_f64() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        rust_sources(&root, &mut files);
+        assert!(
+            files.len() > 20,
+            "the scan must actually walk the crate's sources (found {})",
+            files.len()
+        );
+        // The needles are built with `concat!` so THIS file's own source does not contain the
+        // pattern it is hunting — a lint that flags itself can never go green.
+        let needles = [
+            concat!("try_get::<Option<", "f64", ">"),
+            concat!("try_get::<", "f64", ","),
+        ];
+        let mut hits = Vec::new();
+        for f in &files {
+            let body = std::fs::read_to_string(f).unwrap_or_default();
+            for (n, line) in body.lines().enumerate() {
+                let code = line.trim_start();
+                if code.starts_with("//") {
+                    continue;
+                }
+                if needles.iter().any(|needle| line.contains(needle)) {
+                    hits.push(format!("{}:{} {}", f.display(), n + 1, line.trim()));
+                }
+            }
+        }
+        assert!(
+            hits.is_empty(),
+            "a column is being decoded as f64 — the NUMERIC columns in this schema \
+             (plan_tiers.price_monthly, credit_packages.price, invoices.amount, \
+             checkout_sessions.amount) cannot decode into f64 with this crate's sqlx, so the read \
+             silently yields Err and any fallback hides it; a REAL/float4 column likewise is f32, \
+             not f64. Read NUMERIC as `::text` and parse it (src/models/plan.rs), and float4 as \
+             `f32`. Hits: {hits:#?}"
+        );
+    }
 
     /// A template step whose type the engine has no arm for must be refused on the template path
     /// exactly as `POST /workflows/{id}/steps` refuses it: install copies the row VERBATIM into

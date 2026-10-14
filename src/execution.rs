@@ -2323,6 +2323,88 @@ mod tests {
         }
     }
 
+    /// Migration 088 seeds the steps of the four platform blueprints that carried none, so that
+    /// `POST /templates/{id}/install` can succeed on every gallery row (kanban t_6c589b6b).
+    ///
+    /// The seed is only honest if it obeys the two rules the install leg enforces on a STORED
+    /// template: every `step_type` must be one this app can execute, and the step at position 0 must
+    /// be a Data Card (`assert_template_opens_with_data_card`). Nothing in the build checks a seeded
+    /// row, so this test reads the migration's own tuples — never a copy of them — and checks both,
+    /// plus the `0..n-1` sort_order run that decides which step opens the installed workflow.
+    #[test]
+    fn the_seeded_platform_blueprints_are_installable() {
+        let sql = migration_source("088_seed_platform_template_steps.sql");
+        let blocks: Vec<&str> = sql.split("-- blueprint: ").skip(1).collect();
+        assert_eq!(
+            blocks.len(),
+            4,
+            "migration 088 seeds four blueprints (Client Onboarding, Lead Generation, Newsletter \
+             Campaign, Project Delivery); found {}",
+            blocks.len()
+        );
+        for block in blocks {
+            let header = block.lines().next().unwrap_or("").trim().to_string();
+            let name = header.split(" (").next().unwrap_or("").to_string();
+            // (sort_order, step_type) in FILE order, which is the order install copies them in.
+            let mut tuples: Vec<(i32, String)> = Vec::new();
+            for line in block.lines() {
+                let line = line.trim();
+                if !line.starts_with("('") {
+                    continue;
+                }
+                let step_type = line[2..].split('\'').next().unwrap_or("").to_string();
+                // The tuple's sort_order is the integer that follows the third string literal
+                // ("…', 0, …"). A description carries no `', ` and a config carries `": `, so the
+                // first `', <digits>, ` in the line is the sort_order.
+                let order = line
+                    .match_indices("', ")
+                    .filter_map(|(i, _)| {
+                        let rest = &line[i + 3..];
+                        let digits: String =
+                            rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                        if digits.is_empty() {
+                            return None;
+                        }
+                        rest[digits.len()..]
+                            .trim_start()
+                            .starts_with(", ")
+                            .then(|| digits.parse::<i32>().ok())
+                            .flatten()
+                    })
+                    .next()
+                    .unwrap_or(-1);
+                tuples.push((order, step_type));
+            }
+            assert!(
+                tuples.len() >= 2,
+                "blueprint '{name}' must carry more than one step, or the install this migration \
+                 exists to make possible is still refused (\"Template has no steps\")"
+            );
+            for (order, t) in &tuples {
+                assert!(
+                    is_executable_step_type(t),
+                    "blueprint '{name}' seeds step type '{t}' (sort_order {order}), which this app \
+                     has no executor for — installing it would build a workflow whose steps do \
+                     nothing (executable today: {EXECUTABLE_STEP_TYPES:?})"
+                );
+            }
+            let orders: Vec<i32> = tuples.iter().map(|(o, _)| *o).collect();
+            assert_eq!(
+                orders,
+                (0..tuples.len() as i32).collect::<Vec<i32>>(),
+                "blueprint '{name}' must carry a 0..n-1 sort_order run in file order — install \
+                 copies the lowest sort_order first, so a gap or a repeat changes which step opens \
+                 the installed workflow"
+            );
+            let first = &tuples[0].1;
+            assert_eq!(
+                first, "data-card",
+                "blueprint '{name}' opens with '{first}': install refuses a stored template whose \
+                 lowest sort_order is not a Data Card, so this seed could never install"
+            );
+        }
+    }
+
     /// The ten rows migrations/013_seed_data.sql seeded hold lifecycle STAGE NAMES in `step_type`
     /// (the human label already lives in `name`), which is the whole defect of kanban t_27a15474:
     /// install copies the column verbatim into `workflow_steps`. Migration 073 must remap every one

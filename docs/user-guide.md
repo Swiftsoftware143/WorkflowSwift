@@ -141,10 +141,16 @@ Base API: `https://workflowswift.com/api/v1` — all non-public endpoints need
   Builder would refuse to build that workflow. (Workflows this platform created itself with another
   first step — the inbound-capture `integration` — keep running and stay editable; the rule governs
   what the API lets you *build*.)
-- The gallery's **Government Contracting Lifecycle** template is a 10-stage checklist: its first
-  step is the Data Card every workflow opens with (pick your dashboard widget for it), and each
-  stage after it is a **Manual / Approval** step — the run parks at the stage and you **Approve**
-  or **Reject** it from the instance's run history to move on.
+- Every template in the gallery is a checklist of the same shape. **Government Contracting Lifecycle**
+  is ten stages; **Client Onboarding**, **Lead Generation**, **Newsletter Campaign** and **Project
+  Delivery** are six or seven each. The first step is the Data Card every workflow opens with (pick
+  your dashboard widget for it), each stage after it is a **Manual / Approval** step — the run parks
+  at the stage and you **Approve** or **Reject** it from the instance's run history to move on — and a
+  blueprint that waits on a clock carries a **Delay / Wait** step, which the background worker advances
+  when its due time arrives.
+- A template that carries **no steps cannot be installed**, so the gallery shows it as `0 steps` and
+  draws no install button (the API refuses it either way: `Template has no steps. Cannot install an
+  empty template.`).
 - A template that is **not included in your plan is locked** — the lock is enforced server-side,
   so the padlock badge is not just decoration.
 

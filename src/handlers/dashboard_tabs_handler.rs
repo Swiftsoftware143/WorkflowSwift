@@ -413,7 +413,15 @@ pub async fn get_prospecting_results(
             "source": r.try_get::<&str, _>("source").unwrap_or(""),
             "source_url": r.try_get::<&str, _>("source_url").unwrap_or(""),
             "social_links": r.try_get::<serde_json::Value, _>("social_links").unwrap_or(json!({})),
-            "rating": r.try_get::<Option<f64>, _>("rating").unwrap_or(None),
+            // `prospecting_results.rating` is REAL (float4), so it decodes into f32 — `try_get::<f64>`
+            // asks for FLOAT8 and answers Err, which `.unwrap_or(None)` turned into a silent null
+            // (the same shape as the plan-price bug behind kanban t_6c589b6b; the table is empty on
+            // this install, so the old behaviour was unmeasurable here and the fix is type-level).
+            "rating": r
+                .try_get::<Option<f32>, _>("rating")
+                .ok()
+                .flatten()
+                .map(|v| v as f64),
             "review_count": r.try_get::<Option<i32>, _>("review_count").unwrap_or(None),
             "fetched_at": r.try_get::<&str, _>("fetched_at").unwrap_or(""),
         })
