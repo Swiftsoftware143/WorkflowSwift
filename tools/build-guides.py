@@ -59,6 +59,17 @@ MID_SUBS = [
 ]
 TAIL_MARKER = "\n    </div>\n  </div>\n</div>\n<script>"
 
+# The `.note` callout (used by the user guide's retired-fields box) has no rule in the house
+# template — measured 2026-10-14: `grep -c '\.note' apps/FunnelSwift/www/guide.html` = 0 — so a page
+# regenerated from markdown that carries <div class="note"> shipped the class UNSTYLED. That is the
+# defect commit ee3f1f0 fixed by hand in the served HTML, and a regeneration silently undid it.
+# Injecting the rule here is what makes regeneration byte-honest: built page == served page.
+NOTE_CSS = (
+    "  .note { background: var(--bg-elevated); border: 1px solid var(--border);"
+    " border-left: 3px solid var(--indigo-light); border-radius: 8px; padding: 14px 18px;"
+    " margin: 20px 0; font-size: 14px; color: var(--text-secondary); }\n"
+)
+
 
 def slug(txt: str) -> str:
     t = html.unescape(re.sub(r"<[^>]+>", "", txt)).lower()
@@ -133,6 +144,10 @@ def build(tpl: str, job: dict) -> str:
 
     content = f'\n      <h1>{job["title"]}</h1>\n{indent(lead_body)}\n'
     out = head + nav + mid + content + tail
+
+    if 'class="note"' in out and ".note {" not in out:
+        assert "</style>" in out, "template has no </style>, cannot inject the .note rule"
+        out = out.replace("</style>", NOTE_CSS + "</style>", 1)
 
     # the app guide legitimately mentions FunnelSwift (affiliate auto-sync), so test the
     # template's own brand strings, not the word

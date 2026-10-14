@@ -233,15 +233,28 @@ Your tier today:
 | Professional | unlimited | 25 | 1000 | ✓ | ✓ |
 | Enterprise | unlimited | unlimited | unlimited | ✓ | ✓ |
 
-## Custom branding
+## Email branding
 
-Not available. There is no branding editor, and no page or email in this app renders a per-tenant
-logo or colour. The `logo_url`, `branding_name`, `primary_color` and `accent_color` columns that
-used to sit on your account were **dropped on 2026-10-02** (migration 077, kanban t_731bf864) —
-nothing read or wrote them — so the database no longer carries the capability either. The "Custom
-Branding" plan feature that promised white-labelling was retired the same day (kanban t_413b4aab)
-for exactly that reason. The footer text on your account (`footer_year` / `footer_company`) *is*
-real and settable through `PUT /api/v1/accounts`.
+**Available, per account.** Open the console and go to **👤 Profile & Account → Email Branding**,
+then set:
+
+- **Logo** — upload a PNG, JPEG, WebP or GIF up to 2 MB. Once one is set there is a **Replace** and a
+  **Remove** button too.
+- **Brand display name** — up to 60 characters, printed above the message.
+- **Brand colour** — a hex colour such as `#4f46e5`; it draws the rule under your logo.
+
+Press **Save branding**. From then on every transactional email this account sends — the welcome /
+login-credentials mail, team invitations, password resets, purchase confirmations and workflow
+notifications — opens with your logo and name. The logo is served from your own account's public URL
+(`GET /api/v1/branding/logo/{account_id}`), which is what lets a mail client load it, and the mail
+keeps the WorkflowSwift look until you set a name or a logo, because branding is per account.
+
+<div class="note">The older <em>account-level</em> white-label fields were a different thing and are
+still retired: the logo, brand-name and colour columns those held were <strong>dropped on
+2026-10-02</strong>, and the "Custom Branding" plan feature that promised white-labelling was retired
+the same day. <strong>The Email Branding screen above is the supported way to brand your mail.</strong>
+The footer text on your account (<code>footer_year</code> / <code>footer_company</code>) <em>is</em>
+real and settable through <code>PUT /api/v1/accounts</code>.</div>
 
 ## Integrations
 
@@ -257,11 +270,12 @@ real and settable through `PUT /api/v1/accounts`.
   target has no webhook URL. What is still NOT wired is a step's binding to a target: the **Builder
   has no target picker and the steps API accepts no binding field**, so a workflow you build in the
   app does not dispatch to a target.
-- **Retired 2026-10-02 (kanban t_cb839034)**: the per-user "Integration Center" store
-  (`user_integrations`) and its routes. `GET`/`POST /api/v1/integrations`, `GET
+- **Retired 2026-10-02**: the per-user "Integration Center" store
+  and its routes. `GET`/`POST /api/v1/integrations`, `GET
   /api/v1/integrations/native`, `POST /api/v1/integrations/native/{provider}`, `DELETE
   /api/v1/integrations/{provider}` and `POST /api/v1/integrations/health-check` are gone (404);
-  provider credentials live only in `provider_keys`, the store every delivery path reads.
+  provider credentials live only in the account's provider-key store, the one every delivery path
+  reads.
 - **Incoming webhook**: `POST /api/v1/incoming` is what other Swift tools push leads to. It is
   protected by an internal key.
 
