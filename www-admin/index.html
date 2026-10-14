@@ -342,10 +342,27 @@ async function renderCRUD(container,key,label,fields,ep,editFields,extraAction,a
   let cols=fields;
   if(!cols.length&&items[0])cols=Object.keys(items[0]).filter(k=>k!=='id'&&k!=='aid'&&k!=='updated_at'&&k!=='created_at').slice(0,5);
   const thead=cols.map(f=>`<th>${f.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase())}</th>`).join('');
-  const tbody=items.map(it=>'<tr>'+cols.map(f=>`<td>${String(it[f]===undefined||it[f]===null?'':it[f])}</td>`).join('')+
+  // kanban t_ws-team-role — a `role` column shows the WRITTEN role, never the database's own enum
+  // (`user`, `company_admin`, ...). Same roleLabel the Profile screen uses; an unknown value is
+  // shown as-is and a missing one as an em-dash, so an operator reads a role, not a column value.
+  const cellVal=(f,v)=>f==='role'?roleLabel(v):String(v===undefined||v===null?'':v);
+  // DO NOT DRAW A DELETE THE API WILL REFUSE (measured live 2026-10-14). `remove_user` answers
+  // 422 "Cannot remove yourself" for the caller's own row and 403 "Cannot remove the super admin"
+  // for a super-admin row, and the Team table drew a Del button on both - the exact "a button that
+  // cannot do anything is worse than no button" this file's own rule forbids. `ME` is the
+  // /auth/me payload read once per page load; when it is absent (a 401 that has already switched
+  // the screen to login) only the super-admin arm applies, so a failed read never hides a real
+  // control. Every other row keeps its Del button.
+  const canDel=it=>{
+    const r=String((it&&it.role)||'').toLowerCase();
+    if(r==='super_admin')return false;
+    if(ME&&ME.id&&String(rowId(it))===String(ME.id))return false;
+    return true;
+  };
+  const tbody=items.map(it=>'<tr>'+cols.map(f=>`<td>${cellVal(f,it[f])}</td>`).join('')+
     `<td class="text-right">`+(extraAction?`<button class="btn btn-sm btn-ghost" data-extra="${escHtml(rowId(it))}">${extraAction.label}</button>`:'')
     +(canEdit?`<button class="btn btn-sm btn-ghost" data-edit="${escHtml(rowId(it))}">Edit</button>`:'')
-    +`<button class="btn btn-sm btn-danger" data-del="${escHtml(rowId(it))}">Del</button></td></tr>`).join('');
+    +(canDel(it)?`<button class="btn btn-sm btn-danger" data-del="${escHtml(rowId(it))}">Del</button>`:'')+'</td></tr>').join('');
   list.innerHTML=`<table class="table"><thead><tr>${thead}<th style="width:140px"></th></tr></thead><tbody>${tbody}</tbody></table>`;
   // Bound by DATA attribute (no inline onclick string) and handed the ROW OBJECT the list already
   // has, so opening Edit never issues GET <ep>/{id} — the route six of these panels do not serve.
@@ -373,14 +390,28 @@ async function showForm(key,label,fields,ep,id,cb,row){
   if(!item)item={};
   const modal=h('div',{className:'modal-overlay',onclick:function(e){if(e.target===modal)modal.remove()}});
   const box=h('div',{className:'modal-box'});
+  // kanban t_ws-team-role — a `role` field is a LABELLED select, not a free-text box an operator
+  // has to fill with the database's own enum. The invite route accepts exactly these two tenant
+  // roles (src/handlers/user_handler.rs invite_user refuses any other), so offering them as
+  // written names removes the guess and the 422 that came with a typo.
+  const INVITABLE_ROLES=[['team_member','Team member'],['company_admin','Company admin']];
+  const fieldBox=f=>{
+    const lab=f.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase());
+    if(f==='role'){
+      const cur=String(item.role==null||item.role===''?'team_member':item.role);
+      const opts=INVITABLE_ROLES.map(([v,t])=>`<option value="${v}"${v===cur?' selected':''}>${t}</option>`).join('');
+      return `<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">${lab}</label><select class="input" name="${f}">${opts}</select></div>`;
+    }
+    return `<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">${lab}</label><input class="input" name="${f}" value="${item[f]===undefined||item[f]===null?'':String(item[f]).replace(/"/g,'&quot;')}"></div>`;
+  };
   box.innerHTML=`<h2 class="text-lg font-bold mb-4">${id?'Edit':'Add'} ${label}</h2><form id="mf">`+
-    fields.map(f=>`<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">${f.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase())}</label><input class="input" name="${f}" value="${item[f]===undefined||item[f]===null?'':String(item[f]).replace(/"/g,'&quot;')}"></div>`).join('')+
+    fields.map(fieldBox).join('')+
     `</form><div class="flex justify-end gap-2 mt-4"><button class="btn btn-ghost" id="cancelBtn">Cancel</button><button class="btn btn-primary" id="saveBtn">Save</button></div>`;
   box.querySelector('#cancelBtn').onclick=()=>modal.remove();
   box.querySelector('#saveBtn').onclick=async()=>{
     // Skip blank inputs: an empty string is not "unset" server-side — POST /surfaces would
     // store slug='' instead of slugifying the name, and PUT uses COALESCE (blank can't clear).
-    const body={};box.querySelectorAll('#mf input').forEach(inp=>{if(String(inp.value).trim()!=='')body[inp.name]=inp.value});
+    const body={};box.querySelectorAll('#mf input,#mf select').forEach(inp=>{if(String(inp.value).trim()!=='')body[inp.name]=inp.value});
     const r=await api(id?(EP.list+'/'+id):EP.create,{method:id?'PUT':'POST',body:JSON.stringify(body)});
     if(r)showMsg('Saved!');else showMsg('Error saving: '+LAST_ERR,'error');
     if(r){modal.remove();if(cb)cb();}
@@ -775,7 +806,7 @@ function renderBridge(c){
 // in the fleet that showed a raw role enum; a missing role is an em-dash, never a made-up word.
 const ROLE_LABELS={owner:'Owner',admin:'Admin',super_admin:'Super admin',agency_admin:'Agency admin',
   client_admin:'Client admin',company_admin:'Company admin',team_member:'Team member',
-  member:'Member',user:'Member',viewer:'Viewer'};
+  member:'Member',user:'Owner',viewer:'Viewer'};
 // Unknown values are shown as-is (honest, never an invented role); a missing one is an em-dash.
 const roleLabel=r=>{const s=String(r==null?'':r).trim();if(!s)return '—';return ROLE_LABELS[s.toLowerCase()]||s};
 function renderProfile(c){
