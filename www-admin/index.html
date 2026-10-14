@@ -298,7 +298,17 @@ function content(){
     else if(s==='portfolio-companies')renderAdminPortfolio(c);
     else if(s==='plans')renderAdminPlans(c);
     else if(s==='surfaces')renderSurfaces(c);
-    else if(s==='email-templates')renderCRUD(c,'admin-email-templates','Email Template',['name','subject'],'/admin/email-templates',['name','subject']);
+    // kanban t_ws-mailtpl — the Add AND Edit field lists must carry every column the API writes.
+    // They carried ['name','subject'] only, so: (a) a create sent no template_type, the handler
+    // defaulted it to 'custom', and no sender selects that type - measured live 2026-10-14, the
+    // resolver returns 0 rows for it; (b) is_default was never sendable, and the resolver's own
+    // predicate is `template_type = $1 AND (is_default = true OR is_default IS NULL)`; and (c) the
+    // BODY - the thing the screen exists to change - could not be edited at all, though
+    // admin_update_email_template sets body/html_body/is_html/template_type for any of them.
+    else if(s==='email-templates')renderCRUD(c,'admin-email-templates','Email Template',
+      ['name','template_type','subject','body','html_body','is_default'],
+      '/admin/email-templates',
+      ['name','template_type','subject','body','html_body','is_default']);
     else if(s==='industry-sources')renderIndustrySources(c);
     else if(s==='site-config')renderSiteConfig(c);
   }
@@ -444,6 +454,39 @@ async function showForm(key,label,fields,ep,id,cb,row){
       const opts=INVITABLE_ROLES.map(([v,t])=>`<option value="${v}"${v===cur?' selected':''}>${t}</option>`).join('');
       return `<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">${lab}</label><select class="input" name="${f}">${opts}</select></div>`;
     }
+    // kanban t_ws-mailtpl — a template_type is a SELECT of the types this app's senders actually
+    // ask for (measured in src: welcome, password_reset, team_invite, workflow_notify,
+    // purchase_confirmed, email_test). A free-text box is how the dead 'custom' row got minted: the
+    // handler defaults an absent template_type to 'custom', and the sender resolver
+    // (`WHERE template_type = $1 AND (is_default = true OR is_default IS NULL)`) selects 'custom'
+    // for nobody, so a template created without this field could never be sent and the panel gave
+    // an operator no way to see why.
+    const TEMPLATE_TYPES=['welcome','password_reset','team_invite','workflow_notify','purchase_confirmed','email_test'];
+    if(f==='template_type'){
+      const cur=String(item.template_type==null||item.template_type===''?'welcome':item.template_type);
+      const opts=TEMPLATE_TYPES.map(v=>`<option value="${v}"${v===cur?' selected':''}>${v}</option>`).join('');
+      return `<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">${lab}</label><select class="input" name="${f}">${opts}</select></div>`;
+    }
+    // Booleans must be REAL booleans in the JSON body: a text input hands back the string "true",
+    // and the handler reads these with `as_bool()`, which answers None for a string and then
+    // applies its default. A select keeps the payload typed.
+    if(f==='is_default'||f==='is_html'){
+      const cur=String(item[f]===undefined||item[f]===null?(f==='is_html'?'true':'false'):item[f]);
+      const opts=['true','false'].map(v=>`<option value="${v}"${v===cur?' selected':''}>${v}</option>`).join('');
+      return `<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">${lab}</label><select class="input" name="${f}">${opts}</select></div>`;
+    }
+    // The wording itself is prose, not a one-line token: a single-line <input> cannot be edited
+    // honestly. Same name= contract, so the collector below is unchanged.
+    if(f==='body'||f==='html_body'){
+      // NOTE, measured on this app's own API 2026-10-14: `admin_list_email_templates` selects
+      // id/name/subject/template_type/is_html/is_default and NOT body/html_body, and
+      // `admin/email-templates/{id}` serves PUT but no GET, so the stored wording cannot be SHOWN
+      // here. The collector below skips a blank input, and the PUT uses COALESCE, so an empty box
+      // leaves the stored wording untouched. The hint says exactly that rather than showing an
+      // empty box the operator would read as "this template has no body".
+      const v=item[f]===undefined||item[f]===null?'':String(item[f]);
+      return `<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">${lab}</label><textarea class="input" name="${f}" rows="6" style="width:100%;font-family:ui-monospace,monospace" placeholder="Leave empty to keep the wording already stored">${v.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</textarea></div>`;
+    }
     return `<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">${lab}</label><input class="input" name="${f}" value="${item[f]===undefined||item[f]===null?'':String(item[f]).replace(/"/g,'&quot;')}"></div>`;
   };
   box.innerHTML=`<h2 class="text-lg font-bold mb-4">${id?'Edit':'Add'} ${label}</h2><form id="mf">`+
@@ -453,7 +496,11 @@ async function showForm(key,label,fields,ep,id,cb,row){
   box.querySelector('#saveBtn').onclick=async()=>{
     // Skip blank inputs: an empty string is not "unset" server-side — POST /surfaces would
     // store slug='' instead of slugifying the name, and PUT uses COALESCE (blank can't clear).
-    const body={};box.querySelectorAll('#mf input,#mf select').forEach(inp=>{if(String(inp.value).trim()!=='')body[inp.name]=inp.value});
+    const body={};box.querySelectorAll('#mf input,#mf textarea,#mf select').forEach(inp=>{if(String(inp.value).trim()!=='')body[inp.name]=inp.value});
+    // `EP.bools` names the fields the BACKEND reads with `as_bool()`. A select hands back the
+    // STRING "true"/"false"; `as_bool()` answers None for a string, so the handler would silently
+    // apply its default - the same class as the `credit_cost` string/i32 422 fixed above.
+    ['is_default','is_html'].forEach(k=>{if(k in body)body[k]=(String(body[k]).toLowerCase()==='true')});
     // `EP.ints` names the fields the BACKEND declares as a number. An <input> hands back a STRING,
     // and `credit_cost: Option<i32>` refuses `"7"` with
     // 422 `invalid type: string "7", expected i32` (measured live against this app's own API
