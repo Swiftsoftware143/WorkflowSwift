@@ -828,6 +828,19 @@
         wrote no row; its reads decoded the NULL system <code>aid</code> as a UUID, so list answered
         <code>200 {"items":[],"count":0}</code> over a table with rows and get/put answered 500; and its DELETE
         removed a system-wide template for any authenticated caller. Do not re-add a second create path.</li>
+      <li>What an operator has to set for a template to actually be sent, and it is three bounds at once:
+        <strong>Type</strong> must be one of the types this app sends — <code>welcome</code>,
+        <code>password_reset</code>, <code>team_invite</code>, <code>workflow_notify</code>,
+        <code>purchase_confirmed</code>, <code>email_test</code> — because the resolver matches on it and nothing
+        sends a type that is not in that list; <strong>Is default</strong> must be <code>true</code>, because a
+        non-default row loses to the default one for the same type; and <strong>Body</strong> / <strong>HTML body</strong>
+        hold the wording, with the app's own fallback text used when they are empty. Measured 2026-10-14 (kanban
+        t_ws-mailtpl): a template created with no Type landed as <code>custom</code> / <code>is_default=false</code> and
+        the resolver answered <strong>0 rows</strong> for it — the row existed and no sender could ever pick it up —
+        while the same create with Type and Is default set was returned by the resolver and the app's own test send
+        used its wording. <strong>Edit</strong> loads the wording already stored; leaving a body box empty keeps it
+        (a blank field is not sent, and the update keeps the stored value), so clear a body deliberately, never by
+        leaving it alone.</li>
       <li>Invoices: <code>/api/v1/invoices</code> and <code>/api/v1/invoices/{id}</code> read <code>invoices</code>; <code>amount</code> is
         <code>NUMERIC(10,2)</code> and is returned as a decimal <strong>string</strong> (<code>amount::text</code>), like <code>plan_tiers</code>
         prices — sqlx cannot decode NUMERIC into a JSON value.</li>
