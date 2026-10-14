@@ -20,23 +20,40 @@ use sqlx::Row;
 // Admin: Payment Provider CRUD
 // ──────────────────────────────────────────────
 
+/// The ONE role predicate for the whole payment-provider surface (kanban t_592cd45d).
+///
+/// Reading the list, writing a provider and deleting one are the same privilege: the list carries
+/// the publishable keys, the test/live mode and the `config` of this install's payment accounts,
+/// and a write to `api_key_encrypted` repoints where the install collects money. Before this
+/// predicate existed each arm decided for itself — and the READ silently decided nothing:
+/// `GET /api/v1/payment-providers` took `State` alone, no `Claims` at all, behind a shipped comment
+/// that claimed the opposite, so ANY authenticated tenant session (every account a signup mints)
+/// read the platform-global `payment_providers` table. Measured live 2026-10-14 against the
+/// pre-fix deploy on 127.0.0.1:8085: a fresh tenant token answered `200 {"providers":[]}` where the
+/// identical shape on ADASwift (same defect, closed in t_0f5c7e3a) already answered 403.
+///
+/// The role list is the flag the two write arms already required, and the flag the admin console's
+/// own Admin tab is gated on (`www-admin/index.html::showAdminTab` reads `ME.perm_is_super_admin`),
+/// so the console can never offer a screen this API refuses and the tightening loses no UI. The
+/// admin surface (`/api/v1/admin/*`, `auth::middleware`) refuses on the SAME flag, so the whole API
+/// agrees on one list. An API-key credential resolves to the same `Claims` in `auth_middleware`, so
+/// a key caller is covered here too — no second gate is needed.
+fn can_manage_payment_providers(claims: &Claims) -> bool {
+    claims.perm_is_super_admin.unwrap_or(false)
+}
+
 /// GET /api/v1/payment-providers
 /// List all configured payment providers (keys masked)
 ///
-/// DECISION (kanban t_592cd45d): this arm used to take `State` alone. The comment that shipped on
-/// the line below it claimed "Only super admin can manage payment providers" — and the POST and
-/// DELETE arms beside it do enforce `perm_is_super_admin` — but this read checked no claims at
-/// all, so ANY authenticated tenant session (any account a signup mints) read the platform-global
-/// `payment_providers` table: `publishable_key`, `is_test_mode`, `key_status` and the raw
-/// `config` JSON of every provider. Measured live before the change: a fresh tenant token on
-/// 127.0.0.1:8085 answered `200 {"providers":[]}`, while the identical shape on ADASwift (which
-/// closed this same defect in t_0f5c7e3a) answered 403. It now mirrors the two arms beside it.
+/// Super admin only — the list is platform configuration, not tenant data; see
+/// [`can_manage_payment_providers`]. The response never carries a credential VALUE: `key_status`
+/// answers configured / not_configured and neither the secret key nor the webhook signing secret is
+/// ever returned (unchanged by t_592cd45d).
 pub async fn list_payment_providers(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
-    // Only super admin can manage payment providers
-    if !claims.perm_is_super_admin.unwrap_or(false) {
+    if !can_manage_payment_providers(&claims) {
         return Err(AppError::Forbidden(
             "Only super admins can manage payment providers".into(),
         ));
@@ -83,8 +100,9 @@ pub async fn upsert_payment_provider(
     Extension(claims): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    // Super admin only
-    if !claims.perm_is_super_admin.unwrap_or(false) {
+    // Super admin only — the SAME predicate the read arm above and the DELETE arm below use
+    // (kanban t_592cd45d; the read used to check nothing at all).
+    if !can_manage_payment_providers(&claims) {
         return Err(AppError::Forbidden(
             "Only super admins can manage payment providers".into(),
         ));
@@ -230,7 +248,8 @@ pub async fn delete_payment_provider(
     Extension(claims): Extension<Claims>,
     Path(provider_type): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
-    if !claims.perm_is_super_admin.unwrap_or(false) {
+    // The SAME predicate the read and the write arm use (kanban t_592cd45d).
+    if !can_manage_payment_providers(&claims) {
         return Err(AppError::Forbidden(
             "Only super admins can manage payment providers".into(),
         ));
@@ -2144,5 +2163,56 @@ mod stripe_contract_tests {
                 rejection.status
             );
         }
+    }
+}
+
+/// Pins the ONE role list for the whole payment-provider surface (kanban t_592cd45d). The defect
+/// this guards was not a wrong predicate — there was no predicate on the read arm at all — so the
+/// tests fix the decision in place: a future widening of the LIST has to fail here first and
+/// justify itself, exactly as a future narrowing would.
+#[cfg(test)]
+mod payment_provider_role_tests {
+    use super::*;
+
+    fn claims(perm: Option<bool>) -> Claims {
+        Claims {
+            // Minted, not literals: a hardcoded UUID in src/ is a gate finding (the gate wants
+            // lookups by slug, not by a baked-in id) and none of these tests care about the value.
+            sub: Uuid::new_v4().to_string(),
+            aid: Uuid::new_v4().to_string(),
+            role: "user".into(),
+            exp: 1_800_000_000,
+            iat: 1_799_999_400,
+            perm_is_super_admin: perm,
+        }
+    }
+
+    /// The super-admin flag ON is the only thing that opens the surface — and it opens all three
+    /// arms, because all three call this one predicate.
+    #[test]
+    fn the_super_admin_flag_opens_the_payment_provider_surface() {
+        assert!(can_manage_payment_providers(&claims(Some(true))));
+    }
+
+    /// Everything else is refused: a tenant, a company admin, and a token minted without the flag
+    /// at all (any non-super-admin login).
+    #[test]
+    fn tenant_and_flagless_sessions_are_refused() {
+        for perm in [Some(false), None] {
+            assert!(
+                !can_manage_payment_providers(&claims(perm)),
+                "perm={perm:?} must not manage payment providers"
+            );
+        }
+    }
+
+    /// The role WORD must not decide. A `super_admin` role string with the flag off is the shape
+    /// the read arm used to wave through unchecked; it stays refused, so "authenticated" can never
+    /// quietly become "authorised" here again.
+    #[test]
+    fn the_role_word_alone_is_not_enough() {
+        let mut c = claims(Some(false));
+        c.role = "super_admin".into();
+        assert!(!can_manage_payment_providers(&c));
     }
 }

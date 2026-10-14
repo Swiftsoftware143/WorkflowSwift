@@ -2,7 +2,11 @@
 
 Audience: the **super admin** (the platform operator). Everything under `/api/v1/admin/*`
 requires a super-admin JWT — `perm_is_super_admin` is checked at the API, so a tenant admin or
-member gets `403`, not a hidden button.
+member gets `403`, not a hidden button. The payment-provider surface sits **outside** that prefix
+and requires the **same flag** — `GET`/`POST /api/v1/payment-providers` and
+`DELETE /api/v1/payment-providers/{provider_type}` — because reading this install's payment
+configuration is as sensitive as changing it: the list carries the publishable keys, the test/live
+mode and each provider's settings (never a secret value).
 
 Base: `https://workflowswift.com/api/v1` · Health: `GET /api/v1/health` (public).
 

@@ -180,7 +180,11 @@
       <h1>WorkflowSwift — Admin Guide</h1>
       <p class="lead">Audience: the <strong>super admin</strong> (the platform operator). Everything under <code>/api/v1/admin/*</code>
       requires a super-admin JWT — <code>perm_is_super_admin</code> is checked at the API, so a tenant admin or
-      member gets <code>403</code>, not a hidden button.</p>
+      member gets <code>403</code>, not a hidden button. The payment-provider surface sits <strong>outside</strong> that prefix
+      and requires the <strong>same flag</strong> — <code>GET</code>/<code>POST /api/v1/payment-providers</code> and
+      <code>DELETE /api/v1/payment-providers/{provider_type}</code> — because reading this install's payment
+      configuration is as sensitive as changing it: the list carries the publishable keys, the test/live mode and
+      each provider's settings (never a secret value).</p>
       <p>Base: <code>https://workflowswift.com/api/v1</code> · Health: <code>GET /api/v1/health</code> (public).</p>
       <h2 id="plan-limits-settable-and-enforced">Plan limits — settable AND enforced</h2>
       <p>This is the part of the platform that controls revenue, so it is worth stating exactly how it
