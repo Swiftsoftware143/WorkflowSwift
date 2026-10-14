@@ -412,6 +412,15 @@ async function showForm(key,label,fields,ep,id,cb,row){
     // Skip blank inputs: an empty string is not "unset" server-side — POST /surfaces would
     // store slug='' instead of slugifying the name, and PUT uses COALESCE (blank can't clear).
     const body={};box.querySelectorAll('#mf input,#mf select').forEach(inp=>{if(String(inp.value).trim()!=='')body[inp.name]=inp.value});
+    // `EP.ints` names the fields the BACKEND declares as a number. An <input> hands back a STRING,
+    // and `credit_cost: Option<i32>` refuses `"7"` with
+    // 422 `invalid type: string "7", expected i32` (measured live against this app's own API
+    // 2026-10-14) - which is why Save on the Industry Sources panel never stored anything even when
+    // the route existed. Only the named fields are coerced, and only when the text is a finite
+    // number, so a text field whose value merely LOOKS numeric is left exactly as typed.
+    ((EP&&EP.ints)||[]).forEach(k=>{
+      if(k in body){const n=Number(body[k]); if(String(body[k]).trim()!==''&&Number.isFinite(n))body[k]=n;}
+    });
     // `EP.upsert` marks a resource whose ONLY write is an upsert POST (admin/industry-sources:
     // POST /admin/industry-sources is `ON CONFLICT (industry_slug, source_name) DO UPDATE`, and its
     // /{id} route serves DELETE only, so the generic Edit's PUT answered 405 Method Not Allowed -
@@ -1314,7 +1323,13 @@ function renderIndustrySources(c){
   // an ON CONFLICT (industry_slug, source_name) DO UPDATE. The /{id} route serves DELETE only, so the
   // generic Edit's PUT answered 405 and the fixed panel offered an Edit that could never save. Edit now
   // posts the same upsert the Add form does, prefilled from the row.
-  renderCRUD(c.querySelector('#isdata'),'industry-sources','Industry Source',['industry_slug','source_name','source_type','endpoint','refresh_cadence','credit_cost','is_active'],{list:'/admin/industry-sources',create:'/admin/industry-sources',del:'/admin/industry-sources',upsert:true});
+  // The field list is passed THREE ways on purpose: it is the table's columns, the Edit modal's
+  // inputs and the Add modal's inputs. Without the explicit `editFields` argument renderCRUD falls
+  // back to `['name']`, so Edit opened with ONE stray box named `name` — a field the upsert POST
+  // does not accept (CreateSourceRequest wants industry_slug/source_name/...), which would have
+  // answered a deserialisation 4xx the moment it was saved (measured live 2026-10-14).
+  const IS_FIELDS=['industry_slug','source_name','source_type','endpoint','refresh_cadence','credit_cost','is_active'];
+  renderCRUD(c.querySelector('#isdata'),'industry-sources','Industry Source',IS_FIELDS,{list:'/admin/industry-sources',create:'/admin/industry-sources',del:'/admin/industry-sources',upsert:true,ints:['credit_cost']},IS_FIELDS);
 }
 
 // --- Checkout Sessions (GET /checkout/sessions -> {sessions:[...]}) — read-only history ---
