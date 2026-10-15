@@ -532,8 +532,11 @@
         — the target is resolved against your own workflows first, so one tenant cannot fire another's.</li>
       <li><strong>Endpoints it uses</strong> (all under <code>/api/v1</code>, <code>Authorization: Bearer &lt;token&gt;</code>):
         <code>GET /bridge/commands</code>, <code>GET /bridge/status</code>, <code>POST /workflows/trigger</code>,
-        <code>POST /bridge/ingest</code>. Command acknowledgement (<code>POST /bridge/commands/ack</code>) is
-        <strong>not implemented server-side yet</strong>.</li>
+        <code>POST /bridge/ingest</code>, and <code>POST /bridge/commands/ack</code> — after the
+        extension runs a command it polled, it reports the outcome back
+        (<code>{command_id, status: "completed"|"failed", result}</code>) and the server stamps that
+        command <code>acknowledged_at</code> with the result, scoped to your own account (an id
+        belonging to another tenant is answered <code>404</code>).</li>
       <li><strong>History</strong>: 1.1.0 shipped <code>API Base URL = https://workflowswift.com/api</code> (no <code>/v1</code>), so every
         call returned 404 while <em>Test Connection</em> still reported success. Fixed in 1.2.0, which also
         drops the <code>&lt;all_urls&gt;</code> host permission (it was listed next to the explicit marketplace
