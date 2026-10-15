@@ -864,7 +864,12 @@ pub async fn admin_list_accounts(
     let accounts = sqlx::query(
         r#"SELECT a.id, a.name, a.account_slug, a.is_active, a.retention_days, a.retention_purge_at,
                   a.created_at,
-                  p.name as plan_name, p.slug as plan_slug
+                  p.name as plan_name, p.slug as plan_slug,
+                  (SELECT u.email FROM users u WHERE u.aid = a.id
+                   ORDER BY CASE WHEN u.role IN ('owner','company_admin','admin','super_admin')
+                                 THEN 0 ELSE 1 END,
+                            u.created_at ASC
+                   LIMIT 1) AS owner_email
            FROM accounts a
            LEFT JOIN account_plans ap ON ap.aid = a.id AND ap.status = 'active'
            LEFT JOIN plan_tiers p ON p.id = ap.plan_id
@@ -878,7 +883,16 @@ pub async fn admin_list_accounts(
     for row in &accounts {
         let id: Uuid = row.try_get("id")?;
         let name: Option<String> = row.try_get("name").ok();
-        let email: Option<String> = None;
+        // The account's OWNER, i.e. the workspace's own user - the same value `POST
+        // /admin/accounts/create` takes as `email` and stores on the `users` row it mints for the
+        // new account. It used to be the literal `None`, so this list returned twelve `"email":
+        // null` fields and the operator could not tell one workspace from another (kanban
+        // t_81a1ba13): `email` was not a wrong COLUMN, it was never read at all. NULL now means
+        // exactly one thing - an account with no user row (David Giraudy's Workspace, David Admin's
+        // Workspace and the app's own account today).
+        // `owner_email` carries the same value under the fleet-wide spelling the FunnelSwift and
+        // missedcallrespondr operator lists use, so one operator tool reads all three.
+        let email: Option<String> = row.try_get("owner_email").ok().flatten();
         let slug: Option<String> = row.try_get("account_slug").ok();
         let is_active: bool = row.try_get("is_active")?;
         let retention_days: Option<i32> = row.try_get("retention_days").ok();
@@ -892,6 +906,7 @@ pub async fn admin_list_accounts(
             "id": id.to_string(),
             "name": name,
             "email": email,
+            "owner_email": email,
             "slug": slug,
             "is_active": is_active,
             "retention_days": retention_days,
