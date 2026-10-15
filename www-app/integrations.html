@@ -81,7 +81,7 @@ async function api(path, method, body){
   var r = await fetch(API_BASE + path, {method:method||'GET', headers:{'Content-Type':'application/json','Authorization':'Bearer '+token}, body: body?JSON.stringify(body):undefined});
   if (r.status === 401) { window.location.href = '/login'; return null; }
   var d = null; try{ d = await r.json(); }catch(e){}
-  if(!r.ok) throw new Error((d && (d.error||d.message)) || ('HTTP '+r.status));
+  if(!r.ok) throw new Error((d && ((typeof d.error==='string'&&d.error)||d.message)) || ('HTTP '+r.status));
   return d;
 }
 
