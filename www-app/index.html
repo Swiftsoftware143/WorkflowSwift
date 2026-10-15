@@ -1093,7 +1093,7 @@ const PlanView = () => {
   return html`
     <div>
       <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
-        <div><h1 class="text-xl font-extrabold text-gray-900">Plan &amp; Billing</h1><p class="text-sm text-gray-500 mt-1">Your current plan and the plans this install offers</p></div>
+        <div><h1 class="text-xl font-extrabold text-gray-900">Plan & Billing</h1><p class="text-sm text-gray-500 mt-1">Your current plan and the plans this install offers</p></div>
         <button class="btn-outline text-sm" onClick=${loadPlans} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button>
       </header>
       <div class="card" style="margin-bottom:16px">
@@ -1141,7 +1141,21 @@ const startCheckout = async (p) => {
     if (r && r.checkout_url) { S.checkoutMsg = 'Opening the secure checkout…'; window.location = r.checkout_url; return; }
     S.checkoutMsg = 'The checkout was created but no payment page came back.';
   } catch (e) {
-    S.checkoutMsg = (e && e.message) || 'The checkout could not be started.';
+    // kanban t_1762f2c4-adjacent (2026-10-15): a refused purchase must not answer the BUYER in the
+    // operator's words. This arm used to print the server's own sentence verbatim, which on an
+    // install with no payment provider is "No active stripe provider configured" — measured live in
+    // Chromium on app.workflowswift.com/dashboard (real mouse click on "Upgrade to Starter" -> 400
+    // POST /api/v1/checkout/create, message card read the server words). That names the one thing a
+    // customer cannot act on, and reads like something they broke. Fleet convention, taken from the
+    // sentence IncentiveSwift's Plan & Billing already ships: lead with the customer's own line and
+    // the fact that nothing was charged, then the server's detail unchanged. A refused
+    // /checkout/create never creates a session, so "nothing was charged" holds on every arm.
+    const detail = (e && e.message) ? String(e.message) : '';
+    const config = /provider|not configured/i.test(detail);
+    S.checkoutMsg = (config
+      ? 'Upgrades are not open on this workspace yet \u2014 nothing was charged.'
+      : 'The upgrade could not be started \u2014 nothing was charged.')
+      + (detail ? ' ' + detail : '');
   }
   S.checkoutBusy = false; renderApp();
 };
