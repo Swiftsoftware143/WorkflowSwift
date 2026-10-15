@@ -216,6 +216,14 @@ const API = (() => {
     // this route's unique value is workflows / clients / templates (kanban t_3a8ccd2a).
     getDashboardStats: () => fetch(base + '/dashboard/stats', { headers: headers() }).then(handle),
     getPlanCapabilities: () => fetch(base + '/plans/capabilities', { headers: headers() }).then(handle),
+    // --- Plan & Billing (zz-ws-upgrade-gap, 2026-10-15). WorkflowSwift could sell nothing from
+    // any shipped surface: `plan_tiers` holds four ACTIVE priced tiers, POST /checkout/create was
+    // mounted and called by NO console, and the Templates pane's own "Upgrade to Unlock" opened the
+    // marketing site's #features anchor, which never mentions upgrading. GET /plans is
+    // authenticated (an anonymous call answers 401), so the catalogue is read with the tenant token.
+    listPlans: () => fetch(base + '/plans', { headers: headers() }).then(handle),
+    createCheckout: (b) => fetch(base + '/checkout/create', { method:'POST', headers: headers(), body: JSON.stringify(b) }).then(handle),
+    listCheckoutSessions: () => fetch(base + '/checkout/sessions', { headers: headers() }).then(handle),
     rolloverCredits: () => fetch(base + '/credits/rollover', { method:'POST', headers: headers(), body: JSON.stringify({}) }).then(handle),
     removeAccountIndustry: (slug) => fetch(base + '/accounts/industry/' + encodeURIComponent(slug), { method:'DELETE', headers: headers() }).then(handle),
     // --- Prospecting surface: enrich (paid/mocked server-side) + the Hexomatic enrichment key ---
@@ -254,7 +262,7 @@ const API = (() => {
   };
 })();
 
-const S = { view:'login', loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, dataVer:0, apiKeys:null, extBuild:null, hexKey:null, hexKeyInput:'', enrich:null, enriching:null, newApiKey:null, builder:null, steps:null, stepsWf:null, stepValidation:null, stepDraft:null, widgetCat:null, notifyChannels:null, notifyRecipients:null, rendSummary:null, renditions:null, rendWf:'', rendStatus:'active', rendSel:null, stitchName:'', modalErr:null };
+const S = { view:'login', loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, dataVer:0, apiKeys:null, extBuild:null, hexKey:null, hexKeyInput:'', enrich:null, enriching:null, newApiKey:null, builder:null, steps:null, stepsWf:null, stepValidation:null, stepDraft:null, widgetCat:null, notifyChannels:null, notifyRecipients:null, rendSummary:null, renditions:null, rendWf:'', rendStatus:'active', rendSel:null, stitchName:'', modalErr:null, plans:null, plansTried:false, checkoutMsg:null, checkoutBusy:false };
 
 // Views call their loaders from inside render (the house pattern: `if(!S.x) loadX();`), and
 // every loader calls renderApp() again — a *re-entrant* preact render. The inner render
@@ -723,7 +731,9 @@ const renderTplGrid = () => {
   root.querySelectorAll('[data-tpl-export]').forEach(b=>{ const p=b.getAttribute('data-tpl-export').split('|'); b.addEventListener('click',()=>exportTemplate(p[0],p[1])); });
   root.querySelectorAll('[data-tpl-upgrade]').forEach(b=>b.addEventListener('click',()=>upgradeTemplates()));
 };
-const upgradeTemplates = () => { window.open('https://workflowswift.com/#features','_blank'); toast('Upgrade required to unlock this template'); };
+// The pane's OWN upsell used to open the marketing site's #features anchor, which never
+// mentions upgrading — a CTA that led nowhere. It now opens the in-app Plan & Billing view.
+const upgradeTemplates = () => { setView('plan'); toast('Choose a plan to unlock this template'); };
 const loadTemplates = async () => { if(S.loading)return; S.loading=true; renderApp(); try { const _r = await API.get('/templates' + (S.tplSurface ? '?surface=' + encodeURIComponent(S.tplSurface) : '')); S.templates = _r.templates || []; S.templateAvail = _r.available_public || []; S.plan = _r.plan || null; } catch(e){ S.templates=[]; S.templateAvail=[]; S.plan=null; } S.loading=false; S.dataVer=(S.dataVer||0)+1; renderApp(); renderTplGrid(); };
 const setTplSurface = (v) => { S.tplSurface = v; S.templates = null; loadTemplates(); };
 // The install body must be a JSON OBJECT, not an empty request: `headers()` always sends
@@ -1067,6 +1077,73 @@ const rolloverNow = async () => {
   try { const r = await API.rolloverCredits(); S.rolloverMsg = r.message || ('Rolled ' + (r.rolled ?? 0) + ' credits'); S.creditInfo=null; }
   catch(e){ S.rolloverMsg = e.message; toast(e.message,'err'); }
   S.loading=false; renderApp();
+};
+
+// ===== Plan & Billing (GET /plans, POST /checkout/create, GET /checkout/sessions) =====
+// The missing tenant upsell surface (zz-ws-upgrade-gap). The catalogue reads the app's own
+// `plan_tiers` rows and the button drives the app's REAL checkout arm, reporting the server's own
+// sentence — so a configured provider sells, and an install with no provider says exactly what is
+// missing instead of dead-ending on a marketing anchor.
+const PlanView = () => {
+  if (!S.plans && !S.plansTried) { S.plansTried = true; loadPlans(); }
+  if (!S.planCaps && !S.planCapsTried) { S.planCapsTried = true; loadPlanCaps(); }
+  const tiers = (S.plans && (S.plans.plans || S.plans)) || [];
+  const curSlug = (S.planCaps && S.planCaps.plan_slug) || '';
+  const curName = (S.planCaps && S.planCaps.plan_name) || '';
+  return html`
+    <div>
+      <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
+        <div><h1 class="text-xl font-extrabold text-gray-900">Plan &amp; Billing</h1><p class="text-sm text-gray-500 mt-1">Your current plan and the plans this install offers</p></div>
+        <button class="btn-outline text-sm" onClick=${loadPlans} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button>
+      </header>
+      <div class="card" style="margin-bottom:16px">
+        <h3 class="font-semibold text-gray-800 mb-1">Your plan — ${curName || curSlug || '—'}</h3>
+        <p class="text-sm text-gray-600">${(curSlug && curSlug !== 'free') ? 'Thanks for subscribing.' : 'A paid plan lifts the template and credit limits.'}</p>
+      </div>
+      ${S.checkoutMsg ? html`<div class="card" style="margin-bottom:16px;border-left:4px solid #f59e0b"><p class="text-sm text-gray-700">${S.checkoutMsg}</p></div>` : ''}
+      ${tiers.length === 0 ? html`<div class="empty">No plans are published for this install yet.</div>` : html`
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+        ${tiers.map(p => html`
+          <div class="card" style="border:${(p.slug === curSlug) ? '2px solid #2563eb' : '1px solid #e2e8f0'}">
+            <div class="flex items-center justify-between">
+              <div class="font-bold text-gray-900">${p.name || p.slug}</div>
+              <div class="text-lg font-extrabold text-gray-900">$${fmtAmt(p.price_monthly)}<span class="text-xs text-gray-500 font-normal">/mo</span></div>
+            </div>
+            ${p.description ? html`<p class="text-xs text-gray-500 mt-1">${p.description}</p>` : ''}
+            <div class="mt-3">
+              ${(p.slug === curSlug)
+                ? html`<span class="chip">Current plan</span>`
+                : (Number(p.price_monthly) > 0
+                    ? html`<button class="btn text-sm" onClick=${() => startCheckout(p)} disabled=${S.checkoutBusy}>${S.checkoutBusy ? 'Starting…' : ('Upgrade to ' + (p.name || p.slug))}</button>`
+                    : html`<span class="text-xs text-gray-400">Free — no payment needed</span>`)}
+            </div>
+          </div>`)}
+      </div>`}
+    </div>`;
+};
+const loadPlans = async () => {
+  if (S.loading) return;
+  S.loading = true; renderApp();
+  try { S.plans = await API.listPlans(); } catch (e) { S.plans = null; toast(e.message, 'err'); }
+  S.loading = false; renderApp();
+};
+// `create_checkout_session` takes the amount from the REQUEST (checkout_handler.rs:474), so the
+// console sends the tier's own stored price_monthly rather than inventing one.
+const startCheckout = async (p) => {
+  if (S.checkoutBusy) return;
+  S.checkoutBusy = true; S.checkoutMsg = null; renderApp();
+  try {
+    const r = await API.createCheckout({
+      purchasable_type: 'plan', purchasable_id: p.id, provider_type: 'stripe',
+      amount: Number(p.price_monthly) || 0, currency: 'USD',
+      success_url: '/', cancel_url: '/',
+    });
+    if (r && r.checkout_url) { S.checkoutMsg = 'Opening the secure checkout…'; window.location = r.checkout_url; return; }
+    S.checkoutMsg = 'The checkout was created but no payment page came back.';
+  } catch (e) {
+    S.checkoutMsg = (e && e.message) || 'The checkout could not be started.';
+  }
+  S.checkoutBusy = false; renderApp();
 };
 
 // ===== Tickets =====
@@ -2062,6 +2139,7 @@ const NAV = [
   { id:'brand-monitor', label:'Brand Monitor', icon:'📣' },
   { id:'competitors', label:'Competitors', icon:'👁️' },
   { id:'credits', label:'Credits', icon:'💰' },
+  { id:'plan', label:'Plan & Billing', icon:'⭐' },
   { id:'api-keys', label:'API Keys', icon:'🔑' },
   { id:'provider-keys', label:'Provider Keys', icon:'🔌' },
   { id:'team', label:'Team', icon:'🧑🤝🧑' },
@@ -2075,6 +2153,7 @@ const VIEW_MAP = {
   instances: InstancesView, automations: AutomationsView, leads: LeadsView,
   prospecting: ProspectingView, 'prospecting-results': ProspectingResultsView, 'brand-monitor': BrandMonitorView,
   competitors: CompetitorsView, credits: CreditsView, tickets: TicketsView, profile: ProfileView,
+  plan: PlanView,
   'api-keys': ApiKeysView,
   'provider-keys': ProviderKeysView,
   team: TeamView,
