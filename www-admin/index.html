@@ -50,6 +50,25 @@ let app={tab:'dashboard',sub:'overview',data:{}};
 // error) had no way to reach the operator. showForm surfaces this on failure.
 let LAST_ERR='';
 
+/* Provider-preset destinations. GET /provider-presets carries a `base_url` per preset, and for the
+   platform's OWN destinations that value is LOOPBACK: measured live 2026-10-15, `coreswift` and
+   `coreswift_crm` are `http://localhost:8084` (the CoreSwift hub this app pushes into, read from its
+   CORESWIFT_URL) and `n8n` is `http://localhost:5678`. Those are the addresses the SERVER dials —
+   neither reachable nor owned by the operator choosing a preset — so printing them in the picker
+   named the destination in terms useless to the person picking it (the sibling consoles mask the
+   same class: kanban t_ff1f0d6b on FunnelSwift, b76f8e1 on ADASwift). A public base_url still
+   prints; an internal one is named instead of quoted. */
+function publicBase(u){
+  const s=String(u==null?'':u).trim();
+  if(!s)return '';
+  return /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|host\.docker\.internal|[A-Za-z0-9_-]+\.internal|10\.[0-9]|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)/i.test(s)?'':s;
+}
+function presetLabel(p){
+  const pub=publicBase(p&&p.base_url);
+  const where=pub?' — '+escHtml(pub):((p&&p.base_url)?' — in-platform':'');
+  return escHtml((p&&p.name)||'')+' ('+escHtml((p&&p.key)||'')+')'+where;
+}
+
 async function api(path,opts={}){
   const h={...opts.headers,'Content-Type':'application/json'};
   if(TOKEN)h['Authorization']='Bearer '+TOKEN;
@@ -896,7 +915,7 @@ function renderIntegrationTargets(c){
       +'<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">Provider label</label><input class="input" id="tg_provider" value="'+escHtml(item.provider||'webhook')+'"></div>'
       +'<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">Provider preset</label>'
       +'<select class="input" id="tg_preset"><option value="">none (route by webhook URL)</option>'
-      +presets.map(p=>'<option value="'+escHtml(p.key)+'"'+(item.provider_preset===p.key?' selected':'')+'>'+escHtml(p.name)+' ('+escHtml(p.key)+')'+(p.base_url?' — '+escHtml(p.base_url):'')+'</option>').join('')
+      +presets.map(p=>'<option value="'+escHtml(p.key)+'"'+(item.provider_preset===p.key?' selected':'')+'>'+presetLabel(p)+'</option>').join('')
       +'</select></div>'
       +'<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">Webhook URL</label>'
       +'<input class="input" id="tg_url" value="'+escHtml(item.webhook_url||'')+'" placeholder="https://… (leave blank when a preset routes the target)"></div>'
