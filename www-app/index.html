@@ -161,6 +161,11 @@ const API = (() => {
     // t_39cea779). The server takes the first non-empty part and sniffs its magic bytes; the part
     // name is not significant, and the bearer token is still attached (the route is private).
     uploadAvatar: (blob) => { const fd = new FormData(); fd.append('file', blob, blob.name || 'avatar'); return fetch(base + '/auth/avatar', { method:'POST', headers: { ...(token ? { 'Authorization': 'Bearer ' + token } : {}) }, body: fd }).then(handle); },
+    // The REMOVAL twin of the upload. The upload upserts ONE row per user, so until this route
+    // existed a picture could be swapped for another one but never taken down. An authenticated
+    // DELETE on the caller's OWN picture — the session decides whose row goes, there is no path id
+    // to spoof — idempotent on the server (`removed` = 1/0), and it answers `avatar_url: ""`.
+    deleteAvatar: () => fetch(base + '/auth/avatar', { method:'DELETE', headers: headers() }).then(handle),
     // Per-account email branding (kanban t_c3cfe7ba). The logo uses the same multipart envelope.
     uploadBrandingLogo: (blob) => { const fd = new FormData(); fd.append('file', blob, blob.name || 'logo'); return fetch(base + '/settings/branding/logo', { method:'POST', headers: { ...(token ? { 'Authorization': 'Bearer ' + token } : {}) }, body: fd }).then(handle); },
     deleteBrandingLogo: () => fetch(base + '/settings/branding/logo', { method:'DELETE', headers: headers() }).then(handle),
@@ -1426,6 +1431,25 @@ const ProfileView = () => {
     av.uploading = false; renderApp();
   };
 
+  // The REMOVAL twin of uploadPicture. The upload upserts ONE row per user, so before this existed
+  // the picture could only ever be REPLACED: an operator who wanted their initials back had no way
+  // to ask. The route is an authenticated DELETE on the caller's OWN row, so nothing but the session
+  // decides whose picture goes; this screen re-reads /auth/me afterwards because the server derives
+  // `avatar_url` from the row EXISTING — clearing the picture locally without the re-read would
+  // leave this console and the header avatar showing a picture that no longer resolves.
+  const removePicture = async () => {
+    if (!(u && u.avatar_url)) return toast('There is no picture to remove','err');
+    if (!window.confirm('Remove your profile picture?')) return;
+    S.loading = true; renderApp();
+    try {
+      await API.deleteAvatar();
+      av.stamp = av.stamp + 1;
+      await refreshMe(() => {});    // the server's truth: avatar_url is null once the row is gone
+      toast('Profile picture removed');
+    } catch (err) { toast(err.message || 'Could not remove picture','err'); }
+    S.loading = false; renderApp();
+  };
+
   const changePw = async (e) => {
     e.preventDefault();
     if (!pw.next || !pw.current) return toast('Enter your new password and your current one','err');
@@ -1447,12 +1471,14 @@ const ProfileView = () => {
       <div class="card">
         <h2 class="text-base font-bold text-gray-900 mb-3">Profile picture</h2>
         <div class="flex items-center gap-4 flex-wrap">
-          <${Avatar} u=${u} size=${72} stamp=${av.stamp} />
+          <${Avatar} u=${u} size=${72} stamp=${av.stamp} id="profile-picture-preview" />
           <div>
             <input id="profile-picture-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp"
               onChange=${e=>{ pendingAvatar = (e.target.files && e.target.files[0]) || null; av.chosen = pendingAvatar ? pendingAvatar.name : ''; renderApp(); }} />
             <div class="text-xs text-gray-500 mt-1">PNG, JPEG, GIF or WebP — up to 2 MB.${av.chosen ? (' Selected: ' + av.chosen) : ''}</div>
             <button class="btn text-sm mt-2" id="profile-picture-save" onClick=${uploadPicture} disabled=${av.uploading || S.loading}>${av.uploading ? 'Uploading…' : 'Upload picture'}</button>
+            ${(u && u.avatar_url) ? html`<button class="btn-outline text-sm mt-2 ml-2" id="profile-picture-remove" onClick=${removePicture} disabled=${S.loading}>Remove picture</button>` : ''}
+            ${(u && u.avatar_url) ? '' : html`<div class="text-xs text-gray-400 mt-2" id="profile-picture-empty">No picture yet — your initials are shown instead.</div>`}
           </div>
         </div>
       </div>

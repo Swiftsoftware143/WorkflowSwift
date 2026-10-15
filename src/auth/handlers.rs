@@ -655,6 +655,43 @@ pub async fn get_avatar(
     Ok(resp)
 }
 
+/// `DELETE /api/v1/auth/avatar` — remove the caller's OWN profile picture.
+///
+/// The upload twin only ever REPLACES the row (`ON CONFLICT (user_id) DO UPDATE`), so before this
+/// route existed a picture could be swapped for another one but never taken down: an operator who
+/// wanted their initials back had no way to ask, and the console could only offer "Upload picture".
+/// The email-branding logo has had its own DELETE since it shipped, so this closes the same gap on
+/// the profile.
+///
+/// It writes the SESSION's own user — there is no path id to spoof, the same rule `upload_avatar`
+/// follows — and it is idempotent: `removed` reports whether a row was actually there, so calling it
+/// on an account with no picture answers 200 rather than inventing a 404 for a state that is already
+/// what the caller asked for. `avatar_url` comes back empty so the caller can repaint from the
+/// response instead of re-reading `/auth/me`.
+///
+/// ONE row carries the picture here: the bytes in `user_avatars`. Unlike the apps whose `users`
+/// table also holds an `avatar_url` POINTER, this app derives the answer for `/auth/me` from the row
+/// existing (`SELECT EXISTS(... user_avatars ...)`), so deleting the row is the whole statement and
+/// there is no second place to leave stale.
+pub async fn delete_avatar(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+
+    let removed = sqlx::query("DELETE FROM user_avatars WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&state.db)
+        .await?
+        .rows_affected();
+
+    Ok(Json(json!({
+        "status": "ok",
+        "removed": removed,
+        "avatar_url": "",
+    })))
+}
+
 pub async fn forgot_password(
     State(state): State<AppState>,
     Json(req): Json<ForgotPasswordRequest>,

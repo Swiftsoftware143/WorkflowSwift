@@ -57,8 +57,15 @@ pub fn create_router(state: AppState) -> Router {
         // this app's original POST path so no existing caller breaks.
         .route("/password", put(auth::change_password))
         .route("/profile", put(auth::update_profile))
-        // The picture UPLOAD: raw image bytes, private (card t_39cea779).
-        .route("/avatar", post(auth::upload_avatar));
+        // The picture UPLOAD: raw image bytes, private (card t_39cea779). The DELETE twin added with
+        // the picture-removal gap acts on the caller's OWN row, so it stays authenticated for the
+        // same reason — the session decides whose picture goes, and there is no path id to spoof.
+        // The path is NOT in route_policy::PUBLIC_ROUTES (only the `/avatar/{user_id}` READ is), so
+        // an anonymous DELETE is refused 401 by the boundary before this handler is reached.
+        .route(
+            "/avatar",
+            post(auth::upload_avatar).delete(auth::delete_avatar),
+        );
 
     // Resource sub-routers
 

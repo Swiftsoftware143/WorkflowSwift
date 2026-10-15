@@ -397,12 +397,17 @@ mod tests {
     /// `<img src>` cannot carry a token, so the GET must be anonymous; but the POST writes bytes
     /// under the caller's own session and must never be. Both directions are pinned, and the
     /// template is segment-exact so a deeper path is not caught by it either way.
+    ///
+    /// The path now carries TWO private methods — the upload (POST) and the picture REMOVAL
+    /// (DELETE, added with the picture-removal gap). The boundary classifies by PATH, so one
+    /// assertion covers both: neither an anonymous upload nor an anonymous delete may reach a
+    /// handler, and the session is what decides whose picture is written.
     #[test]
     fn the_avatar_read_is_public_and_the_upload_is_not() {
         assert!(is_public_route("/api/v1/auth/avatar/user-one"));
         assert!(
             !is_public_route("/api/v1/auth/avatar"),
-            "the upload twin must never be anonymous"
+            "the upload/delete twin must never be anonymous"
         );
         assert!(
             !is_public_route("/api/v1/auth/avatar/x/extra"),

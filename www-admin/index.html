@@ -1225,27 +1225,66 @@ function renderProfile(c){
     // ── picture + name + company (the editable half) ──
     left.appendChild(h('label',{className:'text-xs text-gray-500'},'Profile picture'));
     const picRow=h('div',{className:'flex items-center gap-3 mt-1 mb-3'});
-    if(me.avatar_url){
-      const im=h('img',{alt:'Profile picture',style:'width:72px;height:72px;border-radius:50%;object-fit:cover;border:1px solid #e5e7eb;flex:none'});
-      im.src=me.avatar_url;picRow.appendChild(im);
-    }else{
-      picRow.appendChild(h('span',{style:'width:72px;height:72px;border-radius:50%;background:#4f46e5;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:24px;flex:none'},(me.name||me.email||'U').charAt(0).toUpperCase()));
-    }
-    const fileIn=h('input',{type:'file',accept:'image/png,image/jpeg,image/webp,image/gif',style:'display:none'});
-    const pickBtn=h('button',{className:'btn btn-ghost btn-sm'},me.avatar_url?'Replace picture':'Upload picture');
+    // BOTH cells are built and then shown/hidden by `paint()` below, so an upload and a removal can
+    // each repaint this screen IN PLACE. A full renderApp() here would rebuild the screen and throw
+    // away the confirmation message that very action is; the fleet's FunnelSwift hit exactly that.
+    const im=h('img',{id:'wsac-av',alt:'Profile picture',style:'width:72px;height:72px;border-radius:50%;object-fit:cover;border:1px solid #e5e7eb;flex:none'});
+    const ph=h('span',{id:'wsac-avph',style:'width:72px;height:72px;border-radius:50%;background:#4f46e5;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:24px;flex:none'},(me.name||me.email||'U').charAt(0).toUpperCase());
+    if(me.avatar_url){im.src=me.avatar_url;im.style.display='';ph.style.display='none'}
+    else{im.style.display='none';ph.style.display='flex'}
+    picRow.appendChild(im);picRow.appendChild(ph);
+    const fileIn=h('input',{id:'wsac-file',type:'file',accept:'image/png,image/jpeg,image/webp,image/gif',style:'display:none'});
+    const pickBtn=h('button',{className:'btn btn-ghost btn-sm',id:'wsac-avpick'},me.avatar_url?'Replace picture':'Upload picture');
     pickBtn.onclick=()=>fileIn.click();
+    // The REMOVAL twin. The email-branding logo has had its own DELETE since it shipped, but the
+    // profile picture could only ever be REPLACED: the upload upserts one row per user, so an
+    // operator who wanted their initials back had no way to ask and this screen could only offer
+    // "Upload picture". Painted HIDDEN while no picture exists, REVEALED by a successful upload in
+    // place, WITHDRAWN again once the removal lands.
+    const delBtn=h('button',{className:'btn btn-ghost btn-sm',id:'wsac-avdel',style:'margin-left:6px'},'Remove picture');
+    delBtn.style.display=me.avatar_url?'':'none';
+    const avMsg=h('span',{id:'wsac-avmsg',className:'text-xs text-gray-500',style:'margin-left:8px'},'');
+    // One repaint for both actions, so the three UI states can never disagree with the state the
+    // server just reported: the picture, the placeholder and the Remove control move together.
+    const paint=()=>{
+      const url=me.avatar_url||'';
+      if(url){im.src=url;im.style.display='';ph.style.display='none'}
+      else{im.removeAttribute('src');im.style.display='none';ph.style.display='flex'}
+      pickBtn.textContent=url?'Replace picture':'Upload picture';
+      delBtn.style.display=url?'':'none';
+    };
     fileIn.onchange=async()=>{
       const f=fileIn.files&&fileIn.files[0];if(!f)return;
       if(f.size>2*1024*1024){showMsg('That image is larger than 2 MB','error');fileIn.value='';return}
       const fd=new FormData();fd.append('file',f,f.name||'picture');
+      pickBtn.disabled=true;
       try{
         const res=await fetch(API+'/auth/avatar',{method:'POST',headers:TOKEN?{'Authorization':'Bearer '+TOKEN}:{},body:fd});
         const j=await res.json().catch(()=>({}));
         if(!res.ok)throw new Error(j.message||j.error||('HTTP '+res.status));
-        showMsg('Profile picture updated','success');renderApp();
-      }catch(e){showMsg('Upload failed: '+e.message,'error');fileIn.value=''}
+        me.avatar_url=j.avatar_url||'';
+        // The screen was painted when there was NO picture, so the Remove control came out hidden.
+        // `paint()` reveals it here rather than making the operator reopen the tab.
+        paint();avMsg.textContent='Picture updated';
+        showMsg('Profile picture updated','success');
+      }catch(e){showMsg('Upload failed: '+e.message,'error');fileIn.value='';avMsg.textContent=''}
+      pickBtn.disabled=false;
     };
-    picRow.appendChild(h('div',{},pickBtn,h('p',{className:'text-xs text-gray-400'},'PNG, JPEG, WebP or GIF, up to 2 MB.'),fileIn));
+    delBtn.onclick=async()=>{
+      if(!me.avatar_url){showMsg('There is no picture to remove','error');return}
+      if(!window.confirm('Remove your profile picture?'))return;
+      delBtn.disabled=true;
+      try{
+        const res=await fetch(API+'/auth/avatar',{method:'DELETE',headers:TOKEN?{'Authorization':'Bearer '+TOKEN}:{}});
+        const j=await res.json().catch(()=>({}));
+        if(!res.ok)throw new Error(j.message||j.error||('HTTP '+res.status));
+        me.avatar_url='';
+        paint();avMsg.textContent='Picture removed';
+        showMsg('Profile picture removed','success');
+      }catch(e){showMsg('Remove failed: '+e.message,'error')}
+      delBtn.disabled=false;
+    };
+    picRow.appendChild(h('div',{},pickBtn,delBtn,h('p',{className:'text-xs text-gray-400'},'PNG, JPEG, WebP or GIF, up to 2 MB.'),fileIn,avMsg));
     left.appendChild(picRow);
 
     left.appendChild(h('label',{className:'text-xs text-gray-500'},'Name'));
