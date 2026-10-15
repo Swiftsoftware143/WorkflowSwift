@@ -22,6 +22,7 @@ use std::sync::Arc;
 
 pub async fn register(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(req): Json<RegisterRequest>,
 ) -> ApiResult<impl IntoResponse> {
     // David's signup model (as IncentiveSwift/FunnelSwift ship): the page collects NAME + EMAIL
@@ -90,6 +91,12 @@ pub async fn register(
             // The account is usable without the mail: the caller owns this hash, and
             // `register` hands the session back in its response (kanban t_6d58f5be).
             credential_delivery: super::signup::CredentialDelivery::WithTheAccount,
+            // Attribution for the workspace this route is about to mint, from the `X-Swift-Harness`
+            // request HEADER only — never the body (client-controlled data the flow writes into
+            // customer-visible columns) and never a query field (kanban t_4a744754). `None` for every
+            // ordinary customer signup, so a real account is byte-identical to what it was before the
+            // column existed.
+            probe_harness: crate::probe_harness::from_headers(&headers).as_deref(),
         },
     )
     .await?;

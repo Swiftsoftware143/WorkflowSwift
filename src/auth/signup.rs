@@ -94,6 +94,12 @@ pub struct NewAccount<'a> {
     /// `users` row carries and whether a failed welcome mail fails this call (kanban
     /// t_6d58f5be).
     pub credential_delivery: CredentialDelivery,
+    /// The `X-Swift-Harness` marker, when the door that called this mint is the SERVED,
+    /// unauthenticated signup and the caller sent one (kanban t_4a744754). Read from the request
+    /// HEADER only (`crate::probe_harness::from_headers`) — never from the body and never from a
+    /// query field. `None` mints a row byte-identical to every row minted before the column
+    /// existed, which is what every authenticated door passes.
+    pub probe_harness: Option<&'a str>,
 }
 
 /// The rows that were written. `account_id` is this app's notion of "the account".
@@ -168,14 +174,17 @@ async fn insert_account(
     id: Uuid,
     name: &str,
     slug: &str,
+    probe_harness: Option<&str>,
 ) -> Result<u64, sqlx::Error> {
     let r = sqlx::query(
-        "INSERT INTO accounts (id, name, account_slug, is_active) VALUES ($1, $2, $3, true) \
+        "INSERT INTO accounts (id, name, account_slug, is_active, probe_harness) \
+         VALUES ($1, $2, $3, true, $4) \
          ON CONFLICT (account_slug) DO NOTHING",
     )
     .bind(id)
     .bind(name)
     .bind(slug)
+    .bind(probe_harness)
     .execute(&mut *conn)
     .await?;
     Ok(r.rows_affected())
@@ -320,7 +329,16 @@ pub async fn create_account(
             // candidate every pass, so a taken value is never retried verbatim.
             unique_account_slug_on(&mut tx, a.name).await?
         };
-        if insert_account(&mut tx, account_id, &account_name, &candidate).await? == 1 {
+        if insert_account(
+            &mut tx,
+            account_id,
+            &account_name,
+            &candidate,
+            a.probe_harness,
+        )
+        .await?
+            == 1
+        {
             account_slug = Some(candidate);
             break;
         }

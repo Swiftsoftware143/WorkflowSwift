@@ -44,6 +44,9 @@ async fn mirror_account(
     name: &str,
     slug: &str,
 ) -> Result<(), AppError> {
+    // NOT marked with `probe_harness` on purpose (kanban t_4a744754): this is the
+    // x-internal-key portfolio-sync door (an AUTHENTICATED machine call), not the served,
+    // unauthenticated signup that the `X-Swift-Harness` marker exists for.
     sqlx::query(
         "INSERT INTO accounts (id, name, account_slug) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING",
     )
@@ -111,7 +114,9 @@ pub async fn portfolio_sync_internal(
     match action {
         "create" => {
             if let (Some(pid), Some(tid)) = (portfolio_id, tenant_id) {
-                // WorkflowSwift uses accounts not tenants
+                // WorkflowSwift uses accounts not tenants.
+                // NOT marked with `probe_harness` on purpose (kanban t_4a744754): this
+                // mirror runs inside the x-internal-key portfolio-sync door.
                 sqlx::query("INSERT INTO accounts (id, name, account_slug) VALUES ($1, $2, CONCAT($3, '-', LEFT(CAST($1 AS TEXT), 8))) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name")
                     .bind(tid).bind(&name).bind(&slug)
                     .execute(&state.db).await.ok();

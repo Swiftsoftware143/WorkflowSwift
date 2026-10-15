@@ -285,6 +285,12 @@ pub async fn provision_free_account(
             // The marketing-side provisioning has already been reported to the caller, so a
             // mail failure must never fail the account (kanban t_6d58f5be).
             credential_delivery: crate::auth::signup::CredentialDelivery::WithTheAccount,
+            // DELIBERATELY `None`: this is an AUTHENTICATED machine door (the fleet-internal
+            // provision-free-account call FunnelSwift makes when a lead is tagged), not the served
+            // signup. Only the anonymous signup records the `X-Swift-Harness` marker (kanban
+            // t_4a744754), so a workspace this door mints stays byte-identical to what it minted
+            // before.
+            probe_harness: None,
         },
     )
     .await

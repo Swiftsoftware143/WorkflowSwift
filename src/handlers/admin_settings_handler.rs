@@ -1419,6 +1419,8 @@ pub async fn admin_create_account(
                 .to_string()
         });
 
+    // NOT marked with `probe_harness` on purpose (kanban t_4a744754): an AUTHENTICATED admin-console create-account
+    // door, not the served, unauthenticated signup that the `X-Swift-Harness` marker exists for.
     sqlx::query(
         r#"INSERT INTO accounts (id, name, account_slug)
            VALUES ($1, $2, $3)"#,

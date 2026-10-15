@@ -222,7 +222,10 @@ pub async fn internal_create_portfolio_company(
         .to_string();
     let id = Uuid::new_v4();
 
-    // Ensure account exists (FK constraint)
+    // Ensure account exists (FK constraint).
+    // NOT marked with `probe_harness` on purpose (kanban t_4a744754): an AUTHENTICATED
+    // x-internal-key portfolio door, not the served, unauthenticated signup that the
+    // `X-Swift-Harness` marker exists for.
     sqlx::query(
         "INSERT INTO accounts (id, name, account_slug) VALUES ($1, $2, CONCAT($3, '-', LEFT(CAST($1 AS TEXT), 8))) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, account_slug = EXCLUDED.account_slug"
     )
