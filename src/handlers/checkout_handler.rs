@@ -424,6 +424,12 @@ async fn paypal_verify_config(state: &AppState) -> Result<Option<PaypalVerifyCon
     }))
 }
 
+/// The provider a plan checkout falls back to when neither the request nor `plan_tiers` names one.
+/// See the resolution arm in `create_checkout_session` for the measurement behind this default
+/// (kanban t_8a1afdd5): NULL on the tier must not be a refusal, because this install sells four
+/// tiers and none of them carries a value.
+const DEFAULT_PAYMENT_PROVIDER: &str = "stripe";
+
 /// POST /api/v1/checkout/create
 /// Create a Stripe/PayPal checkout session
 pub async fn create_checkout_session(
@@ -439,31 +445,47 @@ pub async fn create_checkout_session(
         .and_then(|v| v.as_str())
         .ok_or_else(|| AppError::BadRequest("purchasable_type is required".into()))?;
 
-    // Resolve payment provider: explicit > plan's payment_provider > error
+    // Resolve payment provider: explicit > the plan tier's own column > this install's default.
+    //
+    // MEASURED 2026-10-15 (kanban t_46881521 leg 3, fixed under t_8a1afdd5): `plan_tiers` shipped
+    // `payment_provider` NULL on ALL FOUR live rows, so a plan checkout that named no `provider_type`
+    // was refused with a 400 BEFORE any credential was consulted — the arm could not succeed for any
+    // tier this install sells, and the operator read that as the plan being misconfigured. The column
+    // HAS a writer (`admin_create_plan` / `admin_update_plan_full` bind it, and the admin Plans panel
+    // passes `payment_provider` as an add/edit input), so it stays the per-tier OVERRIDE it was meant
+    // to be; NULL now means "use this install's provider", which is what the sibling ADASwift arm
+    // does with the same idea (`plans.payment_provider` … `.unwrap_or("stripe")`). Stripe is the
+    // default because it is the provider every install-wide arm here is written for, and an install
+    // with no active row still answers the honest 400 below ("No active stripe provider configured")
+    // rather than pretending to charge. A `purchasable_id` that names NO tier is still refused: it is
+    // a bad purchase, not a provider question.
     let provider_type = if let Some(pt) = req.get("provider_type").and_then(|v| v.as_str()) {
         pt.to_string()
     } else if purchasable_type == "plan" {
-        if let Some(pid) = req
+        let pid = req
             .get("purchasable_id")
             .and_then(|v| v.as_str())
             .and_then(|s| Uuid::parse_str(s).ok())
-        {
-            sqlx::query_scalar::<_, Option<String>>(
-                "SELECT payment_provider FROM plan_tiers WHERE id = $1",
-            )
-            .bind(pid)
-            .fetch_optional(&state.db)
-            .await?
-            .flatten()
             .ok_or_else(|| {
-                AppError::BadRequest(
-                    "No provider_type specified and plan has no payment_provider set".into(),
-                )
-            })?
-        } else {
-            return Err(AppError::BadRequest(
-                "purchasable_id is required for plan checkout".into(),
-            ));
+                AppError::BadRequest("purchasable_id is required for plan checkout".into())
+            })?;
+        match sqlx::query_scalar::<_, Option<String>>(
+            "SELECT payment_provider FROM plan_tiers WHERE id = $1",
+        )
+        .bind(pid)
+        .fetch_optional(&state.db)
+        .await?
+        {
+            // Some(row): the tier exists. Its column is an override; blank and NULL mean "default".
+            Some(tier_provider) => tier_provider
+                .filter(|p| !p.trim().is_empty())
+                .unwrap_or_else(|| DEFAULT_PAYMENT_PROVIDER.to_string()),
+            None => {
+                return Err(AppError::BadRequest(format!(
+                    "purchasable_id {} names no plan tier",
+                    pid
+                )))
+            }
         }
     } else {
         return Err(AppError::BadRequest(
@@ -658,19 +680,26 @@ async fn create_stripe_session(
         .form(&to_stripe_form_data(&body))
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("Stripe API error: {}", e)))?;
+        .map_err(|e| AppError::UpstreamRefused(format!("Stripe unreachable: {}", e)))?;
 
     let status = resp.status();
-    let response_body: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to parse Stripe response: {}", e)))?;
+    let response_body: serde_json::Value = resp.json().await.map_err(|e| {
+        AppError::UpstreamRefused(format!(
+            "Stripe returned {} but its body was not JSON: {}",
+            status.as_u16(),
+            e
+        ))
+    })?;
 
     if !status.is_success() {
         let error_msg = response_body["error"]["message"]
             .as_str()
             .unwrap_or("Unknown Stripe error");
-        return Err(AppError::Internal(format!("Stripe error: {}", error_msg)));
+        return Err(AppError::UpstreamRefused(format!(
+            "Stripe returned {}: {}",
+            status.as_u16(),
+            clip_for_log(error_msg, 300)
+        )));
     }
 
     Ok(json!({
@@ -702,16 +731,38 @@ async fn create_paypal_session(
         .body("grant_type=client_credentials")
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("PayPal auth error: {}", e)))?;
+        .map_err(|e| AppError::UpstreamRefused(format!("PayPal unreachable: {}", e)))?;
 
-    let token_body: serde_json::Value = token_resp
-        .json()
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to parse PayPal auth response: {}", e)))?;
+    let token_status = token_resp.status();
+    let token_body: serde_json::Value = token_resp.json().await.map_err(|e| {
+        AppError::UpstreamRefused(format!(
+            "PayPal returned {} but its auth body was not JSON: {}",
+            token_status.as_u16(),
+            e
+        ))
+    })?;
 
-    let access_token = token_body["access_token"]
-        .as_str()
-        .ok_or_else(|| AppError::Internal("Failed to get PayPal access token".into()))?;
+    // The credential is checked HERE, before anything else can fail (kanban t_8a1afdd5): a wrong or
+    // expired client id/secret answers 401 `invalid_client` and carries its reason in
+    // `error_description`, and reading the body for `access_token` without looking at the status
+    // turned that into an uninformative "Failed to get PayPal access token" behind a bare 500.
+    if !token_status.is_success() {
+        let reason = token_body["error_description"]
+            .as_str()
+            .or_else(|| token_body["error"].as_str())
+            .unwrap_or("no reason given");
+        return Err(AppError::UpstreamRefused(format!(
+            "PayPal returned {}: {}",
+            token_status.as_u16(),
+            clip_for_log(reason, 300)
+        )));
+    }
+
+    let access_token = token_body["access_token"].as_str().ok_or_else(|| {
+        AppError::UpstreamRefused(
+            "PayPal answered without an access_token, so no order could be created".into(),
+        )
+    })?;
 
     // Create the order
     let order_body = serde_json::json!({
@@ -743,20 +794,27 @@ async fn create_paypal_session(
         .json(&order_body)
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("PayPal order error: {}", e)))?;
+        .map_err(|e| AppError::UpstreamRefused(format!("PayPal unreachable: {}", e)))?;
 
     let order_status = order_resp.status();
-    let order_body: serde_json::Value = order_resp
-        .json()
-        .await
-        .map_err(|e| AppError::Internal(format!("Failed to parse PayPal order response: {}", e)))?;
+    let order_body: serde_json::Value = order_resp.json().await.map_err(|e| {
+        AppError::UpstreamRefused(format!(
+            "PayPal returned {} but its order body was not JSON: {}",
+            order_status.as_u16(),
+            e
+        ))
+    })?;
 
     if !order_status.is_success() {
         let error_msg = order_body["message"]
             .as_str()
             .or_else(|| order_body["error_description"].as_str())
             .unwrap_or("Unknown PayPal error");
-        return Err(AppError::Internal(format!("PayPal error: {}", error_msg)));
+        return Err(AppError::UpstreamRefused(format!(
+            "PayPal returned {}: {}",
+            order_status.as_u16(),
+            clip_for_log(error_msg, 300)
+        )));
     }
 
     // Get the approval URL from the links
