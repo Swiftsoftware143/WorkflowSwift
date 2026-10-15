@@ -128,11 +128,37 @@ pub async fn get_coreswift_connection(state: &AppState, aid: Uuid) -> Option<(St
     Some((api_key, base_url.trim_end_matches('/').to_string()))
 }
 
-/// THE shared inbound helper. Every capture path and the manual push endpoint call this.
-///
-/// Quietly returns `false` when the account is not connected; logs real failures.
-/// Never fails the caller — a capture must complete even when CoreSwift is down or absent.
-pub async fn push_lead_to_coreswift(
+/// Why an upstream CoreSwift call produced no answer. `upstream` separates "the PROVIDER is at
+/// fault" (reached and refused, or unreachable — a 424) from "the caller has not set this up"
+/// (no key stored, nothing pushable — a 400).
+#[derive(Debug)]
+pub struct UpstreamError {
+    pub upstream: bool,
+    pub reason: String,
+}
+
+impl UpstreamError {
+    /// The local setup is the problem: a client-fixable 400.
+    fn client(reason: impl Into<String>) -> Self {
+        Self {
+            upstream: false,
+            reason: reason.into(),
+        }
+    }
+    /// CoreSwift was reached and refused, or could not be reached: a 424.
+    fn provider(reason: impl Into<String>) -> Self {
+        Self {
+            upstream: true,
+            reason: reason.into(),
+        }
+    }
+}
+
+/// THE shared inbound helper, in its operator-facing form: it says WHY nothing landed, in the
+/// hub's own words, so the manual push endpoint can report the real reason instead of a bare
+/// `bool`. The automatic capture paths use the `bool` face below.
+#[allow(clippy::too_many_arguments)]
+pub async fn push_lead_to_coreswift_detailed(
     state: &AppState,
     aid: Uuid,
     lead: &CapturedLead,
@@ -140,10 +166,12 @@ pub async fn push_lead_to_coreswift(
     tags: &[String],
     fields: Value,
     context_label: &str,
-) -> bool {
+) -> Result<(), UpstreamError> {
     if !lead.is_pushable() {
         tracing::debug!("CoreSwift push skipped ({context_label}): nothing to push");
-        return false;
+        return Err(UpstreamError::client(
+            "nothing to push: the lead has no name, email or phone",
+        ));
     }
 
     let (api_key, base_url) = match get_coreswift_connection(state, aid).await {
@@ -152,7 +180,9 @@ pub async fn push_lead_to_coreswift(
             tracing::debug!(
                 "CoreSwift push skipped ({context_label}): account {aid} not connected"
             );
-            return false;
+            return Err(UpstreamError::client(
+                "CoreSwift is not connected — store your csk_ key in the Integration Center first",
+            ));
         }
     };
 
@@ -206,14 +236,16 @@ pub async fn push_lead_to_coreswift(
         Ok(r) => r,
         Err(e) => {
             tracing::warn!("CoreSwift push failed (network) for aid {aid} ({context_label}): {e}");
-            return false;
+            return Err(UpstreamError::provider(format!(
+                "CoreSwift unreachable at {base_url}: {e}"
+            )));
         }
     };
 
     let status = resp.status();
     if status.is_success() {
         tracing::info!("CoreSwift push OK for aid {aid} ({context_label})");
-        true
+        Ok(())
     } else {
         let text: String = resp
             .text()
@@ -223,16 +255,36 @@ pub async fn push_lead_to_coreswift(
             .take(300)
             .collect();
         tracing::warn!("CoreSwift push returned {status} for aid {aid} ({context_label}): {text}");
-        false
+        Err(UpstreamError::provider(format!(
+            "CoreSwift returned {status}: {text}"
+        )))
     }
+}
+
+/// The `bool` face of [`push_lead_to_coreswift_detailed`], for the AUTOMATIC capture paths
+/// (workflow capture / embedded forms): a CoreSwift outage must never fail a lead capture, so
+/// they log and carry on. The operator-facing manual push uses the detailed form.
+#[allow(clippy::too_many_arguments)]
+pub async fn push_lead_to_coreswift(
+    state: &AppState,
+    aid: Uuid,
+    lead: &CapturedLead,
+    list_id: Option<String>,
+    tags: &[String],
+    fields: Value,
+    context_label: &str,
+) -> bool {
+    push_lead_to_coreswift_detailed(state, aid, lead, list_id, tags, fields, context_label)
+        .await
+        .is_ok()
 }
 
 /// Proxy the hub's list picker: GET {base}/api/external/lists.
 /// Returns the hub's JSON body on success, a human-readable error otherwise.
-pub async fn hub_get_lists(state: &AppState, aid: Uuid) -> Result<Value, String> {
-    let (api_key, base_url) = get_coreswift_connection(state, aid)
-        .await
-        .ok_or_else(|| "Not connected: store a CoreSwift key first".to_string())?;
+pub async fn hub_get_lists(state: &AppState, aid: Uuid) -> Result<Value, UpstreamError> {
+    let (api_key, base_url) = get_coreswift_connection(state, aid).await.ok_or_else(|| {
+        UpstreamError::client("CoreSwift is not connected — store your csk_ key first")
+    })?;
 
     let resp = reqwest::Client::new()
         .get(format!("{base_url}/api/external/lists"))
@@ -240,7 +292,9 @@ pub async fn hub_get_lists(state: &AppState, aid: Uuid) -> Result<Value, String>
         .timeout(std::time::Duration::from_secs(15))
         .send()
         .await
-        .map_err(|e| format!("CoreSwift unreachable: {e}"))?;
+        .map_err(|e| {
+            UpstreamError::provider(format!("CoreSwift unreachable at {base_url}: {e}"))
+        })?;
 
     let status = resp.status();
     if !status.is_success() {
@@ -251,12 +305,16 @@ pub async fn hub_get_lists(state: &AppState, aid: Uuid) -> Result<Value, String>
             .chars()
             .take(300)
             .collect();
-        return Err(format!("CoreSwift returned {status}: {text}"));
+        return Err(UpstreamError::provider(format!(
+            "CoreSwift returned {status}: {text}"
+        )));
     }
 
-    resp.json::<Value>()
-        .await
-        .map_err(|e| format!("CoreSwift returned invalid JSON: {e}"))
+    resp.json::<Value>().await.map_err(|e| {
+        UpstreamError::provider(format!(
+            "CoreSwift answered {status} but its body was not JSON: {e}"
+        ))
+    })
 }
 
 /// Live connection probe used by "Test connection" — hits the hub with the stored key.

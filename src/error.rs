@@ -55,6 +55,17 @@ pub enum AppError {
     #[error("Upstream failure: {0}")]
     Upstream(String),
 
+    /// An upstream provider (the CoreSwift hub) was reached and REFUSED, or could not be
+    /// reached at all. **424 Failed Dependency**, carrying the provider's own words.
+    ///
+    /// WHY 424 AND NOT 400/500: the manual CoreSwift push discarded the hub's reason entirely
+    /// (the shared helper returned a bare `bool`), so a rejected key was reported to the
+    /// operator as a generic "push failed or account not connected". 424 says "the action
+    /// depended on another action and that action failed" — exactly true — and unlike 502 it is
+    /// not rewritten by the CDN edge.
+    #[error("Upstream refused: {0}")]
+    UpstreamRefused(String),
+
     #[error("Too many requests: {0}")]
     TooManyRequests(String),
 
@@ -82,6 +93,10 @@ impl IntoResponse for AppError {
             AppError::Validation(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg.clone()),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::UpgradeRequired(msg) => (StatusCode::PAYMENT_REQUIRED, msg.clone()),
+            AppError::UpstreamRefused(msg) => {
+                tracing::warn!(upstream_error = %msg, "Upstream provider refused");
+                (StatusCode::FAILED_DEPENDENCY, msg.clone())
+            }
             AppError::Hash(msg) => {
                 tracing::error!("Password hashing error: {}", msg);
                 (

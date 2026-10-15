@@ -16,7 +16,7 @@ use uuid::Uuid;
 use crate::auth::models::Claims;
 use crate::error::{ApiResult, AppError};
 use crate::handlers::coreswift_external::{
-    hub_get_lists, hub_probe, push_lead_to_coreswift, CapturedLead,
+    hub_get_lists, hub_probe, push_lead_to_coreswift_detailed, CapturedLead,
 };
 use crate::state::AppState;
 
@@ -54,7 +54,10 @@ pub async fn coreswift_lists(
     let aid = account_id(&claims)?;
     match hub_get_lists(&state, aid).await {
         Ok(body) => Ok((axum::http::StatusCode::OK, Json(body))),
-        Err(e) => Err(AppError::BadRequest(e)),
+        // 424 when CoreSwift was reached and refused (or could not be reached) — carrying the
+        // hub's own sentence — and 400 only when the local setup is what is missing.
+        Err(e) if e.upstream => Err(AppError::UpstreamRefused(e.reason)),
+        Err(e) => Err(AppError::BadRequest(e.reason)),
     }
 }
 
@@ -123,7 +126,11 @@ pub async fn coreswift_push(
         )
     };
 
-    let pushed = push_lead_to_coreswift(
+    // The hub's OWN reason reaches the operator. The shared helper used to return a bare `bool`,
+    // so a rejected key was reported as a generic "push failed or account not connected" while
+    // CoreSwift's 401 sentence sat in the log. Now: 424 when CoreSwift refused or was
+    // unreachable, 400 when the local setup is the problem.
+    push_lead_to_coreswift_detailed(
         &state,
         aid,
         &lead,
@@ -132,14 +139,14 @@ pub async fn coreswift_push(
         fields,
         "manual /integrations/coreswift/push",
     )
-    .await;
-
-    if !pushed {
-        return Err(AppError::BadRequest(
-            "CoreSwift push failed or account not connected (store a CoreSwift key via POST /api/v1/provider-keys)"
-                .into(),
-        ));
-    }
+    .await
+    .map_err(|e| {
+        if e.upstream {
+            AppError::UpstreamRefused(e.reason)
+        } else {
+            AppError::BadRequest(e.reason)
+        }
+    })?;
 
     Ok(Json(json!({
         "status": "pushed",
