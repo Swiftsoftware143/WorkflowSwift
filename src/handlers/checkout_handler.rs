@@ -272,6 +272,371 @@ pub async fn delete_payment_provider(
     ))
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// Verifying the operator's payment key (kanban t_48e4dd2a)
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// The FunnelSwift precedent is kanban t_6a192c06 (commit b153f98): the same route, adapted to this
+// app's shape. Until it existed the ONLY way to learn that a payment key was wrong, truncated or
+// from another account was for a CUSTOMER to press Upgrade and receive the 424 that carries the
+// provider's refusal. `payment_providers` is empty on this install (measured 2026-10-16), so every
+// checkout refuses — and an operator pasting a key had no way to check it before it mattered. This
+// route makes the key verifiable at the moment it is pasted.
+//
+// Both checks are READS that create nothing at the provider: Stripe is asked for `GET /v1/balance`
+// and PayPal for an OAuth `client_credentials` token. Those are exactly the first calls the two buy
+// arms make (`create_stripe_session`, `create_paypal_session` — whose own comment reads "the
+// credential is checked HERE"), so a key that passes here cannot then fail at the buy button for a
+// credential reason. The arms match that pair one-for-one: a provider this app's checkout has no arm
+// for is refused here (501) rather than reported as working.
+//
+// One body shape, `{ "api_key": "<key>" }`, and both arms are useful:
+//   * `api_key` non-empty -> test THAT key. It is never stored, never logged and never echoed (only
+//     masked), so a typo cannot overwrite a working credential the way a Save would. This is the
+//     button beside the Save form.
+//   * `api_key` empty/absent -> test the key STORED for this provider type, opened through the SAME
+//     choke point a checkout opens it through (`provider_secrets::open_for_use`, the only reader of
+//     `api_key_encrypted`). This is the per-row button.
+//
+// Every refusal is a 4xx class JSON body, never a 502: a CDN replaces a 502 body and the operator
+// would lose the reason — the same rule `AppError::UpstreamRefused` (424) follows.
+//
+// Super-admin only, through the SAME predicate the list/upsert/delete arms use
+// ([`can_manage_payment_providers`]): the key this route tests or reads is the install's own, and a
+// tenant session must not be able to use it as an oracle for a credential it cannot see.
+pub async fn test_payment_provider(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(provider_type): Path<String>,
+    payload: Option<Json<serde_json::Value>>,
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    if !can_manage_payment_providers(&claims) {
+        return Err(AppError::Forbidden(
+            "Only super admins can manage payment providers".into(),
+        ));
+    }
+
+    let provider = provider_type.trim().to_ascii_lowercase();
+    let supplied = payload
+        .as_ref()
+        .and_then(|j| j.0.get("api_key"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    let (key, source, stored_active) = if !supplied.is_empty() {
+        (supplied, "supplied", None)
+    } else {
+        // The stored arm. `is_active DESC` first, so the row a CHECKOUT would use is the one tested
+        // when an older inactive row is still lying around; `is_active` is then reported back,
+        // because a key that works on an inactive row is exactly the state that still refuses every
+        // checkout — and that is not something the operator can see from this screen otherwise.
+        let row = sqlx::query(
+            "SELECT api_key_encrypted, is_active FROM payment_providers \
+             WHERE provider_type = $1 ORDER BY is_active DESC, created_at DESC LIMIT 1",
+        )
+        .bind(&provider)
+        .fetch_optional(&state.db)
+        .await?;
+
+        let Some(row) = row else {
+            return Ok((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({
+                    "ok": false,
+                    "error": "payment_provider_not_configured",
+                    "reason": "payment_provider_not_configured",
+                    "provider": provider,
+                    "message": format!(
+                        "No '{}' payment provider is stored on this install, so there is no stored key to test. Paste the key and press Test key, or save a provider first.",
+                        provider
+                    ),
+                })),
+            ));
+        };
+
+        let stored: Option<String> = row
+            .try_get(provider_secrets::API_KEY_COLUMN)
+            .unwrap_or(None);
+        let active: bool = row.try_get("is_active").unwrap_or(false);
+        let opened = provider_secrets::open_for_use(
+            &state.db,
+            provider_secrets::API_KEY_COLUMN,
+            stored.as_deref().unwrap_or(""),
+        )
+        .await;
+        if opened.trim().is_empty() {
+            return Ok((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({
+                    "ok": false,
+                    "error": "payment_provider_not_configured",
+                    "reason": "payment_provider_not_configured",
+                    "provider": provider,
+                    "stored_active": active,
+                    "message": format!(
+                        "The stored '{}' provider row carries no secret key (or it cannot be opened by this deployment), so there is nothing to test. Paste the key and press Save first.",
+                        provider
+                    ),
+                })),
+            ));
+        }
+        (opened, "stored", Some(active))
+    };
+
+    // Stay in step with `create_checkout_session`: whatever that arm will not sell through, this one
+    // must not claim to have verified. Square and Paddle are accepted by the upsert but have no
+    // checkout arm, so their keys are refused HERE instead of being reported as working.
+    if provider != "stripe" && provider != "paypal" {
+        return Ok((
+            StatusCode::NOT_IMPLEMENTED,
+            Json(json!({
+                "ok": false,
+                "error": "checkout_not_implemented",
+                "provider": provider,
+                "reason": "checkout_not_implemented",
+                "message": format!(
+                    "'{}' cannot be verified: checkout in this app has only a Stripe and a PayPal arm, so a key for any other provider would be accepted here and then refused at the buy button.",
+                    provider
+                ),
+            })),
+        ));
+    }
+
+    let masked = crate::handlers::provider_keys_handler::mask_key(&key);
+    let client = reqwest::Client::new();
+
+    if provider == "paypal" {
+        // The same first call `create_paypal_session` makes — and the credential IS what it checks
+        // (a wrong or expired client id/secret answers 401 `invalid_client`). No order is created.
+        // The base is this app's own `PAYPAL_API_BASE` knob, already read by the PayPal webhook arm,
+        // and its default is the same live endpoint the buy arm dials.
+        let base = std::env::var("PAYPAL_API_BASE")
+            .unwrap_or_else(|_| "https://api-m.paypal.com".to_string())
+            .trim_end_matches('/')
+            .to_string();
+
+        let sent = client
+            .post(format!("{}/v1/oauth2/token", base))
+            .header(
+                "Authorization",
+                format!("Basic {}", base64_encode_auth(&key)),
+            )
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body("grant_type=client_credentials")
+            .timeout(std::time::Duration::from_secs(20))
+            .send()
+            .await;
+
+        let resp = match sent {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(provider = %provider, key_source = source, error = %e, "payment key test could not reach the provider");
+                return Ok(payment_key_unreachable(
+                    &provider,
+                    source,
+                    &masked,
+                    stored_active,
+                    e.to_string(),
+                ));
+            }
+        };
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+
+        if status.is_success() {
+            return Ok((
+                StatusCode::OK,
+                Json(json!({
+                    "ok": true,
+                    "provider": provider,
+                    "key_source": source,
+                    "stored_active": stored_active,
+                    // PayPal's token carries no test/live flag, and this app's buy arm dials the
+                    // live PayPal API, so there is no second mode to report for it.
+                    "livemode": serde_json::Value::Null,
+                    "api_key_masked": masked,
+                    "message": "PayPal accepted the client id and secret. This app's buy path dials the live PayPal API, so this credential can take real payments.",
+                })),
+            ));
+        }
+
+        // Never echo the key. The provider's own sentence is safe and is the whole point of the
+        // route — PayPal carries it in `error_description`.
+        let msg = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| {
+                v.get("error_description")
+                    .and_then(|m| m.as_str())
+                    .or_else(|| v.get("error").and_then(|m| m.as_str()))
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| format!("PayPal returned {}", status));
+        tracing::warn!(provider = %provider, key_source = source, http = %status, "payment key was REFUSED by the provider");
+        return Ok(payment_key_refused(
+            &provider,
+            source,
+            &masked,
+            stored_active,
+            msg,
+        ));
+    }
+
+    // Stripe. `STRIPE_API_BASE` is the same knob `create_stripe_session` reads.
+    let api_base = std::env::var("STRIPE_API_BASE")
+        .unwrap_or_else(|_| "https://api.stripe.com".to_string())
+        .trim_end_matches('/')
+        .to_string();
+
+    let sent = client
+        .get(format!("{}/v1/balance", api_base))
+        .bearer_auth(&key)
+        .timeout(std::time::Duration::from_secs(20))
+        .send()
+        .await;
+
+    let resp = match sent {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(provider = %provider, key_source = source, error = %e, "payment key test could not reach the provider");
+            return Ok(payment_key_unreachable(
+                &provider,
+                source,
+                &masked,
+                stored_active,
+                e.to_string(),
+            ));
+        }
+    };
+    let status = resp.status();
+    let text = resp.text().await.unwrap_or_default();
+
+    if status.is_success() {
+        // Stripe's /v1/balance answers `{ "object": "balance", "livemode": <bool>, ... }`. Only
+        // `livemode` is read.
+        let live = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| v.get("livemode").and_then(|b| b.as_bool()));
+        return Ok((
+            StatusCode::OK,
+            Json(json!({
+                "ok": true,
+                "provider": provider,
+                "key_source": source,
+                "stored_active": stored_active,
+                "livemode": live,
+                "api_key_masked": masked,
+                "message": stripe_livemode_message(live),
+            })),
+        ));
+    }
+
+    let msg = serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|v| {
+            v.get("error")
+                .and_then(|e| e.get("message"))
+                .and_then(|m| m.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| format!("Stripe returned {}", status));
+    tracing::warn!(provider = %provider, key_source = source, http = %status, "payment key was REFUSED by the provider");
+    Ok(payment_key_refused(
+        &provider,
+        source,
+        &masked,
+        stored_active,
+        msg,
+    ))
+}
+
+/// What a successful Stripe check reads back to the operator.
+///
+/// `livemode` is most of the value of the Stripe arm: a TEST-mode key is a working key that will
+/// never charge anybody, and mistaking one for the other is the exact mistake this route exists to
+/// prevent. Split out so all three arms are pinned by a test — the two `Some(..)` branches cannot be
+/// reached live without a real credential.
+fn stripe_livemode_message(live: Option<bool>) -> String {
+    match live {
+        Some(true) => {
+            "Stripe accepted the key and it is a LIVE key — a real customer can be charged."
+                .to_string()
+        }
+        Some(false) => {
+            "Stripe accepted the key but it is a TEST-mode key — no customer will ever be charged. Replace it with the live key before selling.".to_string()
+        }
+        None => "Stripe accepted the key.".to_string(),
+    }
+}
+
+/// The refusal body both provider arms answer with: the provider's OWN sentence, the mask, never the
+/// key.
+fn payment_key_refused(
+    provider: &str,
+    key_source: &str,
+    masked: &str,
+    stored_active: Option<bool>,
+    provider_message: String,
+) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::FAILED_DEPENDENCY,
+        Json(json!({
+            "ok": false,
+            "error": "provider_refused",
+            "provider": provider,
+            "key_source": key_source,
+            "stored_active": stored_active,
+            "api_key_masked": masked,
+            "reason": "provider_refused",
+            "message": format!(
+                "{} refused the key: {}",
+                provider_display(provider),
+                provider_message
+            ),
+        })),
+    )
+}
+
+/// The provider could not be reached at all — the test never ran, so nothing is claimed either way.
+fn payment_key_unreachable(
+    provider: &str,
+    key_source: &str,
+    masked: &str,
+    stored_active: Option<bool>,
+    error: String,
+) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::FAILED_DEPENDENCY,
+        Json(json!({
+            "ok": false,
+            "error": "provider_unreachable",
+            "provider": provider,
+            "key_source": key_source,
+            "stored_active": stored_active,
+            "api_key_masked": masked,
+            "reason": "provider_unreachable",
+            "message": format!(
+                "Could not reach {} at all: {}",
+                provider_display(provider),
+                error
+            ),
+        })),
+    )
+}
+
+/// The provider's own name, for prose. An unknown id is passed through rather than silently named
+/// after a provider that did not answer.
+fn provider_display(provider: &str) -> &str {
+    match provider {
+        "stripe" => "Stripe",
+        "paypal" => "PayPal",
+        "square" => "Square",
+        "paddle" => "Paddle",
+        other => other,
+    }
+}
+
 // ──────────────────────────────────────────────
 // Checkout Session Creation
 // ──────────────────────────────────────────────
@@ -2276,5 +2641,33 @@ mod payment_provider_role_tests {
         let mut c = claims(Some(false));
         c.role = "super_admin".into();
         assert!(!can_manage_payment_providers(&c));
+    }
+}
+#[cfg(test)]
+mod payment_key_check_tests {
+    use super::{provider_display, stripe_livemode_message};
+
+    /// The three Stripe outcomes. The two `Some(..)` arms need a real credential to reach live
+    /// (this install has none), so the statement the operator reads is pinned here instead.
+    #[test]
+    fn a_successful_stripe_check_reports_the_mode_it_actually_is() {
+        assert!(
+            stripe_livemode_message(Some(true)).contains("LIVE"),
+            "a live key must say so"
+        );
+        assert!(
+            stripe_livemode_message(Some(false)).contains("TEST-mode"),
+            "a test key is a working key that charges nobody — it must say so"
+        );
+        // A body without the flag claims nothing about the mode.
+        assert_eq!(stripe_livemode_message(None), "Stripe accepted the key.");
+    }
+
+    /// The refusal names the provider that answered, and an unknown id is passed through.
+    #[test]
+    fn the_prose_names_the_provider_that_answered() {
+        assert_eq!(provider_display("stripe"), "Stripe");
+        assert_eq!(provider_display("paypal"), "PayPal");
+        assert_eq!(provider_display("adyen"), "adyen");
     }
 }

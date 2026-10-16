@@ -798,6 +798,19 @@
       <li>Checkout: <code>/api/v1/checkout/create</code>, <code>/checkout/sessions</code>; providers configured per plan via
         <code>/api/v1/payment-providers</code>. Webhooks: <code>POST /api/v1/webhooks/stripe</code>,
         <code>POST /api/v1/webhooks/paypal</code>.</li>
+      <li>Before you rely on a payment key, press <strong>Test key</strong> beside the Save button on
+        Admin -&gt; Payment providers: it asks the provider directly whether the key in the box works,
+        answers in Stripe's or PayPal's OWN words
+        (<code>POST /api/v1/payment-providers/{provider_type}/test</code>), and saves nothing. Every saved
+        row also carries a <strong>Test stored key</strong> button, which tests the key already stored for
+        that provider. The answer says whether a Stripe key is <em>live</em> or <em>test-mode</em> —
+        Stripe accepts a test-mode key and will still never charge anybody, and that is the mistake this
+        button exists to catch before a customer finds it for you. A key that works on a row marked
+        <strong>Inactive</strong> is reported as such, because checkout still refuses until the row is set
+        Active. <code>square</code> and <code>paddle</code> rows can be stored but have no checkout arm in
+        this app, so their keys answer <code>501 checkout_not_implemented</code> instead of being reported
+        as working. The key is never echoed back (only a mask is), and a test never writes the
+        <code>payment_providers</code> table.</li>
       <li><code>POST /api/v1/webhooks/paypal</code> is <strong>signature-verified before anything is written or dispatched</strong>
         (kanban t_5cf44e1b). The four PayPal signature headers (<code>paypal-transmission-id</code>,
         <code>paypal-transmission-time</code>, <code>paypal-transmission-sig</code>, <code>paypal-cert-url</code>) are required and the

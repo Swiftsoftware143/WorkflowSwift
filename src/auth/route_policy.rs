@@ -25,6 +25,12 @@
 //!    sub-router as a named key route, `/api/v1/admin/provisioning-settings` joins the protected
 //!    admin router.)
 //!
+//!   (+1 from kanban t_48e4dd2a: `POST /api/v1/payment-providers/{provider_type}/test`, the
+//!    operator's read-only payment-key check, joins `protected_routes`. It is PRIVATE — it tests or
+//!    reads the INSTALL's own payment credential — so neither list below changes: the census moves
+//!    by one mount (its counts are measured at each census, not maintained here), not by one
+//!    public placement. `the_payment_key_check_is_mounted_and_private` pins that.)
+//!
 //!   live, with NO credential, against 127.0.0.1:8085:
 //!    22 of those 24 are DELIBERATE   -> 12 [`PUBLIC_ROUTES`] + 10 [`INTERNAL_ROUTES`]
 //!     2 of them were NOT             ->  `/api/v1/bridge-tasks`, `/api/v1/bridge-results`
@@ -495,6 +501,31 @@ mod tests {
         assert!(is_guarded_path("/api/v1/health"));
         assert!(!is_guarded_path("/api/v1x"));
         assert!(!is_guarded_path("/api/v2/health"));
+    }
+
+    /// The operator's payment-key check (kanban t_48e4dd2a) is mounted, and its path is PRIVATE:
+    /// it tests a key the caller supplies and reads the install's own stored credential, so it must
+    /// never be reachable by a caller who presents no credential. The sibling arm it sits beside
+    /// (the DELETE) is asserted too, so a failure here cannot be an accident of an empty list.
+    #[test]
+    fn the_payment_key_check_is_mounted_and_private() {
+        assert!(
+            mounted("/api/v1/payment-providers/{provider_type}/test").is_some(),
+            "the payment-key check is not mounted in src/routes.rs"
+        );
+        assert!(
+            mounted("/api/v1/payment-providers/{provider_type}").is_some(),
+            "the sibling payment-provider arm is not mounted"
+        );
+        for path in [
+            "/api/v1/payment-providers/stripe/test",
+            "/api/v1/payment-providers/paypal/test",
+            "/api/v1/payment-providers/square/test",
+            "/api/v1/payment-providers",
+        ] {
+            assert!(!is_public_route(path), "{} must be private", path);
+            assert!(!is_internal_route(path), "{} must be private", path);
+        }
     }
 
     /// The census shape the module docs claim, pinned so the numbers in the doc cannot drift away

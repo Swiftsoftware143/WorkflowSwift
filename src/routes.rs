@@ -883,6 +883,14 @@ pub fn create_router(state: AppState) -> Router {
             "/payment-providers/{provider_type}",
             delete(handlers::checkout_handler::delete_payment_provider),
         )
+        // kanban t_48e4dd2a — the operator's own key check (FunnelSwift precedent: t_6a192c06,
+        // commit b153f98). A read-only provider call that answers whether a payment key works
+        // BEFORE a customer finds out for them. PRIVATE by default: it is not in
+        // route_policy::PUBLIC_ROUTES, so an anonymous caller is refused at the boundary.
+        .route(
+            "/payment-providers/{provider_type}/test",
+            post(handlers::checkout_handler::test_payment_provider),
+        )
         .nest("/admin", admin_routes)
         // Layer order: in axum the LAST `.layer()` is the OUTERMOST, so the request path is
         // pre_auth_rate_limit -> auth -> per-account rate limit -> handler.

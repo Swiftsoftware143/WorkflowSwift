@@ -14,7 +14,11 @@ use crate::AppState;
 use chrono::{DateTime, Utc};
 
 /// Mask an API key ??? show first 3 and last 3 chars, mask the rest.
-fn mask_key(key: &str) -> String {
+///
+/// `pub(crate)` since kanban t_48e4dd2a: the operator's payment-key check
+/// (`checkout_handler::test_payment_provider`) reports the mask of the key it tested and must show
+/// the SAME mask this surface already shows rather than a second implementation of it.
+pub(crate) fn mask_key(key: &str) -> String {
     if key.len() > 6 {
         format!("{}...{}", &key[..3], &key[key.len() - 3..])
     } else if key.len() > 3 {
