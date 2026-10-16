@@ -63,6 +63,7 @@ pub async fn list_payment_providers(
         r#"SELECT id, provider_type, label, is_active,
                   CASE WHEN api_key_encrypted IS NOT NULL AND api_key_encrypted != '' THEN 'configured' ELSE 'not_configured' END as key_status,
                   COALESCE(publishable_key, '') as publishable_key,
+                  api_key_encrypted, webhook_secret_encrypted,
                   is_test_mode, config, created_at, updated_at
            FROM payment_providers
            ORDER BY provider_type ASC"#,
@@ -79,6 +80,19 @@ pub async fn list_payment_providers(
                 "label": r.try_get::<&str,_>("label").unwrap_or(""),
                 "is_active": r.try_get::<bool,_>("is_active").unwrap_or(false),
                 "key_status": r.try_get::<&str,_>("key_status").unwrap_or("not_configured"),
+                // At-rest posture of the SAVED credential, measured off the ciphertext COLUMN and
+                // never off the decrypted value (kanban t_d1fcda7e). `key_status` says a credential
+                // is configured; it does NOT say the copy in the database is encrypted, and this
+                // panel promised "stored encrypted" as a flat claim until 2026-10-16. The raw
+                // columns are selected so the SAME `is_encrypted` predicate the write path seals
+                // with decides this, instead of a second copy of the prefix literal. The webhook
+                // secret had no status field at all before this.
+                "api_key_set": r.try_get::<&str,_>("key_status").map(|s| s == "configured").unwrap_or(false),
+                "api_key_sealed": crate::security::provider_key_crypto::is_encrypted(
+                    r.try_get::<&str,_>("api_key_encrypted").unwrap_or("")),
+                "webhook_secret_set": !r.try_get::<&str,_>("webhook_secret_encrypted").unwrap_or("").trim().is_empty(),
+                "webhook_secret_sealed": crate::security::provider_key_crypto::is_encrypted(
+                    r.try_get::<&str,_>("webhook_secret_encrypted").unwrap_or("")),
                 "publishable_key": r.try_get::<&str,_>("publishable_key").unwrap_or(""),
                 "is_test_mode": r.try_get::<bool,_>("is_test_mode").unwrap_or(true),
                 "config": r.try_get::<serde_json::Value,_>("config").unwrap_or(json!({})),

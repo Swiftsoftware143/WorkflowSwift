@@ -979,7 +979,7 @@ function renderProviderKeys(c){
     +'</select></div>'
     +'<div class="md:col-span-2"><label class="block text-xs font-medium text-gray-500 mb-1">API key</label>'
     +'<input id="pk_key" class="input" type="password" autocomplete="new-password" '
-    +'placeholder="paste the provider key (stored encrypted)"></div>'
+    +'placeholder="paste the provider key"></div>'
     +'<div><button class="btn btn-primary" id="pk_save">Save key</button></div>'
     +'</div><div id="pkdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
 
@@ -1037,11 +1037,19 @@ function renderProviderKeys(c){
 // handler keys on, so an edit that leaves both secret boxes empty KEEPS the stored credential rather
 // than wiping it (the failure class fixed on the FunnelSwift console today).
 function renderPaymentProviders(c){
-  const PSLOTS=[['stripe','Stripe'],['paypal','PayPal'],['square','Square'],['paddle','Paddle']];
+    // At-rest posture of a payment provider's SAVED credential (kanban t_d1fcda7e). Measured by the
+  // API off the ciphertext COLUMN, never asserted here: until 2026-10-16 this panel promised
+  // "stored encrypted" whatever the row held, and `key_status` cannot tell a sealed row from a
+  // legacy plaintext one. Tri-state — a missing field prints "unknown", never "in the clear".
+  const postureCell=(set,sealed)=>!set?'<span class="text-gray-400">—</span>'
+    :(sealed===true?'<span style="background:#dcfce7;color:#166534;padding:2px 8px;border-radius:9999px;font-size:12px" data-pp="sealed">encrypted</span>'
+    :sealed===false?'<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:9999px;font-size:12px" data-pp="plain">in the clear</span>'
+    :'<span class="text-gray-400" data-pp="unknown">unknown</span>');
+const PSLOTS=[['stripe','Stripe'],['paypal','PayPal'],['square','Square'],['paddle','Paddle']];
   const pname=(p)=>{const i=PSLOTS.findIndex(s=>s[0]===p);return i>=0?PSLOTS[i][1]:(p||'')};
   c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-2"><h2 class="text-xl font-bold">Payment Providers</h2>'
     +'<button class="btn btn-primary btn-sm" id="pp_add">+ Add provider</button></div>'
-    +'<p class="text-xs text-gray-400 mb-4">The payment accounts this install can take money through at checkout. A platform administrator manages them here; the secret key and the webhook signing secret are stored encrypted and are never shown back.</p>'
+    +'<p class="text-xs text-gray-400 mb-4">The payment accounts this install can take money through at checkout. A platform administrator manages them here; the secret key and the webhook signing secret are never shown back, and the Encrypted column states whether the saved copy is encrypted at rest.</p>'
     +'<div id="ppdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
   const list=c.querySelector('#ppdata');
 
@@ -1132,11 +1140,12 @@ function renderPaymentProviders(c){
       list.innerHTML='<p class="text-gray-400 text-sm">No payment provider is configured yet. Add one above and checkout will offer it; until then checkout should refuse rather than pretend to charge.</p>';
       return;
     }
-    list.innerHTML='<table class="table"><thead><tr><th>Provider</th><th>Label</th><th>Secret key</th><th>Mode</th><th>Active</th><th></th></tr></thead><tbody>'
+    list.innerHTML='<table class="table"><thead><tr><th>Provider</th><th>Label</th><th>Secret key</th><th>Encrypted</th><th>Mode</th><th>Active</th><th></th></tr></thead><tbody>'
       +items.map(p=>'<tr><td><strong>'+escHtml(pname(p.provider_type))+'</strong>'
         +'<span class="text-xs text-gray-400 ml-2">'+escHtml(p.provider_type||'')+'</span></td>'
         +'<td>'+escHtml(p.label||'')+'</td>'
         +'<td>'+(p.key_status==='configured'?'stored':'not set')+'</td>'
+        +'<td data-pp-posture>key '+postureCell(p.api_key_set,p.api_key_sealed)+' webhook '+postureCell(p.webhook_secret_set,p.webhook_secret_sealed)+'</td>'
         +'<td>'+(p.is_test_mode?'Test':'Live')+'</td>'
         +'<td>'+(p.is_active?'Yes':'No')+'</td>'
         +'<td class="text-right"><button class="btn btn-sm btn-ghost" data-test="'+escHtml(p.provider_type||'')+'" title="Asks the provider whether the STORED key of this row works.">Test stored key</button> '
