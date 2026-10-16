@@ -195,6 +195,28 @@ async fn seal_row_secrets(
     sealed.map_err(|e| AppError::Internal(format!("Failed to seal {key} credentials: {e}")))
 }
 
+/// The at-rest posture of a settings row's credential, read from the STORED value (before
+/// `open_row_secrets` replaces the envelope with the plaintext). `None` for a key that carries no
+/// credential. Returns `(credential_present, sealed)`.
+///
+/// This is what makes the panels honest: until 2026-10-16 the SMS panel asserted "sealed at rest"
+/// and the Provider Keys panel asserted "encrypted at rest" unconditionally, so an operator could
+/// not tell a sealed row from a legacy plaintext one (the rule CoreSwift's panel set, kanban
+/// t_d1fcda7e). The panel now prints the MEASURED answer.
+fn row_credential_posture(key: &str, stored: &serde_json::Value) -> Option<(bool, bool)> {
+    match key {
+        "email" => Some((
+            crate::email::stored_credential_present(stored),
+            crate::email::stored_credential_sealed(stored),
+        )),
+        "sms" => Some((
+            crate::sms::stored_credential_present(stored),
+            crate::sms::stored_credential_sealed(stored),
+        )),
+        _ => None,
+    }
+}
+
 /// GET /api/v1/admin/settings — list all admin settings
 pub async fn list_settings(
     State(state): State<AppState>,
@@ -212,6 +234,8 @@ pub async fn list_settings(
     for row in &rows {
         let key: String = row.try_get("key")?;
         let mut value: serde_json::Value = row.try_get("value")?;
+        // At-rest posture from the STORED value, before the open below replaces the envelope.
+        let posture = row_credential_posture(&key, &value);
         // Same read-path rule as `get_setting` (kanban t_a794cb09): mask the DECRYPTED credential.
         open_row_secrets(&state.db, &key, &mut value).await;
         if is_secret_field(&key) {
@@ -225,12 +249,17 @@ pub async fn list_settings(
         }
         let description: Option<String> = row.try_get("description").ok();
         let updated_at: chrono::DateTime<chrono::Utc> = row.try_get("updated_at")?;
-        items.push(json!({
+        let mut item = json!({
             "key": key,
             "value": value,
             "description": description,
             "updated_at": updated_at.to_rfc3339()
-        }));
+        });
+        if let Some((present, sealed)) = posture {
+            item["credential_present"] = json!(present);
+            item["sealed"] = json!(sealed);
+        }
+        items.push(item);
         settings.insert(
             key,
             json!({
@@ -262,6 +291,9 @@ pub async fn get_setting(
 
     let key_str: String = row.try_get("key")?;
     let mut value: serde_json::Value = row.try_get("value")?;
+    // The at-rest posture is read from the STORED value, BEFORE `open_row_secrets` replaces the
+    // envelope with the plaintext — after the open, `sealed` is unanswerable from this object.
+    let posture = row_credential_posture(&key_str, &value);
     // `admin_settings.email` carries a SEALED credential (kanban t_a794cb09): open it FIRST, so
     // the mask the admin is shown is derived from the credential and never from the envelope
     // (`enc...XYZ`), and so the panel never round-trips ciphertext as though it were the key.
@@ -279,12 +311,19 @@ pub async fn get_setting(
     let description: Option<String> = row.try_get("description").ok();
     let updated_at: chrono::DateTime<chrono::Utc> = row.try_get("updated_at")?;
 
-    Ok(Json(json!({
+    let mut out = json!({
         "key": key_str,
         "value": value,
         "description": description,
         "updated_at": updated_at.to_rfc3339()
-    })))
+    });
+    // The panel prints the MEASURED at-rest posture instead of asserting it (kanban cron-1016).
+    if let Some((present, sealed)) = posture {
+        out["credential_present"] = json!(present);
+        out["sealed"] = json!(sealed);
+    }
+
+    Ok(Json(out))
 }
 
 /// Recursively replace values that look like our own mask (`abc...xyz`) with the

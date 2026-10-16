@@ -84,6 +84,9 @@ pub async fn list_provider_keys(
             "provider": provider,
             "api_key": mask_key(&raw_key),
             "has_key": !stored_key.is_empty(),
+            // At-rest posture of the STORED column, printed by the panel instead of asserted
+            // (kanban cron-1016). `is_encrypted` is the same predicate the seal/open halves use.
+            "sealed": key_crypto::is_encrypted(stored_key),
             "base_url": base_url,
             "metadata": metadata,
             "is_active": row.try_get::<bool, _>("is_active").unwrap_or(false),

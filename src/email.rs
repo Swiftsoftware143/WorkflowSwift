@@ -592,6 +592,43 @@ pub async fn open_config_secrets(
     Ok(())
 }
 
+/// Does the `admin_settings.email` row carry a credential at all? An empty secret field is not a
+/// credential, so the panel can say "nothing saved" instead of guessing from the row's existence (a
+/// row can hold only a provider/URL and no key).
+pub fn stored_credential_present(cfg: &serde_json::Value) -> bool {
+    CONFIG_SECRET_FIELDS.iter().any(|f| {
+        !cfg.get(*f)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .is_empty()
+    })
+}
+
+/// Is the credential in this row ENCRYPTED AT REST?
+///
+/// `true` only when a credential field is non-empty AND every non-empty one carries the storage
+/// envelope. A value without the envelope is a legacy plaintext row — a restored dump, a manual SQL
+/// write, or a key-rotation tool that updates the row directly — which this app's boot backfill
+/// (`seal_legacy_config_secrets`) has not converged yet. The panel PRINTS the answer, so "saved" is
+/// never read as "sealed": until 2026-10-16 the SMS panel asserted "sealed at rest" and the Provider
+/// Keys panel asserted "encrypted at rest" whether or not that was true (the rule CoreSwift's panel
+/// set, kanban t_d1fcda7e). The predicate is the same `provider_key_crypto::is_encrypted` the
+/// seal/open halves use, so the panel cannot disagree with the storage layer.
+pub fn stored_credential_sealed(cfg: &serde_json::Value) -> bool {
+    let mut any = false;
+    for f in CONFIG_SECRET_FIELDS {
+        let v = cfg.get(f).and_then(|v| v.as_str()).unwrap_or("");
+        if v.is_empty() {
+            continue;
+        }
+        any = true;
+        if !crate::security::provider_key_crypto::is_encrypted(v) {
+            return false;
+        }
+    }
+    any
+}
+
 /// Seal every credential still sitting in the clear in the `admin_settings.email` row.
 ///
 /// Three writers touch this row (the admin settings route, the generic
@@ -1273,6 +1310,40 @@ async fn send_via_smtp(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The at-rest posture the panels now PRINT, instead of asserting it. Until 2026-10-16 the SMS
+    /// panel said "sealed at rest" and the Provider Keys panel said "encrypted at rest"
+    /// unconditionally, so an operator could not tell a sealed row from a legacy plaintext one
+    /// (the rule CoreSwift's panel set, kanban t_d1fcda7e).
+    #[test]
+    fn at_rest_posture_reads_the_storage_envelope() {
+        // Nothing saved: no credential, so not sealed either.
+        assert!(!stored_credential_present(&json!({})));
+        assert!(!stored_credential_sealed(&json!({})));
+        // Routing fields only: still no credential.
+        assert!(!stored_credential_present(&json!({
+            "provider": "mailgun",
+            "api_url": "https://api.mailgun.net/v3/mail.workflowswift.com/messages",
+            "api_key": ""
+        })));
+        // A legacy plaintext credential is present and NOT sealed.
+        let plain = json!({"api_key": "key-0123456789abcdef"});
+        assert!(stored_credential_present(&plain));
+        assert!(!stored_credential_sealed(&plain));
+        // The envelope is the whole answer, not the field name.
+        let sealed = json!({
+            "api_key": format!("{}{}", crate::security::provider_key_crypto::ENC_PREFIX, "Y2lwaGVy")
+        });
+        assert!(stored_credential_present(&sealed));
+        assert!(stored_credential_sealed(&sealed));
+        // Every non-empty credential field must be enveloped: one plaintext field beside a sealed
+        // one is "stored in the clear", which is the state the operator has to see.
+        let mixed = json!({
+            "api_key": format!("{}{}", crate::security::provider_key_crypto::ENC_PREFIX, "Y2lwaGVy"),
+            "smtp_password": "hunter2"
+        });
+        assert!(!stored_credential_sealed(&mixed));
+    }
 
     /// An `EmailConfig` carrying only the two identity halves — every other field is irrelevant to
     /// the From the transport builds. `provider` / `smtp_host` are set by the one test that needs a

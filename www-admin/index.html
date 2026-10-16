@@ -971,7 +971,7 @@ const PROVIDER_SLOTS = [
 function renderProviderKeys(c){
   c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-2">Provider Keys</h2>'
     +'<p class="text-xs text-gray-400 mb-4">Per-account API keys for the providers this platform uses. '
-    +'Values are encrypted at rest and reads only ever return a mask.</p>'
+    +'Reads only ever return a mask; the Encrypted column states whether the saved copy is encrypted at rest.</p>'
     +'<div class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end mb-5">'
     +'<div><label class="block text-xs font-medium text-gray-500 mb-1">Provider</label>'
     +'<select id="pk_provider" class="input">'
@@ -993,11 +993,12 @@ function renderProviderKeys(c){
       list.innerHTML='<p class="text-gray-400 text-sm">No provider keys stored yet. Pick a provider above, paste its key and press Save — an empty slot is fine, it is filled when the key arrives.</p>';
       return;
     }
-    list.innerHTML='<table class="table"><thead><tr><th>Provider</th><th>Key</th><th>Stored</th><th>Active</th><th></th></tr></thead><tbody>'
+    list.innerHTML='<table class="table"><thead><tr><th>Provider</th><th>Key</th><th>Stored</th><th>Encrypted</th><th>Active</th><th></th></tr></thead><tbody>'
       +items.map(k=>'<tr><td><strong>'+short(k.provider)+'</strong>'
         +'<span class="text-xs text-gray-400 ml-2">'+k.provider+'</span></td>'
         +'<td>'+(k.api_key||'(empty)')+'</td>'
         +'<td class="text-xs text-gray-500">'+String(k.updated_at||k.created_at||'').slice(0,10)+'</td>'
+        +'<td>'+(k.has_key===false?'<span class="text-gray-400">'+"\u2014"+'</span>':(k.sealed===true?'<span style="background:#dcfce7;color:#166534;padding:2px 8px;border-radius:9999px;font-size:12px" data-pk="sealed">'+"\uD83D\uDD12 encrypted"+'</span>':'<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:9999px;font-size:12px" data-pk="plain">'+"\u26A0 in the clear"+'</span>'))+'</td>'
         +'<td>'+(k.is_active?'Yes':'No')+'</td>'
         +'<td class="text-right"><button class="btn btn-sm btn-danger" data-del="'+k.provider+'">Delete</button></td></tr>').join('')
       +'</tbody></table>';
@@ -1510,6 +1511,7 @@ function renderAdminSettings(c){
    +'<div class="card mt-4"><h2 class="text-xl font-bold mb-4">Platform Settings</h2><div id="sdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>'
    +'<div class="card mt-4"><h2 class="text-xl font-bold mb-1">Email Provider</h2>'
    +'<p class="text-xs text-gray-500 mb-4">Pick the transport WorkflowSwift sends with. These credentials live in the database and are read at send time &mdash; no server environment variables are consulted. Save, then send a test to prove it works.</p>'
+   +'<div id="eposture" class="mb-3"></div>'
    +'<div id="estatus"></div>'
    +'<div id="emailform" class="grid grid-cols-2 gap-3"></div>'
    +'<div class="flex gap-2 mt-4"><button class="btn btn-primary btn-sm" id="esave">Save email provider</button>'
@@ -1573,6 +1575,16 @@ function renderAdminSettings(c){
     window._wfEmailStatus=renderStatus;
     renderStatus(v);
 
+    // At-rest posture of the SAVED credential, PRINTED and not asserted (rule: CoreSwift's panel,
+    // kanban t_d1fcda7e). "Configured" and "encrypted at rest" are two different facts and the
+    // operator sees both: the API answers `credential_present`/`sealed` from the STORED row.
+    const epost=c.querySelector('#eposture');
+    if(epost){
+      if(!d||d.credential_present!==true){epost.innerHTML='';}
+      else if(d.sealed===true){epost.innerHTML='<span style="background:#dcfce7;color:#166534;padding:2px 8px;border-radius:9999px;font-size:12px" data-email-provider="sealed">'+"\uD83D\uDD12 credential encrypted at rest"+'</span>';}
+      else{epost.innerHTML='<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:9999px;font-size:12px" data-email-provider="sealed">'+"\u26A0 credential stored in the clear"+'</span> <span class="text-xs text-red-600">The saved key is readable in the database as it stands. Restart the app (or save the key again from this panel) and it is encrypted at rest.</span>';}
+    }
+
     const f=(id,label,ph,val)=>'<div><label class="text-xs text-gray-500">'+label+'</label><input id="'+id+'" class="input" placeholder="'+(ph||'')+'" value="'+String(val==null?'':val).replace(/"/g,'&quot;')+'"></div>';
     form.innerHTML='<div><label class="text-xs text-gray-500">Provider</label><select id="e_provider" class="input">'
       +['smtp','mailgun','sendgrid','sendiio'].map(p=>'<option value="'+p+'"'+((v.provider||'smtp')===p?' selected':'')+'>'+p+'</option>').join('')
@@ -1617,7 +1629,8 @@ function renderAdminSettings(c){
   // tenant console and an `sms` step is refused at the write path — nothing is sold undeliverable.
   c.insertAdjacentHTML('beforeend',
     '<div class="card mt-4"><h2 class="text-xl font-bold mb-1">SMS Provider</h2>'
-   +'<p class="text-xs text-gray-500 mb-4">The transport the Notify step\u2019s <strong>SMS</strong> channel sends with. Credentials are stored in the database, sealed at rest, and read at send time &mdash; no environment variables, and nothing is copied into n8n. Save, then send a test to prove it works.</p>'
+   +'<p class="text-xs text-gray-500 mb-4">The transport the Notify step\u2019s <strong>SMS</strong> channel sends with. Credentials are stored in the database and read at send time &mdash; no environment variables, and nothing is copied into n8n. Save, then send a test to prove it works.</p>'
+   +'<div id="sposture" class="mb-3"></div>'
    +'<div id="smsform" class="grid grid-cols-2 gap-3"></div>'
    +'<div class="flex gap-2 mt-4"><button class="btn btn-primary btn-sm" id="ssave">Save SMS provider</button>'
    +'<button class="btn btn-sm btn-ghost" id="stest">Send test SMS</button></div>'
@@ -1636,6 +1649,15 @@ function renderAdminSettings(c){
       +f('s_api_secret','API secret (vonage only, leave the mask to keep it)','',v.api_secret)
       +f('s_account_sid','Account SID (twilio only)','ACxxxxxxxxxxxx',v.account_sid)
       +f('s_api_url','API URL override (optional)','',v.api_url);
+    // Same rule as the Email Provider panel above (kanban t_d1fcda7e): the SAVED secret's at-rest
+    // posture is measured, never asserted. Until 2026-10-16 this line said "sealed at rest"
+    // whatever the row actually held.
+    const spost=c.querySelector('#sposture');
+    if(spost){
+      if(!d||d.credential_present!==true){spost.innerHTML='';}
+      else if(d.sealed===true){spost.innerHTML='<span style="background:#dcfce7;color:#166534;padding:2px 8px;border-radius:9999px;font-size:12px" data-sms-provider="sealed">'+"\uD83D\uDD12 credential encrypted at rest"+'</span>';}
+      else{spost.innerHTML='<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:9999px;font-size:12px" data-sms-provider="sealed">'+"\u26A0 credential stored in the clear"+'</span> <span class="text-xs text-red-600">The saved secret is readable in the database as it stands. Restart the app (or save it again from this panel) and it is encrypted at rest.</span>';}
+    }
   });
   const ssave=c.querySelector('#ssave'), stest=c.querySelector('#stest');
   if(ssave)ssave.onclick=async()=>{

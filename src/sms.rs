@@ -319,6 +319,36 @@ pub async fn open_config_secrets(
     Ok(())
 }
 
+/// Does the `admin_settings.sms` row carry a credential at all? (Same rule as
+/// `email::stored_credential_present`: an empty secret field is not a credential.)
+pub fn stored_credential_present(cfg: &serde_json::Value) -> bool {
+    CONFIG_SECRET_FIELDS.iter().any(|f| {
+        !cfg.get(*f)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .is_empty()
+    })
+}
+
+/// Is the SMS credential ENCRYPTED AT REST? `true` only when a credential field is non-empty AND
+/// every non-empty one carries the `enc:v1:` envelope — a plaintext field is a legacy row the boot
+/// backfill has not converged yet, and the panel must say so rather than assert "sealed at rest"
+/// (the rule CoreSwift's panel set, kanban t_d1fcda7e). Same predicate the seal/open halves use.
+pub fn stored_credential_sealed(cfg: &serde_json::Value) -> bool {
+    let mut any = false;
+    for f in CONFIG_SECRET_FIELDS {
+        let v = cfg.get(f).and_then(|v| v.as_str()).unwrap_or("");
+        if v.is_empty() {
+            continue;
+        }
+        any = true;
+        if !crate::security::provider_key_crypto::is_encrypted(v) {
+            return false;
+        }
+    }
+    any
+}
+
 /// JSON shape the Admin > Settings > SMS panel reads, so it never has to know the envelope.
 pub fn panel_view(cfg: &SmsConfig) -> serde_json::Value {
     json!({
@@ -334,6 +364,36 @@ pub fn panel_view(cfg: &SmsConfig) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The at-rest posture the SMS panel now PRINTS (the rule CoreSwift's panel set, kanban
+    /// t_d1fcda7e). The sms row's credential fields are api_key + api_secret, and the panel must
+    /// read the storage envelope rather than assert sealing.
+    #[test]
+    fn at_rest_posture_reads_the_storage_envelope() {
+        assert!(!stored_credential_present(&json!({})));
+        assert!(!stored_credential_sealed(&json!({})));
+        assert!(!stored_credential_present(&json!({
+            "provider": "twilio",
+            "from_number": "+15550000000",
+            "account_sid": "ACxxxxxxxx",
+            "api_key": ""
+        })));
+        let plain = json!({"api_key": "AC0123456789abcdef"});
+        assert!(stored_credential_present(&plain));
+        assert!(!stored_credential_sealed(&plain));
+        let sealed = json!({
+            "api_key": format!("{}{}", crate::security::provider_key_crypto::ENC_PREFIX, "Y2lwaGVy")
+        });
+        assert!(stored_credential_present(&sealed));
+        assert!(stored_credential_sealed(&sealed));
+        // The SECOND credential field matters: a plaintext api_secret beside a sealed api_key is
+        // still "stored in the clear".
+        let mixed = json!({
+            "api_key": format!("{}{}", crate::security::provider_key_crypto::ENC_PREFIX, "Y2lwaGVy"),
+            "api_secret": "hunter2"
+        });
+        assert!(!stored_credential_sealed(&mixed));
+    }
 
     #[test]
     fn normalize_phone_accepts_e164_and_refuses_guesses() {

@@ -487,6 +487,14 @@
       admin choice (<code>twilio</code>, <code>vonage</code>). Both rows are edited in <strong>Admin → Settings → Email Provider</strong> and
       <strong>Admin → Settings → SMS Provider</strong>; each card has a <em>Send test</em> button that performs a REAL send
       and reports the provider's own answer — a fabricated "OK" is never shown.</p>
+      <p>The <strong>Email Provider</strong> and <strong>SMS Provider</strong> cards print the saved credential's
+      <strong>at-rest posture</strong> instead of asserting it. A green <em>credential encrypted at rest</em>
+      badge means every non-empty secret field in the row carries the <code>enc:v1:</code> envelope; a red
+      <em>credential stored in the clear</em> badge means the row holds a plaintext value — a database restored
+      from a dump taken before sealing, or a row written by hand. A plaintext row is sealed by this app's next
+      start, or by saving the key again from the same card. The <strong>Provider Keys</strong> table answers the
+      same question per key in its <em>Encrypted</em> column. The badge reads the same predicate the storage
+      layer uses, so the panel cannot disagree with the database.</p>
       <h3 id="notify-channels-what-a-notify-step-can-actually-deliver-on">Notify channels — what a Notify step can actually deliver on</h3>
       <p>A Notify step's <strong>Channel</strong> is vocabulary, not free text, and it is <strong>sender-backed</strong>: the list the
       console renders is exactly the list this install can deliver on
