@@ -39,6 +39,54 @@ let TOKEN=localStorage.getItem('ws_token')||'';
 // tenant-scoped 15-minute JWT POST /impersonate minted, so every panel call acts as that
 // tenant. Stop calls POST /stop-impersonation for real and restores the admin token.
 let IMPERSONATION=null;
+// The console holds TWO sessions during a support call and they are stored in two places on purpose:
+// `localStorage['ws_token']` is the OPERATOR's own sign-in (line 37 — the only thing login() writes,
+// a day long), and the tenant's 15-minute impersonation token lives under its OWN sessionStorage
+// keys together with the record the banner needs. Measured live 2026-10-16 (audit ws-imp-reload,
+// card t_b44d6384): the tenant token used to exist in the `TOKEN` variable ONLY, so a page reload —
+// or ANY navigation, since this console has no client-side routing — silently dropped the support
+// session: banner and Stop control went with it and the console quietly became the operator again,
+// with no notice and no way back to the tenant except re-impersonating. A reload now re-adopts the
+// parked session, and every path that ends a session (Log Out, a 401, a failed identity read)
+// clears BOTH halves, so the tenant half can never outlive the operator's sign-out (the FunnelSwift
+// class: a parked token one click from restoring a session that was supposed to be over).
+const IMP_TOKEN_KEY='ws_impersonation_token', IMP_REC_KEY='ws_impersonation';
+function readParkedImpersonation(){
+  try{
+    const t=sessionStorage.getItem(IMP_TOKEN_KEY)||'';
+    const r=JSON.parse(sessionStorage.getItem(IMP_REC_KEY)||'null');
+    if(!t||!r||!r.tenant_id)return null;
+    // The record carries the server's own expires_in, so an expired support session is not a
+    // session: it is never adopted, it is dropped.
+    if(!(Number(r.expires_at)>Math.floor(Date.now()/1000)))return null;
+    return {token:t,rec:r};
+  }catch(e){return null}
+}
+function clearImpersonation(){
+  try{sessionStorage.removeItem(IMP_TOKEN_KEY);sessionStorage.removeItem(IMP_REC_KEY)}catch(e){}
+  IMPERSONATION=null;
+}
+// The ONE way a session ends. Every caller goes through it: the Log Out control, api()'s 401 arm
+// and a failed identity read. Nothing the console holds may still be live after a sign-out.
+function clearSession(){
+  TOKEN='';ME=null;
+  try{localStorage.removeItem('ws_token')}catch(e){}
+  clearImpersonation();
+  renderLogin();
+}
+// Adopt a parked support session. boot() calls this only once the OPERATOR's own /auth/me has been
+// read, so a parked tenant token can never stand alone in front of a dead operator session.
+function adoptImpersonation(){
+  const had=!!sessionStorage.getItem(IMP_REC_KEY);
+  const parked=readParkedImpersonation();
+  if(!parked){if(had)clearImpersonation();return false}
+  const own=localStorage.getItem('ws_token')||'';
+  if(!own){clearImpersonation();return false}
+  IMPERSONATION={admin_token:own,tenant_id:parked.rec.tenant_id,user_name:parked.rec.user_name,
+    expires_at:parked.rec.expires_at};
+  TOKEN=parked.token;
+  return true;
+}
 // This account's own /auth/me payload, read once per page load. It carries `perm_is_super_admin`,
 // the SAME flag the backend's admin middleware enforces, so the console can stop showing the
 // operator-only Admin tab to a tenant user whose calls under it would all answer 403.
@@ -73,7 +121,13 @@ async function api(path,opts={}){
   const h={...opts.headers,'Content-Type':'application/json'};
   if(TOKEN)h['Authorization']='Bearer '+TOKEN;
   const r=await fetch(API+path,{...opts,headers:h});
-  if(r.status===401){TOKEN='';localStorage.removeItem('ws_token');renderLogin();return null}
+  if(r.status===401){
+    // A refused TENANT session falls back to the operator's own sign-in instead of ending it: the
+    // support token lasts 15 minutes, the operator's a day. Any other 401 ends the session whole.
+    const own=IMPERSONATION?(localStorage.getItem('ws_token')||''):'';
+    if(own){clearImpersonation();TOKEN=own;renderPage();showMsg('The support session ended; you are back as yourself','error');return null}
+    clearSession();return null;
+  }
   if(!r.ok){
     let msg='HTTP '+r.status;
     try{const j=await r.json();msg=(j&&(j.message||(typeof j.error==='string'&&j.error)))||msg;}catch(e){}
@@ -98,11 +152,16 @@ async function login(email,pw){
   const d=await r.json();
   TOKEN=d.access_token||'';
   localStorage.setItem('ws_token',TOKEN);
+  // A fresh sign-in starts with no support session: anything parked belongs to the session that
+  // just ended, and `ws_token` is about to point at a different operator's day.
+  clearImpersonation();
   await loadMe();
   renderApp();
 }
 
-function logout(){TOKEN='';ME=null;localStorage.removeItem('ws_token');renderLogin()}
+// Signing out ends EVERY session this console holds — the operator's own and a parked support
+// session — through the one clearSession() the other ending paths use too.
+function logout(){clearSession()}
 
 function h(tag,props={},...children){
   const el=document.createElement(tag);
@@ -170,6 +229,14 @@ async function startImpersonation(tenantId){
   if(!r||!r.impersonation_token){showMsg('Impersonate failed: '+(LAST_ERR||'no token returned'),'error');return}
   IMPERSONATION={admin_token:TOKEN,tenant_id:r.tenant_id,user_name:r.user_name,
     expires_at:Math.floor(Date.now()/1000)+(r.expires_in||900)};
+  // PARK the tenant session before the panel acts as it. `ws_token` is left alone: it is the
+  // operator's OWN sign-in and is the way back (Stop restores it, and a reload needs it to prove an
+  // operator session is still behind the parked one).
+  try{
+    sessionStorage.setItem(IMP_TOKEN_KEY,r.impersonation_token);
+    sessionStorage.setItem(IMP_REC_KEY,JSON.stringify({tenant_id:r.tenant_id,user_name:r.user_name,
+      expires_at:IMPERSONATION.expires_at}));
+  }catch(e){}
   TOKEN=r.impersonation_token;
   showMsg('Impersonating '+(r.user_name||r.tenant_id));
   renderPage();
@@ -177,10 +244,14 @@ async function startImpersonation(tenantId){
 async function stopImpersonation(){
   const was=IMPERSONATION?(IMPERSONATION.user_name||IMPERSONATION.tenant_id):'tenant';
   // Restore the admin token FIRST: the stop call must go out as the admin, not as the
-  // short-lived impersonation token the server just minted.
-  if(IMPERSONATION&&IMPERSONATION.admin_token)TOKEN=IMPERSONATION.admin_token;
+  // short-lived impersonation token the server just minted. The operator's session is the one this
+  // console keeps in `ws_token`, so the way back survives a reload that dropped the in-memory copy.
+  const own=(IMPERSONATION&&IMPERSONATION.admin_token)||localStorage.getItem('ws_token')||'';
+  if(own)TOKEN=own;
+  // The tenant session is over BEFORE the call, so a refused stop cannot leave it parked (and a
+  // reload can never resurrect it).
+  clearImpersonation();
   const r=await api('/stop-impersonation',{method:'POST',body:JSON.stringify({})});
-  IMPERSONATION=null;
   showMsg(r?('Stopped impersonating '+was):('Stop failed: '+(LAST_ERR||'request failed')),r?undefined:'error');
   renderPage();
 }
@@ -2065,7 +2136,22 @@ function renderSiteConfig(c){
 // document.body is still null — renderApp()/renderLogin() both start with
 // document.body.innerHTML='' and threw "Cannot set properties of null", leaving
 // admin.workflowswift.com a blank page for every account. Wait for the DOM instead.
-function boot(){ if(TOKEN){ loadMe().then(()=>{ if(TOKEN) renderApp(); }); } else renderLogin(); }
+function boot(){
+  // Nothing to adopt without the operator's own session: drop any parked tenant session too, so a
+  // stale support token cannot sit in storage waiting for someone else's sign-in.
+  if(!TOKEN){clearImpersonation();renderLogin();return}
+  // Read WHO WE ARE first — the operator's own session — and only then adopt a parked support
+  // session, so the tenant half can never render in front of a dead operator session. A reload (or
+  // any navigation) mid-support therefore comes back as the tenant WITH its banner and its Stop
+  // control, instead of silently dropping the session and becoming the operator with no notice.
+  loadMe().then(()=>{
+    if(!TOKEN)return;   // the read was refused: api() already ended the session and drew the sign-in
+    const hadParked=!!sessionStorage.getItem(IMP_REC_KEY);
+    if(adoptImpersonation())showMsg('Resumed the support session as '+(IMPERSONATION.user_name||IMPERSONATION.tenant_id));
+    else if(hadParked)showMsg('The support session has ended','error');
+    renderApp();
+  });
+}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
 </script>
 <link rel="stylesheet" href="/tw.css">
