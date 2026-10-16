@@ -1621,13 +1621,24 @@ function renderAdminSettings(c){
 // what keeps a leftover probe account from reading like a paying one. The badge carries its colours
 // INLINE: this console's Tailwind build ships no yellow utility (measured: /tw.css holds no
 // `yellow` rule at all), so a utility class here would render an unstyled word.
+//
+// kanban cron-1016: the badge's first cut tested only the reserved TLDs, so the fleet's OWN
+// machine-minted probe addresses - which are not reserved domains - went unbadged. Measured live
+// 2026-10-16 against this app's own `accounts` + `users` rows: THREE rows sat in the operator's list
+// looking like customers - `Tenancy Canary A/B` and `Verify Fixture`, owners
+// `probe-canary-a@swiftsoftware.dev` and `verify-fixture-...@swiftsoftware.dev`. Two arms now, the
+// fleet shape: the reserved TLDs (and example.com/.net/.org), and the fleet's own probe domains
+// (swiftsoftware.dev/.local, sw.dev, local.<app>, and maxxspace.com - the mail.tm probe inbox).
+// `swiftsoftware.com` is deliberately NOT here: real, routable, the operator's own.
+const RESERVED_ADDR_RE = /@(?:[^@]*\.)?(?:invalid|example|test|local)$|@(?:[^@]*\.)?example\.(?:com|net|org)$/i;
+const FLEET_PROBE_ADDR_RE = /@(?:[^@]*\.)?(?:swiftsoftware\.(?:dev|local)|sw\.dev|maxxspace\.com)$|@local\.(?:funnelswift|coreswift|adaswift|incentiveswift|workflowswift|missedcallrespondr|multidirectory)$/i;
+const isProbeAddress = (addr) => RESERVED_ADDR_RE.test(String(addr || '')) || FLEET_PROBE_ADDR_RE.test(String(addr || ''));
 function ownerCellHtml(a){
   const oe=String((a&&(a.owner_email||a.email))||'').trim();
   if(!oe) return '<span class="text-gray-400">\u2014</span>';
-  const dom=oe.split('@')[1]||'';
-  const probe=/(^|\.)(invalid|example|test|local)$/i.test(dom);
+  const probe=isProbeAddress(oe);
   return escHtml(oe)+(probe
-    ? ' <span class="badge" style="background:#fef3c7;color:#92400e" title="a reserved address \u2014 a fleet probe, not a customer">probe</span>'
+    ? ' <span class="badge" style="background:#fef3c7;color:#92400e" title="a reserved or fleet-probe address \u2014 a probe, not a customer">probe</span>'
     : '');
 }
 
