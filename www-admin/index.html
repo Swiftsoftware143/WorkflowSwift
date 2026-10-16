@@ -1046,23 +1046,33 @@ function renderPaymentProviders(c){
 
   // kanban t_48e4dd2a — ask the provider directly whether a payment key works (the FunnelSwift
   // console's button, ported; precedent commit b153f98). Read-only: the app performs ONE balance or
-  // token call and stores NOTHING when the key came from the box. A refusal is a 424 whose `message`
-  // is the provider's OWN sentence, and this panel's api() helper already lifts that into LAST_ERR —
-  // so the operator reads Stripe's or PayPal's words, not a code. The key itself is never echoed
-  // back: the answer carries a mask only.
+  // token call and stores NOTHING when the key came from the box.
+  //
+  // A RAW fetch, NOT this panel's api() helper: api() reads the body of a failed answer only to
+  // lift `message` into LAST_ERR and returns null, so a 424 refusal would reach the operator as the
+  // bare provider sentence — with the MASK and the INACTIVE warning (both carried in the same body)
+  // silently dropped. Measured before this change: the toast read "Stripe refused the key: Invalid
+  // API Key provided: sk_test_***…" and nothing else. The key itself is never echoed back by either
+  // form of the answer: only a mask is.
   const testKey=async(ptype,apiKey)=>{
     const p=String(ptype||'').trim();
     if(!p){showMsg('Choose a provider first','error');return}
     const usingBox=!!(apiKey&&String(apiKey).trim());
-    showMsg('Testing the '+(usingBox?'key in the box':('stored '+(pname(p)||p)+' key'))+'\u2026');
-    const r=await api('/payment-providers/'+encodeURIComponent(p)+'/test',
-      {method:'POST',body:JSON.stringify({api_key:usingBox?String(apiKey).trim():''})});
-    if(r){
-      const tail=r.api_key_masked?(' (key '+r.api_key_masked+')'):'';
-      const inactive=(r.stored_active===false)?' \u2014 this provider row is INACTIVE, so checkout still refuses until it is set Active.':'';
-      showMsg((r.message||'The provider accepted the key')+tail+inactive);
-    }else{
-      showMsg(LAST_ERR||'The key test could not run','error');
+    showMsg('Testing the '+(usingBox?'key in the box':('stored '+(pname(p)||p)+' key'))+'…');
+    try{
+      const res=await fetch(API+'/payment-providers/'+encodeURIComponent(p)+'/test',{
+        method:'POST',
+        headers:Object.assign({'Content-Type':'application/json'},TOKEN?{'Authorization':'Bearer '+TOKEN}:{}),
+        body:JSON.stringify({api_key:usingBox?String(apiKey).trim():''})
+      });
+      let j={};
+      try{j=await res.json()}catch(e){j={}}
+      const tail=j.api_key_masked?(' (key '+j.api_key_masked+')'):'';
+      const inactive=(j.stored_active===false)?' — this provider row is INACTIVE, so checkout still refuses until it is set Active.':'';
+      showMsg((j.message||(res.ok?'The provider accepted the key':'The key test could not run'))+tail+inactive,
+              res.ok?undefined:'error');
+    }catch(err){
+      showMsg('Could not run the key test: '+((err&&err.message)?err.message:err),'error');
     }
   };
 
