@@ -216,6 +216,12 @@ const API = (() => {
     // this route's unique value is workflows / clients / templates (kanban t_3a8ccd2a).
     getDashboardStats: () => fetch(base + '/dashboard/stats', { headers: headers() }).then(handle),
     getPlanCapabilities: () => fetch(base + '/plans/capabilities', { headers: headers() }).then(handle),
+    // GET /auth/me/usage -- this workspace's own counts (workflows, users, templates, instances,
+    // automations, integrations, api keys, clients, tags, industries). The route has been served
+    // since the app shipped and NO surface called it (measured 2026-10-16, grep over every served
+    // root). It is the authenticated twin of GET /plans/capabilities, which carries the industry
+    // allowance only.
+    getUsage: () => fetch(base + '/auth/me/usage', { headers: headers() }).then(handle),
     // --- Plan & Billing (zz-ws-upgrade-gap, 2026-10-15). WorkflowSwift could sell nothing from
     // any shipped surface: `plan_tiers` holds four ACTIVE priced tiers, POST /checkout/create was
     // mounted and called by NO console, and the Templates pane's own "Upgrade to Unlock" opened the
@@ -285,7 +291,22 @@ const setView = (v, params) => { S.current = v; S.viewParams = params || {}; ren
 const closeModal = () => { S.modal = null; renderApp(); };
 // Team / plan / timeline state (kept out of the S literal above so the two lanes editing this
 // file do not collide on one very long line).
-Object.assign(S, { users:null, teamErr:null, invited:null, permsTarget:null, timeline:null, planCaps:null, rolloverMsg:null, timelineTried:false, planCapsTried:false, wsDash:null, wsDashTried:false, stats:null, statsTried:false });
+Object.assign(S, { users:null, teamErr:null, invited:null, permsTarget:null, timeline:null, planCaps:null, rolloverMsg:null, timelineTried:false, planCapsTried:false, wsDash:null, wsDashTried:false, stats:null, statsTried:false, usage:null, usageTried:false });
+// The rows GET /auth/me/usage reports, in the order a tenant reads them. Declared here, with the
+// state, so the Plan & Billing pane can never render before they exist.
+const USAGE_ROWS = [
+  { key: 'workflows', label: 'Workflows' }, { key: 'instances', label: 'Instances' },
+  { key: 'automations', label: 'Automations' }, { key: 'templates', label: 'Templates' },
+  { key: 'clients', label: 'Clients' }, { key: 'tags', label: 'Tags' },
+  { key: 'integrations', label: 'Integrations' }, { key: 'api_keys', label: 'API keys' },
+  { key: 'users', label: 'Users' }, { key: 'industries', label: 'Industries' }
+];
+// The only numeric allowance anywhere in this app's plan data: `feature_limits` holds a
+// max_industries row per plan and nothing else, and it is the one /plans/capabilities reports.
+// Every other row shows its count alone rather than an invented ceiling.
+const usageLimitFor = (key) => (key === 'industries' && S.planCaps && S.planCaps.max_industries != null)
+  ? S.planCaps.max_industries : null;
+
 // Draft state for the auth + invite forms (kanban t_7e48aeb7) — the shared-object idiom guard
 // rule 5 wants, kept out of the long S literal so the lanes editing this file do not collide.
 Object.assign(S, { views: {} });
@@ -1072,6 +1093,8 @@ const loadCredits = async () => { if(S.loading)return; S.loading=true; renderApp
 // both were served but no surface called either, so the plan's industry allowance and the
 // rollover action were invisible to the tenant.
 const loadPlanCaps = async () => { try { S.planCaps = await API.getPlanCapabilities(); } catch(e){ S.planCaps = null; } renderApp(); };
+// GET /auth/me/usage, loaded the same way as the capabilities read above.
+const loadUsage = async () => { try { S.usage = await API.getUsage(); } catch(e){ S.usage = null; } renderApp(); };
 const rolloverNow = async () => {
   S.loading=true; S.rolloverMsg=null; renderApp();
   try { const r = await API.rolloverCredits(); S.rolloverMsg = r.message || ('Rolled ' + (r.rolled ?? 0) + ' credits'); S.creditInfo=null; }
@@ -1087,6 +1110,7 @@ const rolloverNow = async () => {
 const PlanView = () => {
   if (!S.plans && !S.plansTried) { S.plansTried = true; loadPlans(); }
   if (!S.planCaps && !S.planCapsTried) { S.planCapsTried = true; loadPlanCaps(); }
+  if (!S.usage && !S.usageTried) { S.usageTried = true; loadUsage(); }
   const tiers = (S.plans && (S.plans.plans || S.plans)) || [];
   const curSlug = (S.planCaps && S.planCaps.plan_slug) || '';
   const curName = (S.planCaps && S.planCaps.plan_name) || '';
@@ -1100,6 +1124,17 @@ const PlanView = () => {
         <h3 class="font-semibold text-gray-800 mb-1">Your plan — ${curName || curSlug || '—'}</h3>
         <p class="text-sm text-gray-600">${(curSlug && curSlug !== 'free') ? 'Thanks for subscribing.' : 'A paid plan lifts the template and credit limits.'}</p>
       </div>
+      ${S.usage ? html`<div class="card" style="margin-bottom:16px">
+        <h3 class="font-semibold text-gray-800 mb-2">Your usage</h3>
+        <p class="text-sm text-gray-600">What this workspace holds right now. Every figure is the server's own count, read fresh on each visit; the industry allowance is the one your plan carries.</p>
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mt-3">
+          ${USAGE_ROWS.filter(r => S.usage[r.key] != null).map(r => html`<div class="border rounded-lg p-3">
+            <div class="text-lg font-bold text-gray-900">${fmtAmt(S.usage[r.key])}</div>
+            <div class="text-xs text-gray-500 mt-0.5">${r.label}${usageLimitFor(r.key) != null ? (' — of ' + fmtAmt(usageLimitFor(r.key))) : ''}</div>
+          </div>`)}
+        </div>
+      </div>` : ''}
+      ${S.usageTried && !S.usage ? html`<div class="card" style="margin-bottom:16px"><p class="text-sm text-gray-600">Your usage figures could not be read just now.</p></div>` : ''}
       ${S.checkoutMsg ? html`<div class="card" style="margin-bottom:16px;border-left:4px solid #f59e0b"><p class="text-sm text-gray-700">${S.checkoutMsg}</p></div>` : ''}
       ${tiers.length === 0 ? html`<div class="empty">No plans are published for this install yet.</div>` : html`
       <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
