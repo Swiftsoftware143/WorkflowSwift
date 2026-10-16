@@ -1,4 +1,5 @@
 pub mod address_identity;
+pub mod display_name;
 pub mod email_addr;
 pub mod payment_provider_secrets;
 pub mod probe_addr;

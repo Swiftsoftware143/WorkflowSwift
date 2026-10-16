@@ -53,6 +53,27 @@ pub async fn register(
     // mailed. A malformed value is refused here, one layer before the credentials mail that would
     // never reach the address it was given.
     let email = email_addr::normalize(&req.email).map_err(AppError::Validation)?;
+    // ── VALIDATE THE WRITE: name lengths (kanban-class defect, measured live 2026-10-16) ────────
+    // `create_account` derives the workspace label as `"{name}'s Workspace"` and both it and
+    // `users.name` are `varchar(255)`, so a 254-character name made the first INSERT of the
+    // account transaction the one the database refused: `500 {"code":500,…"Database error"}`, no
+    // account, and nothing telling the visitor their name was the problem. Refused BEFORE anything
+    // is hashed or written, as a field error the console can read. (`account_slug` is
+    // `varchar(100)` and `account_name` is `varchar(255)`, so the caller's explicit values are
+    // checked too.)
+    crate::security::display_name::normalize(&req.name).map_err(AppError::Validation)?;
+    if let Some(account_name) = req.account_name.as_deref().filter(|s| !s.trim().is_empty()) {
+        crate::security::display_name::check_len(account_name, 255, "account_name")
+            .map_err(AppError::Validation)?;
+    }
+    if let Some(account_slug) = req.account_slug.as_deref().filter(|s| !s.trim().is_empty()) {
+        crate::security::display_name::check_len(
+            account_slug,
+            crate::security::display_name::MAX_SLUG_CHARS,
+            "account_slug",
+        )
+        .map_err(AppError::Validation)?;
+    }
 
     // Refuse a duplicate BEFORE hashing. This route needs no credential, so spending the Argon2
     // hash on an address that already exists would be a free amplification. `create_account`
