@@ -150,61 +150,91 @@ const API = (() => {
     }
     return d;
   };
+
+  // ── A REFUSED SESSION ENDS THE SESSION (2026-10-16) ───────────────────────────────────────────
+  // The server's session is the only source of truth: when a request that CARRIED a token is
+  // refused 401, the stored session is dead (the token's 7 days are up, or it was revoked). Before
+  // this arm the console kept the signed-in shell and every screen failed — measured in real
+  // Chromium on app.workflowswift.com (browser-run/ws-session-expiry-proof.js): /auth/me,
+  // /dashboard/stats, /dashboard/timeline and /accounts/industry each answered 401 while the nav,
+  // the sidebar and the plan badge stayed painted and NOTHING offered a way back in.
+  // send() is the funnel: it reads whether the REQUEST carried an Authorization header, so the
+  // sign-in and register calls (no token) still surface the API's own sentence on a 401 — a wrong
+  // password must never be read as an expired session.
+  const sessionEnded = () => {
+    token = null; user = null;
+    try { sessionStorage.removeItem('wf_token'); sessionStorage.removeItem('wf_user'); } catch (e) { /* storage can be blocked; the in-memory clear still signs the console out */ }
+    try { localStorage.removeItem('ws_fs_token'); localStorage.removeItem('token'); localStorage.removeItem('access_token'); } catch (e) {}
+    S.sessionEnded = true; S.view = 'login'; S.showRegister = false; S.error = null;
+    renderApp();
+    throw new Error('session ended');
+  };
+  const send = (url, opts) => {
+    const carried = !!(opts && opts.headers && (opts.headers.Authorization || opts.headers.authorization));
+    // The RESPONSE is passed through untouched so every existing `.then(handle)` call site still
+    // parses the body exactly as before; a 401 on a request that carried a token ends the session
+    // instead (sessionEnded throws, so this call rejects and the caller's catch reports nothing
+    // surprising — the sign-in screen is already on its way in).
+    return fetch(url, opts).then((r) => {
+      if (r.status === 401 && carried) sessionEnded();
+      return r;
+    });
+  };
   return {
-    register: (name, email) => fetch(base + '/auth/register', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, email}) }).then(handle),
-    login: (email, password) => fetch(base + '/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, password}) }).then(handle),
-    me: () => fetch(base + '/auth/me', { headers: headers() }).then(handle),
-    changePassword: (current_password, new_password) => fetch(base + '/auth/password', { method:'PUT', headers: headers(), body: JSON.stringify({ current_password, new_password }) }).then(handle),
-    updateProfile: (patch) => fetch(base + '/auth/profile', { method:'PUT', headers: headers(), body: JSON.stringify(patch) }).then(handle),
+    register: (name, email) => send(base + '/auth/register', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, email}) }).then(handle),
+    login: (email, password) => send(base + '/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, password}) }).then(handle),
+    me: () => send(base + '/auth/me', { headers: headers() }).then(handle),
+    changePassword: (current_password, new_password) => send(base + '/auth/password', { method:'PUT', headers: headers(), body: JSON.stringify({ current_password, new_password }) }).then(handle),
+    updateProfile: (patch) => send(base + '/auth/profile', { method:'PUT', headers: headers(), body: JSON.stringify(patch) }).then(handle),
     // The profile picture is sent as `multipart/form-data` (field name `file`, the image as the
     // only part) — the FLEET-WIDE upload convention every other app's console uses (kanban
     // t_39cea779). The server takes the first non-empty part and sniffs its magic bytes; the part
     // name is not significant, and the bearer token is still attached (the route is private).
-    uploadAvatar: (blob) => { const fd = new FormData(); fd.append('file', blob, blob.name || 'avatar'); return fetch(base + '/auth/avatar', { method:'POST', headers: { ...(token ? { 'Authorization': 'Bearer ' + token } : {}) }, body: fd }).then(handle); },
+    uploadAvatar: (blob) => { const fd = new FormData(); fd.append('file', blob, blob.name || 'avatar'); return send(base + '/auth/avatar', { method:'POST', headers: { ...(token ? { 'Authorization': 'Bearer ' + token } : {}) }, body: fd }).then(handle); },
     // The REMOVAL twin of the upload. The upload upserts ONE row per user, so until this route
     // existed a picture could be swapped for another one but never taken down. An authenticated
     // DELETE on the caller's OWN picture — the session decides whose row goes, there is no path id
     // to spoof — idempotent on the server (`removed` = 1/0), and it answers `avatar_url: ""`.
-    deleteAvatar: () => fetch(base + '/auth/avatar', { method:'DELETE', headers: headers() }).then(handle),
+    deleteAvatar: () => send(base + '/auth/avatar', { method:'DELETE', headers: headers() }).then(handle),
     // Per-account email branding (kanban t_c3cfe7ba). The logo uses the same multipart envelope.
-    uploadBrandingLogo: (blob) => { const fd = new FormData(); fd.append('file', blob, blob.name || 'logo'); return fetch(base + '/settings/branding/logo', { method:'POST', headers: { ...(token ? { 'Authorization': 'Bearer ' + token } : {}) }, body: fd }).then(handle); },
-    deleteBrandingLogo: () => fetch(base + '/settings/branding/logo', { method:'DELETE', headers: headers() }).then(handle),
-    get: (p) => fetch(base + p, { headers: headers() }).then(handle),
-    post: (p, b) => fetch(base + p, { method:'POST', headers: headers(), body: b === undefined ? undefined : JSON.stringify(b) }).then(handle),
-    put: (p, b) => fetch(base + p, { method:'PUT', headers: headers(), body: JSON.stringify(b) }).then(handle),
-    del: (p) => fetch(base + p, { method:'DELETE', headers: headers() }).then(handle),
-    getIndustries: () => fetch(base + '/industries', { headers: headers() }).then(handle),
-    getAccountIndustry: () => fetch(base + '/accounts/industry', { headers: headers() }).then(handle),
-    putAccountIndustry: (slug, primary) => fetch(base + '/accounts/industry', { method:'PUT', headers: headers(), body: JSON.stringify({ industry_slug: slug, set_as_primary: !!primary }) }).then(handle),
-    getDashboardWidgets: (slug) => fetch(base + '/dashboard/widgets' + (slug ? ('?industry=' + encodeURIComponent(slug)) : ''), { headers: headers() }).then(handle),
-    getDashboardTabs: (slug) => fetch(base + '/dashboard/tabs' + (slug ? ('?industry=' + encodeURIComponent(slug)) : ''), { headers: headers() }).then(handle),
+    uploadBrandingLogo: (blob) => { const fd = new FormData(); fd.append('file', blob, blob.name || 'logo'); return send(base + '/settings/branding/logo', { method:'POST', headers: { ...(token ? { 'Authorization': 'Bearer ' + token } : {}) }, body: fd }).then(handle); },
+    deleteBrandingLogo: () => send(base + '/settings/branding/logo', { method:'DELETE', headers: headers() }).then(handle),
+    get: (p) => send(base + p, { headers: headers() }).then(handle),
+    post: (p, b) => send(base + p, { method:'POST', headers: headers(), body: b === undefined ? undefined : JSON.stringify(b) }).then(handle),
+    put: (p, b) => send(base + p, { method:'PUT', headers: headers(), body: JSON.stringify(b) }).then(handle),
+    del: (p) => send(base + p, { method:'DELETE', headers: headers() }).then(handle),
+    getIndustries: () => send(base + '/industries', { headers: headers() }).then(handle),
+    getAccountIndustry: () => send(base + '/accounts/industry', { headers: headers() }).then(handle),
+    putAccountIndustry: (slug, primary) => send(base + '/accounts/industry', { method:'PUT', headers: headers(), body: JSON.stringify({ industry_slug: slug, set_as_primary: !!primary }) }).then(handle),
+    getDashboardWidgets: (slug) => send(base + '/dashboard/widgets' + (slug ? ('?industry=' + encodeURIComponent(slug)) : ''), { headers: headers() }).then(handle),
+    getDashboardTabs: (slug) => send(base + '/dashboard/tabs' + (slug ? ('?industry=' + encodeURIComponent(slug)) : ''), { headers: headers() }).then(handle),
     // The per-metric SPA helper that called that route was removed with it (kanban t_0fffb921): it
     // was defined here and never called, and the per-widget data the dashboard needs already arrives
     // in getDashboardWidgets (each widget carries its own `data`).
-    pushDashboardData: (industry_slug, metric_key, value) => fetch(base + '/dashboard/push-widget-data', { method:'POST', headers: headers(), body: JSON.stringify({ industry_slug, metric_key, value }) }).then(handle),
-    listApiKeys: () => fetch(base + '/api-keys', { headers: headers() }).then(handle),
-    createApiKey: (name) => fetch(base + '/api-keys', { method:'POST', headers: headers(), body: JSON.stringify({ name }) }).then(handle),
-    revokeApiKey: (id) => fetch(base + '/api-keys/' + encodeURIComponent(id), { method:'DELETE', headers: headers() }).then(handle),
+    pushDashboardData: (industry_slug, metric_key, value) => send(base + '/dashboard/push-widget-data', { method:'POST', headers: headers(), body: JSON.stringify({ industry_slug, metric_key, value }) }).then(handle),
+    listApiKeys: () => send(base + '/api-keys', { headers: headers() }).then(handle),
+    createApiKey: (name) => send(base + '/api-keys', { method:'POST', headers: headers(), body: JSON.stringify({ name }) }).then(handle),
+    revokeApiKey: (id) => send(base + '/api-keys/' + encodeURIComponent(id), { method:'DELETE', headers: headers() }).then(handle),
     // --- Provider keys (the platform's third-party credentials, per account). The API
     // masks on read (`api_key` comes back as `sk-...xyz`) and encrypts at rest; the value
     // is only ever sent on write. NOTE: the routes are `/provider-keys` and
     // `/provider-keys/{provider}` (DELETE by provider, not by id).
-    listProviderKeys: () => fetch(base + '/provider-keys', { headers: headers() }).then(handle),
+    listProviderKeys: () => send(base + '/provider-keys', { headers: headers() }).then(handle),
     // The Notify step's two vocabularies (kanban t_d3ff37ef): which channels this install can
     // really deliver on, and which of the account's own people a step may reach.
-    notifyChannels: () => fetch(base + '/notify/channels', { headers: headers() }).then(handle),
-    notifyRecipients: () => fetch(base + '/notify/recipients', { headers: headers() }).then(handle),
-    saveProviderKey: (provider, api_key) => fetch(base + '/provider-keys', { method:'POST', headers: headers(), body: JSON.stringify({ provider, api_key }) }).then(handle),
-    deleteProviderKey: (provider) => fetch(base + '/provider-keys/' + encodeURIComponent(provider), { method:'DELETE', headers: headers() }).then(handle),
+    notifyChannels: () => send(base + '/notify/channels', { headers: headers() }).then(handle),
+    notifyRecipients: () => send(base + '/notify/recipients', { headers: headers() }).then(handle),
+    saveProviderKey: (provider, api_key) => send(base + '/provider-keys', { method:'POST', headers: headers(), body: JSON.stringify({ provider, api_key }) }).then(handle),
+    deleteProviderKey: (provider) => send(base + '/provider-keys/' + encodeURIComponent(provider), { method:'DELETE', headers: headers() }).then(handle),
     // --- Team management (see TeamView). NOTE: /users and /users/team are registered WITHOUT a
     // trailing slash — a request to /api/v1/users/ answers 404 while /api/v1/users answers 200.
-    listUsers: () => fetch(base + '/users', { headers: headers() }).then(handle),
-    inviteUser: (b) => fetch(base + '/users/invite', { method:'POST', headers: headers(), body: JSON.stringify(b) }).then(handle),
-    setUserPermissions: (id, permissions) => fetch(base + '/users/' + encodeURIComponent(id) + '/permissions', { method:'PUT', headers: headers(), body: JSON.stringify({ permissions }) }).then(handle),
-    setUserRole: (id, role) => fetch(base + '/users/' + encodeURIComponent(id) + '/role', { method:'PUT', headers: headers(), body: JSON.stringify({ role }) }).then(handle),
-    removeUser: (id) => fetch(base + '/users/' + encodeURIComponent(id), { method:'DELETE', headers: headers() }).then(handle),
+    listUsers: () => send(base + '/users', { headers: headers() }).then(handle),
+    inviteUser: (b) => send(base + '/users/invite', { method:'POST', headers: headers(), body: JSON.stringify(b) }).then(handle),
+    setUserPermissions: (id, permissions) => send(base + '/users/' + encodeURIComponent(id) + '/permissions', { method:'PUT', headers: headers(), body: JSON.stringify({ permissions }) }).then(handle),
+    setUserRole: (id, role) => send(base + '/users/' + encodeURIComponent(id) + '/role', { method:'PUT', headers: headers(), body: JSON.stringify({ role }) }).then(handle),
+    removeUser: (id) => send(base + '/users/' + encodeURIComponent(id), { method:'DELETE', headers: headers() }).then(handle),
     // --- Panel wiring: endpoints that were served but reachable from no shipped surface ---
-    getTimeline: () => fetch(base + '/dashboard/timeline', { headers: headers() }).then(handle),
+    getTimeline: () => send(base + '/dashboard/timeline', { headers: headers() }).then(handle),
     // GET /dashboard/workspace -- the account's running/in-progress/pending instances plus its
     // automation count, in one call (kanban t_b2f20b5b: the route answered 200 with real rows and
     // no served surface called it). The window is deliberately wide -- a running instance must not
@@ -214,40 +244,40 @@ const API = (() => {
     // them was paid for at execution time). These three numbers are the ones NO other page shows:
     // the "running now" count is the separate /dashboard/workspace tile (kanban t_b2f20b5b), so
     // this route's unique value is workflows / clients / templates (kanban t_3a8ccd2a).
-    getDashboardStats: () => fetch(base + '/dashboard/stats', { headers: headers() }).then(handle),
-    getPlanCapabilities: () => fetch(base + '/plans/capabilities', { headers: headers() }).then(handle),
+    getDashboardStats: () => send(base + '/dashboard/stats', { headers: headers() }).then(handle),
+    getPlanCapabilities: () => send(base + '/plans/capabilities', { headers: headers() }).then(handle),
     // GET /auth/me/usage -- this workspace's own counts (workflows, users, templates, instances,
     // automations, integrations, api keys, clients, tags, industries). The route has been served
     // since the app shipped and NO surface called it (measured 2026-10-16, grep over every served
     // root). It is the authenticated twin of GET /plans/capabilities, which carries the industry
     // allowance only.
-    getUsage: () => fetch(base + '/auth/me/usage', { headers: headers() }).then(handle),
+    getUsage: () => send(base + '/auth/me/usage', { headers: headers() }).then(handle),
     // --- Plan & Billing (zz-ws-upgrade-gap, 2026-10-15). WorkflowSwift could sell nothing from
     // any shipped surface: `plan_tiers` holds four ACTIVE priced tiers, POST /checkout/create was
     // mounted and called by NO console, and the Templates pane's own "Upgrade to Unlock" opened the
     // marketing site's #features anchor, which never mentions upgrading. GET /plans is
     // authenticated (an anonymous call answers 401), so the catalogue is read with the tenant token.
-    listPlans: () => fetch(base + '/plans', { headers: headers() }).then(handle),
-    createCheckout: (b) => fetch(base + '/checkout/create', { method:'POST', headers: headers(), body: JSON.stringify(b) }).then(handle),
-    listCheckoutSessions: () => fetch(base + '/checkout/sessions', { headers: headers() }).then(handle),
-    rolloverCredits: () => fetch(base + '/credits/rollover', { method:'POST', headers: headers(), body: JSON.stringify({}) }).then(handle),
-    removeAccountIndustry: (slug) => fetch(base + '/accounts/industry/' + encodeURIComponent(slug), { method:'DELETE', headers: headers() }).then(handle),
+    listPlans: () => send(base + '/plans', { headers: headers() }).then(handle),
+    createCheckout: (b) => send(base + '/checkout/create', { method:'POST', headers: headers(), body: JSON.stringify(b) }).then(handle),
+    listCheckoutSessions: () => send(base + '/checkout/sessions', { headers: headers() }).then(handle),
+    rolloverCredits: () => send(base + '/credits/rollover', { method:'POST', headers: headers(), body: JSON.stringify({}) }).then(handle),
+    removeAccountIndustry: (slug) => send(base + '/accounts/industry/' + encodeURIComponent(slug), { method:'DELETE', headers: headers() }).then(handle),
     // --- Prospecting surface: enrich (paid/mocked server-side) + the Hexomatic enrichment key ---
-    enrichBusiness: (b) => fetch(base + '/prospecting/enrich', { method:'POST', headers: headers(), body: JSON.stringify(b) }).then(handle),
-    getHexomaticKey: () => fetch(base + '/accounts/hexomatic-key', { headers: headers() }).then(handle),
-    setHexomaticKey: (key) => fetch(base + '/accounts/hexomatic-key', { method:'PUT', headers: headers(), body: JSON.stringify({ key }) }).then(handle),
+    enrichBusiness: (b) => send(base + '/prospecting/enrich', { method:'POST', headers: headers(), body: JSON.stringify(b) }).then(handle),
+    getHexomaticKey: () => send(base + '/accounts/hexomatic-key', { headers: headers() }).then(handle),
+    setHexomaticKey: (key) => send(base + '/accounts/hexomatic-key', { method:'PUT', headers: headers(), body: JSON.stringify({ key }) }).then(handle),
     // --- Builder + Renditions (kanban t_ef3b13f4): the step-config and rendition APIs were
     // served with NO caller — the Builder view was a stub. These are the only callers.
-    getSteps: (id) => fetch(base + '/workflows/' + encodeURIComponent(id) + '/steps', { headers: headers() }).then(handle),
-    addStep: (id, b) => fetch(base + '/workflows/' + encodeURIComponent(id) + '/steps', { method:'POST', headers: headers(), body: JSON.stringify(b) }).then(handle),
-    updateStep: (id, sid, b) => fetch(base + '/workflows/' + encodeURIComponent(id) + '/steps/' + encodeURIComponent(sid), { method:'PUT', headers: headers(), body: JSON.stringify(b) }).then(handle),
-    deleteStep: (id, sid) => fetch(base + '/workflows/' + encodeURIComponent(id) + '/steps/' + encodeURIComponent(sid), { method:'DELETE', headers: headers() }).then(handle),
-    reorderSteps: (id, step_ids) => fetch(base + '/workflows/' + encodeURIComponent(id) + '/steps/reorder', { method:'PUT', headers: headers(), body: JSON.stringify({ step_ids }) }).then(handle),
-    validateSteps: (steps) => fetch(base + '/workflows/validate-steps', { method:'POST', headers: headers(), body: JSON.stringify({ steps }) }).then(handle),
-    renditionSummary: () => fetch(base + '/renditions/summary', { headers: headers() }).then(handle),
-    listRenditions: (qs) => fetch(base + '/renditions' + (qs ? ('?' + qs) : ''), { headers: headers() }).then(handle),
-    workflowRenditions: (id) => fetch(base + '/renditions/workflow/' + encodeURIComponent(id), { headers: headers() }).then(handle),
-    stitchRenditions: (b) => fetch(base + '/renditions/stitch', { method:'POST', headers: headers(), body: JSON.stringify(b) }).then(handle),
+    getSteps: (id) => send(base + '/workflows/' + encodeURIComponent(id) + '/steps', { headers: headers() }).then(handle),
+    addStep: (id, b) => send(base + '/workflows/' + encodeURIComponent(id) + '/steps', { method:'POST', headers: headers(), body: JSON.stringify(b) }).then(handle),
+    updateStep: (id, sid, b) => send(base + '/workflows/' + encodeURIComponent(id) + '/steps/' + encodeURIComponent(sid), { method:'PUT', headers: headers(), body: JSON.stringify(b) }).then(handle),
+    deleteStep: (id, sid) => send(base + '/workflows/' + encodeURIComponent(id) + '/steps/' + encodeURIComponent(sid), { method:'DELETE', headers: headers() }).then(handle),
+    reorderSteps: (id, step_ids) => send(base + '/workflows/' + encodeURIComponent(id) + '/steps/reorder', { method:'PUT', headers: headers(), body: JSON.stringify({ step_ids }) }).then(handle),
+    validateSteps: (steps) => send(base + '/workflows/validate-steps', { method:'POST', headers: headers(), body: JSON.stringify({ steps }) }).then(handle),
+    renditionSummary: () => send(base + '/renditions/summary', { headers: headers() }).then(handle),
+    listRenditions: (qs) => send(base + '/renditions' + (qs ? ('?' + qs) : ''), { headers: headers() }).then(handle),
+    workflowRenditions: (id) => send(base + '/renditions/workflow/' + encodeURIComponent(id), { headers: headers() }).then(handle),
+    stitchRenditions: (b) => send(base + '/renditions/stitch', { method:'POST', headers: headers(), body: JSON.stringify(b) }).then(handle),
     get token(){ return token; }, get user(){ return user; },
     get isLoggedIn(){ return !!sessionStorage.getItem('wf_token'); },
     setAuth(t, u){ token = t; user = u; sessionStorage.setItem('wf_token', t); sessionStorage.setItem('wf_user', JSON.stringify(u)); },
@@ -268,7 +298,7 @@ const API = (() => {
   };
 })();
 
-const S = { view:'login', loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, dataVer:0, apiKeys:null, extBuild:null, hexKey:null, hexKeyInput:'', enrich:null, enriching:null, newApiKey:null, builder:null, steps:null, stepsWf:null, stepValidation:null, stepDraft:null, widgetCat:null, notifyChannels:null, notifyRecipients:null, rendSummary:null, renditions:null, rendWf:'', rendStatus:'active', rendSel:null, stitchName:'', modalErr:null, plans:null, plansTried:false, checkoutMsg:null, checkoutBusy:false };
+const S = { view:'login', sessionEnded:false, loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, dataVer:0, apiKeys:null, extBuild:null, hexKey:null, hexKeyInput:'', enrich:null, enriching:null, newApiKey:null, builder:null, steps:null, stepsWf:null, stepValidation:null, stepDraft:null, widgetCat:null, notifyChannels:null, notifyRecipients:null, rendSummary:null, renditions:null, rendWf:'', rendStatus:'active', rendSel:null, stitchName:'', modalErr:null, plans:null, plansTried:false, checkoutMsg:null, checkoutBusy:false };
 
 // Views call their loaders from inside render (the house pattern: `if(!S.x) loadX();`), and
 // every loader calls renderApp() again — a *re-entrant* preact render. The inner render
@@ -355,7 +385,7 @@ const LoginView = () => {
   // a silent no-op (`if(!f.email||!f.password) return;` now read ''). value=${...} makes it visible.
   const f = viewState('login_form', { email: '', password: '' });
   const submit = async (e) => { e.preventDefault(); if(!f.email||!f.password) return; S.loading=true; S.error=null; renderApp();
-    try { const r = await API.login(f.email, f.password); API.setAuth(r.token || r.access_token, r.user || r); f.email=''; f.password=''; S.view='app'; refreshMe(); }
+    try { const r = await API.login(f.email, f.password); API.setAuth(r.token || r.access_token, r.user || r); f.email=''; f.password=''; S.sessionEnded=false; S.view='app'; refreshMe(); }
     catch(err){ S.error=err.message; } S.loading=false; renderApp(); };
   return html`
     <div class="flex items-center justify-center min-h-screen px-4">
@@ -364,6 +394,7 @@ const LoginView = () => {
         <form onSubmit=${submit} class="space-y-5">
           <div><label class="label">Email</label><input type="email" class="input" value=${f.email} onInput=${e=>f.email=e.target.value} placeholder="you@company.com" autocomplete="email" required /></div>
           <div><label class="label">Password</label><input type="password" class="input" value=${f.password} onInput=${e=>f.password=e.target.value} placeholder="••••••••" autocomplete="current-password" required /></div>
+          ${S.sessionEnded && html`<div class="bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg p-3">Your session ended, so you were signed out. Sign in again to carry on.</div>`}
           ${S.error && html`<div class="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3 flex items-center gap-2"><span>⚠️</span> ${S.error}</div>`}
           <button type="submit" class="btn w-full" disabled=${S.loading}>${S.loading?'Signing in...':'Sign In'}</button>
         </form>
