@@ -1550,7 +1550,7 @@ function renderPlansCredits(c){
     el.innerHTML=d.plans.map(p=>`<div class="flex justify-between p-3 border-b"><div><strong>${escHtml(p.name)}</strong><span class="text-xs text-gray-500 ml-2">${escHtml(p.slug)}</span></div><span class="font-semibold text-sm">$${escHtml(p.price_monthly||p.price||0)}/mo</span></div>`).join('');
   });
   api('/credits/balance').then(d=>{
-    c.querySelector('#crdata').innerHTML=`<div class="text-center py-4"><div class="text-4xl font-bold text-blue-600">${d&&d.balance||0}</div><div class="text-xs text-gray-500 mt-1">credits remaining</div></div>`;
+    c.querySelector('#crdata').innerHTML=`<div class="text-center py-4"><div class="text-4xl font-bold text-blue-600">${escHtml(d&&d.balance||0)}</div><div class="text-xs text-gray-500 mt-1">credits remaining</div></div>`;
   });
 }
 
