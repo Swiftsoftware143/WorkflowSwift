@@ -1773,13 +1773,24 @@ function renderAdminSettings(c){
 const RESERVED_ADDR_RE = /@(?:[^@]*\.)?(?:invalid|example|test|local)$|@(?:[^@]*\.)?example\.(?:com|net|org)$/i;
 const FLEET_PROBE_ADDR_RE = /@(?:[^@]*\.)?(?:swiftsoftware\.(?:dev|local)|sw\.dev|maxxspace\.com)$|@local\.(?:funnelswift|coreswift|adaswift|incentiveswift|workflowswift|missedcallrespondr|multidirectory)$/i;
 const isProbeAddress = (addr) => RESERVED_ADDR_RE.test(String(addr || '')) || FLEET_PROBE_ADDR_RE.test(String(addr || ''));
+// The AUTHORITATIVE arm (kanban t_c13803ad): `accounts.probe_harness` is written at signup by the
+// door that minted the workspace, so a non-empty value names a harness even when the owner address
+// looks ordinary. Before this the list could only GUESS from the address, so a harness that signed
+// up with an ordinary-looking address rendered as an ordinary customer. The address arms stay as a
+// FALLBACK for accounts minted before the column existed — the column simply outranks them.
+const probeHarnessOf = (a) => String((a && a.probe_harness) || '').trim();
+function probeBadgeHtml(harness){
+  const title = harness
+    ? 'minted by the &quot;' + escHtml(harness) + '&quot; test harness &mdash; a probe, not a customer'
+    : 'a reserved or fleet-probe address &mdash; a probe, not a customer';
+  return ' <span class="badge" style="background:#fef3c7;color:#92400e" title="' + title + '">probe</span>';
+}
 function ownerCellHtml(a){
   const oe=String((a&&(a.owner_email||a.email))||'').trim();
-  if(!oe) return '<span class="text-gray-400">\u2014</span>';
-  const probe=isProbeAddress(oe);
-  return escHtml(oe)+(probe
-    ? ' <span class="badge" style="background:#fef3c7;color:#92400e" title="a reserved or fleet-probe address \u2014 a probe, not a customer">probe</span>'
-    : '');
+  const harness=probeHarnessOf(a);
+  if(!oe) return '<span class="text-gray-400">\u2014</span>'+(harness ? probeBadgeHtml(harness) : '');
+  const probe=!!harness || isProbeAddress(oe);
+  return escHtml(oe)+(probe ? probeBadgeHtml(harness) : '');
 }
 
 function renderAdminUsers(c){

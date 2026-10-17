@@ -902,7 +902,7 @@ pub async fn admin_list_accounts(
 
     let accounts = sqlx::query(
         r#"SELECT a.id, a.name, a.account_slug, a.is_active, a.retention_days, a.retention_purge_at,
-                  a.created_at,
+                  a.created_at, COALESCE(a.probe_harness, '') AS probe_harness,
                   p.name as plan_name, p.slug as plan_slug,
                   (SELECT u.email FROM users u WHERE u.aid = a.id
                    ORDER BY CASE WHEN u.role IN ('owner','company_admin','admin','super_admin')
@@ -940,6 +940,12 @@ pub async fn admin_list_accounts(
         let created_at: chrono::DateTime<chrono::Utc> = row.try_get("created_at")?;
         let plan_name: Option<String> = row.try_get("plan_name").ok();
         let plan_slug: Option<String> = row.try_get("plan_slug").ok();
+        // The AUTHORITATIVE harness attribution (kanban t_4a744754): written at signup by the door
+        // that minted the account. Published so the operator's list can badge a harness row
+        // instead of GUESSING from its owner address — a harness that signed up with an
+        // ordinary-looking address read as a customer. COALESCEd to '' so a pre-column row is
+        // empty, never null.
+        let probe_harness: String = row.try_get("probe_harness").unwrap_or_default();
 
         result.push(json!({
             "id": id.to_string(),
@@ -948,6 +954,7 @@ pub async fn admin_list_accounts(
             "owner_email": email,
             "slug": slug,
             "is_active": is_active,
+            "probe_harness": probe_harness,
             "retention_days": retention_days,
             "retention_purge_at": retention_purge_at.map(|t| t.to_rfc3339()),
             "created_at": created_at.to_rfc3339(),
