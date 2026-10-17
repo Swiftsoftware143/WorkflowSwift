@@ -1569,10 +1569,23 @@ async function renderPlansCredits(c){
       h('span',{className:'badge',style:'background:#d1fae5;color:#065f46'},'current plan')));
     const price=mine?(mine.price_monthly!=null?mine.price_monthly:mine.price):null;
     el.appendChild(h('p',{className:'text-sm text-gray-500 mt-2'},
-      price!=null&&price!==''?('$'+price+' per month. You can move to another plan from the list below.')
+      price!=null&&price!==''?('$'+price+' per month. Ask support if you need a different plan.')
                              :'This is the plan your account runs on.'));
-    const feats=(mine&&Array.isArray(mine.features))?mine.features.filter(x=>typeof x==='string'):[];
-    if(feats.length)el.appendChild(h('p',{className:'text-xs text-gray-500 mt-2'},'Included: '+feats.slice(0,12).join(' \u00b7 ')));
+    // A tier's `features` is a JSONB OBJECT of enforced limits (max_users, max_instances,
+    // max_tags ...), not a list of sentences: print only the caps the app actually enforces,
+    // with -1 / "unlimited" read as unlimited. Retired and support-promise keys are never
+    // named here (see admin-guide.html, "Plan limits - settable AND enforced").
+    const f=(mine&&mine.features&&typeof mine.features==='object'&&!Array.isArray(mine.features))?mine.features:null;
+    const LAB={max_users:'users',max_instances:'instances',max_tags:'tags',max_workflows:'workflows'};
+    const lim=k=>{
+      const v=f?f[k]:null;
+      if(v==null||v==='')return '';
+      if(v===-1||v==='unlimited')return 'unlimited '+LAB[k];
+      if(typeof v==='number'||/^[0-9]+$/.test(String(v)))return String(v).replace(/\B(?=(\d{3})+(?!\d))/g,',')+' '+LAB[k];
+      return '';
+    };
+    const bits=['max_users','max_instances','max_tags','max_workflows'].map(lim).filter(Boolean);
+    if(bits.length)el.appendChild(h('p',{className:'text-xs text-gray-500 mt-2'},'Included: '+bits.join(' \u00b7 ')));
   }
 
   const all=c.querySelector('#plall');
@@ -2233,7 +2246,7 @@ window.appGuidePages = {
   "support:tickets": { title: "Tickets", desc: "Support requests raised on this account, with the status of each.", actions: ["Open a ticket", "Update its status"] },
   "profile:my-profile": { title: "My Profile", desc: "Your own profile: name, company, email, password and picture. What you set here is what appears across the console.", actions: ["Set your name, company and picture", "Change your password"] },
   "profile:team": { title: "Team", desc: "The people who can sign in to this account, and the role each one holds.", actions: ["Invite a team member", "Change a member's role"] },
-  "profile:plans-credits": { title: "Plans & Credits", desc: "The plan this account is on and the credits it has. A plan is a bundle of limits and features.", actions: ["See the current plan", "Buy credits", "Change plan"] },
+  "profile:plans-credits": { title: "Plans & Credits", desc: "The plan this account is on, the limits that plan carries and the credits it has. A plan is a bundle of limits and features.", actions: ["See your current plan", "Compare the plans on offer", "Check your credit balance"] },
   "profile:email-branding": { title: "Email Branding", desc: "Put your own name, colour and logo on the transactional email this app sends for your account, instead of the default WorkflowSwift header.", actions: ["Upload your logo", "Set your brand name and colour"] },
   "profile:invoices": { title: "Invoices", desc: "The invoices raised on this account.", actions: ["Open an invoice"] },
   "profile:payments": { title: "Payment Providers", desc: "The payment accounts this install can take money through at checkout, and whether each is in test or live mode. A platform administrator manages them here.", actions: ["Add a payment provider", "Switch a provider between test and live", "Remove a provider from checkout"] },
