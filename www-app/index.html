@@ -1249,15 +1249,44 @@ const TicketsView = () => {
     <div>
       <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
         <div><h1 class="text-xl font-extrabold text-gray-900">Tickets</h1><p class="text-sm text-gray-500 mt-1">Your support tickets</p></div>
-        <button class="btn-outline text-sm" onClick=${loadTickets} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button>
+        <div class="flex gap-2"><button class="btn text-sm" onClick=${openTicketModal}>+ Open Ticket</button><button class="btn-outline text-sm" onClick=${loadTickets} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button></div>
       </header>
       ${list.length === 0 ? html`<div class="empty">No tickets.</div>` : html`
-      <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Subject</th><th>Status</th><th>Created</th></tr></thead><tbody>
-        ${list.map(t => html`<tr key=${t.id}><td class="font-semibold">${t.name || t.subject || t.title || '—'}</td><td>${statusBadge(t.status || 'open')}</td><td>${fmtDate(t.created_at)}</td></tr>`)}
+      <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Subject</th><th>Status</th><th>Priority</th><th>Created</th></tr></thead><tbody>
+        ${list.map(t => html`<tr key=${t.id}><td><div class="font-semibold">${t.subject || t.title || '—'}</div>${t.description ? html`<div class="text-xs text-gray-500" style="white-space:pre-wrap">${t.description}</div>` : ''}</td><td>${statusBadge(t.status || 'open')}</td><td>${t.priority || 'medium'}</td><td>${fmtDate(t.created_at)}</td></tr>`)}
       </tbody></table></div>`}
     </div>`;
 };
 const loadTickets = async () => { if(S.loading)return; S.loading=true; renderApp(); try { const r = await API.get('/tickets'); S.tickets = r.items || r.tickets || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+// kanban (2026-10-17): POST /api/v1/tickets was served and called by NOTHING on this surface — the
+// screen's own help text already promised "Open a ticket", and a tenant with a problem had no way to
+// raise one. No server change: the handler, its validation ("subject is required") and its 201 are
+// all live; this modal is the missing half.
+const TICKET_PRIORITIES = ['low', 'medium', 'high'];
+const openTicketModal = () => { S.formSeeded=false; S.modal='ticket'; renderApp(); };
+const TicketModal = () => {
+  // Draft kept in the SHARED view object and seeded ON OPEN (S.formSeeded), so a refused submit keeps
+  // what the tenant typed — the same contract the Brand/Competitor modals had to learn.
+  const f = viewState('ticket_form', { subject:'', body:'', priority:'medium' });
+  if (!S.formSeeded) { f.subject=''; f.body=''; f.priority='medium'; S.formSeeded = true; }
+  const save = async () => {
+    const subject = String(f.subject || '').trim();
+    if (!subject) return toast('A subject is required', 'err');
+    S.loading=true; renderApp();
+    try {
+      await API.post('/tickets', { subject, description: String(f.body || ''), priority: f.priority || 'medium', source: 'console' });
+      toast('Ticket opened — our team can see it now');
+      S.tickets = null; closeModal();
+    } catch(e){ toast(e.message, 'err'); }
+    S.loading=false; renderApp();
+  };
+  return html`<${ModalShell} title="Open a Ticket" onClose=${closeModal}>
+    <div class="mb-4"><label class="label">Subject</label><input class="input" value=${f.subject} onInput=${e=>f.subject=e.target.value} placeholder="What do you need help with?" /></div>
+    <div class="mb-4"><label class="label">Details</label><textarea class="input" rows="4" value=${f.body} onInput=${e=>f.body=e.target.value} placeholder="What were you doing, and what happened?" style="resize:vertical"></textarea></div>
+    <div class="mb-4"><label class="label">Priority</label><select class="input" value=${f.priority} onChange=${e=>f.priority=e.target.value}>${TICKET_PRIORITIES.map(p=>html`<option value=${p} selected=${f.priority===p}>${p.charAt(0).toUpperCase()+p.slice(1)}</option>`)}</select></div>
+    <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Open Ticket'}</button>
+  <//>`;
+};
 
 // ===== Provider Keys (/provider-keys -> {provider_keys:[{provider, api_key:<masked>, has_key, is_active}]}) =====
 // The tenant half of the key-entry surface. The API was always reachable from a tenant
@@ -2299,7 +2328,7 @@ const App = () => {
         <${Current} key=${S.current + "|" + S.dataVer} />
       </main>
     </div>
-    ${S.modal && (S.modal==='wf' ? html`<${WfModal} />` : S.modal==='brand' ? html`<${BrandModal} />` : S.modal==='comp' ? html`<${CompetitorModal} />` : S.modal==='apikey' ? html`<${ApiKeyModal} />` : S.modal==='invite' ? html`<${InviteModal} />` : S.modal==='perms' ? html`<${PermsModal} />` : S.modal==='industry' ? html`<${IndustryPickerView} asModal />` : S.modal==='step' ? html`<${StepModal} />` : S.modal==='logs' ? html`<${LogsModal} />` : null)}
+    ${S.modal && (S.modal==='wf' ? html`<${WfModal} />` : S.modal==='ticket' ? html`<${TicketModal} />` : S.modal==='brand' ? html`<${BrandModal} />` : S.modal==='comp' ? html`<${CompetitorModal} />` : S.modal==='apikey' ? html`<${ApiKeyModal} />` : S.modal==='invite' ? html`<${InviteModal} />` : S.modal==='perms' ? html`<${PermsModal} />` : S.modal==='industry' ? html`<${IndustryPickerView} asModal />` : S.modal==='step' ? html`<${StepModal} />` : S.modal==='logs' ? html`<${LogsModal} />` : null)}
     ${S.toast && html`<div class="toast ${S.toast.type}">${S.toast.msg}</div>`}
     ${S.loading && html`<div style="position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:60"><span class="spinner"></span></div>`}
   `;
