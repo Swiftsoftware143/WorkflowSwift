@@ -1046,7 +1046,7 @@ const LeadsView = () => {
     <div>
       <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
         <div><h1 class="text-xl font-extrabold text-gray-900">Leads</h1><p class="text-sm text-gray-500 mt-1">Your captured leads</p></div>
-        <div class="flex gap-2 items-center"><${SurfaceFilter} value=${S.leadSurface} onChange=${setLeadSurface} /><button class="btn-outline text-sm" onClick=${loadLeads} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button></div>
+        <div class="flex gap-2 items-center"><button class="btn text-sm" onClick=${openLeadModal}>+ Add Lead</button><${SurfaceFilter} value=${S.leadSurface} onChange=${setLeadSurface} /><button class="btn-outline text-sm" onClick=${loadLeads} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button></div>
       </header>
       ${list.length === 0 ? html`<div class="empty">No leads yet.</div>` : html`
       <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Email</th><th>Company</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody>
@@ -1058,6 +1058,40 @@ const LeadsView = () => {
 const loadLeads = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.leads = (await API.get('/leads' + (S.leadSurface ? '?surface_id=' + encodeURIComponent(S.leadSurface) : ''))).leads || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
 const setLeadSurface = (v) => { S.leadSurface = v; S.leads = null; loadLeads(); };
 const delLead = async (id) => { if(!confirm('Delete this lead?'))return; try { await API.del('/leads/'+id); toast('Lead deleted'); S.leads=null; loadLeads(); } catch(e){ toast(e.message,'err'); } };
+// kanban (2026-10-17): POST /api/v1/leads was served and called by NOTHING on this surface — the
+// screen could only list and delete, so a lead that arrived by phone or at an event had no way in.
+// The handler is unchanged: `name` is the only required field and `status` defaults to 'new'.
+const LEAD_STATUSES = ['new', 'contacted', 'qualified', 'won', 'lost'];
+const openLeadModal = () => { S.formSeeded=false; S.modal='lead'; renderApp(); };
+const LeadModal = () => {
+  const f = viewState('lead_form', { name:'', email:'', phone:'', company:'', status:'new', notes:'' });
+  if (!S.formSeeded) { f.name=''; f.email=''; f.phone=''; f.company=''; f.status='new'; f.notes=''; S.formSeeded = true; }
+  const save = async () => {
+    const name = String(f.name || '').trim();
+    if (!name) return toast('A name is required', 'err');
+    const email = String(f.email || '').trim();
+    if (email && email.indexOf('@') < 1) return toast('That email address is not valid', 'err');
+    S.loading=true; renderApp();
+    try {
+      await API.post('/leads', { name, email: email || null, phone: String(f.phone || '').trim() || null,
+        company: String(f.company || '').trim() || null, status: f.status || 'new',
+        source: 'manual', notes: String(f.notes || '').trim() || null,
+        surface_id: S.leadSurface || null });
+      toast('Lead added');
+      S.leads = null; closeModal();
+    } catch(e){ toast(e.message, 'err'); }
+    S.loading=false; renderApp();
+  };
+  return html`<${ModalShell} title="Add a Lead" onClose=${closeModal}>
+    <div class="mb-4"><label class="label">Name</label><input class="input" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="Full name" /></div>
+    <div class="mb-4"><label class="label">Email</label><input class="input" value=${f.email} onInput=${e=>f.email=e.target.value} placeholder="name@company.com" /></div>
+    <div class="mb-4"><label class="label">Phone</label><input class="input" value=${f.phone} onInput=${e=>f.phone=e.target.value} placeholder="+1 555 0100" /></div>
+    <div class="mb-4"><label class="label">Company</label><input class="input" value=${f.company} onInput=${e=>f.company=e.target.value} placeholder="Company" /></div>
+    <div class="mb-4"><label class="label">Status</label><select class="input" value=${f.status} onChange=${e=>f.status=e.target.value}>${LEAD_STATUSES.map(s=>html`<option value=${s} selected=${f.status===s}>${s.charAt(0).toUpperCase()+s.slice(1)}</option>`)}</select></div>
+    <div class="mb-4"><label class="label">Notes</label><textarea class="input" rows="3" value=${f.notes} onInput=${e=>f.notes=e.target.value} placeholder="Where they came from, what they want" style="resize:vertical"></textarea></div>
+    <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Add Lead'}</button>
+  <//>`;
+};
 
 
 // ===== Surface selector =====
@@ -2328,7 +2362,7 @@ const App = () => {
         <${Current} key=${S.current + "|" + S.dataVer} />
       </main>
     </div>
-    ${S.modal && (S.modal==='wf' ? html`<${WfModal} />` : S.modal==='ticket' ? html`<${TicketModal} />` : S.modal==='brand' ? html`<${BrandModal} />` : S.modal==='comp' ? html`<${CompetitorModal} />` : S.modal==='apikey' ? html`<${ApiKeyModal} />` : S.modal==='invite' ? html`<${InviteModal} />` : S.modal==='perms' ? html`<${PermsModal} />` : S.modal==='industry' ? html`<${IndustryPickerView} asModal />` : S.modal==='step' ? html`<${StepModal} />` : S.modal==='logs' ? html`<${LogsModal} />` : null)}
+    ${S.modal && (S.modal==='wf' ? html`<${WfModal} />` : S.modal==='lead' ? html`<${LeadModal} />` : S.modal==='ticket' ? html`<${TicketModal} />` : S.modal==='brand' ? html`<${BrandModal} />` : S.modal==='comp' ? html`<${CompetitorModal} />` : S.modal==='apikey' ? html`<${ApiKeyModal} />` : S.modal==='invite' ? html`<${InviteModal} />` : S.modal==='perms' ? html`<${PermsModal} />` : S.modal==='industry' ? html`<${IndustryPickerView} asModal />` : S.modal==='step' ? html`<${StepModal} />` : S.modal==='logs' ? html`<${LogsModal} />` : null)}
     ${S.toast && html`<div class="toast ${S.toast.type}">${S.toast.msg}</div>`}
     ${S.loading && html`<div style="position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:60"><span class="spinner"></span></div>`}
   `;
