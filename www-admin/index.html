@@ -266,6 +266,11 @@ window.startImpersonation=startImpersonation;
 // panel. Same for '⚙️ Workflows' -> 'All Workflows'. One slug function, used by both callers.
 const subSlug=s=>s.toLowerCase().replace(/\s+&?\s*/g,'-').replace(/[^a-z0-9-]/g,'');
 
+// Panes that belong to the platform operator even though they sit under a tenant tab.
+// "Payments" is the gateway configuration the operator manages; a tenant opening it used to get a
+// raw 403 from GET /api/v1/payment-providers and an empty card.
+const OPERATOR_ONLY_SUBS=new Set(['Payments']);
+function subLabel(t,s){const tab=tabs.find(x=>x.id===t);if(!tab)return '';const hit=tab.subs.find(x=>subSlug(x)===s);return hit||''}
 const tabs=[
   {id:'dashboard',label:'📊 Dashboard',subs:['Overview','Brand Monitor','Competitor Watch','Prospecting']},
   {id:'workflows',label:'⚙️ Workflows',subs:['All Workflows','Instances','Templates']},
@@ -292,7 +297,10 @@ function sidebar(){
     const btn=h('button',{className:'tab-btn'+(app.tab===t.id?' active':''),onclick:()=>{app.tab=t.id;app.sub=subSlug(t.subs[0]);renderApp()}},t.label);
     nav.appendChild(btn);
     if(app.tab===t.id){
-      t.subs.forEach(s=>{
+      // Operator-only subs, hidden from a tenant for the same reason the Admin tab is:
+      // "Payments" is the platform's payment-gateway configuration and its route answers 403
+      // to a non-operator. Showing it produced a raw 403 pane (measured 2026-10-17).
+      t.subs.filter(s=>showAdminTab()||!OPERATOR_ONLY_SUBS.has(s)).forEach(s=>{
         const sid=subSlug(s);
         const sub=h('button',{className:'sub-item'+(app.sub===sid?' active':''),onclick:()=>{app.sub=sid;renderApp()}},s);
         nav.appendChild(sub);
@@ -357,6 +365,14 @@ function content(){
     // COALESCE'd against its current value. All three now use the API's real field names.
     if(s==='tickets')renderCRUD(c,'tickets','Ticket',['subject','status','priority'],'/tickets',['subject','description','status','priority'],undefined,['subject','description','status','priority']);
   }else if(t==='profile'){
+    // Defence in depth, the same shape as the Admin tab's below: a stale app.sub or a restored
+    // session must not land a tenant on an operator-only pane.
+    if(!showAdminTab()&&OPERATOR_ONLY_SUBS.has(subLabel(t,s))){
+      c.appendChild(h('div',{className:'card'},
+        h('h2',{className:'text-xl font-bold mb-4'},'Access Denied'),
+        h('p',{className:'text-sm text-gray-500'},'Payment provider settings are available to the platform operator only.')));
+      return c;
+    }
     if(s==='my-profile')renderProfile(c);
     else if(s==='email-branding')renderBranding(c);
     else if(s==='team')renderCRUD(c,'team','Team Member',['name','email','role'],{list:'/users',create:'/users/invite',del:'/users'},false);
