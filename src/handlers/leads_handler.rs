@@ -118,9 +118,17 @@ pub async fn create(
     Json(b): Json<CreateInput>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    // A lead with no name is not a lead. `name` is a required struct field, but an empty or
+    // whitespace-only string satisfies serde while writing a row every list then renders as an
+    // empty cell — measured live 2026-10-17: POST /api/v1/leads {"name":""} answered 201 and stored
+    // the blank row. Refuse it at the door, the same way tickets_handler refuses a blank subject.
+    let name = b.name.trim();
+    if name.is_empty() {
+        return Err(AppError::Validation("name is required".into()));
+    }
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO leads (id, aid, name, email, phone, company, status, source, surface_id, workflow_id, notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)")
-        .bind(id).bind(aid).bind(&b.name).bind(&b.email).bind(&b.phone).bind(&b.company)
+        .bind(id).bind(aid).bind(name).bind(&b.email).bind(&b.phone).bind(&b.company)
         .bind(&b.status).bind(&b.source).bind(b.surface_id).bind(b.workflow_id).bind(&b.notes)
         .execute(&state.db).await?;
     let row = sqlx::query_as::<_, Lead>(BY_ID)
