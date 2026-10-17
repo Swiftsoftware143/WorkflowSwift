@@ -1114,7 +1114,7 @@ const CreditsView = () => {
           ${S.rolloverMsg ? html`<span class="text-sm text-gray-600">${S.rolloverMsg}</span>` : ''}
         </div>
       </div>` : ''}
-      ${pkgs.length ? html`<div class="card"><h3 class="font-semibold text-gray-800 mb-3">Credit Packages</h3><div class="grid grid-cols-1 md:grid-cols-3 gap-3">${pkgs.map(p=>html`<div class="border rounded-lg p-3"><div class="font-bold">${p.name||p.title||'Package'}</div><div class="text-sm text-gray-500">${fmtAmt(p.credits||p.amount)} credits</div></div>`)}</div></div>` : ''}
+      ${pkgs.length ? html`<div class="card"><h3 class="font-semibold text-gray-800 mb-3">Credit Packages</h3><div class="grid grid-cols-1 md:grid-cols-3 gap-3">${pkgs.map(p=>html`<div class="border rounded-lg p-3"><div class="font-bold">${p.name||p.title||'Package'}</div><div class="text-sm text-gray-500">${fmtAmt(p.credits||p.amount)} credits</div>${p.price != null ? html`<div class="text-sm font-semibold text-gray-800 mt-1">$${Number(p.price).toFixed(2)}</div>` : ''}</div>`)}</div></div>` : ''}
       <div class="card"><h3 class="font-semibold text-gray-800 mb-3">Recent Transactions</h3>${txs.length===0?html`<div class="empty">No transactions.</div>`:html`<div class="overflow-auto"><table class="table"><thead><tr><th>Type</th><th>Amount</th><th>Date</th></tr></thead><tbody>${txs.map((t,i)=>html`<tr key=${i}><td>${t.type||t.description||'—'}</td><td>${fmtAmt(t.amount ?? t.credits)}</td><td>${fmtDate(t.created_at)}</td></tr>`)}</tbody></table></div>`}</div>
     </div>`;
 };
