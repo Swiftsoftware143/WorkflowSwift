@@ -14,6 +14,32 @@ use crate::models::workflow::*;
 use crate::n8n_converter;
 use crate::AppState;
 
+/// The live `workflows` / `workflow_steps` column widths this module writes.
+///
+/// Measured on the live schema 2026-10-17: `workflows.name` varchar(255),
+/// `workflows.category` varchar(100), `workflows.trigger_type` varchar(64),
+/// `workflow_steps.name` varchar(255). No handler here checked any of them, so an
+/// over-long value reached the INSERT and the operator saw a bare
+/// `500 {"code":500,…,"message":"Database error"}` — nothing naming the field, nothing
+/// to act on. Measured LIVE on a probe account before the fix:
+///
+///   POST /api/v1/workflows {"name":"<300 chars>"}                -> 500 Database error
+///   POST /api/v1/workflows {"name":"x","category":"<120 chars>"} -> 500 Database error
+///   POST /api/v1/workflows {"name":"x","trigger_type":"<80>"}    -> 500 Database error
+///   POST /api/v1/workflows {"name":"Probe WF control"}           -> 201 (control)
+///
+/// The cap is the COLUMN's own limit, not a product rule: everything that fit before
+/// still fits. Refused as a 422 naming the field, before the write, the same way
+/// `security::display_name` guards the signup.
+fn check_len(value: &str, max_chars: usize, field: &str) -> ApiResult<()> {
+    crate::security::display_name::check_len(value, max_chars, field).map_err(AppError::Validation)
+}
+
+const MAX_WORKFLOW_NAME: usize = 255;
+const MAX_WORKFLOW_CATEGORY: usize = 100;
+const MAX_TRIGGER_TYPE: usize = 64;
+const MAX_STEP_NAME: usize = 255;
+
 #[derive(Debug, serde::Deserialize)]
 pub struct ListWorkflowsQuery {
     pub surface: Option<Uuid>,
@@ -53,6 +79,16 @@ pub async fn create_workflow(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     features::enforce_feature_limit(&state.db, aid, "max_workflows", "Workflows").await?;
+
+    // Validate the write before it reaches the database, so an over-long field is a 422
+    // naming itself instead of a raw 500 "Database error".
+    check_len(&req.name, MAX_WORKFLOW_NAME, "name")?;
+    if let Some(category) = req.category.as_deref() {
+        check_len(category, MAX_WORKFLOW_CATEGORY, "category")?;
+    }
+    if let Some(trigger_type) = req.trigger_type.as_deref() {
+        check_len(trigger_type, MAX_TRIGGER_TYPE, "trigger_type")?;
+    }
 
     let trigger_type = req
         .trigger_type
@@ -138,6 +174,14 @@ pub async fn update_workflow(
             .unwrap_or_else(|| "manual".to_string()),
     );
     let trigger_config = req.trigger_config.or(existing.trigger_config);
+
+    // Same boundary on the edit path: an update could otherwise write a value the column
+    // cannot hold and answer the same opaque 500.
+    check_len(&name, MAX_WORKFLOW_NAME, "name")?;
+    if let Some(category) = category.as_deref() {
+        check_len(category, MAX_WORKFLOW_CATEGORY, "category")?;
+    }
+    check_len(&trigger_type, MAX_TRIGGER_TYPE, "trigger_type")?;
 
     let workflow = sqlx::query_as::<_, Workflow>(
         r#"UPDATE workflows SET name=$1, description=$2, category=$3, lifecycle_summary=$4, tags=$5, trigger_type=$6, trigger_config=$7, surface_id=$8, updated_at=NOW()
@@ -1143,6 +1187,8 @@ pub async fn create_workflow_step(
     // `crate::ai_llm::AI_PROVIDERS`, so any other name is a step that could not run.
     assert_ai_provider_ok(&req.step_type, &req.config)?;
 
+    check_len(&req.name, MAX_STEP_NAME, "name")?;
+
     let step = sqlx::query_as::<_, WorkflowStep>(
         r#"INSERT INTO workflow_steps (id, workflow_id, step_type, name, description, sort_order, config)
            VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -1222,6 +1268,8 @@ pub async fn update_workflow_step(
         projected.sort_by(|a, b| a.sort_order.cmp(&b.sort_order).then(a.id.cmp(&b.id)));
         assert_data_card_first(&current, &projected)?;
     }
+
+    check_len(&req.name, MAX_STEP_NAME, "name")?;
 
     let step = sqlx::query_as::<_, WorkflowStep>(
         r#"UPDATE workflow_steps SET step_type=$1, name=$2, description=$3, sort_order=$4, config=$5
