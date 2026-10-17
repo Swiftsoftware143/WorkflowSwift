@@ -13,6 +13,12 @@ use crate::features;
 use crate::models::tag::*;
 use crate::AppState;
 
+/// `tags.name` is `varchar(100)` in this database — NOT the 255 the fleet's other apps use — so the
+/// cap is read from the column, never copied from a sibling.
+const TAG_NAME_CHARS: usize = 100;
+/// `tags.color` is `varchar(7)` (a `#RRGGBB` hex string is exactly 7).
+const TAG_COLOR_CHARS: usize = 7;
+
 pub async fn list_tags(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -35,18 +41,32 @@ pub async fn create_tag(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     features::enforce_feature_limit(&state.db, aid, "max_tags", "Tags").await?;
 
-    let name = req
+    let raw_name = req
         .get("name")
         .and_then(|v| v.as_str())
         .unwrap_or("")
-        .to_string();
+        .trim();
+    if raw_name.is_empty() {
+        return Err(AppError::Validation("Tag name is required".to_string()));
+    }
+    // `tags.name` is varchar(100) and `tags.color` varchar(7) (see \d tags) and neither length was
+    // checked, so an over-long value reached the INSERT and came back as the raw
+    // `500 {"code":500,"error":true,"message":"Database error"}` — measured live 2026-10-17 on this
+    // route: a 101-character name, and separately an 8-character colour. Refuse BEFORE the write, as
+    // the 422 the console can read, and bind the trimmed value (names are rendered into mail
+    // subjects and HTML). Same class the display-name module closed for people's names.
+    let name = crate::security::display_name::normalize_capped(raw_name, TAG_NAME_CHARS, "name")
+        .map_err(AppError::Validation)?;
     let color = req
         .get("color")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-
-    if name.is_empty() {
-        return Err(AppError::Validation("Tag name is required".to_string()));
+    if let Some(c) = color.as_deref() {
+        if c.chars().count() > TAG_COLOR_CHARS {
+            return Err(AppError::Validation(format!(
+                "color: is longer than {TAG_COLOR_CHARS} characters"
+            )));
+        }
     }
 
     // Check duplicate
