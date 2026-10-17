@@ -112,12 +112,12 @@ pub async fn register(
             // The account is usable without the mail: the caller owns this hash, and
             // `register` hands the session back in its response (kanban t_6d58f5be).
             credential_delivery: super::signup::CredentialDelivery::WithTheAccount,
-            // Attribution for the workspace this route is about to mint, from the `X-Swift-Harness`
-            // request HEADER only — never the body (client-controlled data the flow writes into
-            // customer-visible columns) and never a query field (kanban t_4a744754). `None` for every
-            // ordinary customer signup, so a real account is byte-identical to what it was before the
-            // column existed.
-            probe_harness: crate::probe_harness::from_headers(&headers).as_deref(),
+            // Attribution for the workspace this route is about to mint (kanban t_4a744754, extended
+            // 2026-10-17): the `X-Swift-Harness` HEADER names the harness when the caller sends one,
+            // otherwise the recipient's own harness/reserved domain decides
+            // (`probe_harness::for_signup`). Neither arm reads the body, and a real customer's domain
+            // matches neither, so their account row is written exactly as before.
+            probe_harness: crate::probe_harness::for_signup(&headers, &email).as_deref(),
         },
     )
     .await?;
