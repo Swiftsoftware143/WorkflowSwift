@@ -1540,19 +1540,57 @@ async function renderBranding(c){
   right.appendChild(h('p',{className:'text-xs text-gray-400 mt-2'},'PNG, JPEG, WebP or GIF, up to 2 MB.'));
 }
 
-function renderPlansCredits(c){
+// The signed-in account's OWN tier comes from GET /auth/me (`plan_name`), which the server
+// resolves through the SAME resolver every entitlement gate uses (features::resolve_plan_id), so
+// this screen can never name a different tier from the one the app enforces. The catalogue from
+// GET /plans is only what else is on offer. Before this, the card headed "My Plan" printed the
+// whole catalogue and never said which plan the account was actually on — the one place a level
+// appears on this console, showing every level instead of theirs.
+async function renderPlansCredits(c){
   c.innerHTML=`<div class="space-y-4">
     <div class="card"><h2 class="text-xl font-bold mb-4">My Plan</h2><div id="pldata"><p class="text-gray-400 text-sm">Loading...</p></div></div>
     <div class="card"><h2 class="text-xl font-bold mb-4">Credits</h2><div id="crdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>
+    <div class="card"><h2 class="text-xl font-bold mb-4">All plans</h2><div id="plall"><p class="text-gray-400 text-sm">Loading...</p></div></div>
   </div>`;
-  api('/plans').then(d=>{
-    const el=c.querySelector('#pldata');
-    if(!d||!d.plans||!d.plans.length){el.innerHTML='<p class="text-gray-400 text-sm">No plans.</p>';return}
-    el.innerHTML=d.plans.map(p=>`<div class="flex justify-between p-3 border-b"><div><strong>${escHtml(p.name)}</strong><span class="text-xs text-gray-500 ml-2">${escHtml(p.slug)}</span></div><span class="font-semibold text-sm">$${escHtml(p.price_monthly||p.price||0)}/mo</span></div>`).join('');
-  });
-  api('/credits/balance').then(d=>{
-    c.querySelector('#crdata').innerHTML=`<div class="text-center py-4"><div class="text-4xl font-bold text-blue-600">${escHtml(d&&d.balance||0)}</div><div class="text-xs text-gray-500 mt-1">credits remaining</div></div>`;
-  });
+  const me=await api('/auth/me');
+  const cat=await api('/plans');
+  const plans=(cat&&Array.isArray(cat.plans))?cat.plans:[];
+  const myName=String((me&&me.user&&me.user.plan_name)||'').trim();
+  const same=n=>String(n||'').trim().toLowerCase()===myName.toLowerCase();
+  const mine=myName?plans.find(p=>same(p.name)||same(p.slug)):null;
+
+  const el=c.querySelector('#pldata');
+  if(!myName){
+    el.innerHTML='<p class="text-red-400 text-sm">Could not read your plan: '+escHtml(LAST_ERR||'request failed')+'</p>';
+  }else{
+    el.innerHTML='';
+    el.appendChild(h('div',{className:'flex items-center gap-3'},
+      h('div',{className:'text-3xl font-bold text-blue-600'},myName),
+      h('span',{className:'badge',style:'background:#d1fae5;color:#065f46'},'current plan')));
+    const price=mine?(mine.price_monthly!=null?mine.price_monthly:mine.price):null;
+    el.appendChild(h('p',{className:'text-sm text-gray-500 mt-2'},
+      price!=null&&price!==''?('$'+price+' per month. You can move to another plan from the list below.')
+                             :'This is the plan your account runs on.'));
+    const feats=(mine&&Array.isArray(mine.features))?mine.features.filter(x=>typeof x==='string'):[];
+    if(feats.length)el.appendChild(h('p',{className:'text-xs text-gray-500 mt-2'},'Included: '+feats.slice(0,12).join(' \u00b7 ')));
+  }
+
+  const all=c.querySelector('#plall');
+  if(!plans.length){
+    all.innerHTML='<p class="text-gray-400 text-sm">No plans are on offer right now.</p>';
+  }else{
+    all.innerHTML=plans.map(p=>{
+      const pr=(p.price_monthly!=null?p.price_monthly:p.price);
+      return '<div class="flex justify-between items-center p-3 border-b">'
+        +'<div><strong>'+escHtml(p.name||'')+'</strong>'
+        +(same(p.name)||same(p.slug)?'<span class="badge ml-2" style="background:#d1fae5;color:#065f46">your plan</span>':'')
+        +'<span class="text-xs text-gray-500 ml-2">'+escHtml(p.slug||'')+'</span></div>'
+        +'<span class="font-semibold text-sm">$'+escHtml(pr==null?'0':pr)+'/mo</span></div>';
+    }).join('');
+  }
+
+  const cr=await api('/credits/balance');
+  c.querySelector('#crdata').innerHTML='<div class="text-center py-4"><div class="text-4xl font-bold text-blue-600">'+escHtml((cr&&cr.balance)||0)+'</div><div class="text-xs text-gray-500 mt-1">credits remaining</div></div>';
 }
 
 function renderList(c,key,label,ep){
