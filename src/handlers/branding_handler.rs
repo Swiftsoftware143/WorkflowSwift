@@ -23,8 +23,8 @@
 //! account saves name/colour, so a panel echo cannot un-reference a logo.
 
 use axum::{
-    body::{Body, Bytes},
-    extract::{Extension, FromRequest, Multipart, Path, Request, State},
+    body::Body,
+    extract::{Extension, Path, Request, State},
     http::{header, HeaderMap},
     response::Response,
     Json,
@@ -33,7 +33,6 @@ use serde_json::{json, Value};
 use sqlx::Row;
 use uuid::Uuid;
 
-use crate::auth::handlers::{sniff_image, MAX_AVATAR_BYTES};
 use crate::auth::models::Claims;
 use crate::branding;
 use crate::error::{ApiResult, AppError};
@@ -146,53 +145,10 @@ pub async fn upload_logo(
 ) -> ApiResult<Json<Value>> {
     let aid = account_id(&claims)?;
 
-    let content_type_header = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-
-    let body: Vec<u8> = if content_type_header.starts_with("multipart/form-data") {
-        let mut multipart = Multipart::from_request(request, &state)
-            .await
-            .map_err(|e| AppError::BadRequest(format!("Invalid multipart body: {e}")))?;
-        let mut picked: Option<Bytes> = None;
-        while let Some(field) = multipart
-            .next_field()
-            .await
-            .map_err(|e| AppError::BadRequest(format!("Invalid multipart body: {e}")))?
-        {
-            let data = field
-                .bytes()
-                .await
-                .map_err(|e| AppError::BadRequest(format!("Could not read the logo: {e}")))?;
-            if !data.is_empty() {
-                picked = Some(data);
-                break;
-            }
-        }
-        picked
-            .ok_or_else(|| AppError::BadRequest("No logo data received".to_string()))?
-            .to_vec()
-    } else {
-        axum::body::to_bytes(request.into_body(), MAX_AVATAR_BYTES + 1)
-            .await
-            .map_err(|e| AppError::BadRequest(format!("Could not read the logo: {e}")))?
-            .to_vec()
-    };
-    let body = Bytes::from(body);
-
-    if body.is_empty() {
-        return Err(AppError::BadRequest("No logo data received".to_string()));
-    }
-    if body.len() > MAX_AVATAR_BYTES {
-        return Err(AppError::BadRequest(
-            "Logo must be 2 MB or smaller".to_string(),
-        ));
-    }
-    let content_type = sniff_image(&body).ok_or_else(|| {
-        AppError::BadRequest("Unsupported logo — use a PNG, JPEG, GIF or WebP image".to_string())
-    })?;
+    // The ONE shared image path (crate::image_store): a multipart form OR a raw image body, the
+    // 2 MB envelope, the magic-byte sniff, and the fleet's 413 sentence when the file is too big.
+    let (content_type, bytes) =
+        crate::image_store::read_request_image(&state, &headers, request).await?;
 
     sqlx::query(
         "INSERT INTO account_logos (account_id, content_type, bytes, updated_at) \
@@ -201,8 +157,8 @@ pub async fn upload_logo(
          bytes = EXCLUDED.bytes, updated_at = NOW()",
     )
     .bind(aid)
-    .bind(content_type)
-    .bind(body.as_ref())
+    .bind(&content_type)
+    .bind(&bytes)
     .execute(&state.db)
     .await?;
 

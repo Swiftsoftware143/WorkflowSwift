@@ -18,6 +18,7 @@ mod execution;
 mod execution_worker;
 mod features;
 mod handlers;
+mod image_store;
 mod models;
 mod n8n_converter;
 mod n8n_provision;

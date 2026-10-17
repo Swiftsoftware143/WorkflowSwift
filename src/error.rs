@@ -36,6 +36,12 @@ pub enum AppError {
 
     #[error("{0}")]
     BadRequest(String),
+
+    /// A request body bigger than the upload envelope. **413**, carrying the sentence the file
+    /// picker shows, because this variant exists to stop the extractor's own words
+    /// ("length limit exceeded") reaching a customer who simply chose a large photo.
+    #[error("{0}")]
+    PayloadTooLarge(String),
     #[error("Upgrade required: {0}")]
     UpgradeRequired(String),
 
@@ -92,6 +98,7 @@ impl IntoResponse for AppError {
             AppError::Duplicate(msg) => (StatusCode::CONFLICT, msg.clone()),
             AppError::Validation(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg.clone()),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
+            AppError::PayloadTooLarge(msg) => (StatusCode::PAYLOAD_TOO_LARGE, msg.clone()),
             AppError::UpgradeRequired(msg) => (StatusCode::PAYMENT_REQUIRED, msg.clone()),
             AppError::UpstreamRefused(msg) => {
                 tracing::warn!(upstream_error = %msg, "Upstream provider refused");

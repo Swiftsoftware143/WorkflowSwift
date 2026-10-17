@@ -1,8 +1,7 @@
 use crate::email::send_reset_email;
 use axum::{
-    body::{Body, Bytes},
-    extract::{Extension, FromRequest, Multipart, Path, Request, State},
-    http::{header, HeaderMap, StatusCode},
+    extract::{Extension, Path, Request, State},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -540,40 +539,28 @@ pub async fn update_profile(
     Ok(Json(json!({"status": "ok"})))
 }
 
-/// Largest profile picture this route accepts. The contract says 2 MB; the protected router's
-/// `DefaultBodyLimit` is set a little above this so a body that is OVER the cap is refused by
-/// [`upload_avatar`] with this app's JSON 400, not by the body-read extractor with an unreadable
-/// text/plain 413.
-pub const MAX_AVATAR_BYTES: usize = 2 * 1024 * 1024;
+/// The upload envelope the protected router allows. This is the SHARED constant
+/// ([`crate::image_store::ENVELOPE_BYTES`]) so the router's body limit, the handler's cap and the
+/// sentence a customer is shown can never drift apart again: the route limit sits just above the
+/// envelope, and a body over it is answered 413 with the picker's own message.
+pub const MAX_AVATAR_BYTES: usize = crate::image_store::ENVELOPE_BYTES;
 
-/// Identify an image by its MAGIC BYTES, never by a caller-supplied content type or filename
-/// (FunnelSwift t_ff948669's decision, reused here). Returns the content type to store, or `None`
-/// for anything that is not one of the four accepted formats.
+/// Identify an image by its MAGIC BYTES. Kept as a re-export of the shared sniffer so any caller
+/// written against the old name still compiles, with ONE implementation behind it.
+#[allow(dead_code)]
 pub(crate) fn sniff_image(b: &[u8]) -> Option<&'static str> {
-    if b.len() >= 8 && b.starts_with(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
-        return Some("image/png");
-    }
-    if b.len() >= 3 && b.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        return Some("image/jpeg");
-    }
-    if b.len() >= 6 && (b.starts_with(b"GIF87a") || b.starts_with(b"GIF89a")) {
-        return Some("image/gif");
-    }
-    if b.len() >= 12 && b.starts_with(b"RIFF") && &b[8..12] == b"WEBP" {
-        return Some("image/webp");
-    }
-    None
+    crate::image_store::sniff(b)
 }
 
 /// `POST /api/v1/auth/avatar` — the image bytes, per user (card t_39cea779).
 ///
-/// TWO body shapes, ONE handler (fleet-normalised 2026-10-10). The other five apps take the picture
-/// as `multipart/form-data`; this app historically took the picture as the RAW body. A client that
-/// used the fleet's form idiom got a 400 "Unsupported picture" here, so the handler now reads BOTH:
-/// `multipart/form-data` takes the first file part, anything else is the body verbatim. The format is
-/// decided by the bytes in either arm (never a caller-declared content type), a non-image and an empty
-/// body are refused 400, and a body over [`MAX_AVATAR_BYTES`] is refused 400 as well. One row per user
-/// (upsert), so re-uploading replaces the picture rather than accumulating rows. Private: the caller
+/// TWO body shapes, ONE handler. The other apps take the picture as `multipart/form-data`; this
+/// app historically took it as the RAW body. A client that used the fleet's form idiom got a 400
+/// "Unsupported picture" here, so BOTH are read — by the ONE shared path
+/// ([`crate::image_store::read_request_image`]), which also owns the size cap and the magic-byte
+/// sniff. A non-image and an empty body are refused 400; a body over the cap is refused **413**
+/// with the sentence the console's own picker shows. One row per user (upsert), so re-uploading
+/// replaces the picture rather than accumulating rows. Private: the caller
 /// must present their session.
 pub async fn upload_avatar(
     State(state): State<AppState>,
@@ -583,53 +570,10 @@ pub async fn upload_avatar(
 ) -> ApiResult<impl IntoResponse> {
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
 
-    let content_type_header = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-
-    let body: Vec<u8> = if content_type_header.starts_with("multipart/form-data") {
-        let mut multipart = Multipart::from_request(request, &state)
-            .await
-            .map_err(|e| AppError::BadRequest(format!("Invalid multipart body: {e}")))?;
-        let mut picked: Option<Bytes> = None;
-        while let Some(field) = multipart
-            .next_field()
-            .await
-            .map_err(|e| AppError::BadRequest(format!("Invalid multipart body: {e}")))?
-        {
-            let data = field
-                .bytes()
-                .await
-                .map_err(|e| AppError::BadRequest(format!("Could not read the picture: {e}")))?;
-            if !data.is_empty() {
-                picked = Some(data);
-                break;
-            }
-        }
-        picked
-            .ok_or_else(|| AppError::BadRequest("No picture data received".to_string()))?
-            .to_vec()
-    } else {
-        axum::body::to_bytes(request.into_body(), MAX_AVATAR_BYTES + 1)
-            .await
-            .map_err(|e| AppError::BadRequest(format!("Could not read the picture: {e}")))?
-            .to_vec()
-    };
-    let body = Bytes::from(body);
-
-    if body.is_empty() {
-        return Err(AppError::BadRequest("No picture data received".to_string()));
-    }
-    if body.len() > MAX_AVATAR_BYTES {
-        return Err(AppError::BadRequest(
-            "Profile picture must be 2 MB or smaller".to_string(),
-        ));
-    }
-    let content_type = sniff_image(&body).ok_or_else(|| {
-        AppError::BadRequest("Unsupported picture — use a PNG, JPEG, GIF or WebP image".to_string())
-    })?;
+    // The ONE shared image path (crate::image_store): a multipart form OR a raw image body, the
+    // 2 MB envelope, the magic-byte sniff, and the fleet's 413 sentence when the file is too big.
+    let (content_type, bytes) =
+        crate::image_store::read_request_image(&state, &headers, request).await?;
 
     sqlx::query(
         "INSERT INTO user_avatars (user_id, bytes, content_type, updated_at) VALUES ($1, $2, $3, NOW()) \
@@ -637,8 +581,8 @@ pub async fn upload_avatar(
          content_type = EXCLUDED.content_type, updated_at = NOW()",
     )
     .bind(user_id)
-    .bind(body.as_ref())
-    .bind(content_type)
+    .bind(&bytes)
+    .bind(&content_type)
     .execute(&state.db)
     .await?;
 
@@ -672,19 +616,10 @@ pub async fn get_avatar(
         .try_get("content_type")
         .map_err(|e| AppError::Internal(e.to_string()))?;
 
-    let mut resp = Response::new(Body::from(bytes));
-    let ct = header::HeaderValue::from_str(&content_type)
-        .unwrap_or_else(|_| header::HeaderValue::from_static("application/octet-stream"));
-    resp.headers_mut().insert(header::CONTENT_TYPE, ct);
-    // NOT cached (card t_39cea779). The URL is stable per user, so ANY max-age would keep serving
-    // the PREVIOUS face after a re-upload — the exact opposite of the "byte-identical" promise the
-    // account screen depends on. The console adds its own cache-buster to the <img>; the endpoint
-    // itself must always answer with the CURRENT bytes.
-    resp.headers_mut().insert(
-        header::CACHE_CONTROL,
-        header::HeaderValue::from_static("no-store"),
-    );
-    Ok(resp)
+    // The ONE serve path. NOT cached (card t_39cea779): the URL is stable per user, so ANY max-age
+    // would keep serving the PREVIOUS face after a re-upload — the exact opposite of the
+    // "byte-identical" promise the account screen depends on.
+    Ok(crate::image_store::image_response(content_type, bytes))
 }
 
 /// `DELETE /api/v1/auth/avatar` — remove the caller's OWN profile picture.
