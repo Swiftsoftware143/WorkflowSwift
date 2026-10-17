@@ -184,7 +184,22 @@ const API = (() => {
     register: (name, email) => send(base + '/auth/register', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name, email}) }).then(handle),
     login: (email, password) => send(base + '/auth/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, password}) }).then(handle),
     me: () => send(base + '/auth/me', { headers: headers() }).then(handle),
-    changePassword: (current_password, new_password) => send(base + '/auth/password', { method:'PUT', headers: headers(), body: JSON.stringify({ current_password, new_password }) }).then(handle),
+    // A WRONG CURRENT PASSWORD IS A 401 BY CONTRACT, NOT A DEAD SESSION (2026-10-17). The route
+    // answers 401 "Current password is incorrect" NAMING the field so the box can be fixed
+    // (src/auth/handlers.rs), while send() ends the session on ANY 401 that carried a token — so a
+    // customer who mistyped their current password was thrown out to the sign-in screen and never
+    // read the sentence. This call keeps the two apart: the session ends only when the 401 is not the
+    // field's own refusal, and a field refusal is rethrown with `field: true` beside the box.
+    changePassword: (current_password, new_password) => fetch(base + '/auth/password', { method:'PUT', headers: headers(), body: JSON.stringify({ current_password, new_password }) }).then(async (r) => {
+      const ct = r.headers.get('content-type') || '';
+      const d = ct.includes('json') ? await r.json() : await r.text();
+      if (r.ok) return d;
+      const body = (d && typeof d === 'object') ? d : {};
+      const msg = (typeof body.error === 'string' && body.error) || (typeof body.message === 'string' && body.message) || ('Request failed (HTTP ' + r.status + ')');
+      const fieldRefusal = r.status === 401 && /current password/i.test(msg);
+      if (r.status === 401 && !fieldRefusal) sessionEnded();
+      const err = new Error(msg); err.status = r.status; err.field = fieldRefusal; throw err;
+    }),
     updateProfile: (patch) => send(base + '/auth/profile', { method:'PUT', headers: headers(), body: JSON.stringify(patch) }).then(handle),
     // The profile picture is sent as `multipart/form-data` (field name `file`, the image as the
     // only part) — the FLEET-WIDE upload convention every other app's console uses (kanban
@@ -1525,7 +1540,7 @@ const ProfileView = () => {
   // themselves, so a per-render local would be re-initialised mid-save and the value lost.
   const f = viewState('profile_fields', { name:'', company:'', uid:null });
   if (f.uid !== (u.id || null)) { f.name = u.name || ''; f.company = u.company || ''; f.uid = u.id || null; }
-  const pw = viewState('profile_pw', { next:'', confirm:'', current:'' });
+  const pw = viewState('profile_pw', { next:'', confirm:'', current:'', error:'' });
   const av = viewState('profile_avatar', { stamp: 0, uploading: false, chosen: '' });
   // Email branding (kanban t_c3cfe7ba): the account's logo + brand name appear at the top of every
   // transactional email. Loaded once per session from the account's own settings document.
@@ -1612,12 +1627,17 @@ const ProfileView = () => {
     if (!pw.next || !pw.current) return toast('Enter your new password and your current one','err');
     if (pw.next.length < 8) return toast('New password must be at least 8 characters','err');
     if (pw.next !== pw.confirm) return toast('The two new passwords do not match','err');
-    S.loading = true; renderApp();
+    S.loading = true; pw.error = ''; renderApp();
     try {
       await API.changePassword(pw.current, pw.next);
-      pw.current = ''; pw.next = ''; pw.confirm = '';
+      pw.current = ''; pw.next = ''; pw.confirm = ''; pw.error = '';
       toast('Password updated');
-    } catch (err) { toast(err.message || 'Could not update password','err'); }
+    } catch (err) {
+      // A field refusal stays BESIDE the box and the page stays as it is: the session was never
+      // touched, so signing the customer out over a typo is the one thing this must not do.
+      if (err && err.field) { pw.error = err.message; }
+      else { toast(err.message || 'Could not update password','err'); }
+    }
     S.loading = false; renderApp();
   };
 
@@ -1681,7 +1701,8 @@ const ProfileView = () => {
         <form onSubmit=${changePw} class="space-y-3">
           <div><label class="label">New password</label><input type="password" class="input" id="pw-new" autocomplete="new-password" value=${pw.next} onInput=${e=>pw.next=e.target.value} /></div>
           <div><label class="label">Confirm new password</label><input type="password" class="input" id="pw-confirm" autocomplete="new-password" value=${pw.confirm} onInput=${e=>pw.confirm=e.target.value} /></div>
-          <div><label class="label">Current password</label><input type="password" class="input" id="pw-current" autocomplete="current-password" value=${pw.current} onInput=${e=>pw.current=e.target.value} /><div class="text-xs text-gray-500 mt-1">For your security, confirm the password you signed in with.</div></div>
+          <div><label class="label">Current password</label><input type="password" class="input" id="pw-current" autocomplete="current-password" value=${pw.current} onInput=${e=>{pw.current=e.target.value; if (pw.error) pw.error='';}} /><div class="text-xs text-gray-500 mt-1">For your security, confirm the password you signed in with.</div></div>
+          ${pw.error ? html`<div id="pw-error" role="alert" style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:10px 12px;border-radius:10px;font-size:13px">${pw.error}</div>` : ''}
           <button class="btn text-sm" id="pw-save" disabled=${S.loading}>${S.loading?spinner():'Update password'}</button>
         </form>
       </div>
