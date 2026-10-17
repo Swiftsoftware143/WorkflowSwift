@@ -479,7 +479,9 @@ pub async fn update_profile(
     Extension(claims): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    /// Longest value any of the three columns accepts from the form. Over-long is a 400, never a 500.
+    /// Longest value `username` / `company` accept from the form. Over-long is a 400, never a
+    /// 500. `name` is NOT bounded here: it goes through `security::display_name`, the same guard
+    /// the signup door uses, so a name signup accepted can always be saved again.
     const MAX_FIELD: usize = 200;
 
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
@@ -488,12 +490,14 @@ pub async fn update_profile(
     let username = req.get("username").and_then(|v| v.as_str());
     let company = req.get("company").and_then(|v| v.as_str());
 
-    if let Some(n) = name {
-        if n.trim().is_empty() {
-            return Err(AppError::BadRequest("name cannot be empty".to_string()));
-        }
-    }
-    for (label, v) in [("name", name), ("username", username), ("company", company)] {
+    // The SAME rule the signup door applies (measured 2026-10-17): a 210-character name was
+    // accepted at signup (cap 243) and then REFUSED here with `400 name is too long`, so the
+    // customer could never save their own profile again. One guard, both doors.
+    let normalised_name = match name {
+        Some(n) => Some(crate::security::display_name::normalize(n).map_err(AppError::Validation)?),
+        None => None,
+    };
+    for (label, v) in [("username", username), ("company", company)] {
         if let Some(v) = v {
             if v.chars().count() > MAX_FIELD {
                 return Err(AppError::BadRequest(format!("{label} is too long")));
@@ -501,9 +505,9 @@ pub async fn update_profile(
         }
     }
 
-    if let Some(n) = name {
+    if let Some(n) = normalised_name {
         sqlx::query("UPDATE users SET name = $1, updated_at = NOW() WHERE id = $2")
-            .bind(n.trim())
+            .bind(n)
             .bind(user_id)
             .execute(&state.db)
             .await?;
