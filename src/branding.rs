@@ -109,6 +109,24 @@ impl Branding {
         }
     }
 
+    /// Drop a `logo_url` whose bytes are not in `account_logos`, and answer `None` when that leaves
+    /// nothing to render with.
+    ///
+    /// The pointer is stored in `accounts.settings` while the bytes live in another table, so
+    /// anything that removes the row without rewriting the document (a restore, a hand-run DELETE,
+    /// a residue sweep) leaves the account advertising a logo that answers 404: a broken header
+    /// image in every mail it sends and a broken thumbnail on its branding screen. The read path is
+    /// the last place that can hold the invariant, so both readers call this.
+    pub fn without_missing_logo(mut self, logo_exists: bool) -> Option<Branding> {
+        if !logo_exists {
+            self.logo_url.clear();
+        }
+        if self.brand_name.is_empty() && self.logo_url.is_empty() {
+            return None;
+        }
+        Some(self)
+    }
+
     /// The header block that opens every rendered HTML mail, or `""` for an account with no
     /// branding.
     ///
@@ -158,11 +176,13 @@ pub async fn load(pool: &PgPool, account_id: Uuid) -> Option<Branding> {
     // The scalar MUST be typed `Option<Value>`: `settings -> 'email_branding'` is SQL NULL both for
     // an account with no `settings` row and for one that simply has not set branding, and sqlx would
     // otherwise fail the decode ("unexpected null; try decoding as an `Option`") on EVERY send to an
-    // unbranded account — logging a false read-failure warning. `fetch_optional` then yields
-    // `Option<Option<Value>>`, and `flatten` collapses "no row" and "NULL column" into one `None`
-    // (kanban t_c3cfe7ba measured this against the live WorkflowSwift container, 2026-10-09).
-    let stored: Option<Value> = sqlx::query_scalar::<_, Option<Value>>(
-        "SELECT (settings -> $2) FROM accounts WHERE id = $1",
+    // unbranded account (kanban t_c3cfe7ba). ONE round trip answers both that AND whether the logo's
+    // bytes are actually present: a pointer whose `account_logos` row is gone must never be rendered
+    // (see [`Branding::without_missing_logo`]).
+    let stored: Option<(Option<Value>, bool)> = sqlx::query_as(
+        "SELECT (s.settings -> $2),
+                EXISTS (SELECT 1 FROM account_logos l WHERE l.account_id = s.id)
+           FROM accounts s WHERE s.id = $1",
     )
     .bind(account_id)
     .bind(SETTINGS_KEY)
@@ -175,10 +195,25 @@ pub async fn load(pool: &PgPool, account_id: Uuid) -> Option<Branding> {
             "email branding could not be read — sending with the app's own identity"
         );
         None
-    })
-    .flatten();
+    });
     // An unreadable row means "unbranded" here: `?` on the Option, not on the read error.
-    Branding::from_value(stored.as_ref()?)
+    let (doc, logo_exists) = stored?;
+    Branding::from_value(doc.as_ref()?).and_then(|b| b.without_missing_logo(logo_exists))
+}
+
+/// Whether this account actually HAS logo bytes in `account_logos`.
+///
+/// The panel's branding read uses this to keep the same invariant [`load`] enforces for the
+/// senders. A read failure answers `false` (fail closed): the worse outcome by far is advertising a
+/// URL that renders as a broken image in every mail the account sends.
+pub async fn logo_exists(pool: &PgPool, account_id: Uuid) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (SELECT 1 FROM account_logos WHERE account_id = $1)",
+    )
+    .bind(account_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false)
 }
 
 /// Validate an incoming `email_branding` document, for the settings write.
@@ -269,6 +304,26 @@ mod tests {
             brand_color: color.to_string(),
             logo_url: logo.to_string(),
         }
+    }
+
+    #[test]
+    fn a_missing_logo_row_is_not_advertised() {
+        // The pointer lives in accounts.settings, the bytes in account_logos. When only the row is
+        // gone the account must fall back to its name — or to no header at all — instead of embedding
+        // a URL that answers 404 in every mail.
+        let gone = b("Acme", "", "/api/v1/branding/logo/abc?v=7")
+            .without_missing_logo(false)
+            .expect("the name still renders");
+        assert_eq!(gone.logo_url, "");
+        assert_eq!(gone.resolve_logo_url("https://x"), None);
+        assert!(!gone.header_html(None).contains("<img"));
+
+        assert_eq!(b("", "", "/logo.png").without_missing_logo(false), None);
+
+        let kept = b("Acme", "", "/logo.png")
+            .without_missing_logo(true)
+            .expect("configured");
+        assert_eq!(kept.logo_url, "/logo.png");
     }
 
     #[test]
