@@ -525,6 +525,29 @@ const loadAccountIndustry = async () => {
 };
 const currentIndustrySlug = () => { const a = S.accIndustry; const s = (a && (a.primary_industry || (a.industries&&a.industries[0]&&(a.industries[0].industry_slug||a.industries[0].slug)))); if (s) return s; if (S.viewParams?.industry) return S.viewParams.industry; return null; };
 const currentIndustryName = () => { const a=S.accIndustry; const slug=currentIndustrySlug(); if(a&&a.industries){ const it=a.industries.find(x=>x.industry_slug===slug||x.slug===slug||x.id===slug); if(it) return it.industry_name||it.name||slug; } return S.selectedIndustryName||slug; };
+// The dashboard header is customer-facing copy: it must never print the database slug or a bare
+// "null". `currentIndustrySlug()` is a stored value ("site-flipping") and reads as jargon to the
+// person using the app — measured live 2026-10-18 on a fresh signup, whose dashboard said
+// "Live KPIs for site-flipping" under a title that correctly said "Site Flipping Dashboard". A
+// workspace with NO industry yet had nothing to print at all and rendered "Live KPIs for  —".
+// Both helpers below resolve the display NAME first, humanise the slug if no row can name it, and
+// fall back to a sentence that says what to do next instead of an empty slot.
+const industryDisplayName = () => {
+  const a = S.accIndustry;
+  const slug = currentIndustrySlug();
+  if (a && Array.isArray(a.industries)) {
+    const it = a.industries.find(x => x.industry_slug === slug || x.slug === slug || x.id === slug);
+    const nm = it && (it.industry_name || it.name);
+    if (nm) return nm;
+  }
+  if (S.selectedIndustryName && S.selectedIndustryName !== slug) return S.selectedIndustryName;
+  if (!slug) return '';
+  return String(slug).replace(/[-_]+/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+};
+const dashTitle = () => { const n = industryDisplayName(); return n ? '\u{1F4CA} ' + n + ' Dashboard' : '\u{1F4CA} Dashboard'; };
+const kpiSubtitle = () => { const n = industryDisplayName();
+  return n ? 'Live KPIs for ' + n + ' \u2014 updated by your automations'
+           : 'Live KPIs \u2014 choose your industry from the picker and this dashboard fills in from your own automations'; };
 
 // ---- Modal helpers ----
 const ModalShell = ({title, children, onClose}) => html`
@@ -583,7 +606,22 @@ const seedSampleData = async () => {
 const DashboardView = () => {
   const slug = currentIndustrySlug();
   if (slug && !S.loading && S.widgetsSlug !== slug) { S.widgetsSlug = slug; loadDashTabs(slug); loadWidgets(slug); }
-  else if (!slug && !S.loading && !S.widgetsSlug) { loadAccountIndustry(); }
+  else if (!slug && !S.loading && !S.widgetsSlug && !S.accLoaded) {
+    // A RETURNING sign-in lands here: the dashboard renders before the account's industry has been
+    // read, so the header rendered "Live KPIs for  —" and the KPI grid stayed empty while the
+    // workspace DID have an industry (measured live 2026-10-18 on probe-ind-…: /api/v1/accounts/industry
+    // answered Site Flipping / site-flipping / is_primary true, while the dashboard showed the
+    // no-industry state). The call was fire-and-forget with nothing re-rendering when it resolved,
+    // so the customer stayed in that state until they navigated away and back. Now the resolve
+    // re-enters the dashboard: with an industry it loads that industry's widgets, without one it
+    // re-renders once. `S.accLoaded` is set synchronously by loadAccountIndustry, so this can never
+    // loop — a second render finds the flag already true.
+    loadAccountIndustry().then(() => {
+      const s2 = currentIndustrySlug();
+      if (s2 && s2 !== S.widgetsSlug) { S.widgetsSlug = s2; loadDashTabs(s2); loadWidgets(s2); }
+      else { renderApp(); }
+    });
+  }
   // NOTE: a plain `&& !S.loading` guard here never fires — loadCredits()/loadWidgets() set
   // S.loading = true synchronously before their first await. Use a tried-flag instead.
   if (S.timeline === null && !S.timelineTried) { S.timelineTried = true; loadTimeline(); }
@@ -594,7 +632,7 @@ const DashboardView = () => {
   return html`
     <div>
       <div class="topbar">
-        <div><div class="dash-title">📊 ${currentIndustryName()} Dashboard</div><p class="text-sm text-gray-500 mt-1">Live KPIs for ${currentIndustrySlug()} — updated by your automations</p></div>
+        <div><div class="dash-title">${dashTitle()}</div><p class="text-sm text-gray-500 mt-1">${kpiSubtitle()}</p></div>
         <div class="flex items-center gap-2">
           ${(S.dashboardTabs||[]).length ? html`<div class="tb-tabs">${S.dashboardTabs.map(t=>html`<button class="tb-tab" onClick=${()=>toast('Tab: '+ (t.title||t.name||t) )}>${(t.title||t.name||t)}</button>`)}</div>` : ''}
           <button class="ind-switch" onClick=${openIndustryPicker}>🏷 ${currentIndustryName()} ▾</button>
