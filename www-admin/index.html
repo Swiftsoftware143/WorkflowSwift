@@ -1571,6 +1571,9 @@ async function renderPlansCredits(c){
   const me=await api('/auth/me');
   const cat=await api('/plans');
   const plans=(cat&&Array.isArray(cat.plans))?cat.plans:[];
+  // `/auth/me` answers `{"user": {...}}` — the server wraps MeResponse (src/auth/handlers.rs::me ends
+  // with `json!({ "user": me })`), so the tier lives at `me.user.plan_name`. Measured live
+  // 2026-10-18: that field answers "Professional" for the operator account.
   const myName=String((me&&me.user&&me.user.plan_name)||'').trim();
   const same=n=>String(n||'').trim().toLowerCase()===myName.toLowerCase();
   const mine=myName?plans.find(p=>same(p.name)||same(p.slug)):null;
