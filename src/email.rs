@@ -1017,6 +1017,50 @@ async fn send_email_fallback(
             )
             .await
         }
+        // The sign-in ADDRESS CHANGE's confirmation (cron 2026-10-18). The link it carries is the
+        // whole point of the mail — `confirm-email-change?token=…` — and the token is single-use
+        // and lives 2 hours (auth::handlers::request_email_change). Without this arm an
+        // `email_change` send would fall to the generic `_` arm below, which prints the raw vars
+        // and no link: the customer would be told to check a mailbox that has nothing actionable.
+        "email_change" => {
+            let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
+            let new_email = vars.get("new_email").and_then(|v| v.as_str()).unwrap_or("");
+            let link = vars.get("link").and_then(|v| v.as_str()).unwrap_or(app_url);
+            let html_body = format!(
+                r#"<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin:0;padding:0;background:#f4f4f4;">
+<table style="width:100%;max-width:600px;margin:20px auto;background:#fff;border-radius:8px;overflow:hidden;">
+<tr><td style="padding:30px 40px;background:linear-gradient(135deg,#6366f1,#4f46e5);text-align:center;">
+<h1 style="color:#fff;font-size:26px;margin:0;">Confirm your new sign-in address</h1></td></tr>
+<tr><td style="padding:40px;">
+<p style="font-size:16px;color:#374151;">Hello <strong>{name}</strong>,</p>
+<p style="font-size:16px;color:#374151;">We were asked to make <strong>{new_email}</strong> the sign-in address for your WorkflowSwift account.</p>
+<table style="margin:28px auto;"><tr><td style="background:#6366f1;border-radius:6px;text-align:center;">
+<a href="{link}" style="display:inline-block;padding:14px 36px;color:#fff;text-decoration:none;font-size:16px;font-weight:bold;">Confirm this address</a>
+</td></tr></table>
+<p style="font-size:14px;color:#374151;">Your current address keeps working until you press that button. The link expires in <strong>2 hours</strong> and can be used once.</p>
+<p style="font-size:14px;color:#9ca3af;margin-top:25px;">If you did not ask for this, ignore this email &mdash; nothing has changed.</p>
+<p style="font-size:14px;color:#9ca3af;text-align:center;margin-top:30px;">- The WorkflowSwift Team</p>
+</td></tr></table></body></html>"#,
+                name = name,
+                new_email = new_email,
+                link = link
+            );
+            let text_body = format!(
+                "Hello {},\n\nWe were asked to make {} the sign-in address for your WorkflowSwift account.\n\nOpen this link to confirm it:\n{}\n\nYour current address keeps working until you confirm. The link expires in 2 hours and can be used once.\n\nIf you did not ask for this, ignore this email - nothing has changed.\n\n- WorkflowSwift",
+                name, new_email, link
+            );
+            send_branded(
+                cfg,
+                to,
+                "Confirm your new WorkflowSwift sign-in address",
+                &text_body,
+                &html_body,
+                branding,
+            )
+            .await
+        }
         // A Notify step's mail (kanban t_d3ff37ef). The recipient is ALWAYS one of the account's
         // own people — `crate::notify` resolves it and refuses anything else BEFORE this is
         // reached, so the address here is never a free-text one the step named.

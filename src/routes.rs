@@ -48,6 +48,12 @@ pub fn create_router(state: AppState) -> Router {
         // (`POST /auth/avatar`) stays on `auth_protected` — see route_policy's tests.
         .route("/avatar/{user_id}", get(auth::get_avatar));
 
+    // The SIGN-IN ADDRESS CHANGE's confirmation arm is anonymous by necessity: the customer opens
+    // the link from their new mailbox in a browser that carries no session, and the token in the
+    // link IS the credential. It is listed in route_policy::PUBLIC_ROUTES for the same reason. The
+    // REQUEST arm (`POST /auth/email-change`) is authenticated and stays on `auth_protected`.
+    let auth_public = auth_public.route("/email-change/confirm", post(auth::confirm_email_change));
+
     // Protected auth route
     let auth_protected = Router::new()
         .route("/me", get(auth::me))
@@ -57,6 +63,9 @@ pub fn create_router(state: AppState) -> Router {
         // this app's original POST path so no existing caller breaks.
         .route("/password", put(auth::change_password))
         .route("/profile", put(auth::update_profile))
+        // Ask to move the caller's OWN sign-in address. The row it writes is `email_changes`
+        // (pending), never `users.email` — the address moves only when the NEW mailbox confirms.
+        .route("/email-change", post(auth::request_email_change))
         // The picture UPLOAD: raw image bytes, private (card t_39cea779). The DELETE twin added with
         // the picture-removal gap acts on the caller's OWN row, so it stays authenticated for the
         // same reason — the session decides whose picture goes, and there is no path id to spoof.

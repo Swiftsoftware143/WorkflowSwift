@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Confirm your new sign-in address — WorkflowSwift</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="alternate icon" href="/favicon.ico">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:linear-gradient(135deg,#1e1b4b,#312e81);display:flex;justify-content:center;align-items:center;min-height:100vh}
+.c{background:#fff;border-radius:12px;padding:40px;width:420px;max-width:95vw;box-shadow:0 12px 40px rgba(0,0,0,.3)}
+.c h1{font-size:22px;color:#1e1b4b;margin-bottom:4px}
+.c p.sub{font-size:13px;color:#64748b;margin-bottom:24px}
+.c input{width:100%;padding:12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;margin-bottom:12px;display:block;outline:none}
+.c input:focus{border-color:#6366f1;box-shadow:0 0 0 2px rgba(99,102,241,.15)}
+.c button{width:100%;padding:12px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}
+.c button:hover{background:#4f46e5}
+.c button:disabled{opacity:.5}
+.msg{padding:10px;border-radius:6px;font-size:13px;margin-top:12px;display:none}
+.msg.e{background:#fee2e2;color:#991b1b;display:block}
+.msg.o{background:#d1fae5;color:#065f46;display:block}
+.msg.i{color:#6366f1;display:block}
+.lk{margin-top:16px;font-size:12px;border-top:1px solid #f1f5f9;padding-top:14px;text-align:center}
+.lk a{color:#6366f1}
+</style>
+</head>
+<body>
+<div class="c">
+<h1>Confirm your new sign-in address</h1>
+<p class="sub">Press the button to make the address in your confirmation email the one you sign in with. Your current address keeps working until you do.</p>
+<form id="f" onsubmit="return S(event)">
+  <input id="t" type="text" placeholder="Confirmation code from your email" autocomplete="one-time-code" required>
+  <button id="b" type="submit">Confirm this address</button>
+</form>
+<div id="m" class="msg"></div>
+<div class="lk"><a href="/login">&larr; Back to sign in</a></div>
+</div>
+<script>
+// The confirmation link mails `?token=<single-use uuid>` (auth::handlers::request_email_change).
+// The token IS the credential here — this page carries no session — so the code is prefilled from
+// the URL and the same value can be pasted if the query string is lost.
+var TOKEN = new URLSearchParams(window.location.search).get("token") || "";
+function S(ev){
+  ev.preventDefault();
+  var t=document.getElementById("t").value.trim(),
+      m=document.getElementById("m"),b=document.getElementById("b");
+  if(!t){m.className="msg e";m.textContent="Enter the confirmation code from your email";return false}
+  m.className="msg i";m.textContent="Confirming...";b.disabled=true;
+  fetch("/api/v1/auth/email-change/confirm",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({token:t})})
+    .then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d}})})
+    .then(function(x){
+      if(!x.ok) throw new Error((typeof x.d.error==='string'&&x.d.error)||x.d.message||"Request failed");
+      m.className="msg o";m.textContent=(x.d.message||"Your sign-in address has been changed")+" — redirecting to sign in...";
+      setTimeout(function(){window.location.href="/login"},2200);
+    })
+    .catch(function(err){m.className="msg e";m.textContent=err.message;b.disabled=false});
+  return false;
+}
+document.addEventListener("DOMContentLoaded",function(){
+  if(TOKEN){document.getElementById("t").value=TOKEN;S(new Event("submit"));}
+  else {document.getElementById("m").className="msg i";document.getElementById("m").textContent="Open this page from your confirmation email, or paste the code below.";}
+});
+</script>
+</body>
+</html>

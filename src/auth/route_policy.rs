@@ -152,6 +152,13 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // surface: an unverified delivery is refused, never answered with tenant data.
     "/api/v1/webhooks/stripe",
     "/api/v1/webhooks/paypal",
+    // --- the sign-in ADDRESS CHANGE's confirmation arm (cron 2026-10-18) -------------------------
+    // Anonymous by necessity: the customer opens the link from their NEW mailbox, in a browser with
+    // no session, and the single-use token in the link IS the credential. Narrow by design — it
+    // reads one unexpired `email_changes` row, writes `users.email` on the caller's OWN row and
+    // nothing else. The REQUEST twin (`POST /api/v1/auth/email-change`) is NOT here and must never
+    // be: it needs the session whose address it is.
+    "/api/v1/auth/email-change/confirm",
 ];
 
 /// Service-to-service routes whose own shared key (`X-Internal-Key` = `INTERNAL_SYNC_KEY`) is the
@@ -532,15 +539,18 @@ mod tests {
     /// from the code without a test failing.
     #[test]
     fn the_census_shape_is_what_the_docs_say() {
-        assert_eq!(super::PUBLIC_ROUTES.len(), 14, "PUBLIC_ROUTES size");
+        assert_eq!(super::PUBLIC_ROUTES.len(), 15, "PUBLIC_ROUTES size");
         assert_eq!(super::INTERNAL_ROUTES.len(), 10, "INTERNAL_ROUTES size");
         // The 22 deliberate anonymous placements the census found, minus the 2 moved to the
         // protected router, plus `/api/v1/auth/avatar/{user_id}` (the account-picture READ, card
         // t_39cea779) and `/api/v1/branding/logo/{account_id}` (the email-branding logo READ, card
-        // t_c3cfe7ba), neither of which was anonymous before it existed.
+        // t_c3cfe7ba), neither of which was anonymous before it existed, plus
+        // `/api/v1/auth/email-change/confirm` (the sign-in address change's confirmation arm,
+        // cron 2026-10-18: the token in the mailed link is the credential, so it cannot carry a
+        // session).
         assert_eq!(
             super::PUBLIC_ROUTES.len() + super::INTERNAL_ROUTES.len(),
-            24
+            25
         );
     }
 }
