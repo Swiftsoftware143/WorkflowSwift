@@ -1938,6 +1938,41 @@ pub async fn test_sms_settings(
     }
 }
 
+/// `GET /api/v1/admin/email-log` — the last 50 transactional sends this installation attempted,
+/// newest first (migration 091).
+///
+/// The Email Provider panel's `last_send_*` fields answer "what happened to the most recent
+/// message?" and are overwritten by the next mail — so a credentials mail the provider refused at
+/// signup used to disappear the moment any later send succeeded. This is the history behind that
+/// one-line status: `withheld` = nothing was attempted (reserved/harness recipient), `failed` = the
+/// transport refused it, `sent` = the provider accepted it.
+pub async fn email_log(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
+    require_admin(&claims)?;
+    let rows = sqlx::query(
+        "SELECT to_email, template, status, detail, created_at FROM email_send_log \
+         ORDER BY created_at DESC LIMIT 50",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+    let sends: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "to": r.get::<String, _>("to_email"),
+                "template": r.get::<Option<String>, _>("template"),
+                "status": r.get::<String, _>("status"),
+                "detail": r.get::<Option<String>, _>("detail"),
+                "at": r.get::<chrono::DateTime<chrono::Utc>, _>("created_at").to_rfc3339(),
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "sends": sends })))
+}
+
 /// Tenant-admin gate. The canonical 403 for this app (`{"code":403,"error":true,
 /// "message":"Admin access required"}`) — reused by surfaces_handler so there is exactly
 /// one place that decides who may write tenant-wide definitions.

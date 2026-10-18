@@ -368,12 +368,39 @@ pub async fn send_email(
         // was attempted — but recording NOTHING left an older `last_send_ok: true` standing in
         // `admin_settings.email`, so the admin panel read "Last email send succeeded" for a message
         // that never left the box (the class fixed on FunnelSwift/ADASwift/MissedCall the same day).
-        record_withheld_send(state, template_type, domain).await;
+        record_withheld_send(state, to, template_type, domain).await;
         return Ok(());
     }
     let result = send_email_inner(state, aid, to, template_type, vars).await;
-    record_send_outcome(state, template_type, &result).await;
+    record_send_outcome(state, to, template_type, &result).await;
     result
+}
+
+/// Append one row to the delivery history (`email_send_log`, migration 091).
+///
+/// The panel slot below answers "what happened to the most recent message?"; this table answers
+/// "did that customer's credentials mail ever go out?", which the slot cannot — any later mail
+/// overwrites it. Best-effort by design: a bookkeeping failure must never fail a send that
+/// actually went out, so the error is logged and dropped.
+async fn append_send_log(
+    state: &AppState,
+    to: &str,
+    template_type: &str,
+    status: &str,
+    detail: &str,
+) {
+    if let Err(e) = sqlx::query(
+        "INSERT INTO email_send_log (to_email, template, status, detail) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(to)
+    .bind(template_type)
+    .bind(status)
+    .bind(detail.chars().take(240).collect::<String>())
+    .execute(&state.db)
+    .await
+    {
+        tracing::warn!("could not append to email_send_log: {e}");
+    }
 }
 
 /// Persist the result of the latest send attempt into the `email` config row
@@ -385,7 +412,22 @@ pub async fn send_email(
 ///
 /// Best-effort by design — a bookkeeping failure must never fail a send that
 /// actually succeeded, so every error path here is swallowed.
-async fn record_send_outcome(state: &AppState, template_type: &str, result: &Result<(), String>) {
+async fn record_send_outcome(
+    state: &AppState,
+    to: &str,
+    template_type: &str,
+    result: &Result<(), String>,
+) {
+    // History FIRST and independently of the slot written below: the slot keeps only the LATEST
+    // outcome, so a refused credentials mail vanished the moment any later send succeeded.
+    append_send_log(
+        state,
+        to,
+        template_type,
+        if result.is_ok() { "sent" } else { "failed" },
+        result.as_ref().err().map(|e| e.as_str()).unwrap_or(""),
+    )
+    .await;
     let row = sqlx::query_scalar::<_, serde_json::Value>(
         "SELECT value FROM admin_settings WHERE key = 'email'",
     )
@@ -444,7 +486,19 @@ async fn record_send_outcome(state: &AppState, template_type: &str, result: &Res
 /// `last_send_withheld=true`, and the admin panel renders that as "was NOT SENT" rather than
 /// "FAILED". Same discipline as `record_send_outcome`: best-effort (a bookkeeping error must never
 /// fail a send) and it re-seals the credentials before writing the row back.
-async fn record_withheld_send(state: &AppState, template_type: &str, domain: &str) {
+async fn record_withheld_send(state: &AppState, to: &str, template_type: &str, domain: &str) {
+    // Its own status, not a failure: a reserved/harness recipient is a NON-SEND — nothing was
+    // attempted, no provider request was made — so it must not read as a refusal.
+    append_send_log(
+        state,
+        to,
+        template_type,
+        "withheld",
+        &format!(
+            "withheld: '{domain}' is a fleet-harness / reserved address, so nothing was sent (no provider request)"
+        ),
+    )
+    .await;
     let row = sqlx::query_scalar::<_, serde_json::Value>(
         "SELECT value FROM admin_settings WHERE key = 'email'",
     )

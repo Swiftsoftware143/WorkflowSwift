@@ -684,6 +684,13 @@ pub fn create_router(state: AppState) -> Router {
             "/settings/email/test",
             post(handlers::admin_settings_handler::test_email_settings),
         )
+        // The send HISTORY behind the one-line `last_send_*` status on the Email Provider panel
+        // (migration 091, 2026-10-18): a refused credentials mail used to be erased by the next
+        // successful send. Platform-admin only, same gate as the settings it explains.
+        .route(
+            "/email-log",
+            get(handlers::admin_settings_handler::email_log),
+        )
         // The SMS provider's own proof-of-configuration (kanban t_d3ff37ef), the sibling of the
         // email test above.
         .route(
