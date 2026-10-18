@@ -1665,7 +1665,10 @@ function renderAdminSettings(c){
    +'<div id="emailform" class="grid grid-cols-2 gap-3"></div>'
    +'<div class="flex gap-2 mt-4"><button class="btn btn-primary btn-sm" id="esave">Save email provider</button>'
    +'<button class="btn btn-sm btn-ghost" id="etest">Send test email</button></div>'
-   +'<pre id="eresult" class="text-xs text-gray-600 mt-3 whitespace-pre-wrap"></pre></div>';
+   +'<pre id="eresult" class="text-xs text-gray-600 mt-3 whitespace-pre-wrap"></pre></div>'
+   +'<div class="card mt-4"><h2 class="text-xl font-bold mb-1">Recent sends</h2>'
+   +'<p class="text-xs text-gray-500 mb-3">The last 50 transactional emails this installation tried to send, newest first. The one-line status above only remembers the MOST RECENT message &mdash; every later mail overwrites it &mdash; so this list is the history: a welcome or password mail the provider refused stays visible here after other mail succeeds. <em>Not sent</em> means the recipient was a reserved/test address, so nothing was attempted and no customer was affected.</p>'
+   +'<div id="esends"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
 
   // Tag → free account (design §3.3): the master toggle + the in-app entry-plan picker. Both keys
   // are read by POST /api/v1/internal/provision-free-account, the receiver FunnelSwift's tag
@@ -1698,6 +1701,25 @@ function renderAdminSettings(c){
     }).join('');
     el.querySelectorAll('button[data-k]').forEach(b=>b.onclick=()=>editSetting(b.getAttribute('data-k')));
   });
+
+  // The send HISTORY (GET /admin/email-log, migration 091). Loaded beside the one-line status
+  // because that status slot is overwritten by the next mail: an operator asking "did this
+  // customer ever get their password?" can only be answered here. Defined at screen scope so the
+  // "Send test email" press can refresh it too.
+  const loadSends=async()=>{
+    const el=c.querySelector('#esends');
+    if(!el)return;
+    const sd=await api('/admin/email-log');
+    if(!sd||!sd.sends){el.innerHTML='<p class="text-red-500 text-sm">Could not load the send history.</p>';return}
+    if(!sd.sends.length){el.innerHTML='<p class="text-gray-400 text-sm">No email has been attempted from this install yet.</p>';return}
+    const esc2=s=>String(s==null?'':s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+    const tone=st=>st==='sent'?'background:#dcfce7;color:#166534':(st==='withheld'?'background:#fef3c7;color:#92400e':'background:#fee2e2;color:#991b1b');
+    const label=st=>st==='sent'?'sent':(st==='withheld'?'not sent':'FAILED');
+    el.innerHTML='<table class="w-full text-sm"><thead><tr class="text-xs text-gray-500 text-left"><th class="py-1">When</th><th>To</th><th>Email</th><th>Result</th></tr></thead><tbody>'
+      +sd.sends.map(s=>'<tr class="border-t"><td class="py-1 whitespace-nowrap text-xs text-gray-500">'+esc2(s.at?new Date(s.at).toLocaleString():'')+'</td><td class="text-xs font-mono">'+esc2(s.to)+'</td><td class="text-xs">'+esc2(s.template||'')+'</td><td><span style="padding:1px 8px;border-radius:9999px;font-size:11px;'+tone(s.status)+'" title="'+esc2(s.detail||'')+'">'+label(s.status)+'</span></td></tr>').join('')
+      +'</tbody></table>';
+  };
+  loadSends();
 
   api('/admin/settings/email').then(d=>{
     const form=c.querySelector('#emailform');
@@ -1769,6 +1791,8 @@ function renderAdminSettings(c){
     // Re-read the last-send line: the press just moved it (a withheld recipient is recorded as the
     // non-send it is), and an operator looking at the panel must see the attempt they just made.
     try{ const d2=await api('/admin/settings/email'); if(typeof window._wfEmailStatus==='function') window._wfEmailStatus((d2&&d2.value)||{}); }catch(e){}
+    // The press just appended a history row too — an operator must see the attempt they made.
+    try{ await loadSends(); }catch(e){}
   };
 
   // ── SMS Provider (kanban t_d3ff37ef) ───────────────────────────────────────────────────────────
