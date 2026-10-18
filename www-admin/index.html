@@ -1941,12 +1941,18 @@ function renderAdminUsers(c){
 // panel is the batch form of it, so the operator no longer needs a psql session to clear junk.
 function renderAdminAccounts(c){
   c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Accounts</h2>'+
-    '<button class="btn btn-danger btn-sm" id="accDel" disabled>Delete selected</button></div>'+
+    '<div class="flex items-center gap-2"><button class="btn btn-outline btn-sm" id="accProbes" data-tenants="select-probes" disabled>Select probes (0)</button>'+
+    '<button class="btn btn-danger btn-sm" id="accDel" disabled>Delete selected</button></div></div>'+
     '<p class="text-xs text-gray-400 mb-4">Every account on this platform. Tick rows and press <b>Delete selected</b> to remove them permanently, with all their data. Three are refused by rule and cannot be forced here: the account you are signed in as, a portfolio company (SwiftImpact / ZaarHub / Giraudy) and this app\'s own workspace — the reason is kept next to the row that was kept.</p>'+
     '<div id="accdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
   const btn=c.querySelector('#accDel');
   // Refusals from the last write, rendered ONCE on the re-render that follows it.
   let reasons=[];
+  // The row set the picker works from (cron 2026-10-18). One click ticks every probe row — the same
+  // two arms the badge already uses (`probe_harness`, else a reserved/fleet-probe owner address) — so
+  // a test-account sweep cannot under-count and no longer means ticking rows by eye. Rows the API
+  // refuses are NOT filtered out: bulk-delete answers per id and the reason stays on the row.
+  let LIST=[];
   const box=()=>Array.from(c.querySelectorAll('.acc-chk'));
   const sync=()=>{
     const picked=box().filter(b=>b.checked);
@@ -1957,6 +1963,7 @@ function renderAdminAccounts(c){
   };
   const load=()=>api('/admin/accounts').then(d=>{
     const items=(d&&d.accounts)||(d&&d.items)||[];
+    LIST=items;
     const el=c.querySelector('#accdata');
     if(!items.length){el.innerHTML='<p class="text-gray-400 text-sm">No accounts yet.</p>';sync();return}
     el.innerHTML='<table class="table"><thead><tr><th style="width:32px"><input type="checkbox" id="accAll" title="Select all"></th><th>Name</th><th>Owner</th><th>Slug</th><th>Plan</th><th>Active</th><th>Created</th><th></th></tr></thead><tbody>'+
@@ -1988,6 +1995,19 @@ function renderAdminAccounts(c){
       else el.appendChild(note);
     });
     reasons=[];
+    // The picker: count the probe rows the list actually holds, then tick exactly them.
+    const pb=c.querySelector('#accProbes');
+    if(pb){
+      const isProbe=(i)=>!!probeHarnessOf(i)||isProbeAddress(String((i&&(i.owner_email||i.email))||''));
+      const probes=LIST.filter(isProbe);
+      pb.textContent='Select probes ('+probes.length+')';
+      pb.disabled=probes.length===0;
+      pb.onclick=()=>{
+        const want=new Set(probes.map(i=>i.id||i.account_id));
+        box().forEach(b=>{b.checked=want.has(b.value)});
+        sync();
+      };
+    }
     sync();
   });
   btn.onclick=async()=>{
