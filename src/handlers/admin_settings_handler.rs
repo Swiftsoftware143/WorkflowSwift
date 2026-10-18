@@ -1899,8 +1899,23 @@ pub async fn test_email_settings(
 
     // The operator's diagnostic renders no template and resolves the GLOBAL provider, so it is
     // deliberately NOT branded (`None`): there is no account context here (see the branding skill).
+    //
+    // A press aimed at a reserved/harness address is a NON-SEND — the send layer suppresses it before
+    // any provider request and records it as `withheld`. Answering "sent" here contradicted the
+    // panel's own "Last email was NOT SENT" banner on the same screen, so the response now names the
+    // truth while STILL going through `send_email` (which is what writes the history row).
+    let withheld = crate::security::probe_addr::harness_domain(&to).map(str::to_string);
     match crate::email::send_email(&state, None, &to, "email_test", &vars).await {
-        Ok(_) => Ok(Json(json!({ "status": "sent", "to": to }))),
+        Ok(_) => match withheld {
+            Some(domain) => Ok(Json(json!({
+                "status": "withheld",
+                "to": to,
+                "detail": format!(
+                    "'{domain}' is a reserved/harness address, so nothing was sent and no provider was contacted"
+                ),
+            }))),
+            None => Ok(Json(json!({ "status": "sent", "to": to }))),
+        },
         Err(e) => Ok(Json(json!({ "status": "error", "detail": e }))),
     }
 }
