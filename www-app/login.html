@@ -98,7 +98,11 @@ fetch("/api/v1/auth/register",{method:"POST",headers:{"Content-Type":"applicatio
 .then(function(r){return r.json().then(function(d){return{r:r,d:d}})})
 .then(function(x){
   if(!x.r.ok){m.className="msg e";m.textContent=(x.d&&((typeof x.d.error==='string'&&x.d.error)||x.d.message))||"Registration failed. Please try again.";b.disabled=false;b.textContent="Create Free Account";return}
-  m.className="msg ok";m.innerHTML="<strong>Account created!</strong><br>Check your email &mdash; we sent your login details to "+e.replace(/[<>&]/g,"")+". You can change your password any time in your profile settings.";
+  m.className="msg ok";m.innerHTML="<strong>Account created!</strong><br>Check your email &mdash; we sent your login details to "+e.replace(/[<>&]/g,"")+". You can change your password any time in your profile settings."
+   +'<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(0,0,0,.08);font-size:13px">'
+   +'Nothing in your inbox after a minute? Check your spam folder, then '
+   +'<a href="/forgot-password.html?email='+encodeURIComponent(e)+'" style="font-weight:600">send yourself a reset code</a>.'
+   +'</div>';
   b.textContent="Check your email";
 })
 .catch(function(err){m.className="msg e";m.textContent="Network error. Please try again.";b.disabled=false;b.textContent="Create Free Account"});

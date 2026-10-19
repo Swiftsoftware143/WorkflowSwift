@@ -1679,6 +1679,52 @@ async function renderBranding(c){
 // GET /plans is only what else is on offer. Before this, the card headed "My Plan" printed the
 // whole catalogue and never said which plan the account was actually on — the one place a level
 // appears on this console, showing every level instead of theirs.
+// ── PLAN REQUESTS (2026-10-19) ────────────────────────────────────────────────────────────────
+// "Ask support if you need a different plan" WAS the upgrade path on this screen: the customer
+// could see every plan and its price and then had to leave the console and write an email, so the
+// ask was never recorded against the workspace. Each paid plan now carries a Request button that
+// files the ask as a real tenant-scoped ticket (POST /tickets — the same queue the operator already
+// answers under Support > Tickets), so the request is recorded, attributed and visible.
+// No payment is taken here and the message says so; a second click on a plan that already has an
+// OPEN request is refused locally, so the queue cannot be spammed.
+async function requestPlan(btn){
+  const name=btn.getAttribute('data-plan-name')||'';
+  const slug=btn.getAttribute('data-plan-slug')||'';
+  const price=btn.getAttribute('data-plan-price')||'';
+  if(!slug){showMsg('That plan carries no identifier — ask support to add one','error');return}
+  const label=btn.textContent;
+  btn.disabled=true; btn.textContent='Requesting…';
+  try{
+    const existing=await api('/tickets?per_page=50');
+    const items=(existing&&Array.isArray(existing.items))?existing.items:[];
+    const already=items.find(t=>/^Plan request/i.test(String(t.subject||''))
+      && String(t.subject||'').includes(name)
+      && !['closed','resolved','done'].includes(String(t.status||'').toLowerCase()));
+    if(already){
+      showMsg('You already have an open request for '+name+' — no need to ask twice');
+      btn.textContent='Requested'; btn.disabled=false; return;
+    }
+    const priced=price?('$'+price+'/mo'):'price on request';
+    const r=await api('/tickets',{method:'POST',body:JSON.stringify({
+      subject:'Plan request — '+name+' ('+priced+')',
+      description:'This workspace asked to move to the '+name+' plan (slug: '+slug+', '+priced+').\n\n'
+        +'Filed from Admin > Profile & Account > Plans & Credits. No payment was taken in the console: '
+        +'our team sets the plan up on this workspace and confirms.',
+      priority:'high',
+      source:'plan_request'
+    })});
+    if(!r){
+      showMsg('Could not file the request: '+(LAST_ERR||'please try again'),'error');
+      btn.textContent=label; btn.disabled=false; return;
+    }
+    showMsg('Request sent — our team will move this workspace to '+name+'. Nothing was charged.');
+    btn.textContent='Requested';
+  }catch(e){
+    showMsg('Could not file the request: '+String((e&&e.message)||e),'error');
+    btn.textContent=label; btn.disabled=false;
+  }
+}
+
 async function renderPlansCredits(c){
   c.innerHTML=`<div class="space-y-4">
     <div class="card"><h2 class="text-xl font-bold mb-4">My Plan</h2><div id="pldata"><p class="text-gray-400 text-sm">Loading...</p></div></div>
@@ -1705,7 +1751,7 @@ async function renderPlansCredits(c){
       h('span',{className:'badge',style:'background:#d1fae5;color:#065f46'},'current plan')));
     const price=mine?(mine.price_monthly!=null?mine.price_monthly:mine.price):null;
     el.appendChild(h('p',{className:'text-sm text-gray-500 mt-2'},
-      price!=null&&price!==''?('$'+price+' per month. Ask support if you need a different plan.')
+      price!=null&&price!==''?('$'+price+' per month. Pick another plan in the list below and press Request — nothing is charged here.')
                              :'This is the plan your account runs on.'));
     // A tier's `features` is a JSONB OBJECT of enforced limits (max_users, max_instances,
     // max_tags ...), not a list of sentences: print only the caps the app actually enforces,
@@ -1730,12 +1776,23 @@ async function renderPlansCredits(c){
   }else{
     all.innerHTML=plans.map(p=>{
       const pr=(p.price_monthly!=null?p.price_monthly:p.price);
+      const isMine=same(p.name)||same(p.slug);
+      const paid=Number(pr)>0;
       return '<div class="flex justify-between items-center p-3 border-b">'
         +'<div><strong>'+escHtml(p.name||'')+'</strong>'
-        +(same(p.name)||same(p.slug)?'<span class="badge ml-2" style="background:#d1fae5;color:#065f46">your plan</span>':'')
+        +(isMine?'<span class="badge ml-2" style="background:#d1fae5;color:#065f46">your plan</span>':'')
         +'<span class="text-xs text-gray-500 ml-2">'+escHtml(p.slug||'')+'</span></div>'
-        +'<span class="font-semibold text-sm">$'+escHtml(pr==null?'0':pr)+'/mo</span></div>';
+        +'<div class="flex items-center gap-3">'
+        +'<span class="font-semibold text-sm">$'+escHtml(pr==null?'0':pr)+'/mo</span>'
+        +(paid&&!isMine
+          ? '<button class="btn btn-primary btn-sm" data-plan-slug="'+escHtml(p.slug||'')+'" '
+            +'data-plan-name="'+escHtml(p.name||'')+'" data-plan-price="'+escHtml(String(pr))+'">Request this plan</button>'
+          : '')
+        +'</div></div>';
     }).join('');
+    all.querySelectorAll('button[data-plan-slug]').forEach(btn=>{
+      btn.onclick=()=>requestPlan(btn);
+    });
   }
 
   const cr=await api('/credits/balance');
@@ -2121,6 +2178,7 @@ function renderAdminUsers(c){
 function renderAdminAccounts(c){
   c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Accounts</h2>'+
     '<div class="flex items-center gap-2"><button class="btn btn-outline btn-sm" id="accProbes" data-tenants="select-probes" disabled>Select probes (0)</button>'+
+    '<span class="text-xs text-gray-500" id="accMonitors" title="live tenancy-canary fixtures that a cron monitor seeds and checks — they stay in the list and are never mass-deleted"></span>'+
     '<button class="btn btn-danger btn-sm" id="accDel" disabled>Delete selected</button></div></div>'+
     '<p class="text-xs text-gray-400 mb-4">Every account on this platform. Tick rows and press <b>Delete selected</b> to remove them permanently, with all their data. Three are refused by rule and cannot be forced here: the account you are signed in as, a portfolio company (SwiftImpact / ZaarHub / Giraudy) and this app\'s own workspace — the reason is kept next to the row that was kept.</p>'+
     '<div id="accdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
@@ -2177,8 +2235,17 @@ function renderAdminAccounts(c){
     // The picker: count the probe rows the list actually holds, then tick exactly them.
     const pb=c.querySelector('#accProbes');
     if(pb){
-      const isProbe=(i)=>!!probeHarnessOf(i)||isProbeAddress(String((i&&(i.owner_email||i.email))||''));
+      // Live MONITORS are not cleanup candidates (cron 2026-10-19): the tenancy-canary fixtures
+      // (`Tenancy Canary A/B`, `probe-canary-*@swiftsoftware.dev`) match the same probe predicate,
+      // and a cron re-seeds them in every app — so ticking them for deletion just churns live
+      // monitoring. They keep the [probe] badge and stay in the table; only the counter changes.
+      const isMonitor=(i)=>/^tenancy canary/i.test(String((i&&i.name)||''))||
+        /^probe-canary/i.test(String((i&&(i.owner_email||i.email))||''));
+      const isProbe=(i)=>!isMonitor(i)&&(!!probeHarnessOf(i)||isProbeAddress(String((i&&(i.owner_email||i.email))||'')));
       const probes=LIST.filter(isProbe);
+      const monitors=LIST.filter(isMonitor).length;
+      const mnote=c.querySelector('#accMonitors');
+      if(mnote)mnote.textContent=monitors?(monitors+' live monitor(s) excluded'):'';
       pb.textContent='Select probes ('+probes.length+')';
       pb.disabled=probes.length===0;
       pb.onclick=()=>{
