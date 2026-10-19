@@ -319,7 +319,7 @@ const API = (() => {
   };
 })();
 
-const S = { view:'login', sessionEnded:false, loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, dataVer:0, apiKeys:null, extBuild:null, hexKey:null, hexKeyInput:'', enrich:null, enriching:null, newApiKey:null, builder:null, steps:null, stepsWf:null, stepValidation:null, stepDraft:null, widgetCat:null, notifyChannels:null, notifyRecipients:null, rendSummary:null, renditions:null, rendWf:'', rendStatus:'active', rendSel:null, stitchName:'', modalErr:null, plans:null, plansTried:false, checkoutMsg:null, checkoutBusy:false };
+const S = { view:'login', sessionEnded:false, loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, dataVer:0, apiKeys:null, extBuild:null, hexKey:null, hexKeyInput:'', enrich:null, enriching:null, newApiKey:null, builder:null, steps:null, stepsWf:null, stepValidation:null, stepDraft:null, widgetCat:null, notifyChannels:null, notifyRecipients:null, rendSummary:null, renditions:null, rendWf:'', rendStatus:'active', rendSel:null, stitchName:'', modalErr:null, plans:null, plansTried:false, checkoutMsg:null, checkoutBusy:false, requestForPlan:null, requestPlanBusy:false, requestPlanMsg:null };
 
 // Views call their loaders from inside render (the house pattern: `if(!S.x) loadX();`), and
 // every loader calls renderApp() again — a *re-entrant* preact render. The inner render
@@ -1260,6 +1260,12 @@ const PlanView = () => {
       </div>` : ''}
       ${S.usageTried && !S.usage ? html`<div class="card" style="margin-bottom:16px"><p class="text-sm text-gray-600">Your usage figures could not be read just now.</p></div>` : ''}
       ${S.checkoutMsg ? html`<div class="card" style="margin-bottom:16px;border-left:4px solid #f59e0b"><p class="text-sm text-gray-700">${S.checkoutMsg}</p></div>` : ''}
+      ${S.requestForPlan ? html`<div class="card" id="billing-request" style="margin-bottom:16px;border-left:4px solid #2563eb">
+        <h3 class="font-semibold text-gray-800 mb-1">Ask our team to switch you to ${(S.requestForPlan.name || S.requestForPlan.slug)}</h3>
+        <p class="text-sm text-gray-600">Checkout is not open on this workspace yet. Send the request and our team makes the switch for you — nothing is charged now.</p>
+        <div class="mt-3"><button class="btn text-sm" id="billing-request-btn" onClick=${requestPlan} disabled=${S.requestPlanBusy}>${S.requestPlanBusy ? 'Sending…' : ('Request the ' + (S.requestForPlan.name || S.requestForPlan.slug) + ' plan')}</button></div>
+      </div>` : ''}
+      ${S.requestPlanMsg ? html`<div class="card" id="billing-request-msg" style="margin-bottom:16px;border-left:4px solid #16a34a"><p class="text-sm text-gray-700">${S.requestPlanMsg}</p></div>` : ''}
       ${tiers.length === 0 ? html`<div class="empty">No plans are published for this install yet.</div>` : html`
       <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
         ${tiers.map(p => html`
@@ -1290,7 +1296,7 @@ const loadPlans = async () => {
 // console sends the tier's own stored price_monthly rather than inventing one.
 const startCheckout = async (p) => {
   if (S.checkoutBusy) return;
-  S.checkoutBusy = true; S.checkoutMsg = null; renderApp();
+  S.checkoutBusy = true; S.checkoutMsg = null; S.requestForPlan = null; S.requestPlanMsg = null; renderApp();
   try {
     const r = await API.createCheckout({
       purchasable_type: 'plan', purchasable_id: p.id, provider_type: 'stripe',
@@ -1315,8 +1321,38 @@ const startCheckout = async (p) => {
       ? 'Upgrades are not open on this workspace yet \u2014 nothing was charged.'
       : 'The upgrade could not be started \u2014 nothing was charged.')
       + (detail ? ' ' + detail : '');
+    // kanban t_45efa679 — a refused self-serve upgrade left the tenant with a sentence and no way to
+    // act. The console already owns the ticket backend (POST /api/v1/tickets, previously reachable
+    // only from the Tickets screen), so the refusal now carries a one-click request the team can see
+    // and complete. Rendered only AFTER a refusal, so an install whose checkout works never shows it.
+    S.requestForPlan = p;
   }
   S.checkoutBusy = false; renderApp();
+};
+// Files the billing request through the app's own ticket route (source 'billing' distinguishes it from
+// a console ticket on the Tickets screen). No price change is promised: the team performs the switch.
+const requestPlan = async () => {
+  const p = S.requestForPlan;
+  if (!p || S.requestPlanBusy) return;
+  S.requestPlanBusy = true; S.requestPlanMsg = null; renderApp();
+  const name = p.name || p.slug;
+  try {
+    await API.post('/tickets', {
+      subject: 'Upgrade request: ' + name + ' plan',
+      description: 'This workspace asked to move to the ' + name + ' plan ($' + fmtAmt(p.price_monthly)
+        + '/month) from Plan & Billing. Self-serve checkout is not open yet, so the switch has to be'
+        + ' made by the team.',
+      priority: 'medium',
+      source: 'billing',
+    });
+    S.requestForPlan = null;
+    S.requestPlanMsg = 'Request sent \u2014 our team will switch this workspace to ' + name
+      + ' and confirm here.';
+  } catch (e) {
+    S.requestPlanMsg = 'The request could not be sent' + ((e && e.message) ? ': ' + e.message : '')
+      + '. Please try again.';
+  }
+  S.requestPlanBusy = false; renderApp();
 };
 
 // ===== Tickets =====
