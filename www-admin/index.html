@@ -281,7 +281,7 @@ const tabs=[
   {id:'support',label:'🎫 Support',subs:['Tickets']},
   {id:'profile',label:'👤 Profile & Account',subs:['My Profile','Team','Plans & Credits','Email Branding','Invoices','Payments','Checkout Sessions']},
   {id:'comms',label:'📧 Communications',subs:['Webhooks']},
-  {id:'admin',label:'🛠️ Admin',subs:['Usage','Settings','Users','Accounts','Portfolio Companies','Plans','Surfaces','Email Templates','Industry Sources','Site Config']},
+  {id:'admin',label:'🛠️ Admin',subs:['Usage','Settings','Users','Accounts','Portfolio Companies','Plans','Plan Requests','Surfaces','Email Templates','Industry Sources','Site Config']},
 ];
 
 function sidebar(){
@@ -404,6 +404,7 @@ function content(){
     else if(s==='accounts')renderAdminAccounts(c);
     else if(s==='portfolio-companies')renderAdminPortfolio(c);
     else if(s==='plans')renderAdminPlans(c);
+    else if(s==='plan-requests')renderPlanRequests(c);
     else if(s==='surfaces')renderSurfaces(c);
     // kanban t_ws-mailtpl — the Add AND Edit field lists must carry every column the API writes.
     // They carried ['name','subject'] only, so: (a) a create sent no template_type, the handler
@@ -637,6 +638,88 @@ async function showForm(key,label,fields,ep,id,cb,row){
 // slugified from name. The user-facing app only *selects* from this registry.
 function renderSurfaces(c){
   renderCRUD(c,'surfaces','Surface',['name','slug','description'],'/surfaces',['name','slug','description']);
+}
+
+
+// --- Plan requests (2026-10-19) --------------------------------------------------------------
+// WHY THIS SCREEN EXISTS: the customer's Plan & Billing screen files "Plan request — <plan>" as a
+// real ticket with source='plan_request' (POST /tickets). `GET /tickets` is TENANT-SCOPED, and this
+// console's own Support > Tickets panel calls exactly that route — so the request sat inside the
+// customer's workspace and the operator could not see it without impersonating them first. Measured
+// live 2026-10-19: a customer filed one (201) and a super-admin session's ticket list answered 200
+// without it, while /admin/tickets was 404. The super-admin read route now exists; this panel is
+// its screen. Read across workspaces, act by status only — the customer's words are not editable
+// from here.
+function renderPlanRequests(c){
+  const card=h('div',{className:'card'});
+  card.appendChild(h('h2',{className:'text-xl font-bold mb-2'},'Plan requests'));
+  card.appendChild(h('p',{className:'text-sm text-gray-500 mb-4'},
+    'Every workspace that asked to move to a paid plan. Nothing is charged when a request is filed: '
+    +'our team makes the switch on the workspace, then marks the request handled here.'));
+  const bar=h('div',{className:'flex items-center gap-3 mb-3'});
+  const note=h('span',{className:'text-xs text-gray-500'},'loading…');
+  const refresh=h('button',{className:'btn btn-sm btn-outline',onClick:()=>load()},'Refresh');
+  bar.appendChild(refresh); bar.appendChild(note);
+  card.appendChild(bar);
+  const body=h('div',{});
+  card.appendChild(body);
+  c.appendChild(card);
+
+  async function load(){
+    note.textContent='loading…';
+    while(body.firstChild)body.removeChild(body.firstChild);
+    const d=await api('/admin/tickets?source=plan_request&per_page=100');
+    if(d===null){
+      note.textContent='';
+      body.appendChild(h('div',{className:'text-sm text-red-600'},
+        'Could not read the queue: '+(LAST_ERR||'request failed')));
+      return;
+    }
+    const rows=(d&&(d.items||d.tickets))||[];
+    const isOpen=r=>!/^(closed|resolved|done)$/i.test(String((r&&r.status)||'open'));
+    const open=rows.filter(isOpen).length;
+    note.textContent=rows.length+' request(s) — '+open+' still open';
+    if(!rows.length){
+      body.appendChild(h('div',{className:'text-sm text-gray-500'},
+        'No plan requests yet. A customer who presses “Request this plan” on their Plan & Billing '
+        +'screen appears here with the workspace it came from.'));
+      return;
+    }
+    const tbl=h('table',{className:'table',id:'planRequestsTable'});
+    const head=h('tr',{});
+    ['Workspace','Request','Status','Filed',''].forEach(x=>head.appendChild(h('th',{},x)));
+    tbl.appendChild(h('thead',{},head));
+    const tb=h('tbody',{});
+    rows.forEach(r=>{
+      const tr=h('tr',{});
+      tr.appendChild(h('td',{className:'font-medium'}, r.account_name||'(unknown workspace)'));
+      tr.appendChild(h('td',{className:'text-xs'}, r.subject||''));
+      tr.appendChild(h('td',{},h('span',{className:'badge '+(isOpen(r)?'badge-yellow':'badge-green')},
+        String(r.status||'open'))));
+      tr.appendChild(h('td',{className:'text-xs text-gray-500'},String(r.created_at||'').slice(0,10)));
+      const td=h('td',{});
+      if(isOpen(r)){
+        const b=h('button',{className:'btn btn-sm btn-outline',onClick:async()=>{
+          b.disabled=true; b.textContent='Saving…';
+          const ok=await api('/admin/tickets/'+r.id,{method:'PUT',body:JSON.stringify({status:'closed'})});
+          if(ok===null){
+            b.disabled=false; b.textContent='Mark handled';
+            body.appendChild(h('div',{className:'text-sm text-red-600 mt-2'},
+              'Could not update that request: '+(LAST_ERR||'request failed')));
+            return;
+          }
+          showMsg('Marked handled');
+          load();
+        }},'Mark handled');
+        td.appendChild(b);
+      }
+      tr.appendChild(td);
+      tb.appendChild(tr);
+    });
+    tbl.appendChild(tb);
+    body.appendChild(tbl);
+  }
+  load();
 }
 
 // --- Templates (kanban t_be118f36) ----------------------------------------------------------
