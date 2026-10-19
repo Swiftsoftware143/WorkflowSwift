@@ -219,6 +219,11 @@
         dropped</strong> (<code>077_drop_account_branding_columns.sql</code>, kanban t_731bf864), together with the equally
         unused <code>custom_domain</code>; they had 0 non-null values across all 8 accounts.
         <br><strong>Not to be confused with per-account email branding</strong> (kanban t_c3cfe7ba), which is live:
+        the screen shows <strong>what your recipients see</strong> &mdash; the header block the app builds
+        (<code>Branding::header_html</code>: the logo at most 56&nbsp;px high and 240&nbsp;px wide, otherwise the name in
+        20&nbsp;px, then a 3&nbsp;px rule in the brand colour) &mdash; and it follows the fields as you type, so a name or
+        colour can be judged before saving; it sends and saves nothing, and a non-hex colour previews as the default
+        <code>#4f46e5</code>. The screen
         <code>Profile &amp; Account → Email Branding</code> in the console writes <code>brand_name</code> / <code>brand_color</code>
         into the account's <code>settings.email_branding</code> document and stores the logo bytes in <code>account_logos</code>
         (served by the public <code>GET /api/v1/branding/logo/{account_id}</code>), and <code>src/email.rs</code> applies that
