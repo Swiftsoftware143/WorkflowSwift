@@ -901,19 +901,32 @@ pub async fn admin_list_accounts(
     require_admin(&claims)?;
 
     let accounts = sqlx::query(
-        r#"SELECT a.id, a.name, a.account_slug, a.is_active, a.retention_days, a.retention_purge_at,
-                  a.created_at, COALESCE(a.probe_harness, '') AS probe_harness,
+        r#"WITH resolved AS (
+               SELECT a.id, a.name, a.account_slug, a.is_active, a.retention_days,
+                      a.retention_purge_at, a.created_at,
+                      COALESCE(a.probe_harness, '') AS probe_harness,
+                      COALESCE(
+                          (SELECT ap.plan_id FROM account_plans ap
+                            WHERE ap.aid = a.id AND ap.status = 'active'
+                            ORDER BY ap.started_at DESC LIMIT 1),
+                          a.plan_id,
+                          (SELECT pt.id FROM plan_tiers pt WHERE pt.is_active = true
+                            ORDER BY pt.price_monthly ASC NULLS LAST, pt.name ASC,
+                                     pt.created_at ASC LIMIT 1)
+                      ) AS plan_id
+               FROM accounts a
+           )
+           SELECT r.id, r.name, r.account_slug, r.is_active, r.retention_days,
+                  r.retention_purge_at, r.created_at, r.probe_harness,
                   p.name as plan_name, p.slug as plan_slug,
-                  (SELECT u.email FROM users u WHERE u.aid = a.id
+                  (SELECT u.email FROM users u WHERE u.aid = r.id
                    ORDER BY CASE WHEN u.role IN ('owner','company_admin','admin','super_admin')
                                  THEN 0 ELSE 1 END,
                             u.created_at ASC
                    LIMIT 1) AS owner_email
-           FROM accounts a
-           LEFT JOIN account_plans ap ON ap.aid = a.id AND ap.status = 'active'
-           LEFT JOIN plan_tiers p ON p.id = ap.plan_id
-           LEFT JOIN n8n_account_config n8n ON n8n.aid = a.id
-           ORDER BY a.created_at DESC"#,
+           FROM resolved r
+           LEFT JOIN plan_tiers p ON p.id = r.plan_id
+           ORDER BY r.created_at DESC"#,
     )
     .fetch_all(&state.db)
     .await?;
