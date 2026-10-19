@@ -411,6 +411,21 @@
       <td>POST</td>
       <td>Support impersonation</td>
       </tr>
+      <tr>
+      <td><code>/api/v1/admin/tickets</code></td>
+      <td>GET</td>
+      <td>Cross-tenant support queue — every workspace's tickets newest-first, with the workspace name,
+      optional <code>status</code> / <code>source</code> filters (<code>source=plan_request</code> is the
+      <strong>Plan requests</strong> screen). Super-admin only.</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/admin/tickets/{id}</code></td>
+      <td>PUT</td>
+      <td>Move ANY workspace's ticket to a new status (<code>open</code> / <code>pending</code> /
+      <code>closed</code> / <code>resolved</code>). Status only — the subject and description stay the
+      customer's own words — and a change emails the workspace's owner straight away. Re-sending the
+      status a ticket already has sends nothing.</td>
+      </tr>
       </tbody>
       </table>
       <p>A tenant (<code>accounts</code>) carries ONE identifier: <code>account_slug</code>, NOT NULL UNIQUE (<code>tenants_slug_key</code>),

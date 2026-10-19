@@ -655,7 +655,8 @@ function renderPlanRequests(c){
   card.appendChild(h('h2',{className:'text-xl font-bold mb-2'},'Plan requests'));
   card.appendChild(h('p',{className:'text-sm text-gray-500 mb-4'},
     'Every workspace that asked to move to a paid plan. Nothing is charged when a request is filed: '
-    +'our team makes the switch on the workspace, then marks the request handled here.'));
+    +'our team makes the switch on the workspace, then marks the request handled here. Marking it '
+    +'emails the customer straight away, so nobody is left waiting on an answer.'));
   const bar=h('div',{className:'flex items-center gap-3 mb-3'});
   const note=h('span',{className:'text-xs text-gray-500'},'loading…');
   const refresh=h('button',{className:'btn btn-sm btn-outline',onClick:()=>load()},'Refresh');
