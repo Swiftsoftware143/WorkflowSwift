@@ -731,6 +731,16 @@ pub fn create_router(state: AppState) -> Router {
             "/feature-definitions",
             get(handlers::admin_settings_handler::list_feature_definitions),
         )
+        // The OPERATOR's cross-tenant support queue (2026-10-19). The customer's own /tickets is
+        // tenant-scoped (`WHERE aid = $1`), so the plan request a customer files from their Plan &
+        // Billing screen landed in that workspace and was invisible to the operator unless he
+        // impersonated it (measured live: 201 filed, super-admin list 200 without it, this path
+        // 404). Read = every workspace newest-first with the workspace name; write = status only.
+        .route("/tickets", get(handlers::tickets_handler::list_all))
+        .route(
+            "/tickets/{id}",
+            put(handlers::tickets_handler::admin_update_status),
+        )
         // Plan management (full admin CRUD)
         .route(
             "/plans",

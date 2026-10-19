@@ -189,3 +189,123 @@ pub async fn delete(
     }
     Ok(Json(json!({ "deleted": true })))
 }
+
+// ── The OPERATOR's cross-tenant queue (2026-10-19) ────────────────────────────────────────────────
+// The customer console files a plan request as a real ticket (`source='plan_request'`, the
+// `requestPlan` button on the served console's Plans section). `list` above is TENANT-SCOPED
+// (`WHERE aid = $1`), and the operator's own Support > Tickets panel calls exactly that route — so a
+// request filed by a customer landed in that customer's workspace and was invisible to the operator
+// unless he impersonated the workspace first. Measured live 2026-10-19: a customer filed "Plan
+// request — Starter ($29/mo)" (201), and a super-admin session answered `GET /api/v1/tickets` 200
+// without that row while `GET /api/v1/admin/tickets` was 404.
+//
+// These two handlers are the missing surface: they read across tenants and are gated on the SAME
+// flag the admin middleware enforces (`users.perm_is_super_admin`), checked in the handler as well so
+// the rule does not depend on where the router happens to mount them. Read is one page of every
+// workspace's tickets newest-first, with the workspace NAME joined in so a row is attributable
+// without a second lookup; the write sets the STATUS only (that is the whole operator decision here —
+// "picked this up" / "done"), and never edits a customer's own words.
+#[derive(Debug, Serialize, FromRow)]
+pub struct AdminTicket {
+    pub id: Uuid,
+    pub aid: Uuid,
+    pub account_name: Option<String>,
+    pub subject: String,
+    pub description: Option<String>,
+    pub status: Option<String>,
+    pub priority: Option<String>,
+    pub source: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdminListQuery {
+    pub status: Option<String>,
+    pub source: Option<String>,
+    #[serde(default)]
+    pub page: i64,
+    #[serde(default)]
+    pub per_page: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdminStatusInput {
+    pub status: String,
+}
+
+fn require_super_admin(claims: &Claims) -> Result<(), AppError> {
+    if claims.perm_is_super_admin.unwrap_or(false) {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden(
+            "Only the platform operator can read every workspace's tickets".to_string(),
+        ))
+    }
+}
+
+/// `GET /api/v1/admin/tickets` — every workspace's support tickets, newest first.
+///
+/// Optional `status` / `source` filters (`source=plan_request` is the upgrade queue), and the
+/// console's own paging (`page`, `per_page`, capped at 200). Returns `{items, count}` — the same
+/// envelope `list` answers, so one console renderer serves both.
+pub async fn list_all(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Query(q): Query<AdminListQuery>,
+) -> ApiResult<impl IntoResponse> {
+    require_super_admin(&claims)?;
+    let limit = if q.per_page > 0 {
+        q.per_page.min(200)
+    } else {
+        50
+    };
+    let offset = if q.page > 1 { (q.page - 1) * limit } else { 0 };
+    let rows = sqlx::query_as::<_, AdminTicket>(
+        "SELECT t.id, t.aid, a.name AS account_name, t.subject, t.description, t.status, t.priority, t.source, t.created_at, t.updated_at FROM tickets t LEFT JOIN accounts a ON a.id = t.aid WHERE ($1::text IS NULL OR t.status = $1) AND ($2::text IS NULL OR t.source = $2) ORDER BY t.created_at DESC LIMIT $3 OFFSET $4",
+    )
+    .bind(q.status.as_deref())
+    .bind(q.source.as_deref())
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(json!({ "items": rows, "count": rows.len() })))
+}
+
+/// `PUT /api/v1/admin/tickets/{id}` — move ANY workspace's ticket to a new status.
+///
+/// The customer's own route (`update` above) is pinned to `aid`, which is why an operator could not
+/// even mark a plan request as handled without impersonating the tenant. Status only: the subject and
+/// description belong to the person who wrote them.
+pub async fn admin_update_status(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(id): Path<Uuid>,
+    Json(b): Json<AdminStatusInput>,
+) -> ApiResult<impl IntoResponse> {
+    require_super_admin(&claims)?;
+    let status = b.status.trim().to_lowercase();
+    if !matches!(status.as_str(), "open" | "pending" | "closed" | "resolved") {
+        return Err(AppError::Validation(
+            "status must be one of: open, pending, closed, resolved".to_string(),
+        ));
+    }
+    let updated = sqlx::query("UPDATE tickets SET status = $2, updated_at = NOW() WHERE id = $1")
+        .bind(id)
+        .bind(&status)
+        .execute(&state.db)
+        .await?;
+    if updated.rows_affected() == 0 {
+        return Err(AppError::NotFound("Ticket not found".into()));
+    }
+    // Re-read through the SAME joined select the list uses, so the console repaints an attributable
+    // row (account name included) rather than a bare ticket.
+    let row = sqlx::query_as::<_, AdminTicket>(
+        "SELECT t.id, t.aid, a.name AS account_name, t.subject, t.description, t.status, t.priority, t.source, t.created_at, t.updated_at FROM tickets t LEFT JOIN accounts a ON a.id = t.aid WHERE t.id = $1",
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
+    Ok(Json(json!({ "item": row })))
+}
