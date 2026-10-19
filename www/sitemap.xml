@@ -1,8 +1,33 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
+    <loc>https://workflowswift.com/guide</loc>
+    <lastmod>2026-10-17</lastmod>
+    <priority>0.7</priority>
+  </url>
+  <url>
     <loc>https://workflowswift.com/</loc>
-    <changefreq>weekly</changefreq>
+    <lastmod>2026-10-15</lastmod>
     <priority>1.0</priority>
+  </url>
+  <url>
+    <loc>https://workflowswift.com/privacy</loc>
+    <lastmod>2026-08-11</lastmod>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://workflowswift.com/refunds</loc>
+    <lastmod>2026-08-11</lastmod>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://workflowswift.com/swift-market-intel-extension</loc>
+    <lastmod>2026-10-07</lastmod>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://workflowswift.com/terms</loc>
+    <lastmod>2026-08-11</lastmod>
+    <priority>0.7</priority>
   </url>
 </urlset>
