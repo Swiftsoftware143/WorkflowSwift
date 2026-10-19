@@ -1635,11 +1635,48 @@ function renderList(c,key,label,ep){
 }
 
 // --- Admin Views ---
+// Admin > Usage. Until 2026-10-19 this screen printed the API's JSON into a <pre>: the operator's
+// only view of platform usage was escaped JSON, so "how many workspaces / runs / credits are out
+// there" could not be read at a glance. It is a real table now — totals, one row per workspace —
+// with the raw answer kept behind a disclosure for support. Each row also carries the workspace's
+// PLAN TIER, read from the same field /admin/accounts reports (the tier the gates enforce), so an
+// operator can see who is on what without switching screens.
 function renderAdminUsage(c){
-  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">Platform Usage</h2><div id="udata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
+  c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-1"><h2 class="text-xl font-bold">Platform Usage</h2><span class="text-xs text-gray-400" id="utot"></span></div>'
+   +'<p class="text-xs text-gray-400 mb-4">One row per workspace: the plan it is on, its credit balance, how many workflow runs it has made, and whether its automation backend is provisioned. Totals for the platform sit above the table.</p>'
+   +'<div id="udata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
+  const fail=()=>{const h=c.querySelector('#udata');if(h)h.innerHTML='<p class="text-red-400">Not available.</p>'};
   api('/admin/usage').then(d=>{
-    c.querySelector('#udata').innerHTML=d?`<pre class="text-xs bg-gray-50 p-4 rounded-lg overflow-x-auto">${escHtml(JSON.stringify(d,null,2))}</pre>`:'<p class="text-red-400">Not available.</p>';
-  }).catch(()=>c.querySelector('#udata').innerHTML='<p class="text-red-400">Not available.</p>');
+    const host=c.querySelector('#udata');
+    if(!host)return;
+    if(!d||!Array.isArray(d.accounts)){fail();return}
+    const rows=d.accounts;
+    const credits=rows.reduce((s,r)=>s+Number(r.credits_balance||0),0);
+    const runs=rows.reduce((s,r)=>s+Number(r.workflows_run||0),0);
+    const prov=rows.filter(r=>r.n8n_provisioned).length;
+    const esc=v=>escHtml(String(v==null?'':v));
+    const when=v=>{const t=Date.parse(v);return isNaN(t)?'\u2014':new Date(t).toLocaleDateString()};
+    const kpi=(label,val)=>'<div class="rounded-lg bg-gray-50 px-3 py-2"><div class="text-xs uppercase text-gray-400">'+label+'</div><div class="text-lg font-semibold">'+val+'</div></div>';
+    let html='<div class="grid grid-cols-4 gap-3 mb-4">'
+      +kpi('Workspaces',rows.length)
+      +kpi('Workflow runs',runs.toLocaleString())
+      +kpi('Credits outstanding',credits.toLocaleString())
+      +kpi('Automation provisioned',prov+' / '+rows.length)+'</div>';
+    html+='<div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="text-left text-xs uppercase text-gray-400 border-b">'
+      +'<th class="py-2">Workspace</th><th class="py-2">Plan</th><th class="py-2">Credits</th><th class="py-2">Workflow runs</th><th class="py-2">Automation</th><th class="py-2">Created</th></tr></thead><tbody>';
+    rows.forEach(r=>{
+      html+='<tr class="border-b last:border-0"><td class="py-2 font-medium">'+esc(r.account_name||'(untitled workspace)')+'</td>'
+        +'<td class="py-2">'+(r.plan_name?'<span class="badge badge-blue">'+esc(r.plan_name)+'</span>':'<span class="text-gray-400">\u2014</span>')+'</td>'
+        +'<td class="py-2">'+Number(r.credits_balance||0).toLocaleString()+'</td>'
+        +'<td class="py-2">'+Number(r.workflows_run||0).toLocaleString()+'</td>'
+        +'<td class="py-2">'+(r.n8n_provisioned?'<span class="badge badge-green">provisioned</span>':'<span class="badge">not yet</span>')+'</td>'
+        +'<td class="py-2 text-gray-500">'+when(r.created_at)+'</td></tr>';
+    });
+    html+='</tbody></table></div>';
+    html+='<details class="mt-4"><summary class="text-xs text-gray-400 cursor-pointer">Raw API answer</summary><pre class="text-xs bg-gray-50 p-4 rounded-lg overflow-x-auto mt-2">'+escHtml(JSON.stringify(d,null,2))+'</pre></details>';
+    host.innerHTML=html;
+    const tot=c.querySelector('#utot');if(tot)tot.textContent=rows.length+' workspaces';
+  }).catch(fail);
 }
 
 // Generic single-setting editor (any key in admin_settings is editable here).

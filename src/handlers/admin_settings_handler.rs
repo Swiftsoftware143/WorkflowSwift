@@ -1313,7 +1313,8 @@ pub async fn admin_assign_plan(
 }
 
 /// GET /api/v1/admin/usage — aggregated usage stats per account
-/// Shows credit balance, workflow runs, n8n provisioned status
+/// Shows credit balance, workflow runs, n8n provisioned status and the PLAN TIER the gates
+/// enforce for that workspace (resolved exactly as `/admin/accounts` resolves it).
 pub async fn admin_usage_dashboard(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -1321,26 +1322,39 @@ pub async fn admin_usage_dashboard(
     require_admin(&claims)?;
 
     let rows = sqlx::query(
-        r#"SELECT
-            a.id as aid,
-            a.name as account_name,
+        r#"WITH resolved AS (
+               SELECT a.id as aid, a.name as account_name, a.created_at,
+                      COALESCE(
+                          (SELECT ap.plan_id FROM account_plans ap
+                            WHERE ap.aid = a.id AND ap.status = 'active'
+                            ORDER BY ap.started_at DESC LIMIT 1),
+                          a.plan_id,
+                          (SELECT pt.id FROM plan_tiers pt WHERE pt.is_active = true
+                            ORDER BY pt.price_monthly ASC NULLS LAST, pt.name ASC,
+                                     pt.created_at ASC LIMIT 1)
+                      ) AS plan_id
+               FROM accounts a
+           )
+           SELECT r.aid, r.account_name, r.created_at,
             COALESCE(ct.balance, 0) as credits_balance,
             COALESCE(wf.run_count, 0) as workflows_run,
             CASE WHEN n8n.aid IS NOT NULL THEN true ELSE false END as n8n_provisioned,
-            a.created_at
-           FROM accounts a
+            p.name as plan_name,
+            p.slug as plan_slug
+           FROM resolved r
            LEFT JOIN (
                SELECT aid, SUM(amount) as balance
                FROM credit_transactions
                GROUP BY aid
-           ) ct ON ct.aid = a.id
+           ) ct ON ct.aid = r.aid
            LEFT JOIN (
                SELECT aid, COUNT(*) as run_count
                FROM workflow_instances
                GROUP BY aid
-           ) wf ON wf.aid = a.id
-           LEFT JOIN n8n_account_config n8n ON n8n.aid = a.id
-           ORDER BY a.created_at DESC"#,
+           ) wf ON wf.aid = r.aid
+           LEFT JOIN n8n_account_config n8n ON n8n.aid = r.aid
+           LEFT JOIN plan_tiers p ON p.id = r.plan_id
+           ORDER BY r.created_at DESC"#,
     )
     .fetch_all(&state.db)
     .await?;
@@ -1353,6 +1367,11 @@ pub async fn admin_usage_dashboard(
         let workflows_run: i64 = row.try_get("workflows_run").unwrap_or(0);
         let n8n_provisioned: bool = row.try_get("n8n_provisioned").unwrap_or(false);
         let created_at: chrono::DateTime<chrono::Utc> = row.try_get("created_at")?;
+        // The tier the GATES enforce, resolved by the same expression /admin/accounts uses
+        // (active subscription row -> accounts.plan_id -> cheapest active tier), so the plan an
+        // operator reads here can never disagree with the plan a write is refused against.
+        let plan_name: Option<String> = row.try_get("plan_name").ok();
+        let plan_slug: Option<String> = row.try_get("plan_slug").ok();
 
         result.push(json!({
             "aid": aid.to_string(),
@@ -1360,6 +1379,8 @@ pub async fn admin_usage_dashboard(
             "credits_balance": credits_balance,
             "workflows_run": workflows_run,
             "n8n_provisioned": n8n_provisioned,
+            "plan_name": plan_name,
+            "plan_slug": plan_slug,
             "created_at": created_at.to_rfc3339()
         }));
     }
