@@ -297,6 +297,7 @@ async fn send_email_inner(
                     "welcome" => "Welcome to WorkflowSwift!".into(),
                     "team_invite" => "Team Invitation".into(),
                     "password_reset" => "Password Reset".into(),
+                    "ticket_update" => "Update on your WorkflowSwift request".into(),
                     _ => "WorkflowSwift Notification".into(),
                 }),
                 vars,
@@ -1082,6 +1083,58 @@ async fn send_email_fallback(
             );
             let text_body = format!("Hi {name},\n\nA workflow you own sent you this notification:\n\n{message}\n\n- WorkflowSwift");
             send_branded(cfg, to, subject, &text_body, &html_body, branding).await
+        }
+        // The CUSTOMER's notice that their own request moved (2026-10-19). A plan request is filed
+        // as a real ticket from the dashboard's Plan & Billing screen (`source='plan_request'`) and
+        // reaches the operator's cross-tenant queue — and until this arm existed that was the end of
+        // it: the operator pressed "Mark handled" and the person who asked was never told. Wording is
+        // per status, and the plan-request sentence never promises a charge (nothing is charged when
+        // a request is filed; a plan change is agreed with the customer first).
+        "ticket_update" => {
+            let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
+            let ticket_subject = vars
+                .get("ticket_subject")
+                .and_then(|v| v.as_str())
+                .unwrap_or("your request");
+            let status = vars
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("updated");
+            let app_url = vars
+                .get("app_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("https://app.workflowswift.com");
+            let said = match status {
+                "pending" => "is being worked on by our team",
+                "resolved" => "has been resolved",
+                "closed" => "has been handled",
+                _ => "is open again",
+            };
+            let next = match status {
+                "open" => "We will pick it up from here.",
+                _ => "If that was a plan request, nothing has been charged \u{2014} a plan change is made on your workspace and any upgrade is agreed with you first.",
+            };
+            let safe_subject = ticket_subject.replace('<', "&lt;").replace('>', "&gt;");
+            let text_body = format!(
+                "Hi {name},\n\nYour WorkflowSwift request \"{ticket_subject}\" {said}.\n\n{next}\n\nYou can see it any time at {app_url}/dashboard (Support).\n\n- WorkflowSwift"
+            );
+            let html_body = format!(
+                "<html><body style=\"font-family:Arial,sans-serif;line-height:1.6;color:#333\">\
+                 <p>Hi {name},</p>\
+                 <p>Your WorkflowSwift request <strong>{safe_subject}</strong> {said}.</p>\
+                 <p style=\"color:#374151\">{next}</p>\
+                 <p><a href=\"{app_url}/dashboard\" style=\"color:#4f46e5\">Open your dashboard</a></p>\
+                 <p style=\"font-size:13px;color:#9ca3af\">- WorkflowSwift</p></body></html>"
+            );
+            send_branded(
+                cfg,
+                to,
+                "Update on your WorkflowSwift request",
+                &text_body,
+                &html_body,
+                branding,
+            )
+            .await
         }
         _ => {
             let text_body = format!("WorkflowSwift Notification:\n\n{}", vars);

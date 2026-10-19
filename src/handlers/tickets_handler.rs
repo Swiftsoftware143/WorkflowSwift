@@ -291,6 +291,18 @@ pub async fn admin_update_status(
             "status must be one of: open, pending, closed, resolved".to_string(),
         ));
     }
+    // The status BEFORE this call (2026-10-19). The customer is told only when something actually
+    // moved: a console that re-sends the value it already shows, or an operator double-clicking
+    // "Mark handled", must not mail the same person twice about the same non-event.
+    let prior_status: Option<String> =
+        sqlx::query_scalar("SELECT status FROM tickets WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?;
+    let Some(prior_status) = prior_status else {
+        return Err(AppError::NotFound("Ticket not found".into()));
+    };
+    let changed = prior_status != status;
     let updated = sqlx::query("UPDATE tickets SET status = $2, updated_at = NOW() WHERE id = $1")
         .bind(id)
         .bind(&status)
@@ -307,5 +319,49 @@ pub async fn admin_update_status(
     .bind(id)
     .fetch_one(&state.db)
     .await?;
+    if changed {
+        notify_customer(&state, &row, &status).await;
+    }
     Ok(Json(json!({ "item": row })))
+}
+
+/// Tell the person who filed the request that it moved (2026-10-19).
+///
+/// The operator's action is already committed when this runs, so it is best-effort by construction:
+/// a mail that cannot go out is logged and never turns a successful status change into a 500. The
+/// recipient is the workspace's OWN owner (the same pick `auth` uses for lifecycle mail), never a
+/// free-text address — and `email::send_email` withholds reserved/harness domains, so a probe
+/// workspace (`...@example.invalid`) records the attempt in `email_send_log` without any message
+/// leaving the box.
+async fn notify_customer(state: &AppState, ticket: &AdminTicket, status: &str) {
+    let owner: Option<(String, String)> = sqlx::query_as(
+        "SELECT name, email FROM users WHERE aid = $1 AND is_active ORDER BY (role IN ('owner','company_admin')) DESC, sort_order NULLS LAST, created_at ASC LIMIT 1",
+    )
+    .bind(ticket.aid)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+    let Some((name, email)) = owner else {
+        tracing::warn!(
+            ticket = %ticket.id,
+            aid = %ticket.aid,
+            "ticket status change: the workspace has no active user to notify"
+        );
+        return;
+    };
+    let vars = json!({
+        "name": name,
+        "ticket_subject": ticket.subject,
+        "status": status,
+        "app_url": "https://app.workflowswift.com",
+    });
+    if let Err(e) =
+        crate::email::send_email(state, Some(ticket.aid), &email, "ticket_update", &vars).await
+    {
+        tracing::warn!(
+            ticket = %ticket.id,
+            "ticket status notice to {email} failed: {e}"
+        );
+    }
 }
