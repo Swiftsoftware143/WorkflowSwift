@@ -443,6 +443,7 @@ const RegisterView = () => {
         <div class="text-4xl mb-3">📧</div>
         <h1 class="text-2xl font-extrabold text-gray-900">Check your email</h1>
         <p class="text-sm text-gray-500 mt-3">We created your account and emailed your login details to <strong>${S.signupEmail}</strong>. Sign in with the password we sent — you can change it any time in your profile settings.</p>
+        <p class="text-xs text-gray-500 mt-3">Nothing in your inbox after a minute? Check your spam folder, then <a class="underline font-semibold" href="https://app.workflowswift.com/forgot-password.html?email=${encodeURIComponent(S.signupEmail)}">send yourself a reset code</a>.</p>
         <button class="btn w-full mt-6" onClick=${()=>{ S.signupSent=false; S.showRegister=false; S.error=null; renderApp(); }}>Go to Sign In</button>
       </div>
     </div>`;
