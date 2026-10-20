@@ -71,6 +71,18 @@ pub async fn auth_middleware(
         return Err(AppError::Unauthorized);
     }
 
+    // …and the USER behind the credential must still exist and be enabled (kanban t_53fcb666,
+    // fleet-wide). `claims.sub` names a `users` row; everything downstream is built from the
+    // claims, so deleting an account used to leave a working credential behind for its whole life
+    // (measured on a sibling app 2026-10-20: the same token still answered 200 from /auth/me and
+    // from a platform-admin read after the user + tenant rows were deleted). Deleting the row is
+    // how the fleet remediates a compromised account and how its probe sweep cleans up throwaways,
+    // so deletion has to BE the revocation. One primary-key read per authenticated request, on
+    // BOTH credential doors — a JWT and an API key both carry the owning user's id in `sub`.
+    if !user_is_live(&state.db, &claims.sub).await? {
+        return Err(AppError::Unauthorized);
+    }
+
     let mut req = req;
     req.extensions_mut().insert(claims);
 
@@ -97,6 +109,24 @@ async fn account_is_live(db: &sqlx::PgPool, aid: &str) -> Result<bool, AppError>
             .await?;
 
     Ok(exists)
+}
+
+/// Is the user named by a credential's `sub` still a live, enabled row in `users`?
+///
+/// The USER half of the boundary (kanban t_53fcb666): [`account_is_live`] answers for the
+/// workspace, this answers for the person. `false` for a `sub` that is not even a uuid — such a
+/// claim names no row, which is the same failure as a deleted account.
+async fn user_is_live(db: &sqlx::PgPool, sub: &str) -> Result<bool, AppError> {
+    let Ok(user_id) = uuid::Uuid::parse_str(sub) else {
+        return Ok(false);
+    };
+
+    let active: Option<bool> = sqlx::query_scalar("SELECT is_active FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(db)
+        .await?;
+
+    Ok(active == Some(true))
 }
 
 pub fn verify_token(token: &str, secret: &str) -> Result<Claims, AppError> {
