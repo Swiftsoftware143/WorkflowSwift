@@ -1338,20 +1338,21 @@ const requestPlan = async () => {
   S.requestPlanBusy = true; S.requestPlanMsg = null; renderApp();
   const name = p.name || p.slug;
   try {
-    const res = await API.post('/tickets', {
+    await API.post('/tickets', {
       subject: 'Upgrade request: ' + name + ' plan',
       description: 'This workspace asked to move to the ' + name + ' plan ($' + fmtAmt(p.price_monthly)
         + '/month) from Plan & Billing. Self-serve checkout is not open yet, so the switch has to be'
         + ' made by the team.',
       priority: 'medium',
-      source: 'billing',
+      // 'plan_request' (not 'billing'): it is the source the operator's Plan requests screen
+      // queries, and the label the handler and that screen both document. A 'billing' ticket is
+      // acknowledged by email but is INVISIBLE in the upgrade queue (measured 2026-10-20: the queue
+      // asks /admin/tickets?source=plan_request, an exact match).
+      source: 'plan_request',
     });
     S.requestForPlan = null;
-    // The receipt is best-effort on the server, so the promise is made only when the server says it
-    // actually queued one (`acknowledged`). Before this the customer's inbox was never mailed at all.
     S.requestPlanMsg = 'Request sent \u2014 our team will switch this workspace to ' + name
-      + ' and confirm here.'
-      + ((res && res.acknowledged) ? ' We have emailed you a copy of this request.' : '');
+      + ' and confirm here.';
   } catch (e) {
     S.requestPlanMsg = 'The request could not be sent' + ((e && e.message) ? ': ' + e.message : '')
       + '. Please try again.';

@@ -669,14 +669,26 @@ function renderPlanRequests(c){
   async function load(){
     note.textContent='loading…';
     while(body.firstChild)body.removeChild(body.firstChild);
-    const d=await api('/admin/tickets?source=plan_request&per_page=100');
-    if(d===null){
+    // Both sources: 'plan_request' is what the console files today, 'billing' is what it filed
+    // before 2026-10-20 (and what any other client may send). The server filter is an EXACT match,
+    // so asking for one source makes the other invisible here.
+    const [a,b]=await Promise.all([
+      api('/admin/tickets?source=plan_request&per_page=100'),
+      api('/admin/tickets?source=billing&per_page=100'),
+    ]);
+    if(a===null&&b===null){
       note.textContent='';
       body.appendChild(h('div',{className:'text-sm text-red-600'},
         'Could not read the queue: '+(LAST_ERR||'request failed')));
       return;
     }
-    const rows=(d&&(d.items||d.tickets))||[];
+    const pick=x=>(x&&(x.items||x.tickets))||[];
+    const seen={};
+    const rows=pick(a).concat(pick(b)).filter(r=>{
+      if(!r||!r.id) return true;
+      if(seen[r.id]) return false;
+      seen[r.id]=1; return true;
+    }).sort((x,y)=>String(y.created_at||'').localeCompare(String(x.created_at||'')));
     const isOpen=r=>!/^(closed|resolved|done)$/i.test(String((r&&r.status)||'open'));
     const open=rows.filter(isOpen).length;
     note.textContent=rows.length+' request(s) — '+open+' still open';
