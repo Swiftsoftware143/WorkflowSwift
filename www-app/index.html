@@ -1356,6 +1356,11 @@ const requestPlan = async () => {
       // acknowledged by email but is INVISIBLE in the upgrade queue (measured 2026-10-20: the queue
       // asks /admin/tickets?source=plan_request, an exact match).
       source: 'plan_request',
+      // The TIER, not just words in the subject (cron 2026-10-20). Without it the operator's resolve
+      // had nothing to switch the workspace onto: the request moved to 'resolved' and the account
+      // stayed on the free plan while the customer was told it was handled. The handler validates
+      // this slug against the live catalogue, so an unknown tier is refused at filing time.
+      plan_slug: p.slug,
     });
     S.requestForPlan = null;
     S.requestPlanMsg = 'Request sent \u2014 our team will switch this workspace to ' + name
