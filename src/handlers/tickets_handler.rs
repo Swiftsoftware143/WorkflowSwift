@@ -26,6 +26,10 @@ pub struct Ticket {
     pub source: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    /// The tier a plan request asks for (cron 2026-10-20). `None` on an ordinary ticket.
+    pub plan_slug: Option<String>,
+    /// When the operator's resolve moved the workspace onto `plan_slug`. `None` = not applied yet.
+    pub plan_applied_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Deserialize)]
@@ -44,6 +48,8 @@ pub struct CreateInput {
     pub status: Option<String>,
     pub priority: Option<String>,
     pub source: Option<String>,
+    /// The catalogue slug this request asks for. Optional: an ordinary ticket names no plan.
+    pub plan_slug: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -60,7 +66,7 @@ pub struct UpdateInput {
 // still one literal at compile time.
 macro_rules! cols {
     () => {
-        "SELECT id, aid, subject, description, status, priority, source, created_at, updated_at FROM tickets"
+        "SELECT id, aid, subject, description, status, priority, source, created_at, updated_at, plan_slug, plan_applied_at FROM tickets"
     };
 }
 
@@ -120,8 +126,33 @@ pub async fn create(
     // `500 {"code":500,"error":true,"message":"Database error"}` (measured live 2026-10-14; the same
     // body WITH a description answered 201). Bind the column's own default instead of NULL.
     let description = b.description.clone().unwrap_or_default();
-    sqlx::query("INSERT INTO tickets (id, aid, subject, description, status, priority, source) VALUES ($1,$2,$3,$4,$5,$6,$7)")
+    // The tier a plan request ASKS FOR travels with the row (cron 2026-10-20). Before this it lived
+    // only as words inside `subject` ("Upgrade request: Professional plan"), so the operator's
+    // resolve had nothing machine-readable to move the workspace onto and the customer stayed on the
+    // free plan while being told the request was handled (measured live). Validated here against the
+    // ACTIVE catalogue, so a typo or a retired tier is a 400 at filing time rather than a request no
+    // operator can match to a plan.
+    let plan_slug = b
+        .plan_slug
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_lowercase);
+    if let Some(slug) = plan_slug.as_deref() {
+        let known: Option<String> =
+            sqlx::query_scalar("SELECT name FROM plan_tiers WHERE slug = $1 AND is_active = true")
+                .bind(slug)
+                .fetch_optional(&state.db)
+                .await?;
+        if known.is_none() {
+            return Err(AppError::Validation(format!(
+                "No active plan with slug '{slug}'"
+            )));
+        }
+    }
+    sqlx::query("INSERT INTO tickets (id, aid, subject, description, status, priority, source, plan_slug) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)")
         .bind(id).bind(aid).bind(&b.subject).bind(&description).bind(&status).bind(&priority).bind(&source)
+        .bind(plan_slug.as_deref())
         .execute(&state.db).await?;
     let row = sqlx::query_as::<_, Ticket>(BY_ID)
         .bind(id)
@@ -277,6 +308,13 @@ pub struct AdminTicket {
     pub source: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+    /// The tier this request asks for (cron 2026-10-20); `None` on an ordinary ticket.
+    pub plan_slug: Option<String>,
+    /// The tier's display name (joined from `plan_tiers`), so the operator row names the plan rather
+    /// than printing a slug.
+    pub plan_name: Option<String>,
+    /// When the resolve moved the workspace onto that tier; `None` = still waiting.
+    pub plan_applied_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -322,7 +360,7 @@ pub async fn list_all(
     };
     let offset = if q.page > 1 { (q.page - 1) * limit } else { 0 };
     let rows = sqlx::query_as::<_, AdminTicket>(
-        "SELECT t.id, t.aid, a.name AS account_name, t.subject, t.description, t.status, t.priority, t.source, t.created_at, t.updated_at FROM tickets t LEFT JOIN accounts a ON a.id = t.aid WHERE ($1::text IS NULL OR t.status = $1) AND ($2::text IS NULL OR t.source = $2) ORDER BY t.created_at DESC LIMIT $3 OFFSET $4",
+        "SELECT t.id, t.aid, a.name AS account_name, t.subject, t.description, t.status, t.priority, t.source, t.created_at, t.updated_at, t.plan_slug, COALESCE(pt.name, t.plan_slug) AS plan_name, t.plan_applied_at FROM tickets t LEFT JOIN accounts a ON a.id = t.aid LEFT JOIN plan_tiers pt ON pt.slug = t.plan_slug WHERE ($1::text IS NULL OR t.status = $1) AND ($2::text IS NULL OR t.source = $2) ORDER BY t.created_at DESC LIMIT $3 OFFSET $4",
     )
     .bind(q.status.as_deref())
     .bind(q.source.as_deref())
@@ -354,12 +392,13 @@ pub async fn admin_update_status(
     // The status BEFORE this call (2026-10-19). The customer is told only when something actually
     // moved: a console that re-sends the value it already shows, or an operator double-clicking
     // "Mark handled", must not mail the same person twice about the same non-event.
-    let prior_status: Option<String> =
-        sqlx::query_scalar("SELECT status FROM tickets WHERE id = $1")
-            .bind(id)
-            .fetch_optional(&state.db)
-            .await?;
-    let Some(prior_status) = prior_status else {
+    let prior: Option<(String, Uuid, Option<String>, bool)> = sqlx::query_as(
+        "SELECT status, aid, plan_slug, (plan_applied_at IS NOT NULL) FROM tickets WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?;
+    let Some((prior_status, ticket_aid, requested_plan, already_applied)) = prior else {
         return Err(AppError::NotFound("Ticket not found".into()));
     };
     let changed = prior_status != status;
@@ -371,10 +410,71 @@ pub async fn admin_update_status(
     if updated.rows_affected() == 0 {
         return Err(AppError::NotFound("Ticket not found".into()));
     }
+    // MOVE THE WORKSPACE ONTO THE PLAN IT ASKED FOR (cron 2026-10-20). Before this the operator's
+    // "Resolved" changed one word on the row and the customer was mailed "handled" while the
+    // workspace stayed on the free plan — measured live on the shipped binary: filed a Professional
+    // request, resolved it as a super-admin, `GET /auth/me` still answered plan_name "Free" and the
+    // only active `account_plans` row was `free`. The switch is deliberately the SAME shape the
+    // platform's "assign plan" route uses (`admin_assign_plan`): supersede every active row, insert
+    // the new one, one transaction — `features::resolve_plan_id` reads the newest ACTIVE row first,
+    // so two live plans can never be ambiguous. Idempotent through `plan_applied_at`: a second
+    // resolve, or a following "closed", never supersedes the same tier twice.
+    let mut plan_applied = false;
+    let mut applied_plan_name: Option<String> = None;
+    if changed && matches!(status.as_str(), "resolved" | "closed") && !already_applied {
+        if let Some(slug) = requested_plan.as_deref() {
+            let plan: Option<(Uuid, Option<String>)> = sqlx::query_as(
+                "SELECT id, name FROM plan_tiers WHERE slug = $1 AND is_active = true",
+            )
+            .bind(slug)
+            .fetch_optional(&state.db)
+            .await?;
+            match plan {
+                Some((plan_id, plan_name)) => {
+                    let mut tx = state.db.begin().await?;
+                    sqlx::query(
+                        "UPDATE account_plans SET status = 'superseded', is_active = false, expires_at = NOW() \
+                         WHERE aid = $1 AND status = 'active'",
+                    )
+                    .bind(ticket_aid)
+                    .execute(&mut *tx)
+                    .await?;
+                    sqlx::query(
+                        "INSERT INTO account_plans (aid, plan_id, status, started_at) \
+                         VALUES ($1, $2, 'active', NOW())",
+                    )
+                    .bind(ticket_aid)
+                    .bind(plan_id)
+                    .execute(&mut *tx)
+                    .await?;
+                    sqlx::query("UPDATE tickets SET plan_applied_at = NOW() WHERE id = $1")
+                        .bind(id)
+                        .execute(&mut *tx)
+                        .await?;
+                    tx.commit().await?;
+                    plan_applied = true;
+                    applied_plan_name = plan_name;
+                    tracing::info!(
+                        ticket = %id,
+                        account = %ticket_aid,
+                        plan = %slug,
+                        "Plan request resolved — the workspace was moved onto the requested plan"
+                    );
+                }
+                None => {
+                    tracing::warn!(
+                        ticket = %id,
+                        plan = %slug,
+                        "Plan request names a tier that is no longer active — status only, nothing switched"
+                    );
+                }
+            }
+        }
+    }
     // Re-read through the SAME joined select the list uses, so the console repaints an attributable
     // row (account name included) rather than a bare ticket.
     let row = sqlx::query_as::<_, AdminTicket>(
-        "SELECT t.id, t.aid, a.name AS account_name, t.subject, t.description, t.status, t.priority, t.source, t.created_at, t.updated_at FROM tickets t LEFT JOIN accounts a ON a.id = t.aid WHERE t.id = $1",
+        "SELECT t.id, t.aid, a.name AS account_name, t.subject, t.description, t.status, t.priority, t.source, t.created_at, t.updated_at, t.plan_slug, COALESCE(pt.name, t.plan_slug) AS plan_name, t.plan_applied_at FROM tickets t LEFT JOIN accounts a ON a.id = t.aid LEFT JOIN plan_tiers pt ON pt.slug = t.plan_slug WHERE t.id = $1",
     )
     .bind(id)
     .fetch_one(&state.db)
@@ -382,7 +482,11 @@ pub async fn admin_update_status(
     if changed {
         notify_customer(&state, &row, &status).await;
     }
-    Ok(Json(json!({ "item": row })))
+    Ok(Json(json!({
+        "item": row,
+        "plan_applied": plan_applied,
+        "plan_name": applied_plan_name,
+    })))
 }
 
 /// Tell the person who filed the request that it moved (2026-10-19).
