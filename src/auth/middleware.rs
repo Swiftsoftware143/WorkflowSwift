@@ -79,8 +79,25 @@ pub async fn auth_middleware(
     // how the fleet remediates a compromised account and how its probe sweep cleans up throwaways,
     // so deletion has to BE the revocation. One primary-key read per authenticated request, on
     // BOTH credential doors — a JWT and an API key both carry the owning user's id in `sub`.
-    if !user_is_live(&state.db, &claims.sub).await? {
-        return Err(AppError::Unauthorized);
+    //
+    // The same read answers the DEMOTION half (kanban t_28184826). This app's platform authority is
+    // the `perm_is_super_admin` FLAG, and every admin handler reads it from
+    // `claims.perm_is_super_admin` (admin_settings_handler, credit_handler, site_handler,
+    // user_handler, tickets_handler). So demoting a super admin — one `UPDATE users SET
+    // perm_is_super_admin = false` — left their existing token holding the whole admin surface
+    // until it expired. A token that CLAIMS the flag for a row that no longer has it is refused
+    // here, once, instead of trusting each handler to notice.
+    match user_grant(&state.db, &claims.sub).await? {
+        Some((true, row_super)) => {
+            if super_admin_claim_outranks_row(claims.perm_is_super_admin, row_super) {
+                tracing::warn!(
+                    subject = %claims.sub,
+                    "refused a super-admin claim the users row no longer grants"
+                );
+                return Err(AppError::Unauthorized);
+            }
+        }
+        _ => return Err(AppError::Unauthorized),
     }
 
     let mut req = req;
@@ -111,22 +128,39 @@ async fn account_is_live(db: &sqlx::PgPool, aid: &str) -> Result<bool, AppError>
     Ok(exists)
 }
 
-/// Is the user named by a credential's `sub` still a live, enabled row in `users`?
+/// Does a token's super-admin CLAIM exceed the authority its `users` row still grants?
+/// (kanban t_28184826)
 ///
-/// The USER half of the boundary (kanban t_53fcb666): [`account_is_live`] answers for the
-/// workspace, this answers for the person. `false` for a `sub` that is not even a uuid — such a
-/// claim names no row, which is the same failure as a deleted account.
-async fn user_is_live(db: &sqlx::PgPool, sub: &str) -> Result<bool, AppError> {
+/// This app's platform authority is the `perm_is_super_admin` FLAG, not a role word, and every
+/// admin handler authorises on `claims.perm_is_super_admin`. Since the flag is carried inside the
+/// token, DEMOTING a super admin — one `UPDATE users SET perm_is_super_admin = false` — used to
+/// leave the existing token holding the whole admin surface until it expired. Only a claim of the
+/// flag over a row that no longer has it is refused; `None`/`false` claims (every API key, and every
+/// ordinary session) are left exactly as they were.
+pub fn super_admin_claim_outranks_row(claim: Option<bool>, row_grants: bool) -> bool {
+    claim == Some(true) && !row_grants
+}
+
+/// What the user named by a credential's `sub` still grants: `(is_active, perm_is_super_admin)`.
+///
+/// The USER half of the boundary (kanban t_53fcb666): `account_is_live` answers for the workspace,
+/// this answers for the person. `None` for a `sub` that is not even a uuid — such a claim names no
+/// row, which is the same failure as a deleted account.
+///
+/// The DEMOTION half (kanban t_28184826) is the second field: `perm_is_super_admin` is the live
+/// platform authority, so a token that still CARRIES the flag after the row lost it is refused.
+async fn user_grant(db: &sqlx::PgPool, sub: &str) -> Result<Option<(bool, bool)>, AppError> {
     let Ok(user_id) = uuid::Uuid::parse_str(sub) else {
-        return Ok(false);
+        return Ok(None);
     };
 
-    let active: Option<bool> = sqlx::query_scalar("SELECT is_active FROM users WHERE id = $1")
-        .bind(user_id)
-        .fetch_optional(db)
-        .await?;
+    let row: Option<(bool, bool)> =
+        sqlx::query_as("SELECT is_active, perm_is_super_admin FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(db)
+            .await?;
 
-    Ok(active == Some(true))
+    Ok(row)
 }
 
 pub fn verify_token(token: &str, secret: &str) -> Result<Claims, AppError> {
@@ -150,6 +184,25 @@ pub fn create_token(claims: &Claims, secret: &str) -> Result<String, AppError> {
 
 #[cfg(test)]
 mod tests {
+    use super::super_admin_claim_outranks_row;
+    /// The reported defect (kanban t_28184826): this app's platform authority is the
+    /// `perm_is_super_admin` flag carried in the token, read by every admin handler. Demoting a
+    /// super admin (`UPDATE users SET perm_is_super_admin = false`) left the existing token holding
+    /// the whole admin surface until it expired. A claim of the flag the row no longer grants must
+    /// be refused, while every lower/absent claim keeps its current behaviour — including the API
+    /// key door, which always mints `Some(false)`.
+    #[test]
+    fn a_super_admin_claim_the_row_no_longer_grants_is_refused() {
+        assert!(super_admin_claim_outranks_row(Some(true), false));
+        // A real super admin is untouched.
+        assert!(!super_admin_claim_outranks_row(Some(true), true));
+        // Every other claim is not this rule's business.
+        assert!(!super_admin_claim_outranks_row(Some(false), true));
+        assert!(!super_admin_claim_outranks_row(Some(false), false));
+        assert!(!super_admin_claim_outranks_row(None, true));
+        assert!(!super_admin_claim_outranks_row(None, false));
+    }
+
     /// No path allowlist may live in this module (kanban t_73f6724d).
     ///
     /// MEASURED 2026-10-02, live: axum strips the `/api/v1` nest prefix before this layer's router
