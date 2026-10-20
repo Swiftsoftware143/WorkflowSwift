@@ -315,6 +315,13 @@ pub struct AdminTicket {
     pub plan_name: Option<String>,
     /// When the resolve moved the workspace onto that tier; `None` = still waiting.
     pub plan_applied_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// The harness marker of the workspace that filed this (`accounts.probe_harness`), e.g.
+    /// `auto-example.invalid`. Empty for a real customer. Without it the operator's queue cannot
+    /// tell a revenue-shaped "Upgrade request" from a test run, and the probe rows read as
+    /// customers waiting on an answer (measured 2026-10-20: both open requests in the queue were
+    /// harness rows). Exposed, never filtered server-side: hiding a row here would make the queue
+    /// lie in the other direction.
+    pub account_probe: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -360,7 +367,7 @@ pub async fn list_all(
     };
     let offset = if q.page > 1 { (q.page - 1) * limit } else { 0 };
     let rows = sqlx::query_as::<_, AdminTicket>(
-        "SELECT t.id, t.aid, a.name AS account_name, t.subject, t.description, t.status, t.priority, t.source, t.created_at, t.updated_at, t.plan_slug, COALESCE(pt.name, t.plan_slug) AS plan_name, t.plan_applied_at FROM tickets t LEFT JOIN accounts a ON a.id = t.aid LEFT JOIN plan_tiers pt ON pt.slug = t.plan_slug WHERE ($1::text IS NULL OR t.status = $1) AND ($2::text IS NULL OR t.source = $2) ORDER BY t.created_at DESC LIMIT $3 OFFSET $4",
+        "SELECT t.id, t.aid, a.name AS account_name, t.subject, t.description, t.status, t.priority, t.source, t.created_at, t.updated_at, t.plan_slug, COALESCE(pt.name, t.plan_slug) AS plan_name, t.plan_applied_at, COALESCE(a.probe_harness, '') AS account_probe FROM tickets t LEFT JOIN accounts a ON a.id = t.aid LEFT JOIN plan_tiers pt ON pt.slug = t.plan_slug WHERE ($1::text IS NULL OR t.status = $1) AND ($2::text IS NULL OR t.source = $2) ORDER BY t.created_at DESC LIMIT $3 OFFSET $4",
     )
     .bind(q.status.as_deref())
     .bind(q.source.as_deref())
@@ -474,7 +481,7 @@ pub async fn admin_update_status(
     // Re-read through the SAME joined select the list uses, so the console repaints an attributable
     // row (account name included) rather than a bare ticket.
     let row = sqlx::query_as::<_, AdminTicket>(
-        "SELECT t.id, t.aid, a.name AS account_name, t.subject, t.description, t.status, t.priority, t.source, t.created_at, t.updated_at, t.plan_slug, COALESCE(pt.name, t.plan_slug) AS plan_name, t.plan_applied_at FROM tickets t LEFT JOIN accounts a ON a.id = t.aid LEFT JOIN plan_tiers pt ON pt.slug = t.plan_slug WHERE t.id = $1",
+        "SELECT t.id, t.aid, a.name AS account_name, t.subject, t.description, t.status, t.priority, t.source, t.created_at, t.updated_at, t.plan_slug, COALESCE(pt.name, t.plan_slug) AS plan_name, t.plan_applied_at, COALESCE(a.probe_harness, '') AS account_probe FROM tickets t LEFT JOIN accounts a ON a.id = t.aid LEFT JOIN plan_tiers pt ON pt.slug = t.plan_slug WHERE t.id = $1",
     )
     .bind(id)
     .fetch_one(&state.db)
