@@ -453,11 +453,16 @@ pub async fn change_password(
     // Hash new password
     let new_hash = argon2_hash(req.new_password.clone()).await?;
 
-    sqlx::query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2")
-        .bind(&new_hash)
-        .bind(user.id)
-        .execute(&state.db)
-        .await?;
+    // SESSION REVOCATION (kanban t_80787a0f): a password change/reset also ends every JWT
+    // minted BEFORE it (`users.sessions_valid_from`), refused at the boundary read.
+    sqlx::query(
+        "UPDATE users SET password_hash = $1, sessions_valid_from = NOW(), updated_at = NOW() \
+           WHERE id = $2",
+    )
+    .bind(&new_hash)
+    .bind(user.id)
+    .execute(&state.db)
+    .await?;
 
     Ok((
         StatusCode::OK,
@@ -941,11 +946,16 @@ pub async fn reset_password(
     // Off the reactor, bounded by the same Argon2 semaphore (see auth::api_key_auth).
     let new_hash = argon2_hash(req.new_password.clone()).await?;
 
-    sqlx::query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2")
-        .bind(&new_hash)
-        .bind(reset.1)
-        .execute(&state.db)
-        .await?;
+    // SESSION REVOCATION (kanban t_80787a0f): a password change/reset also ends every JWT
+    // minted BEFORE it (`users.sessions_valid_from`), refused at the boundary read.
+    sqlx::query(
+        "UPDATE users SET password_hash = $1, sessions_valid_from = NOW(), updated_at = NOW() \
+           WHERE id = $2",
+    )
+    .bind(&new_hash)
+    .bind(reset.1)
+    .execute(&state.db)
+    .await?;
 
     sqlx::query("UPDATE password_resets SET used = true WHERE id = $1")
         .bind(reset.0)
