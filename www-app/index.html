@@ -1327,6 +1327,13 @@ const startCheckout = async (p) => {
     // only from the Tickets screen), so the refusal now carries a one-click request the team can see
     // and complete. Rendered only AFTER a refusal, so an install whose checkout works never shows it.
     S.requestForPlan = p;
+    // ONE PRESS FILES IT (cron 2026-10-20). Measured LIVE in Chromium on app.workflowswift.com
+    // before this change: pressing "Upgrade to Starter" answered 400 /api/v1/checkout/create and
+    // only RENDERED the request button — GET /api/v1/tickets still returned 0, so a buyer who
+    // pressed Upgrade once had asked for nothing. The request is filed here, on that same press;
+    // the button stays on screen for the failure case, when requestPlan's catch arm leaves it
+    // rendered and re-enabled so pressing it retries.
+    if (config) await requestPlan();
   }
   S.checkoutBusy = false; renderApp();
 };
