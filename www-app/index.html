@@ -1678,6 +1678,38 @@ const PermsModal = () => {
 // not re-render the form under the operator's keystrokes.
 let pendingAvatar = null;
 
+// What a RECIPIENT sees — mirrors Branding::header_html (src/branding.rs): a centred logo
+// (max 56px high / 240px wide, alt = the display name); otherwise the display name in 20px bold
+// #111827; then a 3px rule in the effective brand colour; and nothing at all (just the note) when
+// neither is set, which is when mail keeps WorkflowSwift's own header. Reads THIS pane's own
+// controls and the logo the template already rendered, so it sends nothing and cannot disagree
+// with what Save would store.
+const wfBrandEffColor = (c) => /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(String(c || '').trim())
+  ? String(c).trim() : '#4f46e5';
+function syncBrandPreview() {
+  const wrap = document.getElementById('brand-bp-header');
+  const blank = document.getElementById('brand-bp-blank');
+  if (!wrap || !blank) return;
+  const srcImg = document.getElementById('branding-logo-preview');
+  const bpImg = document.getElementById('brand-bp-logo');
+  const logo = (srcImg && srcImg.getAttribute('src')) ? srcImg.getAttribute('src') : '';
+  const nameEl = document.getElementById('branding-name');
+  const colourEl = document.getElementById('branding-color');
+  const name = ((nameEl && nameEl.value) || '').trim();
+  const colour = wfBrandEffColor(colourEl && colourEl.value);
+  const branded = !!(logo || name);
+  wrap.style.display = branded ? 'block' : 'none';
+  blank.style.display = branded ? 'none' : 'block';
+  if (bpImg) {
+    if (logo) bpImg.setAttribute('src', logo);
+    bpImg.style.display = logo ? 'inline-block' : 'none';
+    bpImg.setAttribute('alt', name);
+  }
+  const nm = document.getElementById('brand-bp-name');
+  if (nm) { nm.textContent = name; nm.style.display = (branded && !logo) ? 'block' : 'none'; }
+  const rule = document.getElementById('brand-bp-rule');
+  if (rule) rule.style.borderTop = '3px solid ' + colour;
+}
 const ProfileView = () => {
   const u = API.user || {};
   // Drafts live in the SHARED view objects (guard rule 5): the save handlers call renderApp()
@@ -1724,6 +1756,9 @@ const ProfileView = () => {
     catch (err) { toast(err.message || 'Could not remove logo','err'); }
     S.loading = false; renderApp();
   };
+
+  // The pane is rebuilt on every render, so the preview is repainted after the DOM exists.
+  setTimeout(syncBrandPreview, 0);
 
   const saveProfile = async () => {
     const name = (f.name || '').trim();
@@ -1872,9 +1907,25 @@ const ProfileView = () => {
           </div>
         </div>
         <div class="space-y-4">
-          <div><label class="label">Brand display name</label><input class="input" id="branding-name" value=${bd.name} onInput=${e=>bd.name=e.target.value} placeholder="e.g. Giraudy Capital" /></div>
-          <div><label class="label">Brand colour</label><input class="input" id="branding-color" value=${bd.color} onInput=${e=>bd.color=e.target.value} placeholder="#4f46e5" /></div>
+          <div><label class="label">Brand display name</label><input class="input" id="branding-name" value=${bd.name} onInput=${e=>{ bd.name=e.target.value; syncBrandPreview(); }} placeholder="e.g. Giraudy Capital" /></div>
+          <div><label class="label">Brand colour</label><input class="input" id="branding-color" value=${bd.color} onInput=${e=>{ bd.color=e.target.value; syncBrandPreview(); }} placeholder="#4f46e5" /></div>
           <button class="btn text-sm" id="branding-save" onClick=${saveBranding} disabled=${S.loading}>Save branding</button>
+        </div>
+        <div style="margin-top:16px;padding-top:14px;border-top:1px solid #e5e7eb">
+          <div class="text-xs text-gray-500 mb-2">Preview &mdash; the header every email from this workspace opens with</div>
+          <div style="border:1px solid #e5e7eb;border-radius:8px;padding:16px 14px 12px;background:#fff">
+            <div id="brand-bp-header" style=${(bd.logoUrl || bd.name) ? 'display:block' : 'display:none'}>
+              <div style="text-align:center;margin:0 0 8px">
+                ${bd.logoUrl
+                  ? html`<img id="brand-bp-logo" src=${bd.logoUrl + (bd.logoUrl.indexOf('?') >= 0 ? '&' : '?') + 'cb=' + bd.stamp} alt=${bd.name || ''} style="max-height:56px;max-width:240px;display:inline-block" />`
+                  : html`<img id="brand-bp-logo" alt=${bd.name || ''} style="max-height:56px;max-width:240px;display:none" />`}
+                <div id="brand-bp-name" style="font:700 20px/1.3 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111827">${bd.name || ''}</div>
+              </div>
+              <div id="brand-bp-rule" style="border-top:3px solid #4f46e5;margin:0 0 14px"></div>
+            </div>
+            <div id="brand-bp-blank" class="text-xs text-gray-500" style=${(bd.logoUrl || bd.name) ? 'display:none' : 'display:block'}>Nothing is set yet, so mail keeps WorkflowSwift's own header.</div>
+            <div style="font-size:13.5px;color:#111827;line-height:1.5">Hi Alex &mdash; this is a sample of the message body. Only the header above comes from your branding.</div>
+          </div>
         </div>
       </div>
 
