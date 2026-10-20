@@ -126,6 +126,10 @@ pub async fn instance_callback(
             .unwrap_or("");
         let claims = crate::auth::middleware::verify_token(token, &state.config.jwt_secret)
             .map_err(|_| AppError::Unauthorized)?;
+        // This route is reachable without the middleware, so the boundary's session checks do not
+        // run on their own: apply them here (kanban t_80787a0f) or a session revoked by a password
+        // change could keep writing instance results through this door.
+        crate::auth::middleware::refuse_revoked_session(&state.db, &claims).await?;
         let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
         let owned: bool = sqlx::query_scalar::<_, bool>(

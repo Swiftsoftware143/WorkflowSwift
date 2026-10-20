@@ -185,6 +185,27 @@ async fn user_grant(
     Ok(row)
 }
 
+/// Refuse a credential whose session predates its account's last password change, for the ONE
+/// route that parses a user token itself instead of running this middleware
+/// (`instance_handler::instance_callback`, which accepts either the internal key or a user bearer).
+/// Kanban t_80787a0f: that handler is a WRITE door scoped by `claims.aid`, so a session the
+/// boundary has already revoked must not keep writing through it.
+pub async fn refuse_revoked_session(db: &sqlx::PgPool, claims: &Claims) -> Result<(), AppError> {
+    match user_grant(db, &claims.sub).await? {
+        Some((true, _row_super, valid_from)) => {
+            if session_predates_password_change(Some(claims.iat as i64), valid_from) {
+                tracing::warn!(
+                    subject = %claims.sub,
+                    "refused a session minted before the account's password change"
+                );
+                return Err(AppError::Unauthorized);
+            }
+            Ok(())
+        }
+        _ => Err(AppError::Unauthorized),
+    }
+}
+
 /// Does a session minted at `jwt_iat` predate the instant its account last changed or reset its
 /// password? (kanban t_80787a0f)
 ///
