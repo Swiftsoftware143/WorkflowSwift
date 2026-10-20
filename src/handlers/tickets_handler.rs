@@ -127,7 +127,67 @@ pub async fn create(
         .bind(id)
         .fetch_one(&state.db)
         .await?;
-    Ok((StatusCode::CREATED, Json(json!({ "item": row }))))
+    // A PLAN REQUEST is the console's way to buy while checkout is closed (cron 2026-10-20): the row
+    // was written and the customer's inbox stayed empty until an operator happened to answer. The
+    // receipt goes out here, best-effort, and `acknowledged` reports whether it was actually queued
+    // so the console can only promise a mail that exists. Both spellings are accepted because the
+    // served console files `source:'billing'` while the operator queue labels the same intent
+    // `plan_request` — the customer's intent is identical and neither may be silent.
+    let acknowledged = if source == "plan_request" || source == "billing" {
+        notify_customer_of_plan_request(&state, &row).await
+    } else {
+        false
+    };
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "item": row, "acknowledged": acknowledged })),
+    ))
+}
+
+/// The receipt a customer gets the moment their plan request is filed (cron 2026-10-20).
+///
+/// Filed from the console's Plans section as a real ticket (`source='plan_request'`). While checkout
+/// is closed that request IS the buying path, so an unanswered one is a lost sale. Sends to the
+/// workspace's OWN owner through `email::send_email` — the funnel that carries per-account branding
+/// and withholds reserved/harness domains, so a probe records the attempt without a message leaving
+/// the box. Best-effort: the row is the record the operator works from.
+async fn notify_customer_of_plan_request(state: &AppState, ticket: &Ticket) -> bool {
+    let owner: Option<(String, String)> = sqlx::query_as(
+        "SELECT name, email FROM users WHERE aid = $1 AND is_active ORDER BY (role IN ('owner','company_admin')) DESC, sort_order NULLS LAST, created_at ASC LIMIT 1",
+    )
+    .bind(ticket.aid)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+    let Some((name, email)) = owner else {
+        tracing::warn!(
+            ticket = %ticket.id,
+            aid = %ticket.aid,
+            "plan request: the workspace has no active user to acknowledge"
+        );
+        return false;
+    };
+    let vars = json!({
+        "name": name,
+        "ticket_subject": ticket.subject,
+        "app_url": "https://app.workflowswift.com",
+    });
+    match crate::email::send_email(
+        state,
+        Some(ticket.aid),
+        &email,
+        "plan_request_receipt",
+        &vars,
+    )
+    .await
+    {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(ticket = %ticket.id, "plan-request receipt to {email} failed: {e}");
+            false
+        }
+    }
 }
 
 pub async fn get(

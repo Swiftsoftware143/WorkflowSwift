@@ -298,6 +298,9 @@ async fn send_email_inner(
                     "team_invite" => "Team Invitation".into(),
                     "password_reset" => "Password Reset".into(),
                     "ticket_update" => "Update on your WorkflowSwift request".into(),
+                    // The receipt is not the answer: it says the request arrived and nothing was
+                    // charged (cron 2026-10-20).
+                    "plan_request_receipt" => "We have your plan request".into(),
                     _ => "WorkflowSwift Notification".into(),
                 }),
                 vars,
@@ -1130,6 +1133,44 @@ async fn send_email_fallback(
                 cfg,
                 to,
                 "Update on your WorkflowSwift request",
+                &text_body,
+                &html_body,
+                branding,
+            )
+            .await
+        }
+        // The receipt for a filed plan request (cron 2026-10-20). `POST /api/v1/tickets` with
+        // source='plan_request' is what the console's Plans section files while checkout is closed,
+        // so it is the only way a customer can ask to buy — and until this arm existed the row was
+        // written while the customer's inbox stayed empty. Reached whenever the account has no
+        // `plan_request_receipt` template row, which is the normal state on a fresh install.
+        "plan_request_receipt" => {
+            let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
+            let request_subject = vars
+                .get("ticket_subject")
+                .and_then(|v| v.as_str())
+                .unwrap_or("your request");
+            let app_url = vars
+                .get("app_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("https://app.workflowswift.com");
+            let safe_subject = request_subject.replace('<', "&lt;").replace('>', "&gt;");
+            let text_body = format!(
+                "Hi {name},\n\nThanks — we have your request:\n\n    {request_subject}\n\nNothing has been charged. A person (not a robot) reads it and answers you by email, and you can see where it stands under Support on your dashboard: {app_url}/dashboard\n\nIf you would rather not go ahead, reply to this message and we will close it.\n\n- WorkflowSwift"
+            );
+            let html_body = format!(
+                "<html><body style=\"font-family:Arial,sans-serif;line-height:1.6;color:#333\">\
+                 <p>Hi {name},</p>\
+                 <p>Thanks — we have your request:</p>\
+                 <p style=\"background:#f3f4f6;padding:12px 16px;border-radius:8px;border-left:4px solid #4f46e5;color:#111827\"><strong>{safe_subject}</strong></p>\
+                 <p style=\"color:#374151\"><strong>Nothing has been charged.</strong> A person (not a robot) reads it and answers you by email, and you can see where it stands under Support on your dashboard.</p>\
+                 <p><a href=\"{app_url}/dashboard\" style=\"color:#4f46e5\">Open your dashboard</a></p>\
+                 <p style=\"font-size:13px;color:#9ca3af\">If you would rather not go ahead, reply to this message and we will close it.<br>- WorkflowSwift</p></body></html>"
+            );
+            send_branded(
+                cfg,
+                to,
+                "We have your plan request",
                 &text_body,
                 &html_body,
                 branding,

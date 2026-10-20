@@ -1338,7 +1338,7 @@ const requestPlan = async () => {
   S.requestPlanBusy = true; S.requestPlanMsg = null; renderApp();
   const name = p.name || p.slug;
   try {
-    await API.post('/tickets', {
+    const res = await API.post('/tickets', {
       subject: 'Upgrade request: ' + name + ' plan',
       description: 'This workspace asked to move to the ' + name + ' plan ($' + fmtAmt(p.price_monthly)
         + '/month) from Plan & Billing. Self-serve checkout is not open yet, so the switch has to be'
@@ -1347,8 +1347,11 @@ const requestPlan = async () => {
       source: 'billing',
     });
     S.requestForPlan = null;
+    // The receipt is best-effort on the server, so the promise is made only when the server says it
+    // actually queued one (`acknowledged`). Before this the customer's inbox was never mailed at all.
     S.requestPlanMsg = 'Request sent \u2014 our team will switch this workspace to ' + name
-      + ' and confirm here.';
+      + ' and confirm here.'
+      + ((res && res.acknowledged) ? ' We have emailed you a copy of this request.' : '');
   } catch (e) {
     S.requestPlanMsg = 'The request could not be sent' + ((e && e.message) ? ': ' + e.message : '')
       + '. Please try again.';
