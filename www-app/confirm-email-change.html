@@ -51,8 +51,19 @@ function S(ev){
     .then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d}})})
     .then(function(x){
       if(!x.ok) throw new Error((typeof x.d.error==='string'&&x.d.error)||x.d.message||"Request failed");
-      m.className="msg o";m.textContent=(x.d.message||"Your sign-in address has been changed")+" — redirecting to sign in...";
-      setTimeout(function(){window.location.href="/login"},2200);
+      // (cron 2026-10-20) This used to print the sentence and redirect to /login after 2.2s. The
+      // sentence IS the proof a security change happened, and 2.2 seconds is not long enough to
+      // read it — the person landed on a bare login form with no explanation, while the other four
+      // apps in the fleet leave the confirmation on screen. Same wording as theirs now: the form is
+      // withdrawn, the message stays, and the "Back to sign in" link is the way on.
+      m.className="msg o";
+      // The server's own sentence already ends with "Use it the next time you sign in." — appending
+      // it again printed it twice (measured). The fallback covers an install that returns no message.
+      m.textContent=x.d.message||"Your sign-in address has been changed. Use it the next time you sign in.";
+      var form=document.getElementById("f");
+      if(form) form.style.display="none";
+      var b2=document.getElementById("b");
+      if(b2) b2.disabled=true;
     })
     .catch(function(err){m.className="msg e";m.textContent=err.message;b.disabled=false});
   return false;

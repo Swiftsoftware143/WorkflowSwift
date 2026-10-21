@@ -52,6 +52,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:linear-g
   <input id="rn" name="name" type="text" maxlength="243" placeholder="Full name" autocomplete="name">
   <input id="re" name="email" type="email" placeholder="you@company.com" autocomplete="email">
   <p class="note">No password to choose &mdash; we'll email your login details so you can confirm your address by signing in.</p>
+  <!-- The tier the visitor clicked on /pricing (cron 2026-10-21). Hidden unless ?plan= names one. -->
+  <div id="rplan" class="note" style="display:none;background:#eef2ff;border:1px solid #c7d2fe;color:#3730a3;border-radius:8px;padding:9px 11px;text-align:left"></div>
   <button id="rb" onclick="R()">Create Free Account</button>
   <div id="rm" class="msg"></div>
 </div>
@@ -70,6 +72,28 @@ TAB_L.onclick=function(){swap(true)};
 TAB_R.onclick=function(){swap(false)};
 // The marketing site's Sign-up links 301 here with ?register=1, so open that tab directly.
 try{ if(new URLSearchParams(window.location.search).get('register')) swap(false); }catch(e){}
+
+/* ---- The PLAN a visitor chose on /pricing (cron 2026-10-21) ------------------------------------
+   The pricing page's CTAs link to `app.workflowswift.com/register?plan=starter|professional|
+   enterprise`; nginx now carries that slug here. Signup still mints a FREE workspace (the public
+   door refuses to grant a priced tier — a slug is honoured only when the tier costs nothing), but
+   the choice is shown back to the visitor and, once the account exists, filed as the SAME plan
+   request the dashboard's Plan & Billing screen files (`POST /api/v1/tickets` with `plan_slug` and
+   `source: 'plan_request'`, validated server-side against the active catalogue). Before this a
+   person who clicked "Choose Professional" and signed up left no trace anywhere.
+   Prices are the catalogue's own (`plan_tiers`: starter 29, professional 79, enterprise 199). */
+var PLAN_CATALOGUE={starter:{name:'Starter',price:29},professional:{name:'Professional',price:79},enterprise:{name:'Enterprise',price:199}};
+function chosenPlan(){try{var s=(new URLSearchParams(window.location.search).get('plan')||'').trim().toLowerCase();var h=PLAN_CATALOGUE[s];return h?{slug:s,name:h.name,price:h.price}:null}catch(e){return null}}
+function paintChosenPlan(){var el=document.getElementById('rplan');if(!el)return;var p=chosenPlan();if(!p){el.style.display='none';return}
+  el.innerHTML='<strong>You picked the '+p.name+' plan &mdash; $'+p.price+'/month.</strong> Create your free workspace below and we will pass your request to the team, who switch a workspace onto a paid plan by hand.';
+  el.style.display='block'}
+paintChosenPlan();
+function filePlanRequest(token,plan){if(!plan||!token)return Promise.resolve(false);
+  return fetch('/api/v1/tickets',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+    body:JSON.stringify({subject:'Plan request: '+plan.name+' plan',
+      description:'Chose the '+plan.name+' plan ($'+plan.price+'/month) on the pricing page and then created a workspace. Self-serve checkout is not open yet, so the switch has to be made by the team.',
+      priority:'normal',source:'plan_request',plan_slug:plan.slug})})
+    .then(function(r){return r.ok}).catch(function(){return false})}
 
 /* ---- Sign in (unchanged behaviour: token stored out of band, then /app) ---- */
 function L(){
@@ -104,6 +128,17 @@ fetch("/api/v1/auth/register",{method:"POST",headers:{"Content-Type":"applicatio
    +'<a href="/forgot-password.html?email='+encodeURIComponent(e)+'" style="font-weight:600">send yourself a reset code</a>.'
    +'</div>';
   b.textContent="Check your email";
+  // The tier they clicked on /pricing, filed against the token the signup just returned
+  // (cron 2026-10-21). Best-effort: it must never cost the visitor their account.
+  // The register answer names the session `access_token` (the fleet's RegisterResponse); `token` is
+  // accepted too so this keeps working if the shape ever matches the other apps'.
+  var want=chosenPlan();
+  var sessTok=x.d&&(x.d.access_token||x.d.token);
+  if(want){filePlanRequest(sessTok,want).then(function(ok){
+    m.innerHTML+='<div style="margin-top:8px">'+(ok
+      ?'Your <strong>'+want.name+'</strong> plan request is with us &mdash; the team switches a workspace onto a paid plan by hand. You can follow it under Plan &amp; Billing in the dashboard.'
+      :'To move onto the <strong>'+want.name+'</strong> plan, use the <strong>Plan &amp; Billing</strong> screen in the dashboard &mdash; one press files the same request.')+'</div>';
+  });}
 })
 .catch(function(err){m.className="msg e";m.textContent="Network error. Please try again.";b.disabled=false;b.textContent="Create Free Account"});
 }
