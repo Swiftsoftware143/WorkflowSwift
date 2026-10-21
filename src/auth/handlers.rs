@@ -94,6 +94,27 @@ pub async fn register(
     // fleet-internal `POST /api/v1/internal/provision-free-account` calls (FunnelSwift tag → free
     // account). This handler keeps only what is public-signup-specific: the input validation, the
     // address boundary, the pre-hash duplicate check and the token response.
+    // ── A PUBLIC caller may not CHOOSE a paid tier (measured live 2026-10-21) ────────────────
+    // `create_account` honours whatever `plan_slug` it is handed, and this route is the only door
+    // that takes one from an anonymous body. Measured: `POST /api/v1/auth/register
+    // {"name":…,"email":…,"plan_slug":"enterprise"}` minted an ACTIVE `account_plans` row on the
+    // Enterprise tier — the paid plan, for nothing, to anyone who asked. A slug is still honoured
+    // when it names a tier that costs nothing (so a free-branded tier keeps working); every priced
+    // tier falls back to "free", which is where a self-serve signup belongs until a checkout or an
+    // operator moves it. The internal provisioning door passes its own slug and never comes here.
+    let requested_plan = req.plan_slug.as_deref().unwrap_or("free").trim();
+    let plan_slug: String = if requested_plan.eq_ignore_ascii_case("free") {
+        "free".to_string()
+    } else {
+        sqlx::query_scalar::<_, String>(
+            "SELECT slug FROM plan_tiers \
+             WHERE slug = $1 AND is_active = true AND COALESCE(price_monthly, 0) = 0",
+        )
+        .bind(requested_plan)
+        .fetch_optional(&state.db)
+        .await?
+        .unwrap_or_else(|| "free".to_string())
+    };
     let ids = super::signup::create_account(
         &state,
         super::signup::NewAccount {
@@ -105,7 +126,7 @@ pub async fn register(
             password_plain: Some(&password),
             account_name: req.account_name.as_deref(),
             account_slug: req.account_slug.as_deref(),
-            plan_slug: req.plan_slug.as_deref().unwrap_or("free"),
+            plan_slug: plan_slug.as_str(),
             industry_slug: req.industry_slug.as_deref().unwrap_or("site-flipping"),
             role: "user",
             // The account is usable without the mail: the caller owns this hash, and
