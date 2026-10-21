@@ -1770,8 +1770,9 @@ async function renderBranding(c){
 // ask was never recorded against the workspace. Each paid plan now carries a Request button that
 // files the ask as a real tenant-scoped ticket (POST /tickets — the same queue the operator already
 // answers under Support > Tickets), so the request is recorded, attributed and visible.
-// No payment is taken here and the message says so; a second click on a plan that already has an
-// OPEN request is refused locally, so the queue cannot be spammed.
+// No payment is taken here and the message says so; the ask carries `plan_slug` so the operator's
+// Resolve can actually move the workspace onto it, and a second click on a plan that already has an
+// OPEN ask is refused locally AND by the server, so the queue cannot be spammed.
 async function requestPlan(btn){
   const name=btn.getAttribute('data-plan-name')||'';
   const slug=btn.getAttribute('data-plan-slug')||'';
@@ -1796,11 +1797,20 @@ async function requestPlan(btn){
         +'Filed from Admin > Profile & Account > Plans & Credits. No payment was taken in the console: '
         +'our team sets the plan up on this workspace and confirms.',
       priority:'high',
-      source:'plan_request'
+      source:'plan_request',
+      // The tier travels with the row (2026-10-21). Without it the operator's Resolve had
+      // nothing machine-readable to move the workspace onto: measured live, a Professional
+      // request filed from this screen resolved as "handled" while the workspace stayed on
+      // Free. The server also dedupes on this value, so a second press returns the open ask.
+      plan_slug:slug
     })});
     if(!r){
       showMsg('Could not file the request: '+(LAST_ERR||'please try again'),'error');
       btn.textContent=label; btn.disabled=false; return;
+    }
+    if(r.already_open){
+      showMsg('You already have an open request for '+name+' — our team is on it, and its live status is listed below.');
+      btn.textContent='Requested'; btn.disabled=false; return;
     }
     showMsg('Request sent — our team will move this workspace to '+name+'. Nothing was charged.');
     btn.textContent='Requested';

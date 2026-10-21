@@ -106,6 +106,12 @@ pub async fn list(
     Ok(Json(json!({ "items": rows, "count": rows.len() })))
 }
 
+/// Both spellings a console may use for "the customer is asking to change plan": the operator
+/// queue labels it `plan_request`, the served console files it as `plan_request` too, and older
+/// builds sent `billing` for the same intent.
+fn is_plan_request(source: &str) -> bool {
+    matches!(source, "plan_request" | "billing")
+}
 pub async fn create(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -150,6 +156,64 @@ pub async fn create(
             )));
         }
     }
+    // A plan request must carry the tier it asks FOR, machine-readable: the operator's resolve
+    // moves the workspace onto `plan_slug` and nothing else can. The console sent only the words
+    // ("Plan request — Professional ($49/mo)") until 2026-10-21, so every request filed from it
+    // resolved to no plan at all — measured live on the shipped binary: filed twice, resolved as
+    // the operator, `GET /auth/me` still answered "Free" and the only active `account_plans` row
+    // was `free`, while the customer had been mailed that the plan was set up. Derive the tier
+    // from the subject against the ACTIVE catalogue when the caller omits it, so a cached console
+    // cannot file a request that can never be honoured; and refuse when nothing can be named,
+    // because a plan request with no plan is a dead row in the operator's queue.
+    let plan_slug = if plan_slug.is_none() && is_plan_request(&source) {
+        sqlx::query_scalar::<_, String>(
+            "SELECT slug FROM plan_tiers WHERE is_active = true AND $1 ILIKE '%' || name || '%' \
+             ORDER BY length(name) DESC LIMIT 1",
+        )
+        .bind(&b.subject)
+        .fetch_optional(&state.db)
+        .await?
+    } else {
+        plan_slug
+    };
+    if is_plan_request(&source) && plan_slug.is_none() {
+        return Err(AppError::Validation(
+            "A plan request must name the plan it asks for".into(),
+        ));
+    }
+    // A second press on the same plan is not a second request (fleet-wide, 2026-10-21 — the same
+    // rule IncentiveSwift's `plan_requests` and MissedCall's upgrade ask already carry). Measured
+    // live on the shipped binary: two POSTs one after the other wrote TWO open `plan_request`
+    // tickets and queued two receipts, so the operator's queue read as two customers asking once.
+    // Keyed on the TIER, so a workspace with a Professional ask open can still ask for Enterprise,
+    // and ordinary support tickets are never deduped (a question may legitimately repeat).
+    if is_plan_request(&source) {
+        if let Some(slug) = plan_slug.as_deref() {
+            let existing: Option<Uuid> = sqlx::query_scalar(
+                "SELECT id FROM tickets WHERE aid = $1 AND source = $2 AND plan_slug = $3 \
+                 AND lower(status) NOT IN ('closed','resolved','done') \
+                 ORDER BY created_at DESC LIMIT 1",
+            )
+            .bind(aid)
+            .bind(&source)
+            .bind(slug)
+            .fetch_optional(&state.db)
+            .await?;
+            if let Some(existing_id) = existing {
+                let row = sqlx::query_as::<_, Ticket>(BY_ID)
+                    .bind(existing_id)
+                    .fetch_one(&state.db)
+                    .await?;
+                // `acknowledged: false` because nothing new was mailed: the receipt went out with
+                // the FIRST press, and a second mail for the same ask is exactly the noise this
+                // guard exists to stop.
+                return Ok((
+                    StatusCode::OK,
+                    Json(json!({ "item": row, "acknowledged": false, "already_open": true })),
+                ));
+            }
+        }
+    }
     sqlx::query("INSERT INTO tickets (id, aid, subject, description, status, priority, source, plan_slug) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)")
         .bind(id).bind(aid).bind(&b.subject).bind(&description).bind(&status).bind(&priority).bind(&source)
         .bind(plan_slug.as_deref())
@@ -164,7 +228,7 @@ pub async fn create(
     // so the console can only promise a mail that exists. Both spellings are accepted because the
     // served console files `source:'billing'` while the operator queue labels the same intent
     // `plan_request` — the customer's intent is identical and neither may be silent.
-    let acknowledged = if source == "plan_request" || source == "billing" {
+    let acknowledged = if is_plan_request(&source) {
         notify_customer_of_plan_request(&state, &row).await
     } else {
         false
