@@ -1318,10 +1318,17 @@ const startCheckout = async (p) => {
     // /checkout/create never creates a session, so "nothing was charged" holds on every arm.
     const detail = (e && e.message) ? String(e.message) : '';
     const config = /provider|not configured/i.test(detail);
+    // The provider's own sentence is NOT the buyer's to act on (measured live 2026-10-21 in
+    // Chromium on app.workflowswift.com/dashboard: pressing "Upgrade to Starter" answered 400
+    // /api/v1/checkout/create and the card read "Upgrades are not open on this workspace yet,
+    // nothing was charged. No active stripe provider configured" \u2014 an instruction for whoever
+    // configures the provider). On the config arm the customer keeps the one line they can act on
+    // and the refusal stays in the server log; the sentence is still appended on every OTHER
+    // failure, where it is the only description of what went wrong.
     S.checkoutMsg = (config
       ? 'Upgrades are not open on this workspace yet \u2014 nothing was charged.'
-      : 'The upgrade could not be started \u2014 nothing was charged.')
-      + (detail ? ' ' + detail : '');
+      : 'The upgrade could not be started \u2014 nothing was charged.'
+        + (detail ? ' ' + detail : ''));
     // kanban t_45efa679 — a refused self-serve upgrade left the tenant with a sentence and no way to
     // act. The console already owns the ticket backend (POST /api/v1/tickets, previously reachable
     // only from the Tickets screen), so the refusal now carries a one-click request the team can see
@@ -1363,8 +1370,14 @@ const requestPlan = async () => {
       plan_slug: p.slug,
     });
     S.requestForPlan = null;
+    // ONE press, ONE answer (measured live 2026-10-21 in Chromium on app.workflowswift.com): the
+    // amber refusal card and this green card rendered TOGETHER after a single click, so the buyer
+    // read "Upgrades are not open on this workspace yet, nothing was charged" and "Request sent" at
+    // the same moment and could not tell whether the press had counted. The filed request is what
+    // the press produced: it clears the refusal, and it carries the "nothing was charged" fact.
+    S.checkoutMsg = null;
     S.requestPlanMsg = 'Request sent \u2014 our team will switch this workspace to ' + name
-      + ' and confirm here.';
+      + ' and confirm here. Nothing was charged.';
   } catch (e) {
     S.requestPlanMsg = 'The request could not be sent' + ((e && e.message) ? ': ' + e.message : '')
       + '. Please try again.';
