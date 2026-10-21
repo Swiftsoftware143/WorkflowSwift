@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WorkflowSwift — Pricing</title>
+<meta name="description" content="WorkflowSwift plans and prices.">
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:#0b1120;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.6}
+.wrap{max-width:1120px;margin:0 auto;padding:56px 24px 72px}
+a{color:#38bdf8}
+header.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:48px}
+header.top .brand{font-weight:800;font-size:1.15rem;color:#fff;text-decoration:none}
+header.top nav a{margin-left:22px;font-size:.92rem;color:#94a3b8;text-decoration:none}
+header.top nav a:hover{color:#fff}
+h1{font-size:2.4rem;margin:0 0 12px;color:#fff;letter-spacing:-.02em}
+.sub{color:#94a3b8;max-width:640px;margin:0 0 44px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:20px}
+.card{position:relative;background:#111c33;border:1px solid #1e293b;border-radius:16px;padding:28px 24px}
+.card.popular{border-color:#38bdf8;box-shadow:0 0 0 1px #38bdf8 inset}
+.badge{position:absolute;top:-11px;right:20px;background:#38bdf8;color:#04121f;font-size:.7rem;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:3px 10px;border-radius:999px}
+.card h3{margin:0 0 10px;font-size:1.05rem;color:#fff}
+.price .amt{font-size:2.3rem;font-weight:800;color:#fff}
+.price .per{color:#94a3b8;font-size:.9rem;margin-left:4px}
+.yr{color:#64748b;font-size:.8rem;margin:2px 0 16px;min-height:14px}
+.card ul{list-style:none;padding:0;margin:0 0 22px;font-size:.9rem;color:#cbd5e1}
+.card li{padding:5px 0 5px 20px;position:relative}
+.card li:before{content:"✓";position:absolute;left:0;color:#38bdf8}
+.cta{display:block;text-align:center;text-decoration:none;font-weight:700;font-size:.92rem;padding:11px 16px;border-radius:10px;background:#1e293b;color:#e2e8f0;border:1px solid #334155}
+.card.popular .cta{background:linear-gradient(90deg,#3b82f6,#22d3ee);color:#04121f;border:0}
+.cta:hover{opacity:.9}
+.note{margin-top:40px;color:#64748b;font-size:.85rem}
+footer{margin-top:56px;border-top:1px solid #1e293b;padding-top:22px;color:#64748b;font-size:.85rem}
+footer a{margin-right:18px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <a class="brand" href="/">WorkflowSwift</a>
+    <nav><a href="/">Home</a><a href="/guide">Guide</a><a href="https://app.workflowswift.com/register">Sign in</a></nav>
+  </header>
+  <h1>Simple pricing</h1>
+  <p class="sub">Every plan below is the one this install actually sells. Start on Free, move up whenever you need more room.</p>
+  <div class="grid">
+      <div class="card">
+        
+        <h3>Free</h3>
+        <div class="price"><span class="amt">$0</span><span class="per">/month</span></div>
+        <p class="yr">&nbsp;</p>
+        <ul><li>Get started with basic workflow automation</li><li>3 workflows</li><li>2 users</li><li>10 tags</li><li>Community support</li><li>10 instances</li></ul>
+        <a class="cta" href="https://app.workflowswift.com/register">Start free</a>
+      </div>
+      <div class="card popular">
+        <div class="badge">Most popular</div>
+        <h3>Starter</h3>
+        <div class="price"><span class="amt">$29</span><span class="per">/month</span></div>
+        <p class="yr">Billed yearly at $290</p>
+        <ul><li>For growing teams needing more power</li><li>15 workflows</li><li>10 users</li><li>25 tags</li><li>Email support</li><li>100 instances</li><li>3 API keys</li></ul>
+        <a class="cta" href="https://app.workflowswift.com/register?plan=starter">Get started</a>
+      </div>
+      <div class="card">
+        
+        <h3>Professional</h3>
+        <div class="price"><span class="amt">$79</span><span class="per">/month</span></div>
+        <p class="yr">Billed yearly at $790</p>
+        <ul><li>For businesses requiring full automation</li><li>Unlimited workflows</li><li>25 users</li><li>100 tags</li><li>Priority support</li><li>1000 instances</li><li>10 API keys</li></ul>
+        <a class="cta" href="https://app.workflowswift.com/register?plan=professional">Get started</a>
+      </div>
+      <div class="card">
+        
+        <h3>Enterprise</h3>
+        <div class="price"><span class="amt">$199</span><span class="per">/month</span></div>
+        <p class="yr">Billed yearly at $1990</p>
+        <ul><li>Custom solutions for large organizations</li><li>Unlimited workflows</li><li>Unlimited users</li><li>Unlimited tags</li><li>Dedicated support</li><li>Unlimited instances</li><li>Unlimited API keys</li></ul>
+        <a class="cta" href="https://app.workflowswift.com/register?plan=enterprise">Get started</a>
+      </div>
+  </div>
+  <p class="note">Prices in US dollars. Upgrades are handled by our team — if checkout is not open on your workspace, the upgrade screen files the request for you.</p>
+  <footer>
+    <a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/refunds">Refunds</a><a href="/">Home</a>
+  </footer>
+</div>
+</body>
+</html>
