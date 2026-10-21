@@ -551,7 +551,9 @@ pub async fn admin_update_status(
     .fetch_one(&state.db)
     .await?;
     if changed {
-        notify_customer(&state, &row, &status).await;
+        // The plan the workspace was ACTUALLY moved onto, when this resolve applied one: the
+        // notice then states it instead of hedging about what a plan request might mean.
+        notify_customer(&state, &row, &status, applied_plan_name.as_deref()).await;
     }
     Ok(Json(json!({
         "item": row,
@@ -568,7 +570,12 @@ pub async fn admin_update_status(
 /// free-text address — and `email::send_email` withholds reserved/harness domains, so a probe
 /// workspace (`...@example.invalid`) records the attempt in `email_send_log` without any message
 /// leaving the box.
-async fn notify_customer(state: &AppState, ticket: &AdminTicket, status: &str) {
+async fn notify_customer(
+    state: &AppState,
+    ticket: &AdminTicket,
+    status: &str,
+    applied_plan: Option<&str>,
+) {
     let owner: Option<(String, String)> = sqlx::query_as(
         "SELECT name, email FROM users WHERE aid = $1 AND is_active ORDER BY (role IN ('owner','company_admin')) DESC, sort_order NULLS LAST, created_at ASC LIMIT 1",
     )
@@ -589,6 +596,8 @@ async fn notify_customer(state: &AppState, ticket: &AdminTicket, status: &str) {
         "name": name,
         "ticket_subject": ticket.subject,
         "status": status,
+        // `None` renders as JSON null, which the template arm reads as "no plan moved".
+        "plan_name": applied_plan,
         "app_url": "https://app.workflowswift.com",
     });
     if let Err(e) =

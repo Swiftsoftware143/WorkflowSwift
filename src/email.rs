@@ -833,6 +833,27 @@ fn from_header(cfg: &EmailConfig) -> String {
 }
 
 /// Fallback hardcoded templates (used when DB template not found)
+/// The two sentences the ticket-update notice is built from.
+///
+/// Pure so the wording is testable without a mail transport: a resolve that MOVED the workspace
+/// onto a plan says so ("your workspace is now on the Professional plan") instead of the old
+/// hedge, and every other status keeps exactly the wording it had.
+pub(crate) fn ticket_update_wording(status: &str, applied_plan: Option<&str>) -> (String, String) {
+    let said = match (status, applied_plan) {
+        (_, Some(plan)) => format!("has been resolved — your workspace is now on the {plan} plan"),
+        ("pending", None) => "is being worked on by our team".to_string(),
+        ("resolved", None) => "has been resolved".to_string(),
+        ("closed", None) => "has been handled".to_string(),
+        (_, None) => "is open again".to_string(),
+    };
+    let next = match (status, applied_plan) {
+        ("open", None) => "We will pick it up from here.".to_string(),
+        (_, Some(_)) => "You can use the new plan right away. Nothing further is needed from you, and this change charged you nothing.".to_string(),
+        _ => "If that was a plan request, nothing has been charged — a plan change is made on your workspace and any upgrade is agreed with you first.".to_string(),
+    };
+    (said, next)
+}
+
 async fn send_email_fallback(
     cfg: &EmailConfig,
     to: &str,
@@ -1107,16 +1128,14 @@ async fn send_email_fallback(
                 .get("app_url")
                 .and_then(|v| v.as_str())
                 .unwrap_or("https://app.workflowswift.com");
-            let said = match status {
-                "pending" => "is being worked on by our team",
-                "resolved" => "has been resolved",
-                "closed" => "has been handled",
-                _ => "is open again",
-            };
-            let next = match status {
-                "open" => "We will pick it up from here.",
-                _ => "If that was a plan request, nothing has been charged \u{2014} a plan change is made on your workspace and any upgrade is agreed with you first.",
-            };
+            // A resolve that MOVED the workspace onto the plan states the outcome. Until this the
+            // notice always hedged ("If that was a plan request, nothing has been charged — a plan
+            // change is made on your workspace…") even when the plan had just been applied, which
+            // is the same silent-outcome shape the operator side had (measured live 2026-10-21).
+            // `plan_name` is present ONLY when this resolve applied one, so a plain ticket keeps
+            // its old wording.
+            let applied_plan = vars.get("plan_name").and_then(|v| v.as_str());
+            let (said, next) = ticket_update_wording(status, applied_plan);
             let safe_subject = ticket_subject.replace('<', "&lt;").replace('>', "&gt;");
             let text_body = format!(
                 "Hi {name},\n\nYour WorkflowSwift request \"{ticket_subject}\" {said}.\n\n{next}\n\nYou can see it any time at {app_url}/dashboard (Support).\n\n- WorkflowSwift"
@@ -1508,6 +1527,36 @@ async fn send_via_smtp(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_resolve_that_moved_the_plan_says_which_plan() {
+        let (said, next) = ticket_update_wording("resolved", Some("Professional"));
+        assert!(said.contains("now on the Professional plan"), "said={said}");
+        assert!(
+            !said.contains("has been resolved\u{2014}"),
+            "the plan sentence replaces, not appends"
+        );
+        assert!(next.contains("charged you nothing"), "next={next}");
+    }
+
+    #[test]
+    fn a_plain_ticket_keeps_its_old_wording() {
+        let (said, next) = ticket_update_wording("resolved", None);
+        assert_eq!(said, "has been resolved");
+        assert!(next.contains("If that was a plan request"), "next={next}");
+        let (pending, _) = ticket_update_wording("pending", None);
+        assert_eq!(pending, "is being worked on by our team");
+        let (reopened, _) = ticket_update_wording("open", None);
+        assert_eq!(reopened, "is open again");
+    }
+
+    #[test]
+    fn the_plan_sentence_is_used_for_any_status_that_applied_one() {
+        // `closed` also applies a plan in the resolve arm, so the wording cannot be keyed on
+        // "resolved" alone.
+        let (said, _) = ticket_update_wording("closed", Some("Enterprise"));
+        assert!(said.contains("now on the Enterprise plan"), "said={said}");
+    }
 
     /// The at-rest posture the panels now PRINT, instead of asserting it. Until 2026-10-16 the SMS
     /// panel said "sealed at rest" and the Provider Keys panel said "encrypted at rest"
