@@ -646,34 +646,42 @@ fn replace_anchor_href_after(r: &mut String, anchor: &str, needle: &str, href: &
 /// find the element again (the field would be one-shot), which is why the href's current value is
 /// deliberately not consulted.
 fn replace_plain_link_href_after(r: &mut String, anchor: &str, href: &str) {
-    let mut from = match r.find(anchor) {
+    let from = match r.find(anchor) {
         Some(p) => p + anchor.len(),
         None => return,
     };
-    loop {
-        let a = match r[from..].find("<a ") {
-            Some(p) => from + p,
-            None => return,
-        };
-        let gt = match r[a..].find('>') {
+    // The nav's sign-in link is the LAST classless, non-fragment anchor inside the nav-links region:
+    // the earlier ones are section jumps (`#features`, `#pricing`, `#extension`) and the trailing
+    // "Get Started" CTA is CLASSED. Taking the FIRST match repointed "Pricing" at the operator's
+    // sign-in URL and left the real "Log In" link alone (measured 2026-10-21: red
+    // `every_homepage_editor_moves_only_its_own_region`, `href="/pricing"` swapped). The region ends
+    // at the nav div's own `</div>`, so an anchor further down the page can never be the target.
+    let end = r[from..]
+        .find("</div>")
+        .map(|p| from + p)
+        .unwrap_or(r.len());
+    let mut target: Option<(usize, usize)> = None;
+    let mut at = from;
+    while let Some(p) = r[at..end].find("<a ") {
+        let a = at + p;
+        let gt = match r[a..end].find('>') {
             Some(p) => a + p,
-            None => return,
+            None => break,
         };
-        let classless = !r[a..gt].contains("class=");
-        let href_at = r[a..gt].find("href=\"");
-        if classless {
-            if let Some(h) = href_at {
+        if !r[a..gt].contains("class=") {
+            if let Some(h) = r[a..gt].find("href=\"") {
                 let start = a + h + "href=\"".len();
                 if let Some(e) = r[start..].find('"') {
-                    let is_fragment = r[start..start + e].starts_with('#');
-                    if !is_fragment {
-                        r.replace_range(start..start + e, href);
-                        return;
+                    if !r[start..start + e].starts_with('#') {
+                        target = Some((start, e));
                     }
                 }
             }
         }
-        from = gt + 1;
+        at = gt + 1;
+    }
+    if let Some((start, len)) = target {
+        r.replace_range(start..start + len, href);
     }
 }
 
