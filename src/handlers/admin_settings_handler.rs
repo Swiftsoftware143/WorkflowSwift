@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Json, Path, State},
+    extract::{Json, Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Extension,
@@ -897,8 +897,20 @@ pub async fn admin_delete_plan(
 pub async fn admin_list_accounts(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> ApiResult<impl IntoResponse> {
     require_admin(&claims)?;
+
+    // HARNESS TRAFFIC IS NOT A CUSTOMER (measured live 2026-10-21). The fleet's probe harnesses sign
+    // up through the real door, so every run mints an account tagged from the `X-Swift-Harness`
+    // header (`accounts.probe_harness`); their teardown retires the identity but not the account, so
+    // this list carried `Dash Probe's Workspace` (tag `cron-dash-walk`, zero users) among the real
+    // workspaces. The tag is authoritative and NULL for every real customer, so hiding tagged rows
+    // cannot hide a customer; `?include_probe=1` keeps them observable for support.
+    let include_probe = params
+        .get("include_probe")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
 
     let accounts = sqlx::query(
         r#"WITH resolved AS (
@@ -915,6 +927,9 @@ pub async fn admin_list_accounts(
                                      pt.created_at ASC LIMIT 1)
                       ) AS plan_id
                FROM accounts a
+                 WHERE $1::bool
+                    OR COALESCE(a.probe_harness, '') = ''
+                    OR a.probe_harness ~* '^CNRY'
            )
            SELECT r.id, r.name, r.account_slug, r.is_active, r.retention_days,
                   r.retention_purge_at, r.created_at, r.probe_harness,
@@ -928,6 +943,7 @@ pub async fn admin_list_accounts(
            LEFT JOIN plan_tiers p ON p.id = r.plan_id
            ORDER BY r.created_at DESC"#,
     )
+    .bind(include_probe)
     .fetch_all(&state.db)
     .await?;
 
