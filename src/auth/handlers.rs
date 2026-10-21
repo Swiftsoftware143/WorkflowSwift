@@ -102,13 +102,23 @@ pub async fn register(
     // when it names a tier that costs nothing (so a free-branded tier keeps working); every priced
     // tier falls back to "free", which is where a self-serve signup belongs until a checkout or an
     // operator moves it. The internal provisioning door passes its own slug and never comes here.
+    // BOTH prices must be zero (measured live 2026-10-21). The guard above tested
+    // `COALESCE(price_monthly, 0) = 0` ALONE, so a tier priced only per YEAR — monthly NULL,
+    // yearly 999.00 — read as 0 and an anonymous caller naming that slug was minted on it. Proved
+    // on the pre-fix binary: `POST /api/v1/auth/register {"plan_slug":"probe-annual-only-…"}`
+    // answered 201 and the stranger's `account_plans` row came back `active|probe-annual-only-…|
+    // NULL|999.00`. The ANNUAL column was never consulted, so every annual-only tier was free to
+    // anyone who asked. Both columns are now read with the same NULL-tolerant test: a tier that
+    // records NO price on either side is genuinely free, and any tier that records a price on
+    // either side falls back to "free" like every other priced tier.
     let requested_plan = req.plan_slug.as_deref().unwrap_or("free").trim();
     let plan_slug: String = if requested_plan.eq_ignore_ascii_case("free") {
         "free".to_string()
     } else {
         sqlx::query_scalar::<_, String>(
             "SELECT slug FROM plan_tiers \
-             WHERE slug = $1 AND is_active = true AND COALESCE(price_monthly, 0) = 0",
+             WHERE slug = $1 AND is_active = true \
+               AND COALESCE(price_monthly, 0) = 0 AND COALESCE(price_yearly, 0) = 0",
         )
         .bind(requested_plan)
         .fetch_optional(&state.db)
