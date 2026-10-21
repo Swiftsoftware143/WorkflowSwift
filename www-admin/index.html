@@ -660,7 +660,15 @@ function renderPlanRequests(c){
   const bar=h('div',{className:'flex items-center gap-3 mb-3'});
   const note=h('span',{className:'text-xs text-gray-500'},'loading…');
   const refresh=h('button',{className:'btn btn-sm btn-outline',onClick:()=>load()},'Refresh');
-  bar.appendChild(refresh); bar.appendChild(note);
+  // Hide the harness rows on demand. The filter is CLIENT-side over the rows already fetched, so the
+  // server still returns every request and turning it on can never lose a row (cron 2026-10-20).
+  const hideWrap=h('label',{className:'text-xs text-gray-600 flex items-center gap-1'});
+  const hideBox=h('input',{type:'checkbox',id:'planRequestsHideHarness'});
+  hideBox.addEventListener('change',()=>{
+    body.querySelectorAll('tr[data-probe="1"]').forEach(tr=>{ tr.style.display=hideBox.checked?'none':''; });
+  });
+  hideWrap.appendChild(hideBox); hideWrap.appendChild(document.createTextNode('Hide test-harness rows'));
+  bar.appendChild(refresh); bar.appendChild(hideWrap); bar.appendChild(note);
   card.appendChild(bar);
   const body=h('div',{});
   card.appendChild(body);
@@ -690,8 +698,15 @@ function renderPlanRequests(c){
       seen[r.id]=1; return true;
     }).sort((x,y)=>String(y.created_at||'').localeCompare(String(x.created_at||'')));
     const isOpen=r=>!/^(closed|resolved|done)$/i.test(String((r&&r.status)||'open'));
+    // A TEST-HARNESS ROW IS NOT A CUSTOMER ASK. The workspace that filed it carries
+    // `accounts.probe_harness` (e.g. `auto-example.invalid`), served here as `account_probe`.
+    // Measured live before this: BOTH open "Upgrade request: Professional plan" rows in this queue
+    // came from harness accounts, and the screen made them read as customers waiting on an answer.
+    const isProbe=r=>!!String((r&&r.account_probe)||'').trim();
+    const probeCount=rows.filter(isProbe).length;
     const open=rows.filter(isOpen).length;
-    note.textContent=rows.length+' request(s) — '+open+' still open';
+    note.textContent=rows.length+' request(s) — '+open+' still open'
+      +(probeCount?' — '+probeCount+' from a test harness':'');
     if(!rows.length){
       body.appendChild(h('div',{className:'text-sm text-gray-500'},
         'No plan requests yet. A customer who presses “Request this plan” on their Plan & Billing '
@@ -700,12 +715,28 @@ function renderPlanRequests(c){
     }
     const tbl=h('table',{className:'table',id:'planRequestsTable'});
     const head=h('tr',{});
-    ['Workspace','Request','Status','Filed',''].forEach(x=>head.appendChild(h('th',{},x)));
+    ['Workspace','Plan asked for','Request','Status','Filed',''].forEach(x=>head.appendChild(h('th',{},x)));
     tbl.appendChild(h('thead',{},head));
     const tb=h('tbody',{});
     rows.forEach(r=>{
       const tr=h('tr',{});
-      tr.appendChild(h('td',{className:'font-medium'}, r.account_name||'(unknown workspace)'));
+      if(isProbe(r)) tr.setAttribute('data-probe','1');
+      const wsCell=h('td',{className:'font-medium'}, r.account_name||'(unknown workspace)');
+      if(isProbe(r)){
+        const probeBadge=h('span',{className:'badge',style:'margin-left:6px;background:#e5e7eb;color:#374151'},'harness');
+        probeBadge.title='Filed by a test harness ('+String(r.account_probe)+'), not a customer';
+        wsCell.appendChild(probeBadge);
+      }
+      tr.appendChild(wsCell);
+      // The TIER, read from the request itself (cron 2026-10-20). Before this the operator had to
+      // work the plan out of the subject line ("Upgrade request: Professional plan") and then go
+      // switch the workspace by hand on another screen. `plan_name` is the joined catalogue name;
+      // the tick-mark means the resolve has already moved the workspace onto it.
+      const planTxt=(r.plan_name||r.plan_slug||'');
+      const planCell=h('td',{className:'text-xs'},
+        planTxt ? (planTxt + (r.plan_applied_at ? ' \u2713' : '')) : '\u2014');
+      if(r.plan_applied_at) planCell.title='Already switched on '+String(r.plan_applied_at).slice(0,10);
+      tr.appendChild(planCell);
       tr.appendChild(h('td',{className:'text-xs'}, r.subject||''));
       tr.appendChild(h('td',{},h('span',{className:'badge '+(isOpen(r)?'badge-yellow':'badge-green')},
         String(r.status||'open'))));
@@ -721,7 +752,15 @@ function renderPlanRequests(c){
               'Could not update that request: '+(LAST_ERR||'request failed')));
             return;
           }
-          showMsg('Marked handled');
+          // The resolve now MOVES the workspace onto the tier it asked for, so the operator is told
+          // what actually happened instead of just "saved" (cron 2026-10-20).
+          const applied=!!(ok&&ok.plan_applied);
+          const name=(ok&&ok.plan_name)||r.plan_name||r.plan_slug||'';
+          showMsg(applied
+            ? ('Marked handled \u2014 the workspace is now on '+(name||'the requested plan'))
+            : (name
+                ? ('Marked handled \u2014 that request\u2019s plan was not switched automatically; set it on the workspace')
+                : 'Marked handled'));
           load();
         }},'Mark handled');
         td.appendChild(b);
@@ -1035,7 +1074,15 @@ async function showTemplateForm(onSaved){
 
 // --- Dashboard ---
 function renderDashboardOverview(c){
-  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">Dashboard Overview</h2><div id="stats" class="grid grid-cols-3 gap-4"><p class="text-gray-400">Loading...</p></div></div>';
+  // The account's REAL plan, from `/auth/me`. `plan_name` is resolved by the app's own
+  // `features::resolve_plan_id` (the same tier the gates enforce), never the role word — the fleet
+  // rule is "where a level appears, name the real plan". Measured 2026-10-20: the dashboard named no
+  // tier at all, so a customer on Professional had no screen in their own console that said so.
+  const plan=String((ME&&ME.plan_name)||'').trim();
+  const planHead=plan
+    ?'<div class="flex items-center gap-2" title="The plan this account is on. The same tier the app\'s limits enforce."><span class="text-xs text-gray-500">Plan</span><span class="badge" id="acctPlan">'+escHtml(plan)+'</span></div>'
+    :'';
+  c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Dashboard Overview</h2>'+planHead+'</div><div id="stats" class="grid grid-cols-3 gap-4"><p class="text-gray-400">Loading...</p></div></div>';
   api('/dashboard/stats').then(d=>{
     const s=c.querySelector('#stats');
     if(!d||!d.stats){s.innerHTML='<p class="text-gray-400">No stats available.</p>';return}
@@ -1579,6 +1626,32 @@ function renderProfile(c){
       if(r){showMsg('Password updated','success');curIn.value='';newIn.value='';}else showMsg('Password change failed: '+(LAST_ERR||'request failed'),'error');
     };
     right.appendChild(pwBtn);
+
+    // ── sign-in address (cron 2026-10-20) ──
+    // The change pair (POST /api/v1/auth/email-change + its public /confirm twin) shipped with no
+    // console surface in this app: the Email line above is read-only, so an operator with a new
+    // mailbox had no way to move it. This control only ASKS — the server writes one pending row and
+    // mails the NEW address, and the account address does not move until that link is opened, which
+    // is what makes a typo harmless. A reserved test address answers delivered:false and the
+    // server's own sentence is shown, so a withheld mail is never reported as a send.
+    right.appendChild(h('label',{className:'text-xs text-gray-500 mt-4'},'Change sign-in email'));
+    right.appendChild(h('p',{className:'text-xs text-gray-400 mb-2'},'We email a confirmation link to the new address. Your current address keeps working until you open that link, and the link expires in two hours.'));
+    const ecIn=h('input',{className:'input mb-2',type:'email',maxlength:'254',autocomplete:'email',placeholder:'New email address'});
+    right.appendChild(ecIn);
+    const ecBtn=h('button',{className:'btn btn-primary'},'Send confirmation link');
+    ecBtn.onclick=async()=>{
+      const v=ecIn.value.trim();
+      if(!v){showMsg('Enter the new email address first','error');return}
+      if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)){showMsg('That does not look like an email address','error');return}
+      ecBtn.disabled=true;ecBtn.textContent='Sending...';
+      const d=await api('/auth/email-change',{method:'POST',body:JSON.stringify({new_email:v})});
+      ecBtn.disabled=false;ecBtn.textContent='Send confirmation link';
+      if(d===null){showMsg('Could not start the change: '+(LAST_ERR||'request failed'),'error');return}
+      if(d.delivered===false){showMsg(d.message||'That address cannot receive mail, so nothing was sent.','error');return}
+      ecIn.value='';
+      showMsg('Confirmation link sent to '+v+'. Your sign-in address stays as it is until you open it.','success');
+    };
+    right.appendChild(ecBtn);
   });
 }
 
@@ -2545,7 +2618,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 // renderApp() below re-points the guide after every render because this console rebuilds
 // document.body and switches views in JS with no path or hash change.
 window.appGuidePages = {
-  "dashboard:overview": { title: "Dashboard - Overview", desc: "This account at a glance: workflows, leads and recent activity. The numbers come from your own data.", actions: ["See recent runs", "Open Workflows to build or edit one"] },
+  "dashboard:overview": { title: "Dashboard - Overview", desc: "This account at a glance: the plan it is on (the same tier the app's limits enforce), then how many workflows it holds, how many instances are running right now, and how many templates exist. Every number comes from this account's own data.", actions: ["See recent runs", "Open Workflows to build or edit one"] },
   "dashboard:brand-monitor": { title: "Brand Monitor", desc: "Mentions of your brand that the platform has picked up, so you can watch what is being said.", actions: ["Review a mention", "Add a brand to watch"] },
   "dashboard:competitor-watch": { title: "Competitor Watch", desc: "The competitors this account tracks.", actions: ["Add a competitor", "Open a competitor's record"] },
   "dashboard:prospecting": { title: "Prospecting", desc: "Potential customers the platform has surfaced for this account.", actions: ["Review a prospect", "Move a prospect into your CRM"] },
@@ -2565,7 +2638,7 @@ window.appGuidePages = {
   "integrations:n8n-proxy": { title: "n8n Proxy", desc: "The link to the automation engine: what it can call here and how it authenticates.", actions: ["Review the configuration"] },
   "integrations:bridge": { title: "Bridge", desc: "The connection that lets this app talk to the other SwiftSoftware apps.", actions: ["Check the bridge status"] },
   "support:tickets": { title: "Tickets", desc: "Support requests raised on this account, with the status of each.", actions: ["Open a ticket", "Update its status"] },
-  "profile:my-profile": { title: "My Profile", desc: "Your own profile: name, company, email, password and picture. What you set here is what appears across the console.", actions: ["Set your name, company and picture", "Change your password"] },
+  "profile:my-profile": { title: "My Profile", desc: "Your own profile: name, company, the address you sign in with, password and picture. What you set here is what appears across the console.", actions: ["Set your name, company and picture", "Change your sign-in email (we email a confirmation link)", "Change your password"] },
   "profile:team": { title: "Team", desc: "The people who can sign in to this account, and the role each one holds.", actions: ["Invite a team member", "Change a member's role"] },
   "profile:plans-credits": { title: "Plans & Credits", desc: "The plan this account is on, the limits that plan carries and the credits it has. A plan is a bundle of limits and features.", actions: ["See your current plan", "Compare the plans on offer", "Check your credit balance"] },
   "profile:email-branding": { title: "Email Branding", desc: "Put your own name, colour and logo on the transactional email this app sends for your account, instead of the default WorkflowSwift header.", actions: ["Upload your logo", "Set your brand name and colour"] },
