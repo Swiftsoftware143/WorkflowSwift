@@ -1114,13 +1114,61 @@ pub fn create_router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn health_check() -> impl axum::response::IntoResponse {
-    (
-        axum::http::StatusCode::OK,
-        axum::Json(serde_json::json!({
-            "status": "ok",
-            "service": "workflowswift-api",
-            "version": env!("CARGO_PKG_VERSION")
-        })),
+// Rewritten 2026-10-22 (cron): this returned a CONSTANT 200 `{"status":"ok"}` - no state,
+// no query, so it could not fail. With the database gone or the pool exhausted the container
+// still reported healthy, which makes the green light an assertion nobody measured. It now
+// round-trips `SELECT 1` (bounded, so a hung database cannot hang the healthcheck) and answers
+// 503 with `database:"unreachable"` when that fails, so a watchdog can tell a serving app from
+// a broken one. Public by necessity (a healthcheck carries no credential) and it reads no row.
+async fn health_check(
+    axum::extract::State(state): axum::extract::State<crate::AppState>,
+) -> impl axum::response::IntoResponse {
+    let db_ok = db_answers(&state.db).await;
+
+    let body = serde_json::json!({
+        "status": if db_ok { "ok" } else { "degraded" },
+        "service": "workflowswift-api",
+        "database": if db_ok { "ok" } else { "unreachable" },
+        "version": env!("CARGO_PKG_VERSION")
+    });
+
+    if db_ok {
+        (axum::http::StatusCode::OK, axum::Json(body))
+    } else {
+        (
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(body),
+        )
+    }
+}
+
+/// Does the database actually answer? The ONE question the healthcheck asks.
+///
+/// Bounded to 3 s: a pool whose server has gone away would otherwise wait out sqlx's own
+/// acquire timeout, and a healthcheck that hangs is indistinguishable from an app that hangs.
+/// `pub(crate)` so the failure arm can be proven in a unit test with a pool that cannot
+/// connect - without that leg, a handler that always answered `true` would look identical.
+pub(crate) async fn db_answers(db: &sqlx::PgPool) -> bool {
+    let probe = sqlx::query_scalar::<_, i32>("SELECT 1").fetch_one(db);
+    matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), probe).await,
+        Ok(Ok(_))
     )
+}
+
+#[cfg(test)]
+mod health_probe_tests {
+    use super::db_answers;
+
+    /// The failure arm must be REACHABLE. A lazy pool pointing at a closed port cannot
+    /// answer, so the healthcheck must report it. This is what makes the live 200 an
+    /// assertion rather than a constant.
+    #[tokio::test]
+    async fn an_unreachable_database_answers_false() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .acquire_timeout(std::time::Duration::from_millis(250))
+            .connect_lazy("postgres://nobody:nobody@127.0.0.1:1/nothing")
+            .expect("lazy pool");
+        assert!(!db_answers(&pool).await);
+    }
 }
