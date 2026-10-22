@@ -991,7 +991,7 @@ const runSearch = async () => {
   // form fields used to be sent as industry/city/state, so the search NEVER returned results and
   // the results view — and therefore the Enrich action — was unreachable).
   const query = [industry, city, state].filter(Boolean).join(' ');
-  try { const r = await API.post('/prospecting/search', { query, limit: 20, industry, city, state }); S.searchResults = r.results || r; toast('Search complete'); setView('prospecting-results'); }
+  try { const r = await API.post('/prospecting/search', { query, limit: 20, industry, city, state }); S.searchResults = r.results || r; S.sampleData = r.sample_data === true; toast('Search complete'); setView('prospecting-results'); }
   catch(e){ toast(e.message,'err'); } S.loading=false; renderApp();
 };
 
@@ -1016,7 +1016,7 @@ const ProspectingResultsView = () => {
   const arr = Array.isArray(res) ? res : (res.items || res.results || []);
   return html`
     <div>
-      <header class="flex items-start justify-between mb-5"><div><h1 class="text-xl font-extrabold text-gray-900">Search Results</h1><p class="text-sm text-gray-500 mt-1">${arr.length} businesses found</p></div><button class="btn-outline text-sm" onClick=${()=>setView('prospecting')}>Back</button></header>
+      <header class="flex items-start justify-between mb-5"><div><h1 class="text-xl font-extrabold text-gray-900">Search Results</h1><p class="text-sm text-gray-500 mt-1">${arr.length} businesses found${S.sampleData ? html` &middot; <span style="color:#b45309;font-weight:600">sample data — live prospecting is not connected yet, so these businesses are illustrative, not real</span>` : ''}</p></div><button class="btn-outline text-sm" onClick=${()=>setView('prospecting')}>Back</button></header>
       ${arr.length === 0 ? html`<div class="empty">No results.</div>` : html`
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         ${arr.map((b,i) => html`<div class="card" key=${i} style="margin-bottom:0"><h3 class="font-semibold text-gray-800">${b.name || b.business_name || 'Business '+(i+1)}</h3>
@@ -1056,11 +1056,12 @@ const BrandMonitorView = () => {
           <div class="mt-2">${(b.platforms||[]).map(p=>html`<span class="chip">${p}</span>`)}</div>
           ${b.keywords && b.keywords.length ? html`<p class="text-xs text-gray-400 mt-1">${b.keywords.join(', ')}</p>` : ''}
           <p class="text-sm text-gray-500 mt-2">${statusBadge(b.is_active?'active':'paused')}${b.last_scanned_at ? ' · scanned ' + fmtDate(b.last_scanned_at) : ''}</p>
-          <div class="mt-3 flex gap-2"><button class="btn-red text-xs" onClick=${()=>delBrand(b.id)}>Delete</button></div></div>`)}
+          <div class="mt-3 flex gap-2"><button class="btn-outline text-xs" onClick=${()=>scanBrand(b.id)} disabled=${S.scanning === b.id}>${S.scanning === b.id ? spinner() : 'Scan for mentions'}</button><button class="btn-red text-xs" onClick=${()=>delBrand(b.id)}>Delete</button></div>${(S.mentions && S.mentionsFor === b.id) ? html`<div class="mt-3" style="border-top:1px solid #e2e8f0;padding-top:8px">${(S.mentions||[]).length === 0 ? html`<p class="text-sm text-gray-500">No mentions found.</p>` : html`${(S.mentions||[]).map(m=>html`<div style="margin-bottom:8px"><p class="text-sm font-semibold text-gray-800">${m.title || '(mention)'}</p><p class="text-xs text-gray-600">${m.snippet || ''}</p><p class="text-xs text-gray-400">${m.platform || ''}${m.sentiment ? ' · ' + m.sentiment : ''}</p></div>`)}`}${S.mentionsSample ? html`<p class="text-xs mt-2" style="color:#b45309;font-weight:600">sample data — live mention search is not connected yet, so these mentions are illustrative</p>` : ''}</div>` : ''}</div>`)}
       </div>`}
     </div>`;
 };
 const loadBrands = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.brands = (await API.get('/brand-monitors')).brand_monitors || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+const scanBrand = async (id) => { S.scanning = id; renderApp(); try { const r = await API.post('/brand-monitors/search', { brand_monitor_id: id }); S.mentions = r.mentions || []; S.mentionsFor = id; S.mentionsSample = r.sample_data === true; toast(((r.mentions||[]).length) + ' mention(s)'); } catch(e){ toast(e.message,'err'); } S.scanning = null; renderApp(); };
 const delBrand = async (id) => { if(!confirm('Delete this monitor?'))return; try { await API.del('/brand-monitors/'+id); toast('Monitor deleted'); S.brands=null; loadBrands(); } catch(e){ toast(e.message,'err'); } };
 
 // ===== Competitors (/competitors -> {competitors: [...]}, field=name/website) =====
@@ -1077,10 +1078,16 @@ const CompetitorsView = () => {
       <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Website</th><th>Status</th><th>Last Checked</th><th></th></tr></thead><tbody>
         ${list.map(c => html`<tr key=${c.id}><td class="font-semibold">${c.name}</td><td>${c.website ? html`<a class="text-blue-600" href=${c.website} target="_blank">${c.website}</a>` : '—'}</td><td>${statusBadge(c.is_active?'active':'paused')}</td><td>${fmtDate(c.last_checked_at)}</td><td class="text-right"><button class="btn-outline text-xs" onClick=${()=>checkCompetitor(c.id)}>Check</button> <button class="btn-red text-xs" onClick=${()=>delCompetitor(c.id)}>Del</button></td></tr>`)}
       </tbody></table></div>`}
+      ${S.checkResult ? html`<div class="card" style="margin-top:16px">
+        <h3 class="font-semibold text-gray-800">${S.checkResult.name || 'Competitor'} — last check</h3>
+        <p class="text-sm text-gray-600 mt-1">${S.checkResult.summary || ''}</p>
+        <p class="text-xs text-gray-400 mt-1">checked ${fmtDate(S.checkResult.checked_at)}</p>
+        ${S.checkSample ? html`<p class="text-xs mt-2" style="color:#b45309;font-weight:600">sample data — live competitor monitoring is not connected yet, so this check is illustrative</p>` : ''}
+      </div>` : ''}
     </div>`;
 };
 const loadCompetitors = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.competitors = (await API.get('/competitors')).competitors || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
-const checkCompetitor = async (id) => { try { const r = await API.post('/competitors/'+id+'/check'); toast('Check complete'); S.checkResult = r.check_result || r; } catch(e){ toast(e.message,'err'); } };
+const checkCompetitor = async (id) => { try { const r = await API.post('/competitors/'+id+'/check'); S.checkResult = r.check_result || r; S.checkSample = r.sample_data === true; toast('Check complete'); renderApp(); } catch(e){ toast(e.message,'err'); } };
 const delCompetitor = async (id) => { if(!confirm('Delete this competitor?'))return; try { await API.del('/competitors/'+id); toast('Competitor removed'); S.competitors=null; loadCompetitors(); } catch(e){ toast(e.message,'err'); } };
 
 // ===== Leads (/leads -> {leads: [...], count}, fields: name/email/phone/company/status) =====
