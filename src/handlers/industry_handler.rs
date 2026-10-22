@@ -715,6 +715,77 @@ pub async fn latest_widget_metric(
     .await
 }
 
+/// The account's OWN number for a widget metric — the fallback used when no pushed series exists.
+///
+/// `dashboard_data` is written by an n8n push and by a workflow run's data-card step, so an
+/// account whose workflows have never carried a data-card step has NO row at all, and every tile
+/// read "Awaiting data…" even where the app could answer the question from its own tables.
+/// Measured live 2026-10-22: 6 accounts, 42 widgets, `dashboard_data` held
+/// 0 rows, while one account owned 33 completed instances and its "Completed" tile still said
+/// "Awaiting data…" — the dashboard showed a placeholder to a customer with real activity.
+///
+/// Only metrics whose meaning the app's own columns define are answered here. Anything else — and
+/// any query error — returns `None`, so the tile keeps its honest empty state instead of showing a
+/// fabricated 0 (the failure mode the `loadStats` comment in the shell guards against).
+async fn live_widget_value(
+    db: &sqlx::PgPool,
+    aid: Uuid,
+    metric_key: &str,
+) -> Option<serde_json::Value> {
+    let key = metric_key.trim().to_ascii_lowercase();
+    if key.is_empty() {
+        return None;
+    }
+    // "Active projects — in development / in progress": an instance that has not reached a
+    // terminal state.
+    if key.ends_with("_active_projects") {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM workflow_instances \
+             WHERE aid = $1 AND COALESCE(is_active, true) \
+               AND status NOT IN ('completed', 'failed', 'cancelled')",
+        )
+        .bind(aid)
+        .fetch_one(db)
+        .await
+        .ok()?;
+        return Some(json!(n));
+    }
+    if key.ends_with("_completed_count") {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM workflow_instances WHERE aid = $1 AND status = 'completed'",
+        )
+        .bind(aid)
+        .fetch_one(db)
+        .await
+        .ok()?;
+        return Some(json!(n));
+    }
+    if key.ends_with("_integrations") {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM integration_targets \
+             WHERE aid = $1 AND COALESCE(is_active, true)",
+        )
+        .bind(aid)
+        .fetch_one(db)
+        .await
+        .ok()?;
+        return Some(json!(n));
+    }
+    if key.ends_with("_revenue") {
+        // `paid_at` is the structural fact that the invoice was paid; the status vocabulary is
+        // not asserted here. SUM over no rows is NULL, and no paid invoice genuinely means 0.
+        let total: Option<f64> = sqlx::query_scalar(
+            "SELECT SUM(amount)::float8 FROM invoices WHERE aid = $1 AND paid_at IS NOT NULL",
+        )
+        .bind(aid)
+        .fetch_one(db)
+        .await
+        .ok()?;
+        return Some(json!(total.unwrap_or(0.0)));
+    }
+    None
+}
+
 /// GET /api/v1/dashboard/widgets — return widgets + current data for specified industry dashboard
 /// Now accepts optional ?industry query param for multi-industry support
 /// Defaults to the primary industry dashboard
@@ -844,6 +915,14 @@ pub async fn get_dashboard_widgets(
                     );
                     AppError::Database(e)
                 })?;
+
+        // No pushed series for this metric yet → answer from the account's own rows where the
+        // metric's meaning is defined (NOT a fabricated zero: a metric we cannot answer stays
+        // None and keeps its empty state).
+        let data = match data {
+            Some(v) => Some(v),
+            None => live_widget_value(&state.db, aid, metric_key).await,
+        };
 
         let position: serde_json::Value = if pos_text.is_empty() {
             json!({})
