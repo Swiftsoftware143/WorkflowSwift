@@ -872,19 +872,68 @@ pub async fn create_checkout_session(
         ));
     };
 
-    let amount = req
+    // ── THE PRICE CHARGED IS OUR OWN CATALOGUE'S, NOT THE REQUEST'S ─────────────────────────────
+    // MEASURED 2026-10-22 (cron `default`): this handler took `amount` from the REQUEST BODY and
+    // handed it straight to the provider, so a workspace could POST `amount: 1` against the
+    // Enterprise tier (price_monthly 199) and — the moment an operator configures a key — be
+    // charged $1 for a $199 plan. The server had no opinion on the price it was selling at.
+    //
+    // The sibling arm has always read the plan row (ADASwift `create_upgrade_checkout`: `amount` is
+    // `COALESCE(price_monthly, price)` from `plans`), and this app's own console already SENDS the
+    // tier's stored `price_monthly` — so agreeing callers see no change. A request whose amount
+    // disagrees is REFUSED before a credential is even read, rather than silently repriced: a
+    // console sending the wrong number is a defect that must surface, not one the server papers
+    // over. Non-plan purchases keep the caller's amount (this route sells nothing else here, and
+    // inventing a price for them would be the same mistake in the other direction).
+    let purchasable_id = req
+        .get("purchasable_id")
+        .and_then(|v| v.as_str())
+        .and_then(|s| Uuid::parse_str(s).ok());
+
+    let requested_amount = req
         .get("amount")
         .and_then(|v| v.as_f64())
         .ok_or_else(|| AppError::BadRequest("amount is required".into()))?;
+
+    let amount = if purchasable_type == "plan" {
+        let pid = purchasable_id.ok_or_else(|| {
+            AppError::BadRequest("purchasable_id is required for plan checkout".into())
+        })?;
+        let plan: Option<(String, Option<f64>)> = sqlx::query_as(
+            "SELECT name, price_monthly::float8 FROM plan_tiers WHERE id = $1 AND is_active = true",
+        )
+        .bind(pid)
+        .fetch_optional(&state.db)
+        .await?;
+        let Some((plan_name, plan_price)) = plan else {
+            return Err(AppError::NotFound(
+                "That plan is not on sale any more. Nothing was charged.".into(),
+            ));
+        };
+        let price = plan_price.unwrap_or(0.0);
+        if !price.is_finite() || price <= 0.0 {
+            return Err(AppError::BadRequest(format!(
+                "The {} plan has no price set, so there is nothing to check out. \
+                 Ask the operator to put a price on it.",
+                plan_name
+            )));
+        }
+        if (requested_amount - price).abs() > 0.005 {
+            return Err(AppError::BadRequest(format!(
+                "The {} plan costs {:.2} — the request asked for {:.2}. \
+                 Nothing was charged; please reload the Plans screen and try again.",
+                plan_name, price, requested_amount
+            )));
+        }
+        price
+    } else {
+        requested_amount
+    };
 
     let currency = req
         .get("currency")
         .and_then(|v| v.as_str())
         .unwrap_or("USD");
-    let purchasable_id = req
-        .get("purchasable_id")
-        .and_then(|v| v.as_str())
-        .and_then(|s| Uuid::parse_str(s).ok());
 
     // Resolve success_url: explicit, else the static /thank-you.html.
     // `plan_tiers` has no `thank_you_url` column and no surface writes one: `checkout_url` there is
