@@ -171,5 +171,6 @@ pub async fn search_brand_mentions(
     Ok(Json(json!({
         "mentions": mentions,
         "total": mentions.len(),
+        "sample_data": true,
     })))
 }

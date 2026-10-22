@@ -242,5 +242,5 @@ pub async fn check_competitor(
         checked_at: Utc::now(),
     };
 
-    Ok(Json(json!({"check_result": result})))
+    Ok(Json(json!({"check_result": result, "sample_data": true})))
 }

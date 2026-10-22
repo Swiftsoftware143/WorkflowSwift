@@ -75,6 +75,7 @@ pub async fn search_businesses(
         "results": results,
         "total": results.len(),
         "query": query,
+        "sample_data": true,
     })))
 }
 
@@ -144,7 +145,9 @@ pub async fn enrich_business(
         ],
     };
 
-    Ok(Json(json!({"enriched_business": enriched})))
+    Ok(Json(
+        json!({"enriched_business": enriched, "sample_data": true}),
+    ))
 }
 
 fn rand_number() -> usize {
