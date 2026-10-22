@@ -41,7 +41,9 @@
   .t-ok{background:#16a34a}.t-err{background:#dc2626}
   .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px}
   .modal{background:#fff;border-radius:16px;padding:24px;width:100%;max-width:480px;max-height:90vh;overflow:auto}
-  @media(max-width:768px){.sidebar{display:none}}
+  /* phone: the rail collapses to ICONS and the content keeps the screen. Was `.sidebar{display:none}`, which the element's own `flex` utility class overrode — so on a 390px phone the rail stayed 240px wide and the content got 150px (38%), with controls running off the right edge. Measured 2026-10-22: sidebar 240 / content 150 / 2 controls beyond the edge. */@media(max-width:768px){.sidebar{display:flex!important;width:60px!important;min-width:60px!important;max-width:60px!important;flex:0 0 60px!important;overflow:hidden!important}.sidebar .p-4,.sidebar .p-3{padding:8px 4px!important}.sidebar .font-extrabold,.sidebar .text-xs,.sidebar .badge{display:none!important}.ind-switch{display:flex!important;font-size:0!important;padding:8px 0!important;margin-top:6px!important}.ind-switch .ind-name{display:none!important}.ind-switch .ind-ico{font-size:17px!important;line-height:1}.nav-item{font-size:0!important;justify-content:center!important;gap:0!important;padding:10px 0!important;text-align:center!important}.nav-item span{font-size:17px!important;line-height:1}.main{padding:16px 12px!important}}
+  /* phone: the KPI row's three tiles could not shrink below their own content — each card measured w=86 while its contents needed 134px, so the right-hand tile was cut off by the content column (measured live 2026-10-22 at 390px: #dstats clientW=282 scrollW=330, clipped by main's overflow:hidden). One full-width tile per row on a phone, compact, so every number and its label stay readable. */@media(max-width:640px){#dstats{grid-template-columns:1fr!important;gap:8px!important}#dstats .card{padding:12px 14px!important;gap:10px!important;margin-bottom:0!important}#dstats .text-3xl{font-size:20px!important;line-height:1}}
+  /* phone: the chart widget's inline `grid-column:span 2` forced a SECOND 46px track into the auto-fill widget grid (computed 240px 46px in a 282px column), so every widget after it — the Recent Activity feed among them — was squeezed to 46px and clipped (measured live 2026-10-22 at 390px: feed w=46, title span R=428 past the viewport, chart scrollW 302 vs clientW 282). One column on a phone with the spans clamped to it. */@media(max-width:640px){.widget-grid{grid-template-columns:1fr!important}.widget-grid>.mchart,.widget-grid>.mfeed,.widget-grid>.mcounter,.widget-grid>.mrevenue{grid-column:1/-1!important;grid-row:auto!important}}
 
   /* ── Modern visual dashboard layer ── */
   :root{
@@ -2547,7 +2549,7 @@ const App = () => {
           <div class="flex items-center gap-2">
             <span class="text-2xl">⚡</span><span class="font-extrabold text-gray-900">WorkflowSwift</span>
           </div>
-          <button class="ind-switch w-full mt-3 justify-center" onClick=${openIndustryPicker}>🏷 ${indName} ▾</button>
+          <button class="ind-switch w-full mt-3 justify-center" onClick=${openIndustryPicker}><span class="ind-ico">🏷</span><span class="ind-name">${indName} ▾</span></button>
         </div>
         <nav class="flex-1 overflow-y-auto p-3 space-y-1">
           ${NAV.map(n => html`<button class="nav-item ${S.current===n.id?'active':''}" onClick=${()=>setView(n.id)}><span>${n.icon}</span> ${n.label}</button>`)}
@@ -2562,7 +2564,7 @@ const App = () => {
               <span class="badge b-blue" id="ws-level">${planLabel(user)}</span>
             </div>
           </div>
-          <button class="nav-item text-red-600" onClick=${()=>{API.logout(); window.location.reload();}}>Sign Out</button>
+          <button class="nav-item text-red-600" onClick=${()=>{API.logout(); window.location.reload();}}><span>🚪</span> Sign Out</button>
         </div>
       </aside>
       <main class="flex-1 p-6 md:p-8 overflow-x-hidden">
