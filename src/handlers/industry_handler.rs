@@ -155,16 +155,55 @@ pub async fn set_account_industry(
     .unwrap_or(0)
         == 0;
 
-    if is_new {
-        // Check how many industries this account already has
-        let current_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM account_industries WHERE aid = $1 AND is_active = true",
+    // A SINGLE-INDUSTRY plan must still be able to CHANGE its industry. Measured live 2026-10-22:
+    // a workspace is seeded with `site-flipping`, which fills the only slot a free plan allows, so
+    // choosing ANY other industry answered 402 "Industries limit reached (1/1). Upgrade to increase
+    // your limit." — while the dashboard picker's own promise is "choose your industry from the
+    // picker and this dashboard fills in". Every free customer was stuck in a vertical they never
+    // chose; the only escape the product offered was upgrading.
+    //
+    // So: when the plan's limit is exactly 1, the account already holds exactly one OTHER active
+    // industry, and this call is a primary choice, it is a SWITCH — the previous row is retired
+    // exactly the way `remove_account_industry` retires one (is_active = false; its dashboard and
+    // KPI rows are kept, so switching back re-activates them) and the new industry takes the slot.
+    // The count of ACTIVE industries therefore never exceeds the plan's limit either way.
+    //
+    // The gate is evaluated on the OTHER active rows, not on `is_new`: switching BACK to an
+    // already-retired industry has is_new == false, and gating on is_new alone left both rows
+    // active on a one-industry plan (measured live on the first cut of this fix).
+    let active_others: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM account_industries \
+         WHERE aid = $1 AND is_active = true AND industry_slug <> $2",
+    )
+    .bind(aid)
+    .bind(industry_slug)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0);
+
+    let single_slot = if set_as_primary && active_others == 1 {
+        match features::resolve_plan_id(&state.db, aid).await? {
+            Some(pid) => {
+                features::resolve_limit(&state.db, pid, "max_industries").await? == Some(1)
+            }
+            None => false,
+        }
+    } else {
+        false
+    };
+
+    if single_slot {
+        sqlx::query(
+            "UPDATE account_industries SET is_active = false, updated_at = NOW() \
+             WHERE aid = $1 AND industry_slug <> $2",
         )
         .bind(aid)
-        .fetch_one(&state.db)
-        .await
-        .unwrap_or(0);
+        .bind(industry_slug)
+        .execute(&state.db)
+        .await?;
+    }
 
+    if is_new && !single_slot {
         features::enforce_feature_limit(&state.db, aid, "max_industries", "Industries").await?;
     }
 
