@@ -724,7 +724,7 @@ const renderWidget = (w, idx) => {
   const suffix = wcfg(w).suffix || '';
   const id = 'wc_'+ (w.id||idx);
   const hasVal = n != null;
-  return html`<div class="mcounter ${gradientFor(w)}" key=${w.id||idx}><span class="mico">${icon}</span><div class="msub">${title}</div><div class="mnum" id="${hasVal?id:''}">${hasVal?'…':'—'}</div>${hasVal ? (wcfg(w).delta!=null?html`<div class="mtrend ${Number(wcfg(w).delta)>=0?'up':'down'}">${Number(wcfg(w).delta)>=0?'▲':'▼'} ${Math.abs(wcfg(w).delta)}${suffix}</div>`:html`<div>&nbsp</div>`) : html`<div class="text-xs opacity-75 mt-2">Awaiting data…</div>`}</div>`; };
+  return html`<div class="mcounter ${gradientFor(w)}" key=${w.id||idx}><span class="mico">${icon}</span><div class="msub">${title}</div><div class="mnum" id="${hasVal?id:''}">${hasVal?'…':'—'}</div>${hasVal ? (wcfg(w).delta!=null?html`<div class="mtrend ${Number(wcfg(w).delta)>=0?'up':'down'}">${Number(wcfg(w).delta)>=0?'▲':'▼'} ${Math.abs(wcfg(w).delta)}${suffix}</div>`:html`<div aria-hidden="true"> </div>`) : html`<div class="text-xs opacity-75 mt-2">Awaiting data…</div>`}</div>`; };
 const renderSvgChart = (w) => {
   const d = w.data || {};
   const points = Array.isArray(d) ? d : (d.points || d.series || d.values || []);
