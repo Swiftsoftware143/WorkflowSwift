@@ -596,6 +596,11 @@ const industryDisplayName = () => {
 };
 const dashTitle = () => { const n = industryDisplayName(); return n ? '\u{1F4CA} ' + n + ' Dashboard' : '\u{1F4CA} Dashboard'; };
 const kpiSubtitle = () => { const n = industryDisplayName();
+  // A failed industry read renders NO picker (the card below offers Try again instead), so the
+  // header must not tell the customer to use one. Measured live 2026-10-22 in Chromium: with the
+  // fetch stubbed to 503 the header still read "choose your industry from the picker" while the
+  // card said the dashboard could not be loaded.
+  if (!n && S.accLoadFailed) return 'Live KPIs \u2014 we could not load this workspace\u2019s settings; use Try again below';
   return n ? 'Live KPIs for ' + n + ' \u2014 updated by your automations'
            : 'Live KPIs \u2014 choose your industry from the picker and this dashboard fills in from your own automations'; };
 
@@ -609,8 +614,16 @@ const spinner = () => html`<span class="spinner"></span>`;
 
 
 // ===== Dashboard (per-category visual dashboard) =====
-const loadWidgets = async (slug) => { if(S.loading)return; S.loading=true; renderApp(); try { const r = await API.getDashboardWidgets(slug || currentIndustrySlug()); const w = (Array.isArray(r)? r : (Array.isArray(r.widgets)? r.widgets : (Array.isArray(r.data)? r.data : (r && r.data && Array.isArray(r.data.widgets)? r.data.widgets : [])))); S.widgets = w; S.widgetMeta = { dashboard_id: r?.dashboard_id, industry_name: r?.industry_name }; } catch(e){ S.widgets=[]; } S.loading=false; renderApp(); setTimeout(applyCountUps, 80); };
+const loadWidgets = async (slug) => { if(S.loading)return; S.loading=true; renderApp(); try { const r = await API.getDashboardWidgets(slug || currentIndustrySlug()); const w = (Array.isArray(r)? r : (Array.isArray(r.widgets)? r.widgets : (Array.isArray(r.data)? r.data : (r && r.data && Array.isArray(r.data.widgets)? r.data.widgets : [])))); S.widgets = w; S.widgetsError = false; S.widgetMeta = { dashboard_id: r?.dashboard_id, industry_name: r?.industry_name }; } catch(e){ // A failed read is NOT an empty dashboard: say so and offer a retry, otherwise a single
+    // transient error leaves the customer looking at "your dashboard is ready" with no widgets
+    // and no way back except a reload.
+    S.widgets=[]; S.widgetsError=true; } S.loading=false; renderApp(); setTimeout(applyCountUps, 80); };
 const applyCountUps = () => { (S.widgets||[]).forEach((w,i)=>{ const n=wnum(w); const id='wc_'+(w.id||i); const idc='wcur_'+(w.id||i); if(n!=null){ document.getElementById(id) && countUp(id,n); document.getElementById(idc) && countUp(idc,n); } }); };
+const retryWidgets = async () => {
+  S.loading = true; S.widgetsError = false; S.widgetsSlug = null; renderApp();
+  await loadWidgets(currentIndustrySlug());
+  S.loading = false; renderApp();
+};
 const loadDashTabs = async (slug) => { try { const r = await API.getDashboardTabs(slug || currentIndustrySlug()); S.dashboardTabs = r.tabs || r.items || r || []; } catch(e){ S.dashboardTabs=[]; } };
 // GET /dashboard/timeline was served but uncalled — the account's own activity feed.
 const loadTimeline = async () => { try { const r = await API.getTimeline(); S.timeline = r.timeline || r.items || []; } catch(e){ S.timeline=[]; } renderApp(); };
@@ -713,7 +726,11 @@ const DashboardView = () => {
       ${widgets.length === 0 ? html`
         <div class="card"><div class="empty">
           <div class="text-4xl mb-3">📈</div>
-          ${S.accLoadFailed ? html`
+          ${S.widgetsError ? html`
+            <p class="font-semibold text-gray-800 mb-1">We couldn't load your dashboard data</p>
+            <p class="text-sm text-gray-500 mb-4">The connection dropped while we were reading your widgets. Nothing is lost — try again.</p>
+            <button class="btn text-sm" onClick=${retryWidgets} disabled=${S.loading}>${S.loading?'Retrying…':'Try again'}</button>`
+          : S.accLoadFailed ? html`
             <p class="font-semibold text-gray-800 mb-1">We couldn't load your dashboard</p>
             <p class="text-sm text-gray-500 mb-4">The connection dropped while we were reading your industry settings. Nothing is lost — try again.</p>
             <button class="btn text-sm" onClick=${retryAccountIndustry} disabled=${S.loading}>${S.loading?'Retrying…':'Try again'}</button>`

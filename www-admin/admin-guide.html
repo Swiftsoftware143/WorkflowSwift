@@ -139,6 +139,17 @@
     dl { grid-template-columns: 1fr; gap: 2px; }
     dt { padding-bottom: 0; }
   }
+
+/* Phone: nothing on this page may widen the document (measured 2026-10-22, real Chromium at 390 px).
+   A route/merge-field table laid out wider than the column, and one long migration filename in
+   inline <code>, each pushed the whole guide sideways (measured 420-917 px of document width).
+   The table now scrolls inside its own box and a long token wraps, so the page itself stays 100%. */
+@media (max-width: 768px) {
+  body, .main-content, .content-area, main { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+  table { display: block; width: 100%; max-width: 100%; overflow-x: auto; }
+  pre { overflow-x: auto; max-width: 100%; }
+  code { overflow-wrap: anywhere; }
+}
 </style>
 </head>
 <body>
@@ -167,6 +178,7 @@
       <a href="#credits-payments-and-affiliates" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Credits, payments and affiliates</a>
       <a href="#rate-limiting" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Rate limiting</a>
       <a href="#tag-free-account-admin-configurable" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Tag → free account (admin-configurable)</a>
+      <a href="#profile-picture" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Your profile picture</a>
       <a href="#operational-notes" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Operational notes</a>
     </nav>
     <div class="sidebar-footer">&copy; 2026 WorkflowSwift &mdash; Admin Console</div>
@@ -919,6 +931,18 @@
       </ul>
       <p>Both are read by the receiver and written through <code>GET|PUT /api/v1/admin/provisioning-settings</code>
       (platform admins only).</p>
+      <h2 id="profile-picture">Your profile picture</h2>
+      <p>Any signed-in user can add a picture from the console: open the account menu, choose
+      <strong>Profile</strong>, then <strong>Upload picture</strong>. It appears wherever the user is
+      shown; <strong>Remove picture</strong> deletes it and the card falls back to the account's
+      initials.</p>
+      <p>Accepted are <strong>PNG, JPEG, GIF and WebP up to 2&nbsp;MB</strong>. The type is decided by
+      the file's own bytes, not its name, so a renamed file cannot slip past the check, and an
+      oversized image is refused with the limit stated instead of being stored truncated. Uploading
+      again replaces the previous picture.</p>
+      <p>Routes: <code>POST|DELETE /api/v1/auth/avatar</code> and
+      <code>GET /api/v1/auth/avatar/&lt;account id&gt;</code>. The profile answer carries
+      <code>avatar_url</code> with a version marker so a replacement is not served from cache.</p>
       <h2 id="operational-notes">Operational notes</h2>
       <ul>
       <li>The container runs with <code>network_mode: host</code> and publishes nothing — the API binds

@@ -41,16 +41,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:linear-g
 </div>
 
 <div class="pane on" id="paneLogin">
-  <input id="e" type="email" placeholder="Email" autocomplete="email">
-  <input id="p" type="password" placeholder="Password" autocomplete="current-password">
+  <input id="e" type="email" placeholder="Email" autocomplete="email" aria-label="Email">
+  <input id="p" type="password" placeholder="Password" autocomplete="current-password" aria-label="Password">
   <button id="b" onclick="L()">Sign In</button>
   <div class="fp"><a href="/forgot-password.html">Forgot password?</a></div>
   <div id="m" class="msg"></div>
 </div>
 
 <div class="pane" id="paneRegister">
-  <input id="rn" name="name" type="text" maxlength="243" placeholder="Full name" autocomplete="name">
-  <input id="re" name="email" type="email" placeholder="you@company.com" autocomplete="email">
+  <input id="rn" name="name" type="text" maxlength="243" placeholder="Full name" autocomplete="name" aria-label="Full name">
+  <input id="re" name="email" type="email" placeholder="you@company.com" autocomplete="email" aria-label="Email">
   <p class="note">No password to choose &mdash; we'll email your login details so you can confirm your address by signing in.</p>
   <!-- The tier the visitor clicked on /pricing (cron 2026-10-21). Hidden unless ?plan= names one. -->
   <div id="rplan" class="note" style="display:none;background:#eef2ff;border:1px solid #c7d2fe;color:#3730a3;border-radius:8px;padding:9px 11px;text-align:left"></div>

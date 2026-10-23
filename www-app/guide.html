@@ -139,6 +139,13 @@
     dl { grid-template-columns: 1fr; gap: 2px; }
     dt { padding-bottom: 0; }
   }
+
+  /* kanban t_b92fbd43 — the guide's two tables have a min-content width of 592px, and
+     .main-content / .content-area are flex items with the default min-width:auto, so that width
+     propagated outward: measured 2026-10-22 at 390x844 the document scrolled 624px wide (234px of
+     overflow) and every block on the page inherited it. A table scrolls inside its own box now. */
+  .main-content, .content-area { min-width: 0; }
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
   .note { background: var(--bg-elevated); border: 1px solid var(--border); border-left: 3px solid var(--indigo-light); border-radius: 8px; padding: 14px 18px; margin: 20px 0; font-size: 14px; color: var(--text-secondary); }
 </style>
 </head>
@@ -355,6 +362,7 @@
         an activity timeline and per-workspace views.</li>
       </ul>
       <h2 id="keys-two-different-things">Keys: two different things</h2>
+      <div class="table-scroll">
       <table>
       <thead>
       <tr>
@@ -376,6 +384,7 @@
       </tr>
       </tbody>
       </table>
+      </div>
       <ul>
       <li><strong>Bring your own keys (BYOK).</strong> Every third-party key is entered by <strong>you</strong> in the app, at
         tenant level; it is never a global paste by an admin and never env-var-only.</li>
@@ -414,6 +423,7 @@
       audit table is empty and nothing writes to it) and no report builder exist anywhere in the product.
       A plan feature now exists only where the app actually enforces it.</p>
       <p>Your tier today:</p>
+      <div class="table-scroll">
       <table>
       <thead>
       <tr>
@@ -473,6 +483,7 @@
       <p>Either way you get an <strong>email receipt</strong> confirming what you asked for, and a second
       email when the team has made the switch. Your plan name on the dashboard updates at the same time.</p>
 
+      </div>
       <h2 id="your-account">Your account and sign-in</h2>
       <p><strong>Available to every user.</strong> The <strong>👤 Profile</strong> screen in the console is your own
       account, not the workspace's settings. It holds:</p>
