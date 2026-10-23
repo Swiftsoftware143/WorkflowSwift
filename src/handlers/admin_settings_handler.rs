@@ -2011,6 +2011,12 @@ pub async fn test_sms_settings(
 /// signup used to disappear the moment any later send succeeded. This is the history behind that
 /// one-line status: `withheld` = nothing was attempted (reserved/harness recipient), `failed` = the
 /// transport refused it, `sent` = the provider accepted it.
+///
+/// THOSE `withheld` ROWS ARE NOT IN THE LIST (2026-10-23). Every fleet probe signup writes one, so the
+/// tail was 49/50 harness addresses when measured live on this app — the history could not answer the
+/// question it exists for ("did that customer ever get their password?") because real attempts had been
+/// pushed out of the window by rows that were never sends. The tail now lists real attempts only, and
+/// `withheld_7d` counts the harness rows that are not shown, so nothing is silently dropped.
 pub async fn email_log(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -2018,11 +2024,18 @@ pub async fn email_log(
     require_admin(&claims)?;
     let rows = sqlx::query(
         "SELECT to_email, template, status, detail, created_at FROM email_send_log \
-         ORDER BY created_at DESC LIMIT 50",
+         WHERE status <> 'withheld' ORDER BY created_at DESC LIMIT 50",
     )
     .fetch_all(&state.db)
     .await
     .unwrap_or_default();
+    let withheld: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM email_send_log \
+          WHERE status = 'withheld' AND created_at > NOW() - INTERVAL '7 days'",
+    )
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0);
     let sends: Vec<serde_json::Value> = rows
         .iter()
         .map(|r| {
@@ -2035,7 +2048,7 @@ pub async fn email_log(
             })
         })
         .collect();
-    Ok(Json(json!({ "sends": sends })))
+    Ok(Json(json!({ "sends": sends, "withheld_7d": withheld })))
 }
 
 /// Tenant-admin gate. The canonical 403 for this app (`{"code":403,"error":true,

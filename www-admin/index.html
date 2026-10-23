@@ -2044,7 +2044,7 @@ function renderAdminSettings(c){
    +'<button class="btn btn-sm btn-ghost" id="etest">Send test email</button></div>'
    +'<pre id="eresult" class="text-xs text-gray-600 mt-3 whitespace-pre-wrap"></pre></div>'
    +'<div class="card mt-4"><h2 class="text-xl font-bold mb-1">Recent sends</h2>'
-   +'<p class="text-xs text-gray-500 mb-3">The last 50 transactional emails this installation tried to send, newest first. The one-line status above only remembers the MOST RECENT message &mdash; every later mail overwrites it &mdash; so this list is the history: a welcome or password mail the provider refused stays visible here after other mail succeeds. <em>Not sent</em> means the recipient was a reserved/test address, so nothing was attempted and no customer was affected.</p>'
+   +'<p class="text-xs text-gray-500 mb-3">The last 50 transactional emails this installation tried to send, newest first. The one-line status above only remembers the MOST RECENT message &mdash; every later mail overwrites it &mdash; so this list is the history: a welcome or password mail the provider refused stays visible here after other mail succeeds. Reserved/test addresses are not listed &mdash; a withheld row was never an attempt and no customer was affected.</p>'
    +'<div id="esends"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
 
   // Tag → free account (design §3.3): the master toggle + the in-app entry-plan picker. Both keys
@@ -2094,7 +2094,8 @@ function renderAdminSettings(c){
     const label=st=>st==='sent'?'sent':(st==='withheld'?'not sent':'FAILED');
     el.innerHTML='<table class="w-full text-sm"><thead><tr class="text-xs text-gray-500 text-left"><th class="py-1">When</th><th>To</th><th>Email</th><th>Result</th></tr></thead><tbody>'
       +sd.sends.map(s=>'<tr class="border-t"><td class="py-1 whitespace-nowrap text-xs text-gray-500">'+esc2(s.at?new Date(s.at).toLocaleString():'')+'</td><td class="text-xs font-mono">'+esc2(s.to)+'</td><td class="text-xs">'+esc2(s.template||'')+'</td><td><span style="padding:1px 8px;border-radius:9999px;font-size:11px;'+tone(s.status)+'" title="'+esc2(s.detail||'')+'">'+label(s.status)+'</span></td></tr>').join('')
-      +'</tbody></table>';
+      +'</tbody></table>'
+      +'<p class="text-xs text-gray-400 mt-2">Reserved/test addresses (the fleet\'s own probes) are not listed here &mdash; '+(sd.withheld_7d||0)+' withheld in the last 7 days, and none of them were attempts.</p>';
   };
   loadSends();
 
