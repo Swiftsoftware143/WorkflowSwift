@@ -106,6 +106,82 @@ pub async fn list(
     Ok(Json(json!({ "items": rows, "count": rows.len() })))
 }
 
+/// File the paid tier a VISITOR PICKED on the public pricing page, at the moment they sign up.
+///
+/// The pricing cards carry `?plan=professional` into `/signup`, nginx carries that query through to
+/// `/login?register=1&plan=professional`, and the register form posted `{name, email}` — so the pick
+/// died at the door: the workspace started on Free and NOTHING in the operator's Plan requests queue
+/// knew a paid tier had been asked for. A tier a visitor picked is a lead, not a preference.
+///
+/// The row is the SAME machine-readable `source='plan_request'` ticket the console's Plan & Billing
+/// request button files (`POST /tickets` with `plan_slug`), which is what the operator's Plan
+/// requests screen queries (`?source=plan_request`) and what its Resolve action switches the
+/// workspace with. So a signup pick is workable, not a line in a log.
+///
+/// Best-effort by design: a free, unknown or retired slug files nothing and returns `None`; the
+/// signup itself must never fail because of a preference. Called AFTER the account exists, so the
+/// ticket always has an owner.
+pub async fn file_signup_plan_request(
+    db: &sqlx::PgPool,
+    aid: Uuid,
+    picked: &str,
+) -> Result<Option<(String, String)>, AppError> {
+    let slug = picked.trim().to_ascii_lowercase();
+    if slug.is_empty() || slug == "free" {
+        return Ok(None);
+    }
+    let row: Option<(String, String, Option<f64>, Option<f64>)> = sqlx::query_as(
+        "SELECT slug, name, price_monthly::float8, price_yearly::float8 FROM plan_tiers \
+         WHERE slug = $1 AND is_active = true LIMIT 1",
+    )
+    .bind(&slug)
+    .fetch_optional(db)
+    .await?;
+    // An unknown / retired slug is not a request an operator could ever honour.
+    let Some((slug, name, monthly, yearly)) = row else {
+        return Ok(None);
+    };
+    let monthly = monthly.unwrap_or(0.0);
+    let yearly = yearly.unwrap_or(0.0);
+    // A tier that costs NOTHING is not a request to buy — the signup already starts on it.
+    if monthly <= 0.0 && yearly <= 0.0 {
+        return Ok(None);
+    }
+    // One press is one request, keyed on the TIER: a workspace with a Professional ask open can
+    // still ask for Enterprise, and no visitor's pick may become two rows in the operator's queue.
+    let existing: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM tickets WHERE aid = $1 AND source = 'plan_request' AND plan_slug = $2 \
+         AND lower(status) NOT IN ('closed','resolved','done') ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(aid)
+    .bind(&slug)
+    .fetch_optional(db)
+    .await?;
+    if existing.is_some() {
+        return Ok(Some((slug, name)));
+    }
+    let price = if monthly > 0.0 {
+        format!("${monthly:.0}/month")
+    } else {
+        format!("${yearly:.0}/year")
+    };
+    sqlx::query(
+        "INSERT INTO tickets (id, aid, subject, description, status, priority, source, plan_slug) \
+         VALUES ($1,$2,$3,$4,'open','medium','plan_request',$5)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(aid)
+    .bind(format!("Upgrade request: {name} plan"))
+    .bind(format!(
+        "Picked the {name} plan ({price}) on the pricing page at signup. Self-serve checkout is not \
+         open yet, so the team has to switch this workspace onto the paid plan by hand."
+    ))
+    .bind(&slug)
+    .execute(db)
+    .await?;
+    Ok(Some((slug, name)))
+}
+
 /// Both spellings a console may use for "the customer is asking to change plan": the operator
 /// queue labels it `plan_request`, the served console files it as `plan_request` too, and older
 /// builds sent `billing` for the same intent.

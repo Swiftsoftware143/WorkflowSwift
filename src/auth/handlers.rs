@@ -152,6 +152,34 @@ pub async fn register(
     )
     .await?;
 
+    // The tier the visitor picked on the pricing page becomes a WORKABLE request (cron 2026-10-23).
+    // `create_account` above may only bind a zero-priced tier, so the paid pick would otherwise be
+    // dropped in silence — which is exactly what the nginx comment on the register redirect describes.
+    // Filed as the same `source='plan_request'` ticket the console's request button writes.
+    let plan_request = match req
+        .plan_slug
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
+        Some(picked) => {
+            match crate::handlers::tickets_handler::file_signup_plan_request(
+                &state.db,
+                ids.account_id,
+                picked,
+            )
+            .await
+            {
+                Ok(filed) => filed,
+                Err(e) => {
+                    tracing::warn!("signup plan pick '{picked}' was not recorded: {e}");
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+
     let aid = ids.account_id;
     let user_id = ids.user_id;
     let account_name = ids.account_name;
@@ -211,6 +239,12 @@ pub async fn register(
                 slug: account_slug,
                 is_active: true,
             },
+            // What the signup page reads to tell the visitor their pick reached the team
+            // (`{plan_slug, plan_name}`), null when they picked Free or named no tier.
+            plan_request: plan_request.map(|(slug, name)| json!({
+                "plan_slug": slug,
+                "plan_name": name,
+            })),
         })),
     ))
 }

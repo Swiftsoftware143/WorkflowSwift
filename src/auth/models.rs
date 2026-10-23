@@ -158,6 +158,10 @@ pub struct RegisterResponse {
     pub expires_in: i64,
     pub user: UserResponse,
     pub account: AccountResponse,
+    /// The paid tier the visitor picked on the pricing page, once it has been filed as a
+    /// machine-readable `plan_request` ticket (`{plan_slug, plan_name}`). Null when they picked
+    /// Free, named no tier, or the catalogue no longer holds it.
+    pub plan_request: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
