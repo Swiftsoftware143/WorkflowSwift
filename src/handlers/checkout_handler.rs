@@ -895,17 +895,20 @@ pub async fn create_checkout_session(
         .and_then(|v| v.as_f64())
         .ok_or_else(|| AppError::BadRequest("amount is required".into()))?;
 
-    let amount = if purchasable_type == "plan" {
+    // The tier's SLUG travels out of this block with its price: a REFUSED plan checkout is recorded
+    // as this workspace's plan request (see the refusal arm below), and the operator's queue keys
+    // the ask by the slug and seats the workspace from it.
+    let (amount, plan_slug) = if purchasable_type == "plan" {
         let pid = purchasable_id.ok_or_else(|| {
             AppError::BadRequest("purchasable_id is required for plan checkout".into())
         })?;
-        let plan: Option<(String, Option<f64>)> = sqlx::query_as(
-            "SELECT name, price_monthly::float8 FROM plan_tiers WHERE id = $1 AND is_active = true",
+        let plan: Option<(String, Option<f64>, String)> = sqlx::query_as(
+            "SELECT name, price_monthly::float8, slug FROM plan_tiers WHERE id = $1 AND is_active = true",
         )
         .bind(pid)
         .fetch_optional(&state.db)
         .await?;
-        let Some((plan_name, plan_price)) = plan else {
+        let Some((plan_name, plan_price, slug)) = plan else {
             return Err(AppError::NotFound(
                 "That plan is not on sale any more. Nothing was charged.".into(),
             ));
@@ -925,9 +928,9 @@ pub async fn create_checkout_session(
                 plan_name, price, requested_amount
             )));
         }
-        price
+        (price, slug)
     } else {
-        requested_amount
+        (requested_amount, String::new())
     };
 
     let currency = req
@@ -956,20 +959,44 @@ pub async fn create_checkout_session(
 
     let metadata = req.get("metadata").cloned().unwrap_or(json!({}));
 
-    // Get the active provider config
-    let provider = get_active_provider(&state.db, &provider_type)
-        .await?
-        .ok_or_else(|| {
-            AppError::BadRequest(format!("No active {} provider configured", provider_type))
-        })?;
+    // ── AN UNCONFIGURED INSTALL IS NOT THE BUYER'S ERROR, AND THE ASK MUST NOT BE LOST ────────
+    // MEASURED LIVE 2026-10-23 (cron `default`): this app's arm answered `400 {"error":"No active
+    // stripe provider configured"}` — an operator instruction addressed to a customer, in a status
+    // that blames the caller for the SERVER's missing merchant account. The console re-worded it
+    // and filed a plan request, but only if that console JS ran: any other client, or a buyer who
+    // closed the tab, left nothing behind. The refusal is now recorded HERE, in `tickets` with
+    // `source = 'plan_request'` — the same row the console files and the operator's queue reads,
+    // keyed on (aid, source, plan_slug, open) exactly as `tickets_handler::create` dedupes, so the
+    // console's later press returns it as `already_open` instead of minting a twin. No receipt mail
+    // is queued on this path: nothing was charged, and a refusal must not add mail volume.
+    let provider = match get_active_provider(&state.db, &provider_type).await? {
+        Some(p) if !p["api_key"].as_str().unwrap_or("").trim().is_empty() => p,
+        other => {
+            let reason = if other.is_some() {
+                "payment_provider_key_missing"
+            } else {
+                "payment_provider_not_configured"
+            };
+            if !plan_slug.is_empty() {
+                record_refused_upgrade(&state, account_id, user_id, &plan_slug, amount, reason)
+                    .await;
+            }
+            tracing::error!(
+                "checkout/create REFUSED: {reason} for account {account_id} asking for {plan_slug}"
+            );
+            return Ok((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({
+                    "error": "payment_provider_not_configured",
+                    "message": "No charge was made — nothing was sent to a payment provider, so you cannot be billed. Upgrades are not switched on for this installation yet: your request has been recorded for the platform team, who can activate this plan for your workspace by hand.",
+                    "configured": false,
+                    "request_recorded": !plan_slug.is_empty()
+                })),
+            ));
+        }
+    };
 
     let api_key = provider["api_key"].as_str().unwrap_or("").to_string();
-    if api_key.is_empty() {
-        return Err(AppError::BadRequest(format!(
-            "{} API key not configured",
-            provider_type
-        )));
-    }
 
     // Create checkout session with the provider
     let provider_session = match provider_type.as_str() {
@@ -1029,12 +1056,67 @@ pub async fn create_checkout_session(
     .execute(&state.db)
     .await?;
 
-    Ok(Json(json!({
-        "session_id": session_id.to_string(),
-        "provider_session_id": provider_session_id,
-        "checkout_url": checkout_url,
-        "provider_type": provider_type,
-    })))
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "session_id": session_id.to_string(),
+            "provider_session_id": provider_session_id,
+            "checkout_url": checkout_url,
+            "provider_type": provider_type,
+        })),
+    ))
+}
+
+/// Record a refused plan checkout as this workspace's plan request (2026-10-23).
+///
+/// The destination is `tickets` with `source = 'plan_request'`: the table the console's own
+/// "request this plan" press writes and the operator's Plan requests queue reads, where resolving
+/// the row moves the workspace onto the tier. The open-row key is the one
+/// `tickets_handler::create` already dedupes on (account + source + tier, status not closed), so
+/// the console's later press returns this row as `already_open` rather than a twin.
+///
+/// Deliberately queues no receipt mail. A failure to record is logged, never returned — the buyer
+/// still gets the refusal sentence, and the operator still has the log line naming the account.
+async fn record_refused_upgrade(
+    state: &AppState,
+    account_id: Uuid,
+    user_id: Uuid,
+    plan_slug: &str,
+    amount: f64,
+    reason: &str,
+) {
+    let plan_name: Option<String> =
+        sqlx::query_scalar("SELECT name FROM plan_tiers WHERE slug = $1")
+            .bind(plan_slug)
+            .fetch_optional(&state.db)
+            .await
+            .unwrap_or(None);
+    let label = plan_name.unwrap_or_else(|| plan_slug.to_string());
+    let inserted = sqlx::query(
+        r#"INSERT INTO tickets (id, aid, subject, description, status, priority, source, plan_slug)
+           SELECT $1, $2, $3, $4, 'open', 'medium', 'plan_request', $5
+            WHERE NOT EXISTS (
+                SELECT 1 FROM tickets
+                 WHERE aid = $2 AND source = 'plan_request' AND plan_slug = $5
+                   AND lower(status) NOT IN ('closed', 'resolved', 'done'))"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(account_id)
+    .bind(format!("Upgrade request: {label} plan"))
+    .bind(format!(
+        "This workspace pressed Upgrade on Plan & Billing and asked for the {label} plan \
+         (${amount:.2}/month). Self-serve checkout is not open on this installation yet \
+         ({reason}), so the team makes the switch by hand. Nothing was charged. Filed by \
+         {user_id}."
+    ))
+    .bind(plan_slug)
+    .execute(&state.db)
+    .await;
+    if let Err(e) = inserted {
+        tracing::error!(
+            "checkout/create: could not record the refused upgrade as a plan request: {e:?}"
+        );
+    }
 }
 
 /// Create a Stripe checkout session via Stripe API
