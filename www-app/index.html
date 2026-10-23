@@ -321,7 +321,7 @@ const API = (() => {
   };
 })();
 
-const S = { view:'login', sessionEnded:false, loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, dataVer:0, apiKeys:null, extBuild:null, hexKey:null, hexKeyInput:'', enrich:null, enriching:null, newApiKey:null, builder:null, steps:null, stepsWf:null, stepValidation:null, stepDraft:null, widgetCat:null, notifyChannels:null, notifyRecipients:null, rendSummary:null, renditions:null, rendWf:'', rendStatus:'active', rendSel:null, stitchName:'', modalErr:null, plans:null, plansTried:false, checkoutMsg:null, checkoutBusy:false, requestForPlan:null, requestPlanBusy:false, requestPlanMsg:null };
+const S = { view:'login', sessionEnded:false, loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, accLoadFailed:false, accPromise:null, dataVer:0, apiKeys:null, extBuild:null, hexKey:null, hexKeyInput:'', enrich:null, enriching:null, newApiKey:null, builder:null, steps:null, stepsWf:null, stepValidation:null, stepDraft:null, widgetCat:null, notifyChannels:null, notifyRecipients:null, rendSummary:null, renditions:null, rendWf:'', rendStatus:'active', rendSel:null, stitchName:'', modalErr:null, plans:null, plansTried:false, checkoutMsg:null, checkoutBusy:false, requestForPlan:null, requestPlanBusy:false, requestPlanMsg:null };
 
 // Views call their loaders from inside render (the house pattern: `if(!S.x) loadX();`), and
 // every loader calls renderApp() again — a *re-entrant* preact render. The inner render
@@ -477,7 +477,7 @@ const IndustryPickerView = ({ asModal }) => {
     try {
       const r = await API.removeAccountIndustry(slug);
       toast((r && r.message) || ("Industry '" + slug + "' dashboard removed"));
-      S.accIndustry = null; S.accLoaded = false; S.widgets = null; S.widgetsSlug = null; S.viewParams = {};
+      S.accIndustry = null; S.accLoaded = false; S.accLoadFailed = false; S.widgets = null; S.widgetsSlug = null; S.viewParams = {};
       await loadAccountIndustry();
     } catch(e) { toast(e.message, 'err'); }
     renderApp();
@@ -486,7 +486,7 @@ const IndustryPickerView = ({ asModal }) => {
   const pick = async (ic) => { try { sel = ic.slug || ic.industry_slug || ic.id; S.selectedIndustry = sel; renderApp(); } catch(e){} };
   const done = async () => { if(!sel) return toast('Pick an industry to continue','err'); S.loading=true; renderApp();
     try { await API.putAccountIndustry(sel, true); toast('Dashboard ready for ' + (S.selectedIndustryName||sel));
-      if (S.pickingIndustry) { S.pickingIndustry=false; S.view='app'; S.current='dashboard'; S.widgets=null; S.widgetsSlug=null; S.accIndustry=null; S.accLoaded=false; S.viewParams={industry: sel}; }
+      if (S.pickingIndustry) { S.pickingIndustry=false; S.view='app'; S.current='dashboard'; S.widgets=null; S.widgetsSlug=null; S.accIndustry=null; S.accLoaded=false; S.accLoadFailed=false; S.viewParams={industry: sel}; }
       else { closeModal(); }
     } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
   const card = (ic) => { const slug = ic.slug || ic.industry_slug || ic.id; const nm = ic.name || ic.industry_name || slug; const up = (slug||'').replace(/_/g,'-');
@@ -509,14 +509,11 @@ const IndustryPickerView = ({ asModal }) => {
 };
 const loadIndustries = async () => { if(S.loading)return; S.loading=true; renderApp(); try { const r = await API.getIndustries(); S.industries = r.industries || r.categories || r.items || r || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
 const openIndustryPicker = () => { if(!S.industries && !S.loading) loadIndustries(); S.pickingIndustry=false; S.modal='industry'; renderApp(); };
-const loadAccountIndustry = async () => {
-  if(S.accLoaded) return S.accIndustry;
-  S.accLoaded=true;
-  try { S.accIndustry = await API.getAccountIndustry(); } catch(e){ S.accIndustry=null; }
-  // GET /accounts/industry answers EVERY linked row — a removed dashboard is soft-deactivated
-  // (is_active=false) rather than dropped, so it would otherwise stay selectable AND get picked
-  // as the current industry by the [0] fallback right after a Remove. Keep the active rows only,
-  // and re-point a primary that the removal left dangling.
+// GET /accounts/industry answers EVERY linked row — a removed dashboard is soft-deactivated
+// (is_active=false) rather than dropped, so it would otherwise stay selectable AND get picked
+// as the current industry by the [0] fallback right after a Remove. Keep the active rows only,
+// and re-point a primary that the removal left dangling.
+const normaliseAccountIndustry = () => {
   if (S.accIndustry && Array.isArray(S.accIndustry.industries)) {
     S.accIndustry.industries = S.accIndustry.industries.filter(x => x.is_active !== false);
     const slugs = S.accIndustry.industries.map(x => x.industry_slug || x.slug);
@@ -525,6 +522,47 @@ const loadAccountIndustry = async () => {
     if (!S.accIndustry.primary_industry && slugs[0]) S.accIndustry.primary_industry = slugs[0];
   }
   return S.accIndustry;
+};
+// ONE transient failure of GET /accounts/industry used to strand the whole dashboard on the
+// "Pick your industry" picker for the life of the page load (kanban t_800990f8): `accLoaded` was
+// set BEFORE the fetch resolved, the catch swallowed the error, and nothing ever asked again — so
+// a customer whose industry WAS set was told to choose one, and the shell never even reached the
+// /dashboard/widgets request (measured live: 1 of ~13 first loads, no page error, a reload fixed
+// it). Now `accLoaded` means "the server ANSWERED", concurrent callers share one in-flight
+// request, a failed attempt is retried a bounded 3 times with backoff, and if every attempt fails
+// the dashboard SAYS so and offers Try again instead of dead-ending on the picker.
+const ACC_RETRY_DELAYS = [0, 400, 1200];
+const loadAccountIndustry = (force) => {
+  if (force) { S.accIndustry = null; S.accLoaded = false; S.accLoadFailed = false; }
+  if (S.accLoaded) return Promise.resolve(S.accIndustry);
+  // A failed load is retried only by an explicit Try again (loadAccountIndustry(true)); without
+  // this the shell's own render would re-enter the fetch on every frame of a real outage.
+  if (S.accLoadFailed) return Promise.resolve(null);
+  if (S.accPromise) return S.accPromise;              // one request per page load
+  S.accPromise = (async () => {
+    for (let i = 0; i < ACC_RETRY_DELAYS.length; i++) {
+      if (ACC_RETRY_DELAYS[i]) await new Promise(r => setTimeout(r, ACC_RETRY_DELAYS[i]));
+      try {
+        S.accIndustry = await API.getAccountIndustry();
+        normaliseAccountIndustry();
+        S.accLoaded = true; S.accLoadFailed = false;
+        return S.accIndustry;
+      } catch (e) { /* transient — fall through to the next bounded attempt */ }
+    }
+    S.accIndustry = null; S.accLoadFailed = true;
+    return null;
+  })().finally(() => { S.accPromise = null; });
+  return S.accPromise;
+};
+// The visible half of that failure: the customer sees a sentence and a button, not a picker for an
+// industry they already have.
+const retryAccountIndustry = async () => {
+  S.loading = true; S.widgetsSlug = null; renderApp();
+  await loadAccountIndustry(true);
+  S.loading = false;
+  const s = currentIndustrySlug();
+  if (s) { S.widgetsSlug = s; loadDashTabs(s); loadWidgets(s); }
+  renderApp();
 };
 const currentIndustrySlug = () => { const a = S.accIndustry; const s = (a && (a.primary_industry || (a.industries&&a.industries[0]&&(a.industries[0].industry_slug||a.industries[0].slug)))); if (s) return s; if (S.viewParams?.industry) return S.viewParams.industry; return null; };
 const currentIndustryName = () => { const a=S.accIndustry; const slug=currentIndustrySlug(); if(a&&a.industries){ const it=a.industries.find(x=>x.industry_slug===slug||x.slug===slug||x.id===slug); if(it) return it.industry_name||it.name||slug; } return S.selectedIndustryName||slug; };
@@ -609,7 +647,7 @@ const seedSampleData = async () => {
 const DashboardView = () => {
   const slug = currentIndustrySlug();
   if (slug && !S.loading && S.widgetsSlug !== slug) { S.widgetsSlug = slug; loadDashTabs(slug); loadWidgets(slug); }
-  else if (!slug && !S.loading && !S.widgetsSlug && !S.accLoaded) {
+  else if (!slug && !S.loading && !S.widgetsSlug && !S.accLoaded && !S.accLoadFailed) {
     // A RETURNING sign-in lands here: the dashboard renders before the account's industry has been
     // read, so the header rendered "Live KPIs for  —" and the KPI grid stayed empty while the
     // workspace DID have an industry (measured live 2026-10-18 on probe-ind-…: /api/v1/accounts/industry
@@ -666,7 +704,11 @@ const DashboardView = () => {
       ${widgets.length === 0 ? html`
         <div class="card"><div class="empty">
           <div class="text-4xl mb-3">📈</div>
-          ${!S.accIndustry || !currentIndustrySlug() ? html`
+          ${S.accLoadFailed ? html`
+            <p class="font-semibold text-gray-800 mb-1">We couldn't load your dashboard</p>
+            <p class="text-sm text-gray-500 mb-4">The connection dropped while we were reading your industry settings. Nothing is lost — try again.</p>
+            <button class="btn text-sm" onClick=${retryAccountIndustry} disabled=${S.loading}>${S.loading?'Retrying…':'Try again'}</button>`
+          : !S.accIndustry || !currentIndustrySlug() ? html`
             <p class="font-semibold text-gray-800 mb-1">Pick your industry to build your dashboard</p>
             <p class="text-sm text-gray-500 mb-4">Industry = category. Your dashboard and templates adapt to it.</p>
             <button class="btn text-sm" onClick=${openIndustryPicker}>Choose Industry</button>`
