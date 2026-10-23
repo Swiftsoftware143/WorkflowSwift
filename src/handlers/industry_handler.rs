@@ -771,6 +771,31 @@ async fn live_widget_value(
         .ok()?;
         return Some(json!(n));
     }
+    // "Milestones Due — Upcoming deadlines": an uncompleted step that carries a due date and is
+    // due within the next 7 days. Overdue steps are counted too — a deadline that has already
+    // slipped is the one that needs attention most, and a tile reading 0 while steps sit overdue
+    // would be a comfortable lie. This app has no milestones table: the substrate is
+    // `workflow_instance_steps.due_date`, written for `delay`/`wait` steps when a run reaches them.
+    // Steps of an instance that has already finished are not upcoming work, so the join keeps the
+    // same liveness rule as the active-projects arm.
+    if key.ends_with("_milestones_due") {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM workflow_instance_steps s \
+             JOIN workflow_instances i ON i.id = s.instance_id \
+             WHERE i.aid = $1 AND COALESCE(i.is_active, true) \
+               AND i.status NOT IN ('completed', 'failed', 'cancelled') \
+               AND COALESCE(s.is_active, true) \
+               AND s.completed_at IS NULL \
+               AND s.status NOT IN ('completed', 'skipped') \
+               AND s.due_date IS NOT NULL \
+               AND s.due_date <= NOW() + INTERVAL '7 days'",
+        )
+        .bind(aid)
+        .fetch_one(db)
+        .await
+        .ok()?;
+        return Some(json!(n));
+    }
     if key.ends_with("_revenue") {
         // `paid_at` is the structural fact that the invoice was paid; the status vocabulary is
         // not asserted here. SUM over no rows is NULL, and no paid invoice genuinely means 0.
