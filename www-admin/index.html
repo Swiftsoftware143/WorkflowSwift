@@ -1609,7 +1609,7 @@ function renderProfile(c){
     right.appendChild(h('label',{className:'text-xs text-gray-500'},'Role'));
     right.appendChild(h('p',{className:'font-semibold mb-3'},roleLabel(me.role)));
     right.appendChild(h('label',{className:'text-xs text-gray-500'},'Plan'));
-    right.appendChild(h('p',{className:'font-semibold mb-4'},me.plan_name||'Free'));
+    right.appendChild(h('p',{className:'font-semibold mb-4'},me.plan_name||'\u2014'));
 
     right.appendChild(h('label',{className:'text-xs text-gray-500'},'Change password'));
     const curIn=h('input',{className:'input mb-2',type:'password',autocomplete:'current-password',placeholder:'Current password'});

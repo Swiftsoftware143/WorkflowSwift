@@ -376,9 +376,18 @@ const refreshMe = async (after) => {
   try { const r = await API.me(); if (r && r.user) API.setUser(r.user); } catch (e) { /* keep cached */ }
   if (after) after(); else renderApp();
 };
-// The account's level badge: the SERVER's plan name, falling back to "Free" — never the role word
-// "User" (the FunnelSwift defect this card exists to avoid).
-const planLabel = (u) => (u && (u.plan_name || u.plan)) || 'Free';
+// The account's level badge: the SERVER's plan name — never the role word "User" (the FunnelSwift
+// defect this card exists to avoid), and never an INVENTED "Free". A workspace whose plan read has
+// not answered is named nothing rather than "Free" — telling a paid workspace it is on Free because
+// a read failed is a false statement about what they bought, which is the rule adaswift and
+// incentiveswift already follow. `plan` is a plan OBJECT on endpoints like /me/usage, so it is read
+// by `.name`: the old form interpolated the object and printed "[object Object]".
+const planLabel = (u) => {
+  if (!u) return '';
+  const raw = u.plan_name != null ? u.plan_name
+    : (typeof u.plan === 'string' ? u.plan : (u.plan && u.plan.name));
+  return raw == null ? '' : String(raw).trim();
+};
 // A picture URL, with a cache-buster ONLY when one is passed (the endpoint itself is no-store, so
 // a plain <img> re-fetches; the buster is for the Profile preview's explicit repaint after upload).
 const avatarSrc = (u, stamp) => u && u.avatar_url ? (u.avatar_url + (stamp ? '?t=' + stamp : '')) : null;
@@ -1950,7 +1959,7 @@ const ProfileView = () => {
         <h2 class="text-base font-bold text-gray-900 mb-3">Account details</h2>
         <div class="space-y-4">
           <div><label class="label">Email</label><div class="font-semibold">${u.email || '—'}</div></div>
-          <div><label class="label">Level</label><div><span class="badge b-blue" id="profile-level">${planLabel(u)}</span></div></div>
+          <div><label class="label">Level</label><div>${planLabel(u) ? html`<span class="badge b-blue" id="profile-level">${planLabel(u)}</span>` : html`<span class="text-sm" style="color:#94a3b8" id="profile-level">\u2014</span>`}</div></div>
           <div><label class="label">Name</label><input class="input" id="profile-name" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="Your name" /></div>
           <div><label class="label">Company</label><input class="input" id="profile-company" value=${f.company} onInput=${e=>f.company=e.target.value} placeholder="Your company" /></div>
           <button class="btn text-sm" id="profile-save" onClick=${saveProfile} disabled=${S.loading}>Save changes</button>
@@ -2603,7 +2612,7 @@ const App = () => {
             <${Avatar} u=${user} size=${34} id="header-avatar" />
             <div class="min-w-0">
               <div class="text-xs font-semibold text-gray-800 truncate" title=${user.email || ''}>${user.name || user.email || 'signed in'}</div>
-              <span class="badge b-blue" id="ws-level">${planLabel(user)}</span>
+              ${planLabel(user) ? html`<span class="badge b-blue" id="ws-level">${planLabel(user)}</span>` : null}
             </div>
           </div>
           <button class="nav-item text-red-600" onClick=${()=>{API.logout(); window.location.reload();}}><span>🚪</span> Sign Out</button>
