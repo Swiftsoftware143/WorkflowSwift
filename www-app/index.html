@@ -2535,12 +2535,12 @@ const RenditionsView = () => {
       <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
         <div><h1 class="text-xl font-extrabold text-gray-900">Renditions</h1>
           <p class="text-sm text-gray-500 mt-1">Media produced by render steps — logged per workflow.</p></div>
-        <div class="flex gap-2 items-center">
-          <select class="input" style="width:auto" value=${S.rendWf || ''} onChange=${e=>loadWfRenditions(e.target.value)}>
+        <div class="flex gap-2 items-center flex-wrap" style="min-width:0;max-width:100%">
+          <select class="input" style="width:auto;max-width:100%" value=${S.rendWf || ''} onChange=${e=>loadWfRenditions(e.target.value)}>
             <option value="">All renditions</option>
             ${(S.workflows || []).map(w => html`<option key=${w.id} value=${w.id}>${w.name}</option>`)}
           </select>
-          <select class="input" style="width:auto" value=${S.rendStatus} onChange=${e=>{S.rendStatus=e.target.value;S.renditions=null;loadRenditions();}}>
+          <select class="input" style="width:auto;max-width:100%" value=${S.rendStatus} onChange=${e=>{S.rendStatus=e.target.value;S.renditions=null;loadRenditions();}}>
             <option value="active">Active</option><option value="expired">Expired</option><option value="all">All statuses</option>
           </select>
           <button class="btn-outline text-sm" onClick=${()=>{S.renditions=null;S.rendSummary=null;loadRenditions();}} disabled=${S.loading}>${S.loading ? spinner() : 'Refresh'}</button>
