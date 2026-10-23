@@ -608,6 +608,33 @@
       from the provider configured above. That is deliberately not an <code>emailSend</code>/SMTP node — that node
       type declares an <code>smtp</code> credential this n8n does not hold, and ONE such node made a tenant's entire
       generated workflow un-activatable (<code>Missing required credential: smtp</code>).</p>
+  <p><strong>Recent sends is real sends only.</strong> The list under the Email Provider card
+  (<code>GET /api/v1/admin/email-log</code>) keeps the last 50 <em>attempts</em> and says how many
+  reserved test recipients were <em>withheld</em> in the last 7 days (<code>withheld_7d</code> in the
+  same answer). A reserved address (the fleet probes end in <code>.invalid</code>) is never attempted,
+  so it is not listed as a send; it is counted once, beside the table. Before 2026-10-23 those probe
+  rows filled the window and pushed real customer mail out of it, which is exactly the question the
+  history exists to answer: "did this customer get their password?".</p>
+      <h2 id="email-branding">Email branding (per account)</h2>
+      <ul>
+        <li><strong>What it is:</strong> each account can put its own logo, display name and colour at
+        the top of the transactional mail this app sends for it. An account with nothing configured gets
+        byte-identical mail to before the feature existed, so the change is additive by construction.</li>
+        <li><strong>Where it lives:</strong> <code>brand_name</code> and <code>brand_color</code> sit in the
+        account's settings document under the key <code>email_branding</code>; the logo BYTES are stored per
+        account and streamed back by the <strong>public</strong> <code>GET /api/v1/branding/logo/{account_id}</code>
+        (a mail client renders the <code>&lt;img&gt;</code> with no credential, so that read is deliberately
+        anonymous and narrow).</li>
+        <li><strong>Endpoints:</strong> <code>GET|PUT /api/v1/settings/branding</code> (name + colour; the
+        <code>PUT</code> is authenticated and always writes the CALLER's own account, so there is no id in the
+        path to spoof, and it preserves a stored <code>logo_url</code> when the panel echoes name and colour)
+        and <code>POST|DELETE /api/v1/settings/branding/logo</code> (the image as
+        <code>multipart/form-data</code>, field <code>file</code> — the fleet-wide upload convention;
+        PNG/JPEG/WebP/GIF, format decided by the image's own bytes).</li>
+        <li><strong>Where it renders:</strong> the ONE send funnel in <code>src/email.rs</code> prepends the
+        header to every template send for that account, so a credentials mail, a ticket notice and a test
+        send all carry it — there is no second path that can forget.</li>
+      </ul>
       <h2 id="workspaces-agents-and-tickets">Workspaces, agents and tickets</h2>
       <p>Users create <strong>workspaces</strong> within their tenant (the <code>portfolio_companies</code> table); a workspace carries
       a name and a slug, <code>POST</code> takes an optional <code>industry_slug</code> that seeds that workspace's dashboard, and
