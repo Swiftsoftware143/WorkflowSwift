@@ -1863,6 +1863,25 @@ const ProfileView = () => {
     S.loading = false; renderApp();
   };
 
+  // "Send me a preview email" (2026-10-24): the app's OWN POST /settings/branding/preview mails a sample of
+  // THIS workspace's branded mail to the caller's own address. The request names no recipient, so the
+  // route can never be used as a relay, and a reserved test address comes back as
+  // {sent:false, detail:"…reserved test address…"} instead of a false "sent" — the sentence under the
+  // button is the server's, never invented here.
+  const bdPreview = viewState('profile_branding_preview', { busy:false, msg:'', ok:false });
+  const sendBrandPreview = async () => {
+    bdPreview.busy = true; bdPreview.msg = ''; renderApp();
+    try {
+      const v = await API.post('/settings/branding/preview');
+      bdPreview.ok = !!(v && v.sent);
+      bdPreview.msg = (v && v.detail) || (bdPreview.ok ? ('Preview sent to ' + (v && v.to)) : 'No preview was sent.');
+    } catch (err) {
+      bdPreview.ok = false;
+      bdPreview.msg = 'Could not send the preview: ' + (err.message || 'unknown error');
+    }
+    bdPreview.busy = false; renderApp();
+  };
+
   // The pane is rebuilt on every render, so the preview is repainted after the DOM exists.
   setTimeout(syncBrandPreview, 0);
 
@@ -2031,6 +2050,12 @@ const ProfileView = () => {
             </div>
             <div id="brand-bp-blank" class="text-xs text-gray-500" style=${(bd.logoUrl || bd.name) ? 'display:none' : 'display:block'}>Nothing is set yet, so mail keeps WorkflowSwift's own header.</div>
             <div style="font-size:13.5px;color:#111827;line-height:1.5">Hi Alex &mdash; this is a sample of the message body. Only the header above comes from your branding.</div>
+          </div>
+          <div style="margin-top:14px;padding-top:14px;border-top:1px solid #e5e7eb">
+            <div class="text-xs text-gray-500 mb-2">See it in your own inbox</div>
+            <p class="text-xs text-gray-500" style="margin:0 0 8px">This box shows the header inside this page. The button mails the same sample to your own address &mdash; save your branding first, or the preview carries the default WorkflowSwift header.</p>
+            <button class="btn text-sm" id="branding-preview-send" onClick=${sendBrandPreview} disabled=${bdPreview.busy || S.loading}>${bdPreview.busy ? 'Sending…' : 'Send me a preview email'}</button>
+            ${bdPreview.msg ? html`<p id="branding-preview-msg" class="text-xs" style=${'margin:8px 0 0;color:' + (bdPreview.ok ? '#047857' : '#b91c1c')}>${bdPreview.msg}</p>` : ''}
           </div>
         </div>
       </div>

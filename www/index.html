@@ -44,6 +44,26 @@ nav .container{display:flex;align-items:center;justify-content:space-between}
 .btn-outline{border:1px solid rgba(255,255,255,0.15);color:rgba(255,255,255,0.8)}
 .btn-outline:hover{border-color:#DC2626;color:#fff}
 
+/* kanban t_b92fbd43 — WIDTH BREAKPOINTS. This page had NONE (grep @media -> one max-height rule),
+   and body{overflow-x:hidden} only CLIPPED the result: measured 2026-10-22 at 390x844 on
+   https://workflowswift.com the document scrolled 646px wide (256px of horizontal overflow) because
+   .nav-links is a 421px flex row of five links at gap:32px, which parked the nav's own "Get Started"
+   button (a.btn, right edge 646px) and "Log In" off-screen where they could not be clicked. The
+   fleet convention at this width is FunnelSwift's: drop the secondary links, keep the primary CTA. */
+@media (max-width:820px){
+  .nav-links{gap:18px}
+  .nav-links a{font-size:0.8125rem}
+  .nav-links .btn{padding:9px 16px}
+}
+@media (max-width:600px){
+  .nav-links{gap:14px}
+  .nav-links .nav-secondary{display:none}
+  .logo{font-size:1.2rem}
+}
+@media (max-width:480px){
+  .nav-links .nav-login{display:none}
+}
+
 /* Hero */
 .hero{min-height:90vh;display:flex;align-items:center;position:relative;overflow:hidden;padding:120px 0 80px}
 .hero-bg{position:absolute;inset:0;z-index:0;background:radial-gradient(ellipse 80% 60% at 50% 0%, rgba(220,38,38,0.15) 0%, transparent 70%),radial-gradient(ellipse 60% 50% at 80% 100%, rgba(220,38,38,0.08) 0%, transparent 60%),radial-gradient(ellipse 50% 40% at 20% 100%, rgba(255,255,255,0.03) 0%, transparent 60%)}
@@ -105,9 +125,9 @@ footer a:hover{color:#DC2626}
 <div class="container">
   <a href="/" class="logo"><div class="logo-icon">WS</div>WorkflowSwift</a>
   <div class="nav-links">
-    <a href="#features">Features</a><a href="/pricing">Pricing</a>
-    <a href="#extension">Chrome Extension</a>
-    <a href="https://app.workflowswift.com/login">Log In</a>
+    <a href="#features" class="nav-secondary">Features</a><a href="/pricing" class="nav-secondary">Pricing</a>
+    <a href="#extension" class="nav-secondary">Chrome Extension</a>
+    <a href="https://app.workflowswift.com/login" class="nav-login">Log In</a>
     <a href="https://app.workflowswift.com/register" class="btn btn-primary">Get Started</a>
   </div>
 </div>
