@@ -50,6 +50,8 @@ pub struct CreateInput {
     pub source: Option<String>,
     /// The catalogue slug this request asks for. Optional: an ordinary ticket names no plan.
     pub plan_slug: Option<String>,
+    /// The credit pack a `credit_pack_request` asks for (cron 2026-10-24). Optional everywhere else.
+    pub credit_pack_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -290,9 +292,66 @@ pub async fn create(
             }
         }
     }
-    sqlx::query("INSERT INTO tickets (id, aid, subject, description, status, priority, source, plan_slug) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)")
+    // ── Credit-pack request ───────────────────────────────────────────────────────────────
+    // The Credits screen offers four packs with real prices and, until this, no way to obtain one:
+    // the only purchase route is super-admin-only AND scoped to the caller's own account, while a
+    // deployed workflow's balance gate refuses at zero credits — measured live on a fresh Free
+    // workspace: `POST /credits/deduct` answered 400 "Insufficient credits. Need 2, have 0."
+    // A pack request is a TICKET, the same shape a plan upgrade already uses: nothing is charged
+    // here, the operator sees it in the Plan requests queue, and the same resolve that applies a
+    // plan applies the pack's credits (`admin_update_status`).
+    let credit_pack_id = if source == "credit_pack_request" {
+        let raw = b
+            .credit_pack_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                AppError::Validation("A credit pack request must name the pack it asks for".into())
+            })?;
+        let pack_id = Uuid::parse_str(raw)
+            .map_err(|_| AppError::Validation("Invalid credit_pack_id".into()))?;
+        // Validated against the ACTIVE catalogue, so a retired pack is refused at filing time
+        // instead of sitting in the queue as a row no operator can fulfil.
+        let known: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM credit_packages WHERE id = $1 AND is_active = true")
+                .bind(pack_id)
+                .fetch_optional(&state.db)
+                .await?;
+        if known.is_none() {
+            return Err(AppError::Validation(
+                "No active credit pack with that id".into(),
+            ));
+        }
+        // One open ask per pack — the same rule plan requests carry, and keyed on the PACK so a
+        // workspace asking for the Growth Pack is not swallowed by an open Starter request.
+        let existing: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM tickets WHERE aid = $1 AND source = 'credit_pack_request' \
+             AND credit_pack_id = $2 AND lower(status) NOT IN ('closed','resolved','done') \
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(aid)
+        .bind(pack_id)
+        .fetch_optional(&state.db)
+        .await?;
+        if let Some(existing_id) = existing {
+            let row = sqlx::query_as::<_, Ticket>(BY_ID)
+                .bind(existing_id)
+                .fetch_one(&state.db)
+                .await?;
+            return Ok((
+                StatusCode::OK,
+                Json(json!({ "item": row, "acknowledged": false, "already_open": true })),
+            ));
+        }
+        Some(pack_id)
+    } else {
+        None
+    };
+    sqlx::query("INSERT INTO tickets (id, aid, subject, description, status, priority, source, plan_slug, credit_pack_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)")
         .bind(id).bind(aid).bind(&b.subject).bind(&description).bind(&status).bind(&priority).bind(&source)
         .bind(plan_slug.as_deref())
+        .bind(credit_pack_id)
         .execute(&state.db).await?;
     let row = sqlx::query_as::<_, Ticket>(BY_ID)
         .bind(id)
@@ -539,13 +598,22 @@ pub async fn admin_update_status(
     // The status BEFORE this call (2026-10-19). The customer is told only when something actually
     // moved: a console that re-sends the value it already shows, or an operator double-clicking
     // "Mark handled", must not mail the same person twice about the same non-event.
-    let prior: Option<(String, Uuid, Option<String>, bool)> = sqlx::query_as(
-        "SELECT status, aid, plan_slug, (plan_applied_at IS NOT NULL) FROM tickets WHERE id = $1",
+    let prior: Option<(String, Uuid, Option<String>, bool, Option<Uuid>, bool)> = sqlx::query_as(
+        "SELECT status, aid, plan_slug, (plan_applied_at IS NOT NULL), credit_pack_id, \
+         (credits_applied_at IS NOT NULL) FROM tickets WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(&state.db)
     .await?;
-    let Some((prior_status, ticket_aid, requested_plan, already_applied)) = prior else {
+    let Some((
+        prior_status,
+        ticket_aid,
+        requested_plan,
+        already_applied,
+        ticket_credit_pack,
+        credits_already_applied,
+    )) = prior
+    else {
         return Err(AppError::NotFound("Ticket not found".into()));
     };
     let changed = prior_status != status;
@@ -618,6 +686,69 @@ pub async fn admin_update_status(
             }
         }
     }
+    // ── Apply the pack a credit request names ──────────────────────────────────────────────
+    // Same transactional shape as the plan switch above and idempotent the same way: the row
+    // records `credits_applied_at`, so a second resolve (or a later "closed") never grants twice.
+    // A `grant` transaction, not `purchase`: no money moved through the app — the operator made
+    // the arrangement by hand, exactly like a plan switch. The ticket id is the reference, which
+    // makes the ledger line traceable back to the ask.
+    let mut credits_applied: Option<i32> = None;
+    let mut credits_balance: Option<i64> = None;
+    if changed && matches!(status.as_str(), "resolved" | "closed") && !credits_already_applied {
+        if let Some(pack_id) = ticket_credit_pack {
+            let pack: Option<(String, i32)> = sqlx::query_as(
+                "SELECT name, credits FROM credit_packages WHERE id = $1 AND is_active = true",
+            )
+            .bind(pack_id)
+            .fetch_optional(&state.db)
+            .await?;
+            match pack {
+                Some((name, credits)) if credits > 0 => {
+                    let mut tx = state.db.begin().await?;
+                    sqlx::query(
+                        "INSERT INTO credit_transactions (id, aid, amount, transaction_type, description, reference_id) \
+                         VALUES ($1, $2, $3, 'grant', $4, $5)",
+                    )
+                    .bind(Uuid::new_v4())
+                    .bind(ticket_aid)
+                    .bind(credits)
+                    .bind(format!(
+                        "Credit pack applied: {name} ({credits} credits) — request {id}"
+                    ))
+                    .bind(id.to_string())
+                    .execute(&mut *tx)
+                    .await?;
+                    sqlx::query("UPDATE tickets SET credits_applied_at = NOW() WHERE id = $1")
+                        .bind(id)
+                        .execute(&mut *tx)
+                        .await?;
+                    tx.commit().await?;
+                    credits_applied = Some(credits);
+                    credits_balance = sqlx::query_scalar(
+                        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
+                    )
+                    .bind(ticket_aid)
+                    .fetch_one(&state.db)
+                    .await
+                    .ok();
+                    tracing::info!(
+                        ticket = %id,
+                        account = %ticket_aid,
+                        credits,
+                        "Credit pack request resolved — the credits were added to the workspace"
+                    );
+                }
+                Some(_) => tracing::warn!(
+                    ticket = %id,
+                    "Credit pack declares no credits — status only, nothing granted"
+                ),
+                None => tracing::warn!(
+                    ticket = %id,
+                    "Credit request names a pack that is no longer active — status only, nothing granted"
+                ),
+            }
+        }
+    }
     // Re-read through the SAME joined select the list uses, so the console repaints an attributable
     // row (account name included) rather than a bare ticket.
     let row = sqlx::query_as::<_, AdminTicket>(
@@ -635,6 +766,9 @@ pub async fn admin_update_status(
         "item": row,
         "plan_applied": plan_applied,
         "plan_name": applied_plan_name,
+        // `None` when this ticket was not a credit request: the console then says nothing about credits.
+        "credits_applied": credits_applied,
+        "credits_balance": credits_balance,
     })))
 }
 

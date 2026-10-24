@@ -697,9 +697,11 @@ function renderPlanRequests(c){
   const card=h('div',{className:'card'});
   card.appendChild(h('h2',{className:'text-xl font-bold mb-2'},'Plan requests'));
   card.appendChild(h('p',{className:'text-sm text-gray-500 mb-4'},
-    'Every workspace that asked to move to a paid plan. Nothing is charged when a request is filed: '
-    +'our team makes the switch on the workspace, then marks the request handled here. Marking it '
-    +'emails the customer straight away, so nobody is left waiting on an answer.'));
+    'Every workspace that asked to move to a paid plan, or for a credit pack. Nothing is charged '
+    +'when a request is filed: our team makes the switch or adds the credits on the workspace, then '
+    +'marks the request handled here. Marking a plan request handled moves the workspace onto the tier '
+    +'it asked for; marking a credit request handled adds the pack\u2019s credits. Either way the '
+    +'customer is emailed straight away, so nobody is left waiting on an answer.'));
   const bar=h('div',{className:'flex items-center gap-3 mb-3'});
   const note=h('span',{className:'text-xs text-gray-500'},'loading…');
   const refresh=h('button',{className:'btn btn-sm btn-outline',onClick:()=>load()},'Refresh');
@@ -723,11 +725,16 @@ function renderPlanRequests(c){
     // Both sources: 'plan_request' is what the console files today, 'billing' is what it filed
     // before 2026-10-20 (and what any other client may send). The server filter is an EXACT match,
     // so asking for one source makes the other invisible here.
-    const [a,b]=await Promise.all([
+    // THREE sources now: 'plan_request' (what the console files today), 'billing' (what it filed
+    // before 2026-10-20) and 'credit_pack_request' (a Credits-screen pack ask, cron 2026-10-24).
+    // The server filter is an EXACT match, so a source nobody asks for is invisible here — which is
+    // why the pack ask is named explicitly instead of relying on "all tickets".
+    const [a,b,cp]=await Promise.all([
       api('/admin/tickets?source=plan_request&per_page=100'),
       api('/admin/tickets?source=billing&per_page=100'),
+      api('/admin/tickets?source=credit_pack_request&per_page=100'),
     ]);
-    if(a===null&&b===null){
+    if(a===null&&b===null&&cp===null){
       note.textContent='';
       body.appendChild(h('div',{className:'text-sm text-red-600'},
         'Could not read the queue: '+(LAST_ERR||'request failed')));
@@ -735,7 +742,7 @@ function renderPlanRequests(c){
     }
     const pick=x=>(x&&(x.items||x.tickets))||[];
     const seen={};
-    const rows=pick(a).concat(pick(b)).filter(r=>{
+    const rows=pick(a).concat(pick(b)).concat(pick(cp)).filter(r=>{
       if(!r||!r.id) return true;
       if(seen[r.id]) return false;
       seen[r.id]=1; return true;
@@ -799,7 +806,13 @@ function renderPlanRequests(c){
           // what actually happened instead of just "saved" (cron 2026-10-20).
           const applied=!!(ok&&ok.plan_applied);
           const name=(ok&&ok.plan_name)||r.plan_name||r.plan_slug||'';
-          showMsg(applied
+          // A pack request is fulfilled by the SAME resolve now (cron 2026-10-24): say how many
+          // credits landed instead of "Marked handled", which reads as if nothing happened.
+          const granted=(ok&&ok.credits_applied)||0;
+          showMsg(granted
+            ? ('Marked handled \u2014 '+granted+' credits added to the workspace'
+                +(ok.credits_balance!=null?(' (balance '+ok.credits_balance+')'):''))
+            : applied
             ? ('Marked handled \u2014 the workspace is now on '+(name||'the requested plan'))
             : (name
                 ? ('Marked handled \u2014 that request\u2019s plan was not switched automatically; set it on the workspace')

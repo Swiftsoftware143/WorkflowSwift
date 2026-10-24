@@ -1285,12 +1285,42 @@ const CreditsView = () => {
           ${S.rolloverMsg ? html`<span class="text-sm text-gray-600">${S.rolloverMsg}</span>` : ''}
         </div>
       </div>` : ''}
-      ${pkgs.length ? html`<div class="card"><h3 class="font-semibold text-gray-800 mb-3">Credit Packages</h3><div class="grid grid-cols-1 md:grid-cols-3 gap-3">${pkgs.map(p=>html`<div class="border rounded-lg p-3"><div class="font-bold">${p.name||p.title||'Package'}</div><div class="text-sm text-gray-500">${fmtAmt(p.credits||p.amount)} credits</div>${p.price != null ? html`<div class="text-sm font-semibold text-gray-800 mt-1">$${Number(p.price).toFixed(2)}</div>` : ''}</div>`)}</div></div>` : ''}
+      ${pkgs.length ? html`<div class="card"><h3 class="font-semibold text-gray-800 mb-1">Credit Packages</h3><p class="text-sm text-gray-500 mb-3">Workflows need credits to run. Nothing is charged on this screen: a request goes to our team, who add the credits to this workspace by hand and then reply to you here.</p><div class="grid grid-cols-1 md:grid-cols-3 gap-3">${pkgs.map(p=>html`<div class="border rounded-lg p-3 flex flex-col"><div class="font-bold">${p.name||p.title||'Package'}</div><div class="text-sm text-gray-500">${fmtAmt(p.credits||p.amount)} credits</div>${p.price != null ? html`<div class="text-sm font-semibold text-gray-800 mt-1">$${Number(p.price).toFixed(2)}</div>` : ''}<button class="btn-outline text-sm mt-3 w-full" onClick=${() => requestPack(p)} disabled=${!!(S.packBusy&&S.packBusy[p.id])}>${(S.packRequested&&S.packRequested[p.id]) ? 'Requested \u2713' : 'Request this pack'}</button></div>`)}</div></div>` : ''}
       <div class="card"><h3 class="font-semibold text-gray-800 mb-3">Recent Transactions</h3>${txs.length===0?html`<div class="empty">No transactions.</div>`:html`<div class="overflow-auto"><table class="table"><thead><tr><th>Type</th><th>Amount</th><th>Date</th></tr></thead><tbody>${txs.map((t,i)=>html`<tr key=${i}><td>${t.type||t.description||'—'}</td><td>${fmtAmt(t.amount ?? t.credits)}</td><td>${fmtDate(t.created_at)}</td></tr>`)}</tbody></table></div>`}</div>
     </div>`;
 };
 const loadCredits = async () => { if(S.loading)return; S.loading=true; renderApp(); try { const [bal, tx, pk] = await Promise.allSettled([API.get('/credits/balance'), API.get('/credits/transactions'), API.get('/credits/packages')]); S.creditInfo = { balance: bal.status==='fulfilled'?(bal.value.balance ?? bal.value.credits ?? bal.value):null, transactions: tx.status==='fulfilled'?(tx.value.transactions||tx.value||[]):[], packages: pk.status==='fulfilled'?(pk.value.packages||pk.value||[]):[] }; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
 
+// A credit pack is REQUESTED, not bought (cron 2026-10-24). The purchase route
+// (`POST /credits/package`) is super-admin-only AND acts on the caller's own account, so before this
+// the screen listed four packs with prices and gave the customer no way to obtain one — while a
+// deployed workflow's balance gate refuses at zero credits (measured on a fresh Free workspace:
+// "Insufficient credits. Need 2, have 0. Purchase more credits."). The request is a TICKET, the same
+// shape a plan upgrade uses: source 'credit_pack_request' with the pack's id, which the operator's
+// Plan requests queue shows and whose resolve adds the pack's credits.
+const requestPack = async (p) => {
+  if (!p || !p.id || (S.packBusy && S.packBusy[p.id])) return;
+  S.packBusy = Object.assign({}, S.packBusy, { [p.id]: true }); renderApp();
+  try {
+    const name = p.name || p.title || 'Credit pack';
+    const credits = fmtAmt(p.credits || p.amount);
+    const price = p.price != null ? ('$' + Number(p.price).toFixed(2)) : 'price on request';
+    await API.post('/tickets', {
+      subject: 'Credit pack request: ' + name + ' (' + credits + ' credits, ' + price + ')',
+      description: 'This workspace asked for the ' + name + ' (' + credits + ' credits, ' + price
+        + ') on the Credits screen. Nothing is charged in the app: the team adds the credits to the'
+        + ' workspace by hand and then answers this request.',
+      priority: 'medium',
+      source: 'credit_pack_request',
+      credit_pack_id: p.id,
+    });
+    S.packRequested = Object.assign({}, S.packRequested, { [p.id]: true });
+    toast('Request sent \u2014 our team will add the credits and reply here');
+  } catch (e) {
+    toast(e.message || 'Could not send the request', 'err');
+  }
+  S.packBusy = Object.assign({}, S.packBusy, { [p.id]: false }); renderApp();
+};
 // Plan capabilities (GET /plans/capabilities) + credit rollover (POST /credits/rollover):
 // both were served but no surface called either, so the plan's industry allowance and the
 // rollover action were invisible to the tenant.
