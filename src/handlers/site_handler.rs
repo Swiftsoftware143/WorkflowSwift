@@ -650,12 +650,14 @@ fn replace_plain_link_href_after(r: &mut String, anchor: &str, href: &str) {
         Some(p) => p + anchor.len(),
         None => return,
     };
-    // The nav's sign-in link is the LAST classless, non-fragment anchor inside the nav-links region:
-    // the earlier ones are section jumps (`#features`, `#pricing`, `#extension`) and the trailing
-    // "Get Started" CTA is CLASSED. Taking the FIRST match repointed "Pricing" at the operator's
-    // sign-in URL and left the real "Log In" link alone (measured 2026-10-21: red
-    // `every_homepage_editor_moves_only_its_own_region`, `href="/pricing"` swapped). The region ends
-    // at the nav div's own `</div>`, so an anchor further down the page can never be the target.
+    // The nav's sign-in link is the anchor in the nav-links region that carries `class="nav-login"`
+    // (the served markup since the 2026-10-22 styling pass) or, on a page that predates it, the last
+    // anchor with no class at all — the earlier classless ones are section jumps (`#features`,
+    // `#pricing`, `#extension`) and the trailing "Get Started" CTA is classed. Taking the FIRST
+    // classless match repointed "Pricing" at the operator's sign-in URL and left the real "Log In"
+    // link alone (measured 2026-10-21: red `every_homepage_editor_moves_only_its_own_region`,
+    // `href="/pricing"` swapped). The region ends at the nav div's own `</div>`, so an anchor further
+    // down the page can never be the target.
     let end = r[from..]
         .find("</div>")
         .map(|p| from + p)
@@ -668,7 +670,11 @@ fn replace_plain_link_href_after(r: &mut String, anchor: &str, href: &str) {
             Some(p) => a + p,
             None => break,
         };
-        if !r[a..gt].contains("class=") {
+        let attrs = &r[a..gt];
+        // The sign-in element, located STRUCTURALLY (never by its current href, which the render
+        // rewrites): the classed `nav-login` anchor, or a classless one on the older markup. Every
+        // other anchor in the region is classed and must not move.
+        if attrs.contains("class=\"nav-login\"") || !attrs.contains("class=") {
             if let Some(h) = r[a..gt].find("href=\"") {
                 let start = a + h + "href=\"".len();
                 if let Some(e) = r[start..].find('"') {
