@@ -1259,7 +1259,7 @@ pub const EMAIL_PROVIDERS: &[&str] = &["smtp", "mailgun", "sendgrid", "sendiio"]
 /// transactional mail is ALWAYS `support@` the app's own main domain — never the platform's
 /// or a sibling company's. WorkflowSwift mail carried none at all, so [`with_support_footer`]
 /// adds this to every message that leaves the app.
-pub const SUPPORT_EMAIL: &str = "support@workflowswift.com";
+pub const SUPPORT_EMAIL: &str = "support@swiftsoftware.net";
 
 /// Append the app's support line to one body.
 ///
