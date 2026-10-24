@@ -634,6 +634,13 @@
         <li><strong>Where it renders:</strong> the ONE send funnel in <code>src/email.rs</code> prepends the
         header to every template send for that account, so a credentials mail, a ticket notice and a test
         send all carry it — there is no second path that can forget.</li>
+        <li><strong>Seeing your own branding in an inbox:</strong> the Email Branding screen's
+        <em>Send me a preview email</em> button calls <code>POST /api/v1/settings/branding/preview</code>.
+        It takes <strong>no body and no recipient</strong> — the address is the signed-in user's own, so the
+        route can never be used as a relay — and it sends the app's own <code>branding_preview</code> sample
+        through the same funnel a customer's mail takes, so what arrives is exactly what a recipient sees.
+        A reserved test address (for example one ending <code>.invalid</code>) cannot receive mail, and the
+        screen says so instead of claiming a send: the answer is <code>sent:false</code> with the reason.</li>
       </ul>
       <h2 id="workspaces-agents-and-tickets">Workspaces, agents and tickets</h2>
       <p>Users create <strong>workspaces</strong> within their tenant (the <code>portfolio_companies</code> table); a workspace carries
