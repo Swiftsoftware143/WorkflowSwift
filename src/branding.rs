@@ -22,11 +22,14 @@
 //! logo that is still there). `brand_name` / `brand_color` are owned by the settings write, which
 //! validates them.
 //!
-//! # Nothing configured means nothing changes
+//! # Nothing configured means nothing THIS ACCOUNT owns — the app's own header is sent instead
 //!
-//! An account with no branding gets byte-identical mail to before this module existed — the header
-//! block is only ever added when a brand name or a logo is actually set ([`Branding::from_value`]
-//! returns `None` otherwise). That is what makes the change additive for every existing account.
+//! [`Branding::from_value`] returns `None` when neither a name nor a logo is set, and the header
+//! renderer adds nothing for `None` — so the load is exactly "did this account configure anything".
+//! Every SEND then substitutes the app's OWN identity for `None` (see [`crate::email`]'s
+//! `app_default_branding`): an account with no branding gets the WorkflowSwift wordmark rather than
+//! no header at all, which is what its Email Branding card has always claimed it sends
+//! (kanban t_081edaac, 2026-10-24).
 
 use serde_json::{json, Value};
 use sqlx::PgPool;

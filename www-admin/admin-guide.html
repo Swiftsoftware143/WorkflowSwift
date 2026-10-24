@@ -618,8 +618,12 @@
       <h2 id="email-branding">Email branding (per account)</h2>
       <ul>
         <li><strong>What it is:</strong> each account can put its own logo, display name and colour at
-        the top of the transactional mail this app sends for it. An account with nothing configured gets
-        byte-identical mail to before the feature existed, so the change is additive by construction.</li>
+        the top of the transactional mail this app sends for it. An account with nothing configured is
+        <strong>not</strong> unbranded: its mail carries this app's own header — the WorkflowSwift wordmark
+        (<code>/logo.png</code> on <code>app.workflowswift.com</code>, a PNG because mail clients do not
+        render SVG) and name, in the default colour — and an account's own name/colour/logo wins field by
+        field once set. Before 2026-10-24 the empty case produced no header at all while this screen said
+        the app's header stayed.</li>
         <li><strong>Where it lives:</strong> <code>brand_name</code> and <code>brand_color</code> sit in the
         account's settings document under the key <code>email_branding</code>; the logo BYTES are stored per
         account and streamed back by the <strong>public</strong> <code>GET /api/v1/branding/logo/{account_id}</code>

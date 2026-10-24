@@ -525,8 +525,9 @@
       <p>Press <strong>Save branding</strong>. From then on every transactional email this account sends — the welcome /
       login-credentials mail, team invitations, password resets, purchase confirmations and workflow
       notifications — opens with your logo and name. The logo is served from your own account's public URL
-      (<code>GET /api/v1/branding/logo/{account_id}</code>), which is what lets a mail client load it, and the mail
-      keeps the WorkflowSwift look until you set a name or a logo, because branding is per account.</p>
+      (<code>GET /api/v1/branding/logo/{account_id}</code>), which is what lets a mail client load it. Until
+      you set a name or a logo the mail carries the WorkflowSwift wordmark and name instead, because
+      branding is per account.</p>
       <div class="note">The older <em>account-level</em> white-label fields were a different thing and are
       still retired: the logo, brand-name and colour columns those held were <strong>dropped on
       2026-10-02</strong>, and the "Custom Branding" plan feature that promised white-labelling was retired

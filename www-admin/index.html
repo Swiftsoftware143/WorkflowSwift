@@ -1797,11 +1797,14 @@ async function renderBranding(c){
   right.appendChild(btns);
   right.appendChild(h('p',{className:'text-xs text-gray-400 mt-2'},'PNG, JPEG, WebP or GIF, up to 2 MB.'));
 
-  // What a RECIPIENT sees — mirrors Branding::header_html (src/branding.rs): a centred logo (max
-  // 56px high / 240px wide); otherwise the brand name in 20px #111827; then a 3px rule in the brand
-  // colour. Nothing at all when neither is set, which is why the note says the app's own header
-  // stays. Repainted from the FIELD values on every keystroke (not from the saved document), so a
-  // colour or name can be judged before saving. It sends nothing and saves nothing.
+  // What a RECIPIENT sees — mirrors the SEND path: Branding::header_html (src/branding.rs) for an
+  // account that has set something, and email.rs::app_default_branding() for one that has not. A
+  // centred logo (max 56px high / 240px wide); otherwise the brand name in 20px #111827; then a 3px
+  // rule in the brand colour. An UNBRANDED account is not blank (kanban t_081edaac): its mail
+  // carries the WorkflowSwift wordmark and name, which is exactly what this box paints so the
+  // screen cannot promise a header the message does not have. Repainted from the FIELD values on
+  // every keystroke (not from the saved document), so a colour or name can be judged before saving.
+  // It sends nothing and saves nothing.
   const prevWrap=h('div',{className:'mt-5 pt-4',style:'border-top:1px solid #e2e8f0'});
   prevWrap.appendChild(h('div',{className:'font-semibold mb-1'},'What your recipients see'));
   prevWrap.appendChild(h('p',{className:'text-xs text-gray-500 mb-3'},'The header block the app puts at the top of every email this account sends. It follows the fields above as you type; this preview sends nothing and saves nothing.'));
@@ -1816,16 +1819,21 @@ async function renderBranding(c){
     const col=/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test((colorIn.value||'').trim())?(colorIn.value||'').trim():'#4f46e5';
     const branded=!!(nm||logo);
     bpBox.innerHTML='';
+    const line=h('div',{style:'text-align:center;padding:18px 0 6px'});
+    let rule=col;
     if(branded){
-      const line=h('div',{style:'text-align:center;padding:18px 0 6px'});
       if(logo){const im=h('img',{id:'bp-logo',alt:nm||'Your logo',style:'max-height:56px;max-width:240px;display:inline-block'});im.src=logo;line.appendChild(im);}
       else line.appendChild(h('span',{id:'bp-name',style:'font:700 20px/1.3 -apple-system,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;color:#111827'},nm));
-      bpBox.appendChild(line);
-      bpBox.appendChild(h('div',{id:'bp-rule',style:'border-top:3px solid '+col+';margin:0 0 18px'}));
+    } else {
+      // The app's OWN header, the one an unbranded account really sends (email.rs).
+      const im=h('img',{id:'bp-default-logo',alt:'WorkflowSwift',style:'max-height:56px;max-width:240px;display:inline-block'});im.src='/logo.png';line.appendChild(im);
+      rule='#4f46e5';
     }
+    bpBox.appendChild(line);
+    bpBox.appendChild(h('div',{id:'bp-rule',style:'border-top:3px solid '+rule+';margin:0 0 18px'}));
     bpBox.appendChild(h('div',{style:'font:14px/1.5 -apple-system,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;color:#111827'},'Hi Alex — this is a sample of the message body. Only the header above comes from your branding.'));
     bpBlank.style.display=branded?'none':'block';
-    bpBlank.textContent=branded?'':'Nothing is set yet, so mail keeps the WorkflowSwift header.';
+    bpBlank.textContent=branded?'':'Nothing is set yet, so every mail carries the WorkflowSwift wordmark and name — the header above. Set a name or upload a logo to make it yours.';
   };
   paint();
 }

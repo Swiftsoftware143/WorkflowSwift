@@ -15,6 +15,58 @@ use crate::state::AppState;
 
 use crate::branding::{self, Branding};
 
+/// The app's OWN wordmark, used for the header of every message sent for an account that has
+/// configured no branding of its own (kanban t_081edaac).
+///
+/// A mail client fetches it over the network with NO session, so it is an absolute URL on a host
+/// that answers publicly — and it is a PNG, because Gmail and Outlook do not render the SVG the
+/// pages use. `alt` carries the name, so a client that blocks images still says whose mail this is.
+const APP_LOGO_PATH: &str = "/logo.png";
+
+/// The identity every message falls back to when its account has configured none: this app's own
+/// name and wordmark, in the fleet's default accent (kanban t_081edaac).
+///
+/// Before this the header block only appeared once an account had uploaded a logo of its own, so a
+/// brand-new account's mail — and the Email Branding card's own preview — arrived with no header at
+/// all, while the panel said "it carries the WorkflowSwift header". An account's own branding still
+/// wins field by field.
+fn app_default_branding() -> Branding {
+    Branding {
+        brand_name: branding::APP_NAME.to_string(),
+        brand_color: String::new(),
+        logo_url: APP_LOGO_PATH.to_string(),
+    }
+}
+
+/// Bind the branding merge fields into a render's variable map (kanban t_081edaac).
+///
+/// They are PER-ACCOUNT, so they cannot live in a `&'static` default map: the account's own values
+/// have to be substituted into the template it is rendered from. `stored` is what the account
+/// actually saved — NOT the effective identity — so a preview can say truthfully whose logo the
+/// reader is looking at: `brand_name` / `logo_url` fall back to the app's own, and `logo_is_own`
+/// answers whether the logo is the account's own upload or this app's wordmark standing in for one.
+/// `logo_url` is therefore never bound as an empty string.
+fn bind_branding(vars: &mut serde_json::Value, stored: Option<&Branding>) {
+    let app_default = app_default_branding();
+    let own_logo = stored.and_then(|b| b.resolve_logo_url(branding::APP_URL));
+    let name = match stored {
+        Some(b) if !b.brand_name.is_empty() => b.brand_name.clone(),
+        _ => branding::APP_NAME.to_string(),
+    };
+    let logo = own_logo
+        .clone()
+        .or_else(|| app_default.resolve_logo_url(branding::APP_URL))
+        .unwrap_or_default();
+    if let Some(obj) = vars.as_object_mut() {
+        obj.insert("brand_name".to_string(), json!(name));
+        obj.insert("logo_url".to_string(), json!(logo));
+        obj.insert(
+            "logo_is_own".to_string(),
+            json!(if own_logo.is_some() { "yes" } else { "no" }),
+        );
+    }
+}
+
 /// Prepend an account's branding header to a rendered `(text, html)` pair (kanban t_c3cfe7ba).
 ///
 /// Additive by construction: `branding` is `None` for an account with nothing configured, and the
@@ -282,12 +334,20 @@ async fn send_email_inner(
     .ok()
     .flatten();
 
-    // Load the account's branding ONCE (kanban t_c3cfe7ba). `None` for no account / nothing set,
-    // which is what keeps every unbranded account's mail byte-identical to before this feature.
-    let branding = match aid {
+    // Load the account's branding ONCE (kanban t_c3cfe7ba). `None` for no account / nothing set —
+    // and an account with NOTHING set now gets THIS APP'S own header instead of none at all
+    // (kanban t_081edaac), so `branding` below is never `None` on a send.
+    let stored_branding = match aid {
         Some(a) => crate::branding::load(&state.db, a).await,
         None => None,
     };
+    let branding = stored_branding.clone().unwrap_or_else(app_default_branding);
+    // The MERGE fields follow the STORED document (an account with a name but no logo keeps their
+    // own name and `logo_is_own = no`); the HEADER below follows `branding`, which carries the app's
+    // own identity when there is no stored document at all.
+    let mut vars = vars.clone();
+    bind_branding(&mut vars, stored_branding.as_ref());
+    let vars = &vars;
 
     match template {
         Some(t) => {
@@ -318,22 +378,14 @@ async fn send_email_inner(
             let use_html = t.is_html.unwrap_or(true);
 
             if use_html && !html_body.is_empty() {
-                send_branded(
-                    &cfg,
-                    to,
-                    &subject,
-                    &text_body,
-                    &html_body,
-                    branding.as_ref(),
-                )
-                .await
+                send_branded(&cfg, to, &subject, &text_body, &html_body, Some(&branding)).await
             } else {
-                send_branded(&cfg, to, &subject, &text_body, "", branding.as_ref()).await
+                send_branded(&cfg, to, &subject, &text_body, "", Some(&branding)).await
             }
         }
         None => {
             // Fallback to hardcoded template
-            send_email_fallback(&cfg, to, template_type, vars, branding.as_ref()).await
+            send_email_fallback(&cfg, to, template_type, vars, Some(&branding)).await
         }
     }
 }
@@ -1199,22 +1251,40 @@ async fn send_email_fallback(
         // The operator's own branding PREVIEW (cron 2026-10-24, parity with FunnelSwift,
         // IncentiveSwift and ADASwift). Reached whenever the account has no `branding_preview`
         // template row, which is the normal state on a fresh install — the sample must render
-        // anyway. The header above this body is the account's OWN branding: that is the whole point
-        // of the sample, so the body stays deliberately plain and says what the reader is looking at.
+        // anyway. The header above this body is the account's OWN branding when they have one, and
+        // this app's own wordmark when they do not (kanban t_081edaac) — so the body says which,
+        // instead of describing a header that is not there.
         "branding_preview" => {
             let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
             let app_url = vars
                 .get("app_url")
                 .and_then(|v| v.as_str())
                 .unwrap_or(crate::branding::APP_URL);
+            // `logo_url` is ALWAYS bound now (this app's wordmark is the fallback), so the copy
+            // reads the owner flag rather than testing the URL: an upload the account never made
+            // must not be described as theirs, and a header this app supplied must not be called
+            // "YOUR branding".
+            let (header_line, html_line) = if vars.get("logo_is_own").and_then(|v| v.as_str())
+                == Some("yes")
+            {
+                (
+                    "The header above this line is YOUR branding: your logo, your display name and your colour. If it is right here, it is right on every notification and account email your team receives.",
+                    "The header above this line is <strong>your</strong> branding: your logo, your display name and your colour. If it is right here, it is right on every notification and account email your team receives.",
+                )
+            } else {
+                (
+                    "No logo of your own is set yet, so this message carries the WorkflowSwift wordmark and name. Upload a logo on your console's Email Branding card, save it, and send yourself another preview to see your own.",
+                    "No logo of your own is set yet, so this message carries the <strong>WorkflowSwift</strong> wordmark and name. Upload a logo on your console's Email Branding card, save it, and send yourself another preview to see your own.",
+                )
+            };
             let text_body = format!(
-                "Hi {name},\n\nThis is a sample of the mail WorkflowSwift sends on your behalf.\n\nThe header above this line is YOUR branding: your logo, your display name and your colour. If it is right here, it is right on every notification and account email your team receives.\n\nChange it any time in your console, under Profile & Account > Email Branding: {app_url}\n\n- WorkflowSwift"
+                "Hi {name},\n\nThis is a sample of the mail WorkflowSwift sends on your behalf.\n\n{header_line}\n\nChange it any time in your console, under Profile & Account > Email Branding: {app_url}\n\n- WorkflowSwift"
             );
             let html_body = format!(
                 "<html><body style=\"font-family:Arial,sans-serif;line-height:1.6;color:#333\">\
                  <p>Hi {name},</p>\
                  <p>This is a sample of the mail WorkflowSwift sends on your behalf.</p>\
-                 <p style=\"color:#374151\">The header above this line is <strong>your</strong> branding: your logo, your display name and your colour. If it is right here, it is right on every notification and account email your team receives.</p>\
+                 <p style=\"color:#374151\">{html_line}</p>\
                  <p style=\"color:#374151\">Change it any time in your console, under <strong>Profile &amp; Account &gt; Email Branding</strong>: <a href=\"{app_url}\" style=\"color:#4f46e5\">{app_url}</a></p>\
                  <p style=\"font-size:13px;color:#9ca3af\">- WorkflowSwift</p></body></html>"
             );
@@ -2012,5 +2082,99 @@ mod tests {
             unprocessed_scaffolding("Welcome, {{name}}!").is_empty(),
             "the vocabulary this app speaks is never reported as markup"
         );
+    }
+
+    /// 2026-10-24 (kanban t_081edaac). The header block used to appear only once an ACCOUNT had
+    /// uploaded a logo, so a brand-new account's mail — and the Email Branding card's own preview —
+    /// arrived with no wordmark at all while the panel said "it carries the WorkflowSwift header".
+    /// The app's OWN identity is now the fallback: a PNG on a public host (mail clients do not
+    /// render the SVG the pages use) whose `alt` carries the name, so a blocked image still says
+    /// whose mail this is.
+    #[test]
+    fn an_account_with_no_branding_still_gets_the_apps_own_wordmark() {
+        let b = app_default_branding();
+        assert_eq!(b.brand_name, "WorkflowSwift");
+        let url = b
+            .resolve_logo_url(branding::APP_URL)
+            .expect("the app wordmark resolves");
+        assert_eq!(url, "https://app.workflowswift.com/logo.png");
+
+        let header = b.header_html(Some(&url));
+        assert!(header.contains("<img"), "{header}");
+        assert!(header.contains(&url), "{header}");
+        assert!(header.contains("alt=\"WorkflowSwift\""), "{header}");
+        assert!(
+            header.contains(branding::DEFAULT_BRAND_COLOR),
+            "the fleet accent paints the rule: {header}"
+        );
+
+        // BOTH parts open with it: the text part is headed with the name (a text part cannot carry
+        // an image), the HTML part with the wordmark.
+        let (text, html) = apply_branding(
+            Some(&b),
+            "Hello".to_string(),
+            "<html><body><p>Hello</p></body></html>".to_string(),
+        );
+        assert_eq!(text, "WorkflowSwift\n\nHello");
+        assert!(html.contains(&url), "{html}");
+        assert!(html.contains("<p>Hello</p>"), "{html}");
+
+        // The additive leg the feature was shipped with is unchanged: `None` still returns the pair
+        // untouched. Every SEND passes `Some` now, because the funnel substitutes the app identity.
+        let (t2, h2) = apply_branding(None, "Hello".to_string(), "<p>Hello</p>".to_string());
+        assert_eq!((t2.as_str(), h2.as_str()), ("Hello", "<p>Hello</p>"));
+    }
+
+    /// The merge fields are bound from what the ACCOUNT stored, not from the effective identity, so
+    /// the preview can say truthfully whose logo the reader is looking at — and `logo_url` is never
+    /// bound as an empty string.
+    #[test]
+    fn the_branding_merge_fields_say_whose_logo_it_is() {
+        // Nothing stored: the app's own identity, and the reader is told it is not theirs.
+        let mut v = json!({"name": "Dana"});
+        bind_branding(&mut v, None);
+        assert_eq!(
+            v.get("brand_name").and_then(|x| x.as_str()),
+            Some("WorkflowSwift")
+        );
+        assert_eq!(
+            v.get("logo_url").and_then(|x| x.as_str()),
+            Some("https://app.workflowswift.com/logo.png")
+        );
+        assert_eq!(v.get("logo_is_own").and_then(|x| x.as_str()), Some("no"));
+        assert_eq!(
+            render_template("Hi {{name}} — {{brand_name}}", &v, "test"),
+            "Hi Dana — WorkflowSwift"
+        );
+        assert!(unsubstituted(&render_template("{{logo_url}}", &v, "t")).is_empty());
+
+        // A name but no logo: their own name wins, and the logo is still the app's.
+        let name_only = Branding {
+            brand_name: "Acme".to_string(),
+            brand_color: String::new(),
+            logo_url: String::new(),
+        };
+        let mut v = json!({});
+        bind_branding(&mut v, Some(&name_only));
+        assert_eq!(v.get("brand_name").and_then(|x| x.as_str()), Some("Acme"));
+        assert_eq!(v.get("logo_is_own").and_then(|x| x.as_str()), Some("no"));
+        assert_eq!(
+            v.get("logo_url").and_then(|x| x.as_str()),
+            Some("https://app.workflowswift.com/logo.png")
+        );
+
+        // Their own upload: the stored pointer, version stamp and all.
+        let owned = Branding {
+            brand_name: "Acme".to_string(),
+            brand_color: "#0ea5e9".to_string(),
+            logo_url: "/api/v1/branding/logo/abc?v=7".to_string(),
+        };
+        let mut v = json!({});
+        bind_branding(&mut v, Some(&owned));
+        assert_eq!(
+            v.get("logo_url").and_then(|x| x.as_str()),
+            Some("https://app.workflowswift.com/api/v1/branding/logo/abc?v=7")
+        );
+        assert_eq!(v.get("logo_is_own").and_then(|x| x.as_str()), Some("yes"));
     }
 }
