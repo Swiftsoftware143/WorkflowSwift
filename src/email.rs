@@ -1196,8 +1196,56 @@ async fn send_email_fallback(
             )
             .await
         }
+        // The operator's own branding PREVIEW (cron 2026-10-24, parity with FunnelSwift,
+        // IncentiveSwift and ADASwift). Reached whenever the account has no `branding_preview`
+        // template row, which is the normal state on a fresh install — the sample must render
+        // anyway. The header above this body is the account's OWN branding: that is the whole point
+        // of the sample, so the body stays deliberately plain and says what the reader is looking at.
+        "branding_preview" => {
+            let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
+            let app_url = vars
+                .get("app_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or(crate::branding::APP_URL);
+            let text_body = format!(
+                "Hi {name},\n\nThis is a sample of the mail WorkflowSwift sends on your behalf.\n\nThe header above this line is YOUR branding: your logo, your display name and your colour. If it is right here, it is right on every notification and account email your team receives.\n\nChange it any time in your console, under Profile & Account > Email Branding: {app_url}\n\n- WorkflowSwift"
+            );
+            let html_body = format!(
+                "<html><body style=\"font-family:Arial,sans-serif;line-height:1.6;color:#333\">\
+                 <p>Hi {name},</p>\
+                 <p>This is a sample of the mail WorkflowSwift sends on your behalf.</p>\
+                 <p style=\"color:#374151\">The header above this line is <strong>your</strong> branding: your logo, your display name and your colour. If it is right here, it is right on every notification and account email your team receives.</p>\
+                 <p style=\"color:#374151\">Change it any time in your console, under <strong>Profile &amp; Account &gt; Email Branding</strong>: <a href=\"{app_url}\" style=\"color:#4f46e5\">{app_url}</a></p>\
+                 <p style=\"font-size:13px;color:#9ca3af\">- WorkflowSwift</p></body></html>"
+            );
+            send_branded(
+                cfg,
+                to,
+                "A preview of your WorkflowSwift email branding",
+                &text_body,
+                &html_body,
+                branding,
+            )
+            .await
+        }
         _ => {
-            let text_body = format!("WorkflowSwift Notification:\n\n{}", vars);
+            // An unknown template_type must never mail the serialised variables: `vars` holds
+            // whatever the caller passed — passwords, reset tokens, ticket bodies — and the old arm
+            // shipped exactly that as the body. Keep the subject (it is the marker ops greps for),
+            // send a readable generic notice, and WARN with the type so a missing branch is visible
+            // instead of silently mailing a variable dump (the same class fixed on ADASwift,
+            // t_3217c548).
+            tracing::warn!(
+                template_type = template_type,
+                "send_email_fallback: no inline branch for this template_type — sending the generic \
+                 notification instead of a variable dump"
+            );
+            let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
+            let text_body = format!(
+                "Hi {name},\n\nYou have a new notification from WorkflowSwift.\n\n\
+                 Sign in to see it: {}\n\n- WorkflowSwift",
+                crate::branding::APP_URL
+            );
             send_branded(
                 cfg,
                 to,
@@ -1209,6 +1257,27 @@ async fn send_email_fallback(
             .await
         }
     }
+}
+
+/// The operator's own in-inbox proof that their branding is applied (cron 2026-10-24, parity with
+/// FunnelSwift, IncentiveSwift and ADASwift). Recipient is ALWAYS the caller's own address — this is
+/// a preview, never a relay — and a reserved/harness address is withheld by the one suppression arm
+/// every send already passes through, then recorded as a non-send for the operator to see.
+///
+/// It goes through [`send_email`], the SAME door a customer's mail takes, precisely because that is
+/// what makes the sample trustworthy: one template lookup, one branding header, one transport.
+pub async fn send_branding_preview_email(
+    state: &AppState,
+    aid: Uuid,
+    to: &str,
+    name: &str,
+) -> Result<(), String> {
+    let vars = json!({
+        "name": name,
+        "email": to,
+        "app_url": crate::branding::APP_URL,
+    });
+    send_email(state, Some(aid), to, "branding_preview", &vars).await
 }
 
 /// Compatibility wrapper — used by password reset flow which has no AppState

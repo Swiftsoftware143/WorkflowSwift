@@ -868,6 +868,15 @@ pub fn create_router(state: AppState) -> Router {
             post(handlers::branding_handler::upload_logo)
                 .delete(handlers::branding_handler::delete_logo),
         )
+        // The caller's OWN in-inbox branding preview (cron 2026-10-24, parity with FunnelSwift,
+        // IncentiveSwift and ADASwift). No body and no recipient: the address is read from the
+        // caller's own user row, so this cannot be used as a relay. A reserved test address answers
+        // `sent:false` with the reason rather than claiming a send (see
+        // `branding_handler::preview_email`).
+        .route(
+            "/settings/branding/preview",
+            post(handlers::branding_handler::preview_email),
+        )
         .route(
             "/impersonate",
             post(crate::handlers::admin_settings_handler::admin_impersonate),

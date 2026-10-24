@@ -1741,6 +1741,22 @@ async function renderBranding(c){
     if(r){showMsg('Email branding saved','success');renderApp();}else showMsg('Save failed: '+LAST_ERR,'error');
   };
   left.appendChild(saveBtn);
+  // The operator's own inbox proof (cron 2026-10-24). The card above paints a MOCK header; this
+  // sends the real thing through the same door every customer email takes, so what lands in their
+  // inbox IS what a recipient sees. The backend takes NO recipient — it mails the signed-in user's
+  // own address — so this button can never be turned into a relay, and it answers `sent:false` with
+  // the reason (e.g. a reserved test address) instead of claiming a send that never happened.
+  const prevBtn=h('button',{className:'btn btn-ghost mt-2',id:'brand-preview-btn'},'Send me a preview email');
+  prevBtn.onclick=async()=>{
+    prevBtn.disabled=true;prevBtn.textContent='Sending...';
+    const r=await api('/settings/branding/preview',{method:'POST'});
+    prevBtn.disabled=false;prevBtn.textContent='Send me a preview email';
+    if(r&&r.sent)showMsg(r.detail||('Preview sent to '+(r.to||'your address')),'success');
+    else if(r)showMsg(r.detail||'No preview was sent.','error');
+    else showMsg('Preview failed: '+LAST_ERR,'error');
+  };
+  left.appendChild(prevBtn);
+  left.appendChild(h('p',{className:'text-xs text-gray-400 mt-1'},'Sends the real branded message to your own address — nothing is sent to a customer.'));
 
   right.appendChild(h('label',{className:'text-xs text-gray-500'},'Logo'));
   const box=h('div',{style:'border:1px dashed #cbd5e1;border-radius:10px;height:110px;display:flex;align-items:center;justify-content:center;background:#f8fafc;overflow:hidden'});
