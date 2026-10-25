@@ -428,6 +428,11 @@ pub async fn me(
         .map_err(|e| AppError::Internal(e.to_string()))?;
     let plan_name = plan_name_for(&state.db, aid).await;
 
+    // Kept for the top-level key below: `plan_name` itself is moved into `MeResponse`, and the
+    // response now answers the plan twice (inside `user` for the console, flat for every client
+    // that shares the fleet contract). See the note on the return value.
+    let plan_for_top = plan_name.clone();
+
     let has_avatar: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM user_avatars WHERE user_id = $1)")
             .bind(user_id)
@@ -474,7 +479,19 @@ pub async fn me(
         },
     };
 
-    Ok(Json(json!({ "user": me })))
+    // THE PLAN IS READABLE AT THE TOP LEVEL TOO (cron `default`, 2026-10-25). Every sibling app's
+    // `GET /api/v1/auth/me` answers `plan_name` (and `tenant_id`) as a TOP-LEVEL field — FunnelSwift,
+    // ADASwift and MissedCall answer it flat, IncentiveSwift beside its `user` object — while this
+    // app nested it only inside `user`. Measured live 2026-10-25 on a fresh probe signup: this route
+    // answered `{"user":{... "plan_name":"Free"}}` and nothing else, so a caller that reads
+    // `plan_name` (the fleet's own plan walk, the marketing handoff, any client sharing the fleet
+    // contract) read null here and reported "no plan". Both extra keys are ADDITIVE — `user` is
+    // unchanged, so the console that reads `d.user.plan_name` keeps working.
+    Ok(Json(json!({
+        "user": me,
+        "plan_name": plan_for_top,
+        "tenant_id": aid,
+    })))
 }
 
 /// `PUT /api/v1/auth/password` (fleet path) and `POST /api/v1/auth/change-password` (this app's
