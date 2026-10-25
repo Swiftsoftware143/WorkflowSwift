@@ -121,7 +121,17 @@ async fn main() {
         );
     }
 
-    let rate_limiters = crate::rate_limit::RateLimiters::new(30, 10);
+    // Per-account budget: 30 requests/second SUSTAINED, with a burst large enough for one
+    // console page load. The burst used to be 10, which is smaller than the number of reads a
+    // single signed-in dashboard fires on first paint (industry, tabs, widgets, timeline,
+    // workspace dashboard, stats, /auth/me, credits x3 — 9-12 parallel GETs, more on a tab
+    // switch), so ordinary navigation answered some of its OWN reads with 429 and the panel
+    // rendered an empty state plus "Rate limit exceeded" (measured live 2026-10-25: a fresh
+    // account hit 429 after 7-11 sequential console reads; the log showed 17
+    // "Rate limit exceeded for account" warnings for one account in a minute). 60 is the same
+    // burst this file already gives the pre-auth bucket, and it leaves the sustained ceiling —
+    // the part that actually bounds a runaway client — unchanged at 30/s.
+    let rate_limiters = crate::rate_limit::RateLimiters::new(30, 60);
     // Pre-auth ceiling, per client identity, on API-key credentials: the per-account limit
     // above is applied only AFTER auth, so it cannot protect the Argon2 verification that
     // auth performs. Set deliberately above the per-account limit (30/s) so a legitimate
