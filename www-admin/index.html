@@ -2371,14 +2371,32 @@ function renderAdminUsers(c){
 // mirrors cannot be retired) keeps its reason on screen instead of vanishing behind a generic
 // failure. The single-account DELETE (/admin/accounts/{id}) is the same operation for one row; this
 // panel is the batch form of it, so the operator no longer needs a psql session to clear junk.
+// The probe-visibility switch's state lives OUTSIDE the render. It used to be `let showProbes=false`
+// inside `renderAdminAccounts`, and the switch's own handler re-renders that function — so every
+// click reset the flag to false and re-fetched the customer-only list. Measured live 2026-10-25: the
+// box ticked, the table did not change (12 rows before and after, picker stuck at (1)) while the API
+// answered 14 rows / 2 tagged for the very same flag. A control that looks armed and does nothing is
+// worse than a missing one.
+let ACC_SHOW_PROBES = false;
 function renderAdminAccounts(c){
+  // Show the workspaces the API holds back from this list (cron 2026-10-25). `GET /admin/accounts`
+  // hides every row whose `accounts.probe_harness` tag is set — the attribution a test harness writes
+  // at signup — and offers `?include_probe=1` to see them. Until now no caller sent it, so those rows
+  // were unreachable from this screen: the [probe] badge and "Select probes (n)" could only count what
+  // the ADDRESS heuristic found on a row the list was willing to show. Measured live the same day on
+  // FunnelSwift and IncentiveSwift: a harness-minted workspace was invisible to the panel entirely.
   c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Accounts</h2>'+
-    '<div class="flex items-center gap-2"><button class="btn btn-outline btn-sm" id="accProbes" data-tenants="select-probes" disabled>Select probes (0)</button>'+
+    '<div class="flex items-center gap-2"><label class="flex items-center gap-1 text-xs text-gray-600" title="Probe workspaces a test harness minted. Hidden by default because they are not customers; tick this and they are listed so Select probes can reach them."><input type="checkbox" id="accShowProbes" data-tenants="show-probes"'+ (ACC_SHOW_PROBES?' checked':'') +'> show probe workspaces</label>'+
+    '<button class="btn btn-outline btn-sm" id="accProbes" data-tenants="select-probes" disabled>Select probes (0)</button>'+
     '<span class="text-xs text-gray-500" id="accMonitors" title="live tenancy-canary fixtures that a cron monitor seeds and checks — they stay in the list and are never mass-deleted"></span>'+
     '<button class="btn btn-danger btn-sm" id="accDel" disabled>Delete selected</button></div></div>'+
     '<p class="text-xs text-gray-400 mb-4">Every account on this platform. Tick rows and press <b>Delete selected</b> to remove them permanently, with all their data. Three are refused by rule and cannot be forced here: the account you are signed in as, a portfolio company (SwiftImpact / ZaarHub / Giraudy) and this app\'s own workspace — the reason is kept next to the row that was kept.</p>'+
     '<div id="accdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
   const btn=c.querySelector('#accDel');
+  // The visibility switch (cron 2026-10-25): re-render this panel with the flag flipped, so the row
+  // set, the [probe] badges and the "Select probes (n)" count are all rebuilt from ONE listing.
+  const spBox=c.querySelector('#accShowProbes');
+  if(spBox) spBox.addEventListener('change',()=>{ ACC_SHOW_PROBES=!!spBox.checked; renderAdminAccounts(c); });
   // Refusals from the last write, rendered ONCE on the re-render that follows it.
   let reasons=[];
   // The row set the picker works from (cron 2026-10-18). One click ticks every probe row — the same
@@ -2394,7 +2412,7 @@ function renderAdminAccounts(c){
     const a=c.querySelector('#accAll');
     if(a)a.checked=box().length>0&&picked.length===box().length;
   };
-  const load=()=>api('/admin/accounts').then(d=>{
+  const load=()=>api('/admin/accounts'+(ACC_SHOW_PROBES?'?include_probe=1':'')).then(d=>{
     const items=(d&&d.accounts)||(d&&d.items)||[];
     LIST=items;
     const el=c.querySelector('#accdata');
