@@ -199,6 +199,12 @@
       each provider's settings (never a secret value).</p>
       <p>Base: <code>https://workflowswift.com/api/v1</code> · Health: <code>GET /api/v1/health</code> (public).</p>
       <h2 id="plan-limits-settable-and-enforced">Plan limits — settable AND enforced</h2>
+<p><strong>Payment link (optional).</strong> Each plan form in this console carries a
+Payment link box. Paste the checkout address your payment provider gives you for that price
+(a Stripe Payment Link, for example) and a buyer who picks that plan is sent straight to it.
+Leave the box empty when the plan is free, or when you take payment some other way — the
+plan then behaves exactly as it did before. The link is stored with the plan and is never used
+to charge anyone: it only decides <em>where the buyer is sent</em>.</p>
       <p>This is the part of the platform that controls revenue, so it is worth stating exactly how it
       works.</p>
       <p><strong>One source of truth.</strong> A plan's limits live in <code>plan_tiers</code>, in the <code>features</code> JSONB under the
@@ -406,7 +412,12 @@
       own workspace (<code>account_slug</code> exactly <code>workflowswift</code>). Same mirror rule as the single
       delete: an account whose <code>WFS &lt;uuid&gt;</code> mirrors cannot be retired is refused with its reason.
       Admin &rarr; <strong>Accounts</strong> is the panel: per-row checkbox, select-all header, and one
-      <em>Delete selected</em> button that stays disabled until a row is picked.</td>
+      <em>Delete selected</em> button that stays disabled until a row is picked. A workspace a test run
+      minted is hidden from this panel by default; tick <strong>show probe workspaces</strong> beside those
+      buttons to list it wearing its <em>probe</em> badge, <strong>Select probes (N)</strong> ticks exactly
+      those rows, and <strong>Delete selected</strong> retires them (the live canary monitors keep their badge
+      but are never ticked). The switch is the API's <code>/api/v1/admin/accounts?include_probe=1</code>, so
+      rows, badges and the count all come from one listing.</td>
       </tr>
       <tr>
       <td><code>/api/v1/admin/accounts/{id}/retention</code></td>
