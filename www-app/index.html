@@ -481,6 +481,7 @@ const RegisterView = () => {
           <div><label class="label">Full Name</label><input type="text" class="input" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="Jane Doe" required /></div>
           <div><label class="label">Email</label><input type="email" class="input" value=${f.email} onInput=${e=>f.email=e.target.value} placeholder="you@company.com" required /></div>
           <p class="text-xs text-gray-500">No password to choose — we'll email your login details so you confirm your address by signing in.</p>
+          <p class="text-xs text-gray-500">By creating an account you agree to our <a class="underline font-semibold" href="https://workflowswift.com/terms" target="_blank" rel="noopener">Terms of Service</a> and <a class="underline font-semibold" href="https://workflowswift.com/privacy" target="_blank" rel="noopener">Privacy Policy</a>.</p>
           ${S.error && html`<div class="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3 flex items-center gap-2"><span>⚠️</span> ${S.error}</div>`}
           <button type="submit" class="btn w-full" disabled=${S.loading}>${S.loading?'Creating...':'Create Free Account'}</button>
         </form>
