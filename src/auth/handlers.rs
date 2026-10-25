@@ -257,8 +257,30 @@ const MAX_LOGIN_CANDIDATES: usize = 8;
 
 pub async fn login(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> ApiResult<impl IntoResponse> {
+    // Failed-sign-in throttle (cron 2026-10-25): before this, thirty-six consecutive wrong
+    // passwords were answered 401 with no limit. The concurrency shed and the per-account
+    // limiters above bound WORK and RATE, not GUESSES. The counter is keyed on the CLIENT
+    // ADDRESS, never on the account (a per-account lockout is a denial of service against any
+    // known customer). See `crate::login_throttle`.
+    let throttle_key = crate::login_throttle::client_identity(&headers);
+    if let Err(wait) = state.login_throttle.check(&throttle_key) {
+        tracing::warn!(
+            "sign-in paused for {}: failed-attempt allowance spent ({}s left)",
+            throttle_key,
+            wait
+        );
+        return Err(AppError::TooManyAttempts {
+            retry_after_secs: wait,
+        });
+    }
+    // One closure for every invalid-credentials answer, so no arm can forget the counter.
+    let failed = || {
+        state.login_throttle.record_failure(&throttle_key);
+        AppError::InvalidCredentials
+    };
     // The same normalisation the writers store by, matched case-insensitively so an account stored
     // with capitals (or created before normalisation existed) still resolves when the customer
     // retypes their address with different casing. A malformed value is NOT refused here: login
@@ -287,7 +309,7 @@ pub async fn login(
             "login refused: more than {} rows carry one address",
             MAX_LOGIN_CANDIDATES
         );
-        return Err(AppError::InvalidCredentials);
+        return Err(failed());
     }
 
     // A stored hash that is not a usable Argon2 PHC string is not a credential: no password can
@@ -323,7 +345,7 @@ pub async fn login(
         // Exactly one row holds this credential: it IS the identity, whatever the heap order.
         (1, Some(user)) => user,
         // No row does — an unknown address, a wrong password, or a row with no usable hash.
-        (0, _) => return Err(AppError::InvalidCredentials),
+        (0, _) => return Err(failed()),
         // Several tenants' rows hold this same credential and a login carries no tenant. Minting a
         // session for one of them would be the heap-order lottery again, so refuse — and say it
         // once, in the log, where an operator can see the address needs one identity.
@@ -332,13 +354,17 @@ pub async fn login(
                 rows = n,
                 "login refused: one address matches more than one stored credential"
             );
-            return Err(AppError::InvalidCredentials);
+            return Err(failed());
         }
     };
 
     if !user.is_active {
         return Err(AppError::Forbidden("Account is deactivated".to_string()));
     }
+
+    // A correct password clears this address's failures, so a customer who mistyped twice
+    // inside the window is not left counting down.
+    state.login_throttle.clear(&throttle_key);
 
     // Update last_login
     sqlx::query("UPDATE users SET last_login_at = NOW() WHERE id = $1")

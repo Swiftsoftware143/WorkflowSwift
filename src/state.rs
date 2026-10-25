@@ -17,4 +17,8 @@ pub struct AppState {
     /// waiting for that work at once. Keyed by nothing — it counts the process, not a caller.
     pub auth_in_flight: AuthInFlight,
     pub provider_key_cache: ProviderKeyCache,
+    /// Failed-sign-in counter, keyed by client address (`crate::login_throttle`). The
+    /// concurrency shed and the per-account limiters next door bound WORK and RATE; this
+    /// bounds GUESSES, which is the one thing neither of them counts.
+    pub login_throttle: crate::login_throttle::LoginThrottle,
 }

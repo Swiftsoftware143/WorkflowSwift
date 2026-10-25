@@ -19,6 +19,7 @@ mod execution_worker;
 mod features;
 mod handlers;
 mod image_store;
+mod login_throttle;
 mod models;
 mod n8n_converter;
 mod n8n_provision;
@@ -177,6 +178,7 @@ async fn main() {
         rate_limiters,
         pre_auth_limiters,
         auth_in_flight,
+        login_throttle: crate::login_throttle::LoginThrottle::new(),
         provider_key_cache,
     };
 

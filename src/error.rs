@@ -75,12 +75,25 @@ pub enum AppError {
     #[error("Too many requests: {0}")]
     TooManyRequests(String),
 
+    /// 429 — too many FAILED sign-ins from one client address (`crate::login_throttle`). Its
+    /// own variant so the answer carries `Retry-After` as well as a sentence naming how long
+    /// to wait; `TooManyRequests` above is the provider/notification throttle, which has no
+    /// retry window to name.
+    #[error("Too many failed sign-ins")]
+    TooManyAttempts { retry_after_secs: u64 },
+
     #[error("JWT error: {0}")]
     Jwt(#[from] jsonwebtoken::errors::Error),
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
+        // The paused-sign-in answer carries its retry budget in a header as well as in the
+        // sentence, so a client (and a log reader) can obey the pause without parsing prose.
+        let retry_after_secs = match &self {
+            AppError::TooManyAttempts { retry_after_secs } => Some(*retry_after_secs),
+            _ => None,
+        };
         let (status, message) = match &self {
             AppError::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
@@ -126,6 +139,18 @@ impl IntoResponse for AppError {
                 )
             }
             AppError::TooManyRequests(msg) => (StatusCode::TOO_MANY_REQUESTS, msg.clone()),
+            AppError::TooManyAttempts { retry_after_secs } => {
+                let minutes = retry_after_secs.div_ceil(60).max(1);
+                (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    format!(
+                        "Too many failed sign-in attempts from this address. Try again in about \
+                         {minutes} minute{}. If you have forgotten your password, use \
+                         \"Forgot your password?\".",
+                        if minutes == 1 { "" } else { "s" }
+                    ),
+                )
+            }
             AppError::Upstream(msg) => {
                 tracing::warn!(upstream_error = %msg, "Upstream dependency failed");
                 (StatusCode::BAD_GATEWAY, msg.clone())
@@ -142,7 +167,15 @@ impl IntoResponse for AppError {
             "code": status.as_u16()
         }));
 
-        (status, body).into_response()
+        let mut response = (status, body).into_response();
+        if let Some(value) = retry_after_secs
+            .and_then(|secs| axum::http::HeaderValue::from_str(&secs.to_string()).ok())
+        {
+            response
+                .headers_mut()
+                .insert(axum::http::header::RETRY_AFTER, value);
+        }
+        response
     }
 }
 
