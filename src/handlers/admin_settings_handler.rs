@@ -663,10 +663,25 @@ pub async fn admin_create_plan(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
+    // ── A TIER CAN CARRY ITS OWN PAYMENT PAGE (2026-10-24) ─────────────────────────────────
+    // `plan_tiers.checkout_url` has existed since migration 010 and `admin_list_plans` has always
+    // echoed it, but NO surface wrote it and the till never read it — so on an install whose
+    // `payment_providers` is EMPTY (this one) every press on Upgrade could only be refused even
+    // when the operator already had a working way to be paid. An operator who already has a hosted
+    // payment page — a Stripe Payment Link, a PayPal button, any https page — can now paste it here
+    // and `checkout_handler::create_checkout_session` hands the buyer straight to it. A typo is
+    // judged at the till (`is_hosted_payment_url`), so a bad paste refuses the sale rather than
+    // sending a buyer somewhere broken. Blank means "no link".
+    let checkout_url = req
+        .get("checkout_url")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
     let plan = sqlx::query(
         r#"INSERT INTO plan_tiers (id, name, slug, description, price_monthly, price_yearly, features, is_active, sort_order, payment_provider,
-                                  max_workflows, max_users, retention_days, can_deploy_n8n, has_api_access, max_notify_per_hour)
-           VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+                                  max_workflows, max_users, retention_days, can_deploy_n8n, has_api_access, max_notify_per_hour, checkout_url)
+           VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7::jsonb, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
            RETURNING id, name, slug"#,
     )
     .bind(Uuid::new_v4())
@@ -685,6 +700,7 @@ pub async fn admin_create_plan(
     .bind(can_deploy_n8n)
     .bind(has_api_access)
     .bind(max_notify_per_hour)
+    .bind(checkout_url)
     .fetch_one(&state.db)
     .await?;
 
@@ -748,6 +764,20 @@ pub async fn admin_update_plan_full(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
+    // ── The tier's own hosted payment page: THREE cases, and they must stay distinguishable ────
+    // absent = leave whatever is stored; `null` or `""` = CLEAR the link (that is how a tier comes
+    // off sale-by-link, and the console's empty box posts `""`); anything else = set it. A plain
+    // `Option<&str>` collapses "absent" and "null"/blank into one value, which is why the SQL below
+    // is a CASE on a separate "was the field present" flag — without it a pasted link could never be
+    // removed again. Same semantics as IncentiveSwift's `Option<Option<String>>` arm (1b2cc34d).
+    let checkout_url_set = req.get("checkout_url").is_some();
+    let checkout_url_value: Option<String> = req
+        .get("checkout_url")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+
     let name_use = if name.is_empty() {
         let n: String = sqlx::query_scalar("SELECT name FROM plan_tiers WHERE id = $1")
             .bind(id)
@@ -783,8 +813,9 @@ pub async fn admin_update_plan_full(
             can_deploy_n8n = COALESCE($11, can_deploy_n8n),
             has_api_access = COALESCE($12, has_api_access),
             payment_provider = COALESCE($13, payment_provider),
-            max_notify_per_hour = COALESCE($14, max_notify_per_hour)
-         WHERE id = $15"#,
+            max_notify_per_hour = COALESCE($14, max_notify_per_hour),
+            checkout_url = CASE WHEN $15 THEN $16::text ELSE checkout_url END
+         WHERE id = $17"#,
     )
     .bind(if name.is_empty() {
         None
@@ -808,6 +839,10 @@ pub async fn admin_update_plan_full(
     .bind(has_api_access)
     .bind(&payment_provider)
     .bind(max_notify_per_hour)
+    // "was the field present" first, then the value: absent leaves the stored link alone, present
+    // with no usable value CLEARS it, present with a value sets it.
+    .bind(checkout_url_set)
+    .bind(&checkout_url_value)
     .bind(id)
     .execute(&state.db)
     .await?;

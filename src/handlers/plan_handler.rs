@@ -80,13 +80,22 @@ pub async fn create_plan(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
+    // The tier's own hosted payment page (2026-10-24). This is the SECOND plan-create door (the
+    // console's is `admin_settings_handler::admin_create_plan`); both write the same column so a
+    // tier created here is sellable-by-link too. Blank means "no link".
+    let checkout_url = req
+        .get("checkout_url")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
     // NOTE: `plan_tiers.price_monthly/price_yearly` are NUMERIC(10,2) and sqlx has no
     // String/f64 decode for numeric at all, so EVERY read of this struct must cast the
     // column (`price_monthly::text`) — an INSERT/UPDATE ... RETURNING list must therefore
     // name its columns instead of using `RETURNING *` (kanban t_3d0c5623).
     let plan = sqlx::query_as::<_, PlanTier>(
-        r#"INSERT INTO plan_tiers (id, name, slug, description, price_monthly, price_yearly, features, payment_provider)
-           VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7::jsonb, $8)
+        r#"INSERT INTO plan_tiers (id, name, slug, description, price_monthly, price_yearly, features, payment_provider, checkout_url)
+           VALUES ($1, $2, $3, $4, $5::numeric, $6::numeric, $7::jsonb, $8, $9)
            RETURNING id, name, slug, description, price_monthly::text as price_monthly, price_yearly::text as price_yearly, features, checkout_url, is_active, sort_order, payment_provider, created_at"#,
     )
     .bind(Uuid::new_v4())
@@ -97,6 +106,7 @@ pub async fn create_plan(
     .bind(price_yearly)
     .bind(features)
     .bind(&payment_provider)
+    .bind(checkout_url)
     .fetch_one(&state.db)
     .await?;
 

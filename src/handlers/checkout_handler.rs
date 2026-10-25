@@ -977,9 +977,46 @@ pub async fn create_checkout_session(
             } else {
                 "payment_provider_not_configured"
             };
+            // ── A TIER CAN BE SOLD WITHOUT AN API KEY (2026-10-24) ──────────────────────────
+            // `plan_tiers.checkout_url` is the hosted payment page the OPERATOR pastes into the
+            // tier (a Stripe Payment Link, a PayPal button, anything that takes the money). The
+            // column has existed since migration 010, `admin_list_plans` has always echoed it, and
+            // NOTHING wrote or read it at the till — so on this install, whose `payment_providers`
+            // holds ZERO rows, every press on Upgrade could only ever be refused even when the
+            // operator already had a working way to be paid. A tier that carries a link is
+            // SELLABLE: hand the buyer to it, and STILL file the ask, because a hosted page tells
+            // this installation nothing — the workspace is seated when the operator resolves the
+            // ticket, never by a redirect.
+            //
+            // The provider arm keeps precedence (a configured provider is a real checkout with a
+            // session id a webhook can confirm), so this only runs where the ladder used to
+            // dead-end: no active row at all, or a row whose key is missing/unreadable. Both are
+            // this one arm. Same shape as ADASwift `create_upgrade_checkout` (commit 95c83c5) and
+            // IncentiveSwift (commit 1b2cc34d).
+            if purchasable_type == "plan" {
+                if let Some(pid) = purchasable_id {
+                    if let Some(url) = hosted_payment_link(&state.db, pid).await {
+                        return Ok(hand_off_to_payment_link(
+                            &state,
+                            PaymentLinkHandOff {
+                                account_id,
+                                user_id,
+                                plan_id: pid,
+                                plan_slug: &plan_slug,
+                                amount,
+                                currency,
+                                url,
+                            },
+                        )
+                        .await);
+                    }
+                }
+            }
             if !plan_slug.is_empty() {
-                record_refused_upgrade(&state, account_id, user_id, &plan_slug, amount, reason)
-                    .await;
+                record_refused_upgrade(
+                    &state, account_id, user_id, &plan_slug, amount, reason, None,
+                )
+                .await;
             }
             tracing::error!(
                 "checkout/create REFUSED: {reason} for account {account_id} asking for {plan_slug}"
@@ -1084,6 +1121,10 @@ async fn record_refused_upgrade(
     plan_slug: &str,
     amount: f64,
     reason: &str,
+    // `Some(the tier's own payment page)` when the buyer was HANDED OVER to it rather than refused
+    // (2026-10-24): the ticket then has to say so, because the operator cannot wait for a webhook a
+    // hosted page will never send — they confirm the payment themselves and resolve the request.
+    via_link: Option<&str>,
 ) {
     let plan_name: Option<String> =
         sqlx::query_scalar("SELECT name FROM plan_tiers WHERE slug = $1")
@@ -1092,6 +1133,22 @@ async fn record_refused_upgrade(
             .await
             .unwrap_or(None);
     let label = plan_name.unwrap_or_else(|| plan_slug.to_string());
+    let description = match via_link {
+        Some(url) => format!(
+            "This workspace pressed Upgrade on Plan & Billing and asked for the {label} plan \
+             (${amount:.2}/month), and was handed to the tier's own hosted payment page ({url}). \
+             Nothing was charged by this installation and no payment can be confirmed \
+             automatically — a hosted page tells it nothing — so the workspace is NOT seated yet. \
+             Confirm the payment with your provider, then resolve this request to seat the workspace \
+             on the plan. Filed by {user_id}."
+        ),
+        None => format!(
+            "This workspace pressed Upgrade on Plan & Billing and asked for the {label} plan \
+             (${amount:.2}/month). Self-serve checkout is not open on this installation yet \
+             ({reason}), so the team makes the switch by hand. Nothing was charged. Filed by \
+             {user_id}."
+        ),
+    };
     let inserted = sqlx::query(
         r#"INSERT INTO tickets (id, aid, subject, description, status, priority, source, plan_slug)
            SELECT $1, $2, $3, $4, 'open', 'medium', 'plan_request', $5
@@ -1103,12 +1160,7 @@ async fn record_refused_upgrade(
     .bind(Uuid::new_v4())
     .bind(account_id)
     .bind(format!("Upgrade request: {label} plan"))
-    .bind(format!(
-        "This workspace pressed Upgrade on Plan & Billing and asked for the {label} plan \
-         (${amount:.2}/month). Self-serve checkout is not open on this installation yet \
-         ({reason}), so the team makes the switch by hand. Nothing was charged. Filed by \
-         {user_id}."
-    ))
+    .bind(description)
     .bind(plan_slug)
     .execute(&state.db)
     .await;
@@ -1117,6 +1169,154 @@ async fn record_refused_upgrade(
             "checkout/create: could not record the refused upgrade as a plan request: {e:?}"
         );
     }
+}
+
+/// Is this a URL a browser can be sent to in order to pay?
+///
+/// `plan_tiers.checkout_url` is typed in by an operator, so a typo must REFUSE the sale rather than
+/// send a buyer somewhere broken or insecure. https only (a payment page over plain http is a
+/// downgrade worth refusing), a host with a dot in it, and no whitespace anywhere — enough to catch
+/// the two mistakes an operator actually makes (a bare `stripe.com/pay` with no scheme, a pasted
+/// line with a trailing space or a newline in the middle) without pretending to be a URL parser.
+/// Copied from ADASwift's arm (commit 95c83c5) and IncentiveSwift's (1b2cc34d) so every app judges
+/// a link the same way.
+fn is_hosted_payment_url(raw: &str) -> bool {
+    let u = raw.trim();
+    let Some(rest) = u.strip_prefix("https://") else {
+        return false;
+    };
+    if u.contains(char::is_whitespace) {
+        return false;
+    }
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    !host.is_empty() && host.contains('.')
+}
+
+/// The tier's own hosted payment page, if the operator pasted a usable one.
+///
+/// Read per purchase (never cached): the operator can clear a link, and the next press must see it.
+/// An unusable value is treated as NO link — the refusal below is the honest answer, and the caller
+/// has already declined to send a buyer to a broken page.
+async fn hosted_payment_link(db: &sqlx::PgPool, plan_id: Uuid) -> Option<String> {
+    let stored: Option<String> = sqlx::query_scalar(
+        "SELECT COALESCE(BTRIM(checkout_url), '') FROM plan_tiers WHERE id = $1",
+    )
+    .bind(plan_id)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten();
+    stored.filter(|u| is_hosted_payment_url(u))
+}
+
+/// What the till hands the buyer, in ONE value — the hand-off needs seven facts and clippy refuses an
+/// eight-argument function (`too_many_arguments`), which is the right call here: these travel
+/// together and naming the bundle keeps the call site readable.
+struct PaymentLinkHandOff<'a> {
+    account_id: Uuid,
+    user_id: Uuid,
+    plan_id: Uuid,
+    plan_slug: &'a str,
+    amount: f64,
+    currency: &'a str,
+    url: String,
+}
+
+/// Hand a buyer to the tier's own hosted payment page instead of refusing the sale.
+///
+/// The ask is STILL filed as a plan request, and the hand-off is recorded on `checkout_sessions`, so
+/// the operator's queue and history both show what happened. The session row's status is
+/// `payment_link` and never `pending`: `pending` promises a webhook that cannot arrive for a hosted
+/// page this installation knows nothing about (migration 096 widened the status CHECK for exactly
+/// this value).
+async fn hand_off_to_payment_link(
+    state: &AppState,
+    hand_off: PaymentLinkHandOff<'_>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let PaymentLinkHandOff {
+        account_id,
+        user_id,
+        plan_id,
+        plan_slug,
+        amount,
+        currency,
+        url,
+    } = hand_off;
+    // The ticket TEXT says the buyer was handed to the hosted page — an operator reading "no payment
+    // provider is configured" would not know a sale is in flight and waiting for their confirmation.
+    record_refused_upgrade(
+        state,
+        account_id,
+        user_id,
+        plan_slug,
+        amount,
+        "hosted_payment_link",
+        Some(&url),
+    )
+    .await;
+
+    let recorded = sqlx::query(
+        r#"INSERT INTO checkout_sessions
+           (id, account_id, user_id, provider_type, provider_session_id,
+            purchasable_type, purchasable_id, amount, currency, status, metadata)
+           VALUES ($1, $2, $3, 'payment_link', NULL, 'plan', $4, $5, $6, 'payment_link', $7)"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(account_id)
+    .bind(user_id)
+    .bind(plan_id)
+    .bind(amount)
+    .bind(currency)
+    .bind(json!({
+        "kind": "plan",
+        // What actually happened: handed over to the operator's own payment page. The buyer's tier is
+        // seated when the operator resolves the request, never by the redirect.
+        "reason": "hosted_payment_link",
+        "account_id": account_id.to_string(),
+        "plan_id": plan_id.to_string(),
+        "plan_slug": plan_slug,
+        "checkout_url": url,
+    }))
+    .execute(&state.db)
+    .await;
+    if let Err(e) = recorded {
+        // Best effort, like the ticket: the buyer is being handed to a payment page, and a
+        // bookkeeping failure must not turn a live sale into a 500.
+        tracing::error!(
+            "checkout/create: could not record the payment-link hand-off for {account_id}: {e:?}"
+        );
+    }
+    tracing::info!(
+        %account_id, plan = %plan_slug, amount,
+        "checkout/create: handing the workspace to the tier's own hosted payment page"
+    );
+
+    let request_recorded: bool = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM tickets \
+         WHERE aid = $1 AND source = 'plan_request' AND plan_slug = $2 \
+           AND lower(status) NOT IN ('closed', 'resolved', 'done')",
+    )
+    .bind(account_id)
+    .bind(plan_slug)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(0)
+        > 0;
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "payment_link",
+            "url": url,
+            "checkout_url": url,
+            "configured": false,
+            "request_recorded": request_recorded,
+            "amount": amount,
+            "currency": currency,
+            "purchasable_type": "plan",
+            "purchasable_id": plan_id.to_string(),
+        })),
+    )
 }
 
 /// Create a Stripe checkout session via Stripe API

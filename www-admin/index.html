@@ -548,7 +548,7 @@ async function renderCRUD(container,key,label,fields,ep,editFields,extraAction,a
   // kanban t_ws-team-role — a `role` column shows the WRITTEN role, never the database's own enum
   // (`user`, `company_admin`, ...). Same roleLabel the Profile screen uses; an unknown value is
   // shown as-is and a missing one as an em-dash, so an operator reads a role, not a column value.
-  const cellVal=(f,v)=>f==='role'?escHtml(roleLabel(v)):escHtml(String(v===undefined||v===null?'':v));
+  const cellVal=(f,v)=>f==='role'?escHtml(roleLabel(v)):f==='checkout_url'?(v?'Set':'&mdash;'):escHtml(String(v===undefined||v===null?'':v));
   // DO NOT DRAW A DELETE THE API WILL REFUSE (measured live 2026-10-14). `remove_user` answers
   // 422 "Cannot remove yourself" for the caller's own row and 403 "Cannot remove the super admin"
   // for a super-admin row, and the Team table drew a Del button on both - the exact "a button that
@@ -600,6 +600,19 @@ async function showForm(key,label,fields,ep,id,cb,row){
   const INVITABLE_ROLES=[['team_member','Team member'],['company_admin','Company admin']];
   const fieldBox=f=>{
     const lab=f.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase());
+    // A TIER CAN CARRY ITS OWN PAYMENT PAGE (2026-10-24). `plan_tiers.checkout_url` has existed since
+    // migration 010 and the API has always echoed it, but NO box here could write it — so on an
+    // install whose payment providers table is EMPTY (this one) every press on Upgrade could only be
+    // refused even when the operator already had a working way to be paid. Paste a Stripe Payment
+    // Link, a PayPal button or any https payment page and the checkout hands the buyer to it, while
+    // the request is still filed. CLEARING the box removes the link (that is how a tier comes off
+    // sale-by-link), which is why the save handler posts this field even when it is empty.
+    if(f==='checkout_url'){
+      const v=item[f]===undefined||item[f]===null?'':String(item[f]).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+      return `<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">Payment link (optional)</label>`
+        +`<input class="input" name="checkout_url" value="${v}" placeholder="https://buy.stripe.com/...">`
+        +`<p class="text-xs text-gray-500 mt-1">A hosted payment page for this tier. With a link set, a customer pressing Upgrade is taken straight to it even when no payment provider is connected here, and the request is still filed for you. Clear the box to take it off sale by link.</p></div>`;
+    }
     if(f==='role'){
       const cur=String(item.role==null||item.role===''?'team_member':item.role);
       const opts=INVITABLE_ROLES.map(([v,t])=>`<option value="${v}"${v===cur?' selected':''}>${t}</option>`).join('');
@@ -648,6 +661,13 @@ async function showForm(key,label,fields,ep,id,cb,row){
     // Skip blank inputs: an empty string is not "unset" server-side — POST /surfaces would
     // store slug='' instead of slugifying the name, and PUT uses COALESCE (blank can't clear).
     const body={};box.querySelectorAll('#mf input,#mf textarea,#mf select').forEach(inp=>{if(String(inp.value).trim()!=='')body[inp.name]=inp.value});
+    // EXCEPT the tier's own payment link (2026-10-24): an EMPTY box there is not "leave it alone",
+    // it is "take this tier off sale-by-link", and the server reads `checkout_url` as
+    // absent = keep, `""`/null = CLEAR, a value = set. The blank-skipping rule above would silently
+    // turn a deliberate clear into a no-op, so this field is always posted — raw text, `''` when the
+    // operator emptied it (never `||null`, which would be indistinguishable from a missing field).
+    const cu=box.querySelector('#mf [name="checkout_url"]');
+    if(cu)body.checkout_url=String(cu.value).trim();
     // `EP.bools` names the fields the BACKEND reads with `as_bool()`. A select hands back the
     // STRING "true"/"false"; `as_bool()` answers None for a string, so the handler would silently
     // apply its default - the same class as the `credit_cost` string/i32 422 fixed above.
@@ -2477,11 +2497,14 @@ function renderAdminPortfolio(c){
 
 function renderAdminPlans(c){
   c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">Plans Management</h2>'+
-    '<p class="text-xs text-gray-400 mb-4">A tier IS its entitlements: the limits and flags below are what the plan gate enforces (<code>plan_limits</code>), so this is where a plan\'s price and what it grants are set. They were reachable in the API (POST/PUT /admin/plans) but absent from this panel, so a tier could be created and then never configured — price and limits frozen at their creation values. A BLANK box is left as it is on save; type a new value to change one. Flags take true/false.</p>'+
+    '<p class="text-xs text-gray-400 mb-4">A tier IS its entitlements: the limits and flags below are what the plan gate enforces (<code>plan_limits</code>), so this is where a plan\'s price and what it grants are set. They were reachable in the API (POST/PUT /admin/plans) but absent from this panel, so a tier could be created and then never configured — price and limits frozen at their creation values. A BLANK box is left as it is on save; type a new value to change one. The one exception is <b>Payment link</b>: it is the tier\'s own hosted payment page, and an EMPTY box there CLEARS a stored link (that is how a tier comes off sale-by-link). Flags take true/false.</p>'+
     '<div id="apldata"></div></div>';
   // The COLUMN set stays narrow (a readable table); the full settable surface goes to BOTH forms.
-  const WF_PLAN_FIELDS=['name','slug','price_monthly','price_yearly','is_active','sort_order','description','max_workflows','max_users','retention_days','max_notify_per_hour','can_deploy_n8n','has_api_access','payment_provider'];
-  renderCRUD(c.querySelector('#apldata'),'plans','Plan',['name','slug','price_monthly','price_yearly','is_active'],'/admin/plans',WF_PLAN_FIELDS,undefined,WF_PLAN_FIELDS);
+  // `checkout_url` is the tier's OWN hosted payment page (2026-10-24): it is the one field that can
+  // make a tier sellable on an install with no payment provider key, so it is settable in BOTH forms
+  // and shown in the table as Set/dash rather than as a long URL.
+  const WF_PLAN_FIELDS=['name','slug','price_monthly','price_yearly','is_active','sort_order','description','max_workflows','max_users','retention_days','max_notify_per_hour','can_deploy_n8n','has_api_access','payment_provider','checkout_url'];
+  renderCRUD(c.querySelector('#apldata'),'plans','Plan',['name','slug','price_monthly','price_yearly','is_active','checkout_url'],'/admin/plans',WF_PLAN_FIELDS,undefined,WF_PLAN_FIELDS);
 }
 
 function renderIndustrySources(c){
