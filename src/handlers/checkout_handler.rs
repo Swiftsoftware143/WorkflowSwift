@@ -1180,7 +1180,7 @@ async fn record_refused_upgrade(
 /// line with a trailing space or a newline in the middle) without pretending to be a URL parser.
 /// Copied from ADASwift's arm (commit 95c83c5) and IncentiveSwift's (1b2cc34d) so every app judges
 /// a link the same way.
-fn is_hosted_payment_url(raw: &str) -> bool {
+pub(crate) fn is_hosted_payment_url(raw: &str) -> bool {
     let u = raw.trim();
     let Some(rest) = u.strip_prefix("https://") else {
         return false;

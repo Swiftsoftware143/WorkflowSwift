@@ -611,6 +611,28 @@ pub async fn admin_list_plans(
 }
 
 /// POST /api/v1/admin/plans — create a new plan
+/// A tier's `checkout_url` is a hosted payment page an OPERATOR pastes in, so refuse a typo at
+/// SAVE time instead of at the till.
+///
+/// The till already drops an unusable link (`checkout_handler::is_hosted_payment_url`) — but the
+/// operator only found out when a customer pressed Upgrade: measured live 2026-10-25,
+/// `POST /api/v1/admin/plans` stored `buy.stripe.com/not-a-url` and answered "Plan created", after
+/// which `hosted_payment_link` treated the tier as having NO link and the press fell through to the
+/// refusal arm. create and update now judge the link with the till's own predicate. A blank box
+/// stays allowed (a free tier, or one sold another way, carries no link).
+fn require_hosted_payment_url(raw: &str) -> ApiResult<()> {
+    let u = raw.trim();
+    if u.is_empty() || crate::handlers::checkout_handler::is_hosted_payment_url(u) {
+        return Ok(());
+    }
+    Err(AppError::BadRequest(
+        "The payment link must be a full https:// address, for example https://buy.stripe.com/abc123. \
+         It is where a buyer is sent when they pick this plan, so a link without https:// cannot take \
+         a payment. Leave the box empty if this plan is not sold by link."
+            .to_string(),
+    ))
+}
+
 pub async fn admin_create_plan(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -677,6 +699,9 @@ pub async fn admin_create_plan(
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty());
+    if let Some(url) = checkout_url {
+        require_hosted_payment_url(url)?;
+    }
 
     let plan = sqlx::query(
         r#"INSERT INTO plan_tiers (id, name, slug, description, price_monthly, price_yearly, features, is_active, sort_order, payment_provider,
@@ -777,6 +802,9 @@ pub async fn admin_update_plan_full(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
+    if let Some(url) = checkout_url_value.as_deref() {
+        require_hosted_payment_url(url)?;
+    }
 
     let name_use = if name.is_empty() {
         let n: String = sqlx::query_scalar("SELECT name FROM plan_tiers WHERE id = $1")
