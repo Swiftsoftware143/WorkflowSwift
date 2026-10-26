@@ -968,15 +968,6 @@ pub fn create_router(state: AppState) -> Router {
         .layer(axum::middleware::from_fn(
             crate::path_rejection::path_rejection_is_not_found,
         ))
-        // A malformed BODY answers this app's JSON with a sentence a customer can act on
-        // (measured live 2026-10-26: register/login/forgot-password answered `text/plain` carrying
-        // "Failed to deserialize the JSON body into the target type: missing field `name`", so a
-        // console doing `await r.json()` threw instead of showing a message). Same class and same
-        // placement as the path layer above; it only touches a 400/413/415/422 whose body is
-        // text/plain, so every `AppError` response passes through untouched.
-        .layer(axum::middleware::from_fn(
-            crate::body_rejection::body_rejection_is_app_json,
-        ))
         // OUTERMOST, and last for that reason (card t_39cea779). `body_read_deadline` above reads
         // the body through the same `Bytes` extractor, so the limit it applies is the request's
         // `DefaultBodyLimit` extension — and that extension only exists if the layer that inserts
@@ -1137,6 +1128,19 @@ pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/", get(health_check))
         .nest("/api/v1", api_v1)
+        // A malformed BODY answers this app's JSON with a sentence a customer can act on
+        // (measured live 2026-10-26: `/api/v1/auth/{register,login,forgot-password}` answered
+        // `text/plain` carrying "Failed to deserialize the JSON body into the target type:
+        // missing field `name`", so a console doing `await r.json()` threw instead of showing a
+        // message). Sibling of `path_rejection`, and mounted HERE — on the finished router, after
+        // the `nest` — because `Router::layer` only wraps the routes already registered on that
+        // router: the auth routes live on `public_routes`, so the same call placed inside the
+        // protected sub-router wrapped nothing they use (measured: the first deploy changed no
+        // behaviour at all). It only touches a 400/413/415/422 whose body is text/plain, so every
+        // `AppError` response and every success passes through untouched.
+        .layer(axum::middleware::from_fn(
+            crate::body_rejection::body_rejection_is_app_json,
+        ))
         .with_state(state)
 }
 
