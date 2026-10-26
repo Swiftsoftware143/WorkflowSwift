@@ -960,6 +960,14 @@ pub fn create_router(state: AppState) -> Router {
             state.clone(),
             crate::rate_limit::pre_auth_rate_limit_middleware,
         ))
+        // Malformed path ids answer this app's JSON 404, not axum's parser sentence (measured live
+        // 2026-10-26: `/tickets/{id}` and `/workflows/{id}/steps` still said `Invalid URL: Cannot
+        // parse …`, while eleven sibling id routes already answered cleanly). Sits outside auth and
+        // outside every handler, because the `Path<Uuid>` refusal is raised by a handler's own
+        // extractor — per-handler fixes left exactly these two behind. See `src/path_rejection.rs`.
+        .layer(axum::middleware::from_fn(
+            crate::path_rejection::path_rejection_is_not_found,
+        ))
         // OUTERMOST, and last for that reason (card t_39cea779). `body_read_deadline` above reads
         // the body through the same `Bytes` extractor, so the limit it applies is the request's
         // `DefaultBodyLimit` extension — and that extension only exists if the layer that inserts
