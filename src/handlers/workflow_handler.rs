@@ -118,8 +118,15 @@ pub async fn create_workflow(
 pub async fn get_workflow(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
-    Path(id): Path<Uuid>,
+    Path(raw_id): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
+    // A workflow is addressed by a link the console and the API hand out, so a stale, truncated
+    // or hand-typed id must answer the same clean 404 as an id with no row — not axum's
+    // `Path<Uuid>` refusal (measured live 2026-10-26: "Invalid URL: Cannot parse `id` with value
+    // `not-a-uuid`: UUID parsing failed…" was the ONLY route left on this app answering a parser
+    // sentence, where `/auth/avatar/{id}` and `/branding/logo/{id}` already answer 404).
+    let id = Uuid::parse_str(raw_id.trim())
+        .map_err(|_| AppError::NotFound("Workflow not found".to_string()))?;
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let workflow = sqlx::query_as::<_, Workflow>(
