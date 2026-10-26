@@ -968,6 +968,15 @@ pub fn create_router(state: AppState) -> Router {
         .layer(axum::middleware::from_fn(
             crate::path_rejection::path_rejection_is_not_found,
         ))
+        // A malformed BODY answers this app's JSON with a sentence a customer can act on
+        // (measured live 2026-10-26: register/login/forgot-password answered `text/plain` carrying
+        // "Failed to deserialize the JSON body into the target type: missing field `name`", so a
+        // console doing `await r.json()` threw instead of showing a message). Same class and same
+        // placement as the path layer above; it only touches a 400/413/415/422 whose body is
+        // text/plain, so every `AppError` response passes through untouched.
+        .layer(axum::middleware::from_fn(
+            crate::body_rejection::body_rejection_is_app_json,
+        ))
         // OUTERMOST, and last for that reason (card t_39cea779). `body_read_deadline` above reads
         // the body through the same `Bytes` extractor, so the limit it applies is the request's
         // `DefaultBodyLimit` extension — and that extension only exists if the layer that inserts
