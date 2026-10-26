@@ -131,23 +131,29 @@ pub async fn list_templates(
     // the decimal string. Every other NUMERIC column in the schema is read as text already.
     let plan_info: Option<serde_json::Value> = match plan_id {
         Some(pid) => {
-            sqlx::query("SELECT slug, price_monthly::text AS price FROM plan_tiers WHERE id = $1")
-                .bind(pid)
-                .fetch_optional(&state.db)
-                .await?
-                .map(|row| {
-                    let slug: String = row.try_get("slug").unwrap_or_default();
-                    let price: f64 = row
-                        .try_get::<Option<String>, _>("price")
-                        .ok()
-                        .flatten()
-                        .and_then(|t| t.trim().parse::<f64>().ok())
-                        .unwrap_or(0.0);
-                    json!({
-                        "slug": slug,
-                        "is_paid": price > 0.0,
-                    })
+            // `name` rides along so the console can print the plan the tenant is actually on
+            // instead of the internal slug ("Free plan (free)", measured live 2026-10-26).
+            sqlx::query(
+                "SELECT slug, name, price_monthly::text AS price FROM plan_tiers WHERE id = $1",
+            )
+            .bind(pid)
+            .fetch_optional(&state.db)
+            .await?
+            .map(|row| {
+                let slug: String = row.try_get("slug").unwrap_or_default();
+                let name: String = row.try_get("name").unwrap_or_default();
+                let price: f64 = row
+                    .try_get::<Option<String>, _>("price")
+                    .ok()
+                    .flatten()
+                    .and_then(|t| t.trim().parse::<f64>().ok())
+                    .unwrap_or(0.0);
+                json!({
+                    "slug": slug,
+                    "name": name,
+                    "is_paid": price > 0.0,
                 })
+            })
         }
         None => None,
     };
