@@ -714,8 +714,15 @@ pub async fn upload_avatar(
 /// upload twin stays private.
 pub async fn get_avatar(
     State(state): State<AppState>,
-    Path(user_id): Path<Uuid>,
+    Path(raw_id): Path<String>,
 ) -> ApiResult<Response> {
+    // A public read is fetched by a BROWSER or a MAIL CLIENT, never by a programmer: a stale,
+    // truncated or hand-typed id must answer the SAME clean 404 as an id that simply has no row,
+    // not axum's `Path<Uuid>` refusal ("Invalid URL: UUID parsing failed…", 400) which renders as a
+    // broken image plus a parser sentence. Fleet contract measured 2026-10-26: FunnelSwift /
+    // IncentiveSwift / ADASwift answer 404 here, this app and missedcallrespondr answered 400.
+    let user_id = Uuid::parse_str(raw_id.trim())
+        .map_err(|_| AppError::NotFound("No picture for this account".to_string()))?;
     let row = sqlx::query("SELECT bytes, content_type FROM user_avatars WHERE user_id = $1")
         .bind(user_id)
         .fetch_optional(&state.db)

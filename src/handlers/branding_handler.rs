@@ -291,8 +291,14 @@ pub async fn preview_email(
 /// docs); ids are unguessable uuids and no other tenant datum is reachable from here.
 pub async fn get_logo(
     State(state): State<AppState>,
-    Path(account_id): Path<Uuid>,
+    Path(raw_id): Path<String>,
 ) -> ApiResult<Response> {
+    // PUBLIC read embedded as `<img src>` in transactional mail (see the module doc): a mail client
+    // holding a stale or mangled id must get the same clean 404 as an id with no row, not axum's
+    // `Path<Uuid>` refusal (400 "UUID parsing failed"), which shows the recipient a parser sentence
+    // where their logo should be. Same fix, same day, as `auth::handlers::get_avatar`.
+    let account_id = Uuid::parse_str(raw_id.trim())
+        .map_err(|_| AppError::NotFound("No logo for this account".to_string()))?;
     let row = sqlx::query("SELECT bytes, content_type FROM account_logos WHERE account_id = $1")
         .bind(account_id)
         .fetch_optional(&state.db)
