@@ -542,7 +542,12 @@ async fn record_send_outcome(
 /// `last_send_withheld=true`, and the admin panel renders that as "was NOT SENT" rather than
 /// "FAILED". Same discipline as `record_send_outcome`: best-effort (a bookkeeping error must never
 /// fail a send) and it re-seals the credentials before writing the row back.
-async fn record_withheld_send(state: &AppState, to: &str, template_type: &str, domain: &str) {
+pub(crate) async fn record_withheld_send(
+    state: &AppState,
+    to: &str,
+    template_type: &str,
+    domain: &str,
+) {
     // Its own status, not a failure: a reserved/harness recipient is a NON-SEND — nothing was
     // attempted, no provider request was made — so it must not read as a refusal.
     append_send_log(
