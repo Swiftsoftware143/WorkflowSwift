@@ -890,11 +890,25 @@ const renderTplGrid = () => {
   const isPaid = S.plan ? !!S.plan.is_paid : false;
   const lockAll = !isPaid;
   const unlock = (t) => (!lockAll && t.category && slug && t.category === slug);
+  // Why a card is locked, in the card itself. Measured live 2026-10-26: every locked card on a
+  // FREE plan read "Not in Marketing Agency" — the industry reason — even for a template filed
+  // under that very industry, because the wholesale plan lock (lockAll) was reported as an
+  // industry mismatch. The industry note only means anything once the plan is paid.
+  const lockedChip = lockAll
+    ? 'Upgrade required'
+    : (slug ? 'Not in ' + esc(indName || slug) : 'Upgrade required');
   const msgEl = document.getElementById('tpl-plan-msg');
   if (msgEl) {
     const isPaid = S.plan ? !!S.plan.is_paid : false;
     const indTxt = (slug ? ((indName||slug)) : 'all industries');
-    msgEl.textContent = isPaid ? ("Industry: " + indTxt + " — templates outside your industry require an upgrade") : ("Free plan (" + (S.plan&&S.plan.slug||'free') + ") — upgrade to unlock templates");
+    // Name the plan the tenant is actually on. Measured live 2026-10-26: this read
+    // "Free plan (free)" — the internal SLUG in brackets, which tells a customer nothing
+    // (and read "Free plan (professional)" back when the price parse was broken). The
+    // server now sends the tier's `name` alongside the slug.
+    const planName = (S.plan && (S.plan.name || S.plan.plan_name)) || '';
+    msgEl.textContent = isPaid
+      ? ("Industry: " + indTxt + " — templates outside your industry require an upgrade")
+      : ((planName ? "Plan: " + planName + " — " : "") + "upgrade to unlock every template.");
   }
   if (!list.length) { root.innerHTML = '<div class="empty">No templates available.</div>'; return; }
   const cards = list.map(t => {
@@ -919,7 +933,7 @@ const renderTplGrid = () => {
     return '<div class="card" style="margin-bottom:0;opacity:.92">'
       +'<div class="flex items-start justify-between"><h3 class="font-semibold text-gray-800">'+esc(t.name)+'</h3><span class="badge b-gray">Locked</span></div>'
       +'<p class="text-sm text-gray-500 mt-1 mb-3">'+esc(t.description||'No description')+'</p>'
-      +'<div class="mb-3">'+(t.category?'<span class="chip">'+esc(t.category)+'</span>':'')+stepsChip+'<span class="chip">'+(slug?'Not in '+esc(indName||slug):'Upgrade required')+'</span></div>'
+      +'<div class="mb-3">'+(t.category?'<span class="chip">'+esc(t.category)+'</span>':'')+stepsChip+'<span class="chip">'+lockedChip+'</span></div>'
       +'<div class="flex gap-2"><button class="btn text-sm flex-1" data-tpl-upgrade="1">Upgrade to Unlock</button><button class="btn-outline text-sm flex-1" data-tpl-export="'+esc(t.id)+'|'+esc(t.name)+'">View JSON</button></div>'
       +'</div>';
   }).join('');
