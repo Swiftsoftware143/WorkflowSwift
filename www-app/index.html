@@ -450,11 +450,15 @@ const LoginView = () => {
     </div>`;
 };
 const RegisterView = () => {
+  // The chosen password lives in the DOM node, never in the shared state object (a password has no
+  // business surviving a re-render or a view change). `initPwEl` is re-pointed on every render.
+  let initPwEl = null;
   // kanban t_7e48aeb7 — same class, create-only: the draft lives in the SHARED object and is seeded ON
   // OPEN (the "Create Free Account" button clears S.formSeeded), so a renderApp() while the form is on
   // screen cannot reset it to the literals; value=${...} makes the shared state visible.
   const f = viewState('register_form', { name: '', email: '' });
-  if (!S.formSeeded) { f.name=''; f.email=''; S.signupSent=false; S.signupEmail=''; S.formSeeded = true; }
+  if (!S.formSeeded) { f.name=''; f.email=''; S.signupSent=false; S.signupEmail=''; S.formSeeded = true;
+    S.signupToken=null; S.initPwError=null; S.initPwSaved=false; S.initPwBusy=false; }
   // David's signup model (as IncentiveSwift/FunnelSwift ship): NAME + EMAIL only. The server mints
   // the login credentials and emails them, so there is NO auto-login — the user confirms their
   // address by signing in with the password we sent (the real two-step check).
@@ -462,8 +466,35 @@ const RegisterView = () => {
     // Capture the answer: the server says whether the login mail actually LEFT. A signup whose
     // mail failed holds an account whose first password is on no inbox, so the next screen must
     // not say "check your email" (parity with the other five fleet apps).
-    try { const d = await API.register(f.name, f.email); S.signupMailed = !(d && d.credentials_emailed === false); S.signupSent=true; S.signupEmail=f.email; f.name=''; f.email=''; }
+    try { const d = await API.register(f.name, f.email); S.signupMailed = !(d && d.credentials_emailed === false); S.signupSent=true; S.signupEmail=f.email;
+      // The token this signup returned is the ONLY credential that may set a password through the
+      // failed-mail door below (a sign-in session, an impersonation token and an API key all carry
+      // `pwd_minted: false`). Kept on the shared state so the save can use it after a re-render.
+      S.signupToken = (d && (d.access_token || d.token)) || null; f.name=''; f.email=''; }
     catch(err){ S.error=err.message; } S.loading=false; renderApp(); };
+  // THE PASSWORD FIELD IS REAL, NOT A PROMISE (kanban t_9cd40660). `register` mints the first
+  // password on the server and emails it; when that send fails the account exists and nobody can
+  // sign into it, and /forgot-password.html mails a code through the same broken mailer. This is
+  // the one path that survives it: POST /api/v1/auth/initial-password with the token the signup
+  // just returned. The server accepts it only while `users.password_undelivered` is set, so the
+  // offer is one-shot, and it ends the token when it succeeds. A raw fetch on purpose: the shared
+  // API helper treats ANY 401 as a dead session, and a replayed/expired token here must read as a
+  // message next to the field, not as a thrown login screen.
+  const saveInitialPw = async () => {
+    const pw = (initPwEl && initPwEl.value) || '';
+    if (pw.length < 8) { S.initPwError='Use at least 8 characters.'; renderApp(); return; }
+    if (!S.signupToken) { S.initPwError='This page lost the signup session — sign in with your login details, or use the reset code.'; renderApp(); return; }
+    S.initPwBusy=true; S.initPwError=null; renderApp();
+    try {
+      const r = await fetch('/api/v1/auth/initial-password', { method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':'Bearer '+S.signupToken},
+        body: JSON.stringify({password: pw}) });
+      const d = await r.json().catch(()=>({}));
+      if (!r.ok) throw new Error(d.message || d.error || 'That did not save. Please try again.');
+      S.initPwSaved=true;
+    } catch(err){ S.initPwError=err.message; }
+    S.initPwBusy=false; renderApp();
+  };
   if (S.signupSent) {
     return html`
     <div class="flex items-center justify-center min-h-screen px-4">
@@ -471,8 +502,16 @@ const RegisterView = () => {
         <div class="text-4xl mb-3">📧</div>
         <h1 class="text-2xl font-extrabold text-gray-900">${S.signupMailed===false?'Your account is created':'Check your email'}</h1>
         ${S.signupMailed===false
-          ? html`<p class="text-sm text-gray-500 mt-3"><strong>The email with your login details could NOT be sent.</strong> Nothing reached <strong>${S.signupEmail}</strong>, and the password for this account was generated on our side — so set your own now and sign in with it.</p>
-        <p class="text-xs text-gray-500 mt-3"><a class="underline font-semibold" href="https://app.workflowswift.com/forgot-password.html?email=${encodeURIComponent(S.signupEmail)}">Set your password now</a> — it emails you a reset code, which is how you get into the account we just made.</p>`
+          ? html`<p class="text-sm text-gray-500 mt-3"><strong>The email with your login details could NOT be sent.</strong> Nothing reached <strong>${S.signupEmail}</strong>, and the password for this account was generated on our side — so choose your own below and sign in with it.</p>
+        ${S.initPwSaved
+          ? html`<p class="text-sm text-green-700 mt-4 font-semibold">Password saved — sign in with the address you just used.</p>`
+          : html`<div class="mt-4 text-left">
+          <label class="label">Choose your password (at least 8 characters)</label>
+          <input type="password" class="input" autocomplete="new-password" ref=${el=>{ initPwEl = el; }} />
+          <button type="button" class="btn w-full mt-3" disabled=${S.initPwBusy} onClick=${saveInitialPw}>${S.initPwBusy?'Saving...':'Save my password'}</button>
+          ${S.initPwError && html`<p class="text-xs text-red-600 mt-2">${S.initPwError}</p>`}
+        </div>`}
+        <p class="text-xs text-gray-500 mt-3">A reset code would be emailed by the same mailer that just failed, so it would not arrive either. The field above is the door that works — your account already exists.</p>`
           : html`<p class="text-sm text-gray-500 mt-3">We created your account and emailed your login details to <strong>${S.signupEmail}</strong>. Sign in with the password we sent — you can change it any time in your profile settings.</p>
         <p class="text-xs text-gray-500 mt-3">Nothing in your inbox after a minute? Check your spam folder, then <a class="underline font-semibold" href="https://app.workflowswift.com/forgot-password.html?email=${encodeURIComponent(S.signupEmail)}">send yourself a reset code</a>.</p>`}
         <button class="btn w-full mt-6" onClick=${()=>{ S.signupSent=false; S.showRegister=false; S.error=null; renderApp(); }}>Go to Sign In</button>
