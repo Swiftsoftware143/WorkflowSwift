@@ -459,16 +459,22 @@ const RegisterView = () => {
   // the login credentials and emails them, so there is NO auto-login — the user confirms their
   // address by signing in with the password we sent (the real two-step check).
   const submit = async (e) => { e.preventDefault(); if(!f.name||!f.email) return; S.loading=true; S.error=null; renderApp();
-    try { await API.register(f.name, f.email); S.signupSent=true; S.signupEmail=f.email; f.name=''; f.email=''; }
+    // Capture the answer: the server says whether the login mail actually LEFT. A signup whose
+    // mail failed holds an account whose first password is on no inbox, so the next screen must
+    // not say "check your email" (parity with the other five fleet apps).
+    try { const d = await API.register(f.name, f.email); S.signupMailed = !(d && d.credentials_emailed === false); S.signupSent=true; S.signupEmail=f.email; f.name=''; f.email=''; }
     catch(err){ S.error=err.message; } S.loading=false; renderApp(); };
   if (S.signupSent) {
     return html`
     <div class="flex items-center justify-center min-h-screen px-4">
       <div class="card w-full max-w-md text-center">
         <div class="text-4xl mb-3">📧</div>
-        <h1 class="text-2xl font-extrabold text-gray-900">Check your email</h1>
-        <p class="text-sm text-gray-500 mt-3">We created your account and emailed your login details to <strong>${S.signupEmail}</strong>. Sign in with the password we sent — you can change it any time in your profile settings.</p>
-        <p class="text-xs text-gray-500 mt-3">Nothing in your inbox after a minute? Check your spam folder, then <a class="underline font-semibold" href="https://app.workflowswift.com/forgot-password.html?email=${encodeURIComponent(S.signupEmail)}">send yourself a reset code</a>.</p>
+        <h1 class="text-2xl font-extrabold text-gray-900">${S.signupMailed===false?'Your account is created':'Check your email'}</h1>
+        ${S.signupMailed===false
+          ? html`<p class="text-sm text-gray-500 mt-3"><strong>The email with your login details could NOT be sent.</strong> Nothing reached <strong>${S.signupEmail}</strong>, and the password for this account was generated on our side — so set your own now and sign in with it.</p>
+        <p class="text-xs text-gray-500 mt-3"><a class="underline font-semibold" href="https://app.workflowswift.com/forgot-password.html?email=${encodeURIComponent(S.signupEmail)}">Set your password now</a> — it emails you a reset code, which is how you get into the account we just made.</p>`
+          : html`<p class="text-sm text-gray-500 mt-3">We created your account and emailed your login details to <strong>${S.signupEmail}</strong>. Sign in with the password we sent — you can change it any time in your profile settings.</p>
+        <p class="text-xs text-gray-500 mt-3">Nothing in your inbox after a minute? Check your spam folder, then <a class="underline font-semibold" href="https://app.workflowswift.com/forgot-password.html?email=${encodeURIComponent(S.signupEmail)}">send yourself a reset code</a>.</p>`}
         <button class="btn w-full mt-6" onClick=${()=>{ S.signupSent=false; S.showRegister=false; S.error=null; renderApp(); }}>Go to Sign In</button>
       </div>
     </div>`;

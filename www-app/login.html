@@ -122,12 +122,24 @@ fetch("/api/v1/auth/register",{method:"POST",headers:{"Content-Type":"applicatio
 .then(function(r){return r.json().then(function(d){return{r:r,d:d}})})
 .then(function(x){
   if(!x.r.ok){m.className="msg e";m.textContent=(x.d&&((typeof x.d.error==='string'&&x.d.error)||x.d.message))||"Registration failed. Please try again.";b.disabled=false;b.textContent="Create Free Account";return}
-  m.className="msg ok";m.innerHTML="<strong>Account created!</strong><br>Check your email &mdash; we sent your login details to "+e.replace(/[<>&]/g,"")+". You can change your password any time in your profile settings."
+  // The send can FAIL server-side (SMTP outage, provider refusal) while the account is still
+  // created, and this app's signup mints the password ON THE SERVER — so a failed mail leaves an
+  // account nobody can sign into. The server answers `credentials_emailed`; telling a new customer
+  // to "check your email" when nothing was delivered sends them to an inbox that stays empty. Say
+  // what happened and hand them the door that actually works (parity with the other five apps).
+  var mailed = !(x.d && x.d.credentials_emailed === false);
+  m.className="msg ok";
+  m.innerHTML=(mailed
+    ? "<strong>Account created!</strong><br>Check your email &mdash; we sent your login details to "+e.replace(/[<>&]/g,"")+"."
+    : "<strong>Your account is created &mdash; but the email with your login details could NOT be sent.</strong><br>Nothing reached "+e.replace(/[<>&]/g,"")+". Set your own password below and you can sign in straight away.")
+   +" You can change your password any time in your profile settings."
    +'<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(0,0,0,.08);font-size:13px">'
-   +'Nothing in your inbox after a minute? Check your spam folder, then '
-   +'<a href="/forgot-password.html?email='+encodeURIComponent(e)+'" style="font-weight:600">send yourself a reset code</a>.'
+   +(mailed
+      ? 'Nothing in your inbox after a minute? Check your spam folder, then '
+        +'<a href="/forgot-password.html?email='+encodeURIComponent(e)+'" style="font-weight:600">send yourself a reset code</a>.'
+      : '<a href="/forgot-password.html?email='+encodeURIComponent(e)+'" style="font-weight:600">Set your password now</a> &mdash; it emails you a reset code, which is how you get into the account we just made.')
    +'</div>';
-  b.textContent="Check your email";
+  b.textContent=mailed?"Check your email":"Set your password";
   // The tier they clicked on /pricing, filed against the token the signup just returned
   // (cron 2026-10-21). Best-effort: it must never cost the visitor their account.
   // The register answer names the session `access_token` (the fleet's RegisterResponse); `token` is
