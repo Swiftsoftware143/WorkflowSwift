@@ -1958,8 +1958,11 @@ const ProfileView = () => {
   const u = API.user || {};
   // Drafts live in the SHARED view objects (guard rule 5): the save handlers call renderApp()
   // themselves, so a per-render local would be re-initialised mid-save and the value lost.
-  const f = viewState('profile_fields', { name:'', company:'', uid:null });
-  if (f.uid !== (u.id || null)) { f.name = u.name || ''; f.company = u.company || ''; f.uid = u.id || null; }
+  const f = viewState('profile_fields', { name:'', company:'', username:'', uid:null });
+  if (f.uid !== (u.id || null)) { f.name = u.name || ''; f.company = u.company || ''; f.username = u.username || ''; f.uid = u.id || null; }
+  // /auth/me resolves `username` and PUT /auth/profile accepts it (t_2cb77960) — it is seeded
+  // above on sign-in and filled here for a session whose cached user predates the read.
+  else if (!f.username && u.username) f.username = u.username;
   const pw = viewState('profile_pw', { next:'', confirm:'', current:'', error:'' });
   // The sign-in ADDRESS CHANGE draft (cron 2026-10-18). Shared view object for the same reason as
   // `pw` above: the submit handler calls renderApp() itself.
@@ -2028,7 +2031,7 @@ const ProfileView = () => {
     if (!name) return toast('Enter your name','err');
     S.loading = true; renderApp();
     try {
-      await API.updateProfile({ name, company: (f.company || '').trim() });
+      await API.updateProfile({ name, username: (f.username || '').trim(), company: (f.company || '').trim() });
       await refreshMe(() => {});   // read the server's truth back (name/company/level)
       toast('Profile saved');
     } catch (err) { toast(err.message || 'Could not save profile','err'); }
@@ -2136,6 +2139,7 @@ const ProfileView = () => {
           <div><label class="label">Level</label><div>${planLabel(u) ? html`<span class="badge b-blue" id="profile-level">${planLabel(u)}</span>` : html`<span class="text-sm" style="color:#94a3b8" id="profile-level">\u2014</span>`}</div></div>
           <div><label class="label">Name</label><input class="input" id="profile-name" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="Your name" /></div>
           <div><label class="label">Company</label><input class="input" id="profile-company" value=${f.company} onInput=${e=>f.company=e.target.value} placeholder="Your company" /></div>
+          <div><label class="label">Username</label><input class="input" id="profile-username" value=${f.username} onInput=${e=>f.username=e.target.value} placeholder="Optional" /><p class="text-xs text-gray-500 mt-1">Optional. Clear it and save to remove it.</p></div>
           <button class="btn text-sm" id="profile-save" onClick=${saveProfile} disabled=${S.loading}>Save changes</button>
         </div>
       </div>
