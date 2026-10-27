@@ -1001,7 +1001,8 @@ pub async fn admin_list_accounts(
                    ORDER BY CASE WHEN u.role IN ('owner','company_admin','admin','super_admin')
                                  THEN 0 ELSE 1 END,
                             u.created_at ASC
-                   LIMIT 1) AS owner_email
+                   LIMIT 1) AS owner_email,
+                  (SELECT MAX(lu.last_login_at) FROM users lu WHERE lu.aid = r.id) AS last_sign_in
            FROM resolved r
            LEFT JOIN plan_tiers p ON p.id = r.plan_id
            ORDER BY r.created_at DESC"#,
@@ -1038,6 +1039,13 @@ pub async fn admin_list_accounts(
         // ordinary-looking address read as a customer. COALESCEd to '' so a pre-column row is
         // empty, never null.
         let probe_harness: String = row.try_get("probe_harness").unwrap_or_default();
+        // Whether the workspace was ever actually USED (cron 2026-10-27). Every signup mints an
+        // account and mails its credentials, and `users.last_login_at` is stamped on every successful
+        // login — but this list never read it, so a workspace nobody ever entered was
+        // indistinguishable from one in daily use. `MAX` over the account's users is the last time
+        // ANYONE in it got in; NULL means nobody ever did, which the console renders as "Never".
+        let last_sign_in: Option<chrono::DateTime<chrono::Utc>> =
+            row.try_get("last_sign_in").ok().flatten();
 
         result.push(json!({
             "id": id.to_string(),
@@ -1049,6 +1057,7 @@ pub async fn admin_list_accounts(
             "probe_harness": probe_harness,
             "retention_days": retention_days,
             "retention_purge_at": retention_purge_at.map(|t| t.to_rfc3339()),
+            "last_sign_in": last_sign_in.map(|t| t.to_rfc3339()),
             "created_at": created_at.to_rfc3339(),
             "plan": plan_name.map(|n| json!({"name": n, "slug": plan_slug})),
             "n8n_provisioned": false
