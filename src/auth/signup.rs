@@ -108,6 +108,12 @@ pub struct NewAccountIds {
     pub user_id: Uuid,
     pub account_name: String,
     pub account_slug: String,
+    /// Whether the welcome/credentials mail carrying the first password was ACCEPTED for delivery.
+    /// `false` when the send returned an error: the account is real either way, but a signup whose
+    /// password was SERVER-MINTED has no other copy of it, so the door that minted it must say so
+    /// instead of telling the visitor to check an inbox that will stay empty. Parity with
+    /// FunnelSwift, ADASwift, IncentiveSwift and missedcallrespondr (kanban class 2026-10-27).
+    pub credentials_emailed: bool,
 }
 
 /// Is this address already a login in this app? The ONE idempotency rule of every account door
@@ -548,10 +554,12 @@ pub async fn create_account(
         crate::email::send_email(state, Some(account_id), a.email, "welcome", &welcome_vars).await;
 
     let mut credential_error: Option<AppError> = None;
+    let mut credentials_emailed = true;
     match a.credential_delivery {
         // Best-effort: the account is committed and its owner can already sign in.
         CredentialDelivery::WithTheAccount => {
             if let Err(e) = welcome {
+                credentials_emailed = false;
                 tracing::warn!(%account_id, error = %e, "welcome mail could not be delivered");
             }
         }
@@ -610,5 +618,6 @@ pub async fn create_account(
         user_id,
         account_name,
         account_slug,
+        credentials_emailed,
     })
 }

@@ -162,6 +162,13 @@ pub struct RegisterResponse {
     /// machine-readable `plan_request` ticket (`{plan_slug, plan_name}`). Null when they picked
     /// Free, named no tier, or the catalogue no longer holds it.
     pub plan_request: Option<serde_json::Value>,
+    /// The REGISTER answer only: whether the welcome/credentials mail carrying the first password
+    /// actually left the building. A customer whose mail failed held an account nobody could sign
+    /// into while the page told them to check an inbox that would stay empty — the defect
+    /// FunnelSwift, ADASwift, IncentiveSwift and missedcallrespondr already answer this field for.
+    /// Absent (`None`) on every response that is not a signup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials_emailed: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

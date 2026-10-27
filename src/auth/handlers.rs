@@ -242,9 +242,17 @@ pub async fn register(
             // What the signup page reads to tell the visitor their pick reached the team
             // (`{plan_slug, plan_name}`), null when they picked Free or named no tier.
             plan_request: plan_request.map(|(slug, name)| json!({
-                "plan_slug": slug,
-                "plan_name": name,
+            "plan_slug": slug,
+            "plan_name": name,
             })),
+            // Whether the first password reached the customer. A reserved/harness address is WITHHELD at
+            // the sender (it answers Ok without queueing anything), so it counts as NOT delivered —
+            // otherwise a probe signup would report a mail that never existed. Same predicate ADASwift's
+            // register applies to this field (kanban class 2026-10-27).
+            credentials_emailed: Some(
+                ids.credentials_emailed
+                    && crate::security::probe_addr::harness_domain(&email).is_none(),
+            ),
         })),
     ))
 }
