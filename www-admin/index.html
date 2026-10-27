@@ -331,6 +331,29 @@ function sidebar(){
   const nav=h('div',{className:'py-4'});
   nav.appendChild(h('div',{className:'px-4 py-2 text-lg font-bold text-gray-800'},'WorkflowSwift'));
   nav.appendChild(h('div',{className:'px-4 text-xs text-gray-400 mb-4'},'Admin Dashboard'));
+  // ── Who is signed in, and on which plan ──────────────────────────────────────────────────────
+  // The sidebar carried only the product name and the nav, so an operator could be signed in and
+  // still not see their own name or the workspace's tier without opening My Profile / My Plan.
+  // Both come from the ONE reader this console already has: `ME` (GET /auth/me, read at boot and
+  // again inside login() BEFORE the first render, so the very first paint after signing in is
+  // correct). The badge paints the REAL plan name — never the raw role word ("User"), and an em
+  // dash when no tier was read rather than an invented "Free": telling a paying workspace it is on
+  // Free because a read failed is a false statement about what they bought. While a SUPPORT session
+  // is open the token belongs to the customer, so the block names THAT account and says so instead
+  // of claiming the operator's own tier for someone else's data.
+  (()=>{
+    const imp=IMPERSONATION||null;
+    const me=ME||{};
+    const meName=imp?String(imp.user_name||'Customer account'):String(me.name||me.email||'Account');
+    const mePlan=imp?'':String(me.plan_name==null?'':me.plan_name).trim();
+    const av=h('div',{style:'width:28px;height:28px;border-radius:50%;background:#4f46e5;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;flex-shrink:0'},(meName.charAt(0)||'?').toUpperCase());
+    const sub=imp?'Support session':(mePlan||'\u2014');
+    nav.appendChild(h('div',{className:'mx-3 mb-3 px-2 pb-3 flex items-center gap-2',style:'border-bottom:1px solid #f1f5f9'},
+      av,
+      h('div',{style:'min-width:0'},
+        h('div',{id:'me-name',title:meName,style:'font-size:13px;font-weight:600;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'},meName),
+        h('div',{id:'me-plan',style:'margin-top:3px;font-size:11px;color:#475569'},sub))));
+  })();
   // The Admin tab is the operator surface: every sub under it calls /admin/* (or the admin-level
   // CRUDs), all of which answer 403 "Admin access required" to a tenant user. Same rule the
   // ADASwift / FunnelSwift / CoreSwift consoles adopted: an operator-only screen is not offered to
@@ -552,8 +575,7 @@ async function renderCRUD(container,key,label,fields,ep,editFields,extraAction,a
   // (`user`, `company_admin`, ...). Same roleLabel the Profile screen uses; an unknown value is
   // shown as-is and a missing one as an em-dash, so an operator reads a role, not a column value.
   // A timestamp cell prints in the reader's own time zone, and a NULL says "never" in words —
-  // an empty cell and a zero are indistinguishable to an operator otherwise (same rule the role
-  // column follows: show the meaning, not the column value).
+  // an empty cell and a zero are indistinguishable to an operator otherwise.
   const fmtWhen=(v)=>{ if(v===undefined||v===null||v==='') return '<span class="text-gray-400">never</span>';
     const d=new Date(v); return escHtml(isNaN(d) ? String(v) : d.toLocaleString()); };
   const cellVal=(f,v)=>f==='role'?escHtml(roleLabel(v)):f==='last_login_at'?fmtWhen(v):f==='checkout_url'?(v?'Set':'&mdash;'):escHtml(String(v===undefined||v===null?'':v));
