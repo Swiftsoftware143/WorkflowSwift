@@ -245,6 +245,11 @@ pub async fn set_account_industry(
         }
     };
 
+    // A dashboard that ALREADY existed was never seeded (only the freshly-created arm above was), so
+    // a tenant whose first seed failed — or whose dashboard predates the seed — kept an empty screen
+    // for good. The seed is idempotent, so calling it on both arms is safe.
+    seed_default_widgets_internal(&state, aid, dashboard_id, industry_slug).await;
+
     // Upsert into account_industries
     sqlx::query(
         r#"INSERT INTO account_industries (aid, industry_slug, dashboard_id, is_active)
@@ -346,10 +351,27 @@ pub async fn seed_default_widgets_internal(
     dashboard_id: Uuid,
     industry_slug: &str,
 ) {
+    // IDEMPOTENT, because it is now called on every industry attach, not only when a dashboard is
+    // first created (measured live 2026-10-27: 4 of 6 dashboards held ZERO widgets — three of them
+    // paying tenants' — so a customer's first screen was empty forever, and the Builder's Data Card
+    // step offered no widget to pick). The widget ids are fresh uuids, so `ON CONFLICT DO NOTHING`
+    // could never dedupe them; the dashboard itself is the unit.
+    let existing: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM dashboard_widgets WHERE dashboard_id = $1")
+            .bind(dashboard_id)
+            .fetch_one(&state.db)
+            .await
+            .unwrap_or(0);
+    if existing > 0 {
+        return;
+    }
+
     let widgets = generate_industry_widgets(industry_slug);
 
     for (w_type, title, config, position) in widgets {
-        let _result = sqlx::query(
+        // A discarded Result is how a failed seed stayed invisible: the dashboard simply came up
+        // empty and nothing anywhere said so. Report it; the caller's screen no longer lies.
+        if let Err(e) = sqlx::query(
             r#"INSERT INTO dashboard_widgets (id, dashboard_id, widget_type, title, config, position)
                VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb)
                ON CONFLICT DO NOTHING"#,
@@ -361,7 +383,15 @@ pub async fn seed_default_widgets_internal(
         .bind(&config)
         .bind(&position)
         .execute(&state.db)
-        .await;
+        .await
+        {
+            tracing::error!(
+                %dashboard_id,
+                widget = %title,
+                error = %e,
+                "default dashboard widget was NOT seeded — the dashboard will render without it"
+            );
+        }
     }
 }
 
@@ -899,6 +929,10 @@ pub async fn get_dashboard_widgets(
             id
         }
     };
+
+    // Same self-heal as `set_account_industry`: an existing dashboard with no widgets gets them here,
+    // so opening the industry's dashboard fills it instead of showing an empty page for ever.
+    seed_default_widgets_internal(&state, aid, dashboard_id, &industry_slug).await;
 
     // Get widgets with manual row access
     let widget_rows = sqlx::query(
