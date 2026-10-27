@@ -72,6 +72,10 @@ pub async fn list_users(
                 "name": u.name,
                 "role": u.role,
                 "is_active": u.is_active,
+                // `last_login_at` was SELECTed and then dropped here, so the operator's people list
+                // could not tell a customer who never signed in from one who signed in once and
+                // never came back. Exposed as RFC3339 or null; the console renders null as "never".
+                "last_login_at": u.last_login_at,
                 "permissions": u.permissions,
             })
         })
@@ -103,6 +107,10 @@ pub async fn list_team_members(
                 "name": u.name,
                 "role": u.role,
                 "is_active": u.is_active,
+                // `last_login_at` was SELECTed and then dropped here, so the operator's people list
+                // could not tell a customer who never signed in from one who signed in once and
+                // never came back. Exposed as RFC3339 or null; the console renders null as "never".
+                "last_login_at": u.last_login_at,
                 "permissions": u.permissions,
             })
         })

@@ -418,7 +418,7 @@ function content(){
     }
     if(s==='my-profile')renderProfile(c);
     else if(s==='email-branding')renderBranding(c);
-    else if(s==='team')renderCRUD(c,'team','Team Member',['name','email','role'],{list:'/users',create:'/users/invite',del:'/users'},false);
+    else if(s==='team')renderCRUD(c,'team','Team Member',['name','email','role','last_login_at'],{list:'/users',create:'/users/invite',del:'/users'},false);
     else if(s==='plans-credits')renderPlansCredits(c);
     else if(s==='invoices')renderList(c,'invoices','Invoice','/invoices');
     else if(s==='payments')renderPaymentProviders(c);
@@ -544,11 +544,19 @@ async function renderCRUD(container,key,label,fields,ep,editFields,extraAction,a
   }
   let cols=fields;
   if(!cols.length&&items[0])cols=Object.keys(items[0]).filter(k=>k!=='id'&&k!=='aid'&&k!=='updated_at'&&k!=='created_at').slice(0,5);
-  const thead=cols.map(f=>`<th>${f.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase())}</th>`).join('');
+  // A column's HEADER is prose, not a de-underscored column name: `last_login_at` reads
+  // "Last sign-in", which is the question an operator is asking.
+  const HEAD_LABELS={last_login_at:'Last sign-in'};
+  const thead=cols.map(f=>`<th>${escHtml(HEAD_LABELS[f]||f.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase()))}</th>`).join('');
   // kanban t_ws-team-role — a `role` column shows the WRITTEN role, never the database's own enum
   // (`user`, `company_admin`, ...). Same roleLabel the Profile screen uses; an unknown value is
   // shown as-is and a missing one as an em-dash, so an operator reads a role, not a column value.
-  const cellVal=(f,v)=>f==='role'?escHtml(roleLabel(v)):f==='checkout_url'?(v?'Set':'&mdash;'):escHtml(String(v===undefined||v===null?'':v));
+  // A timestamp cell prints in the reader's own time zone, and a NULL says "never" in words —
+  // an empty cell and a zero are indistinguishable to an operator otherwise (same rule the role
+  // column follows: show the meaning, not the column value).
+  const fmtWhen=(v)=>{ if(v===undefined||v===null||v==='') return '<span class="text-gray-400">never</span>';
+    const d=new Date(v); return escHtml(isNaN(d) ? String(v) : d.toLocaleString()); };
+  const cellVal=(f,v)=>f==='role'?escHtml(roleLabel(v)):f==='last_login_at'?fmtWhen(v):f==='checkout_url'?(v?'Set':'&mdash;'):escHtml(String(v===undefined||v===null?'':v));
   // DO NOT DRAW A DELETE THE API WILL REFUSE (measured live 2026-10-14). `remove_user` answers
   // 422 "Cannot remove yourself" for the caller's own row and 403 "Cannot remove the super admin"
   // for a super-admin row, and the Team table drew a Del button on both - the exact "a button that
