@@ -2953,6 +2953,8 @@ mod payment_provider_role_tests {
             sub: Uuid::new_v4().to_string(),
             aid: Uuid::new_v4().to_string(),
             role: "user".into(),
+            // No test here exercises the signup password door.
+            pwd_minted: false,
             exp: 1_800_000_000,
             iat: 1_799_999_400,
             perm_is_super_admin: perm,

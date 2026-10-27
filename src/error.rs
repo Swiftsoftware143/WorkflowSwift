@@ -10,6 +10,15 @@ pub enum AppError {
     #[error("Authentication required")]
     Unauthorized,
 
+    /// A 401 that NAMES why, for a credential that is valid but may not act: the signup
+    /// password door (kanban class 2026-10-27) refuses a session that did not mint-and-fail, and
+    /// refuses the SAME session a second time once the password is set. The bare
+    /// [`AppError::Unauthorized`] sentence would leave the customer with nothing to do; this
+    /// carries the one instruction that works. Status stays 401 — the credential is the problem,
+    /// not the request.
+    #[error("{0}")]
+    UnauthorizedWith(String),
+
     #[error("Invalid credentials")]
     InvalidCredentials,
 
@@ -99,6 +108,7 @@ impl IntoResponse for AppError {
                 StatusCode::UNAUTHORIZED,
                 "Authentication required".to_string(),
             ),
+            AppError::UnauthorizedWith(msg) => (StatusCode::UNAUTHORIZED, msg.clone()),
             AppError::InvalidCredentials => {
                 (StatusCode::UNAUTHORIZED, "Invalid credentials".to_string())
             }

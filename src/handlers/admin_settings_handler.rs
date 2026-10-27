@@ -1952,6 +1952,9 @@ pub async fn admin_impersonate(
         sub: user_id,
         aid: target_tenant_id.to_string(),
         role: "impersonated".to_string(),
+        // An impersonation session is not a signup door: it may never claim the minted-password
+        // privilege that `set_initial_password` accepts.
+        pwd_minted: false,
         exp: now + 900,
         iat: now,
         perm_is_super_admin: Some(false),

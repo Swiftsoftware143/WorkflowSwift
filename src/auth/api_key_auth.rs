@@ -322,6 +322,8 @@ pub async fn authenticate(
         // Least privilege: a key is never an admin session. Admin-only handlers
         // (role/super-admin checks) stay reachable by JWT only.
         role: "api_key".to_string(),
+        // A key is not a signup session: it may never set a password.
+        pwd_minted: false,
         exp: now + 3600,
         iat: now,
         perm_is_super_admin: Some(false),

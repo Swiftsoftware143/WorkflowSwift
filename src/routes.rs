@@ -59,6 +59,14 @@ pub fn create_router(state: AppState) -> Router {
         .route("/me", get(auth::me))
         .route("/me/usage", get(auth::get_usage))
         .route("/change-password", post(auth::change_password))
+        // THE DOOR FOR A CUSTOMER WHOSE FIRST PASSWORD NEVER ARRIVED (kanban class 2026-10-27):
+        // `register` mints the first password and mails it, and when that send fails the account is
+        // otherwise unreachable — a reset code would fail through the same mailer. Authenticated by
+        // the token `register` returned, and accepted ONLY while that token carries the
+        // `pwd_minted` claim AND `users.password_undelivered` is still true (the one-shot latch).
+        // It is NOT in route_policy::PUBLIC_ROUTES, so an anonymous caller is refused 401 at the
+        // boundary before the handler is reached.
+        .route("/initial-password", post(auth::set_initial_password))
         // The fleet contract's spelling of the same handler (card t_39cea779). Kept alongside
         // this app's original POST path so no existing caller breaks.
         .route("/password", put(auth::change_password))

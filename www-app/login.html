@@ -131,15 +131,17 @@ fetch("/api/v1/auth/register",{method:"POST",headers:{"Content-Type":"applicatio
   m.className="msg ok";
   m.innerHTML=(mailed
     ? "<strong>Account created!</strong><br>Check your email &mdash; we sent your login details to "+e.replace(/[<>&]/g,"")+"."
-    : "<strong>Your account is created &mdash; but the email with your login details could NOT be sent.</strong><br>Nothing reached "+e.replace(/[<>&]/g,"")+". Set your own password below and you can sign in straight away.")
+    : "<strong>Your account is created &mdash; but the email with your login details could NOT be sent.</strong><br>Nothing reached "+e.replace(/[<>&]/g,"")+". Choose your password below and you can sign in straight away.")
    +" You can change your password any time in your profile settings."
    +'<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(0,0,0,.08);font-size:13px">'
    +(mailed
       ? 'Nothing in your inbox after a minute? Check your spam folder, then '
         +'<a href="/forgot-password.html?email='+encodeURIComponent(e)+'" style="font-weight:600">send yourself a reset code</a>.'
-      : '<a href="/forgot-password.html?email='+encodeURIComponent(e)+'" style="font-weight:600">Set your password now</a> &mdash; it emails you a reset code, which is how you get into the account we just made.')
+      : 'A reset code would be emailed by the same mailer that just failed, so it would not arrive either. The field below is the door that works &mdash; your account already exists.')
    +'</div>';
-  b.textContent=mailed?"Check your email":"Set your password";
+  b.textContent=mailed?"Check your email":"Account created";
+  // The field the message promises. Rendered here, wired to the token `register` returned.
+  if(!mailed)showInitialPassword(x.d);
   // The tier they clicked on /pricing, filed against the token the signup just returned
   // (cron 2026-10-21). Best-effort: it must never cost the visitor their account.
   // The register answer names the session `access_token` (the fleet's RegisterResponse); `token` is
@@ -147,6 +149,66 @@ fetch("/api/v1/auth/register",{method:"POST",headers:{"Content-Type":"applicatio
   // The pick already rode the register call (cron 2026-10-23), so the server filed it with the
 // account. This follow-up stays as the fallback for a page cached before that change; the
 // handler keeps ONE open request per tier, so the two paths can never write two rows.
+/* ---- The failed-mail signup door (kanban class 2026-10-27) -------------------------------------
+   `register` mints the first password on the server and emails it. When that send fails the
+   account exists and NOBODY can sign into it: this pane collects name + email only, and the
+   /forgot-password.html link mails a reset code through the SAME mailer that just failed. Every
+   door the page used to offer failed for the reason that produced the message.
+
+   The only path that survives a broken mailer is to choose the password HERE, on the session the
+   signup just returned: POST /api/v1/auth/initial-password accepts that token and nothing else (a
+   sign-in token, an impersonation token and an API key all carry `pwd_minted: false`), it is
+   accepted only while `users.password_undelivered` is still set — so the offer works exactly once —
+   and saving it also tells the customer to sign in with the address they just used.
+
+   The field is its OWN element after #rm, never inside it: the plan-request follow-up below does
+   `m.innerHTML += …`, which would throw away an input rendered in there (and its click handler)
+   while the customer is still typing. DOM nodes are built with textContent, so the address never
+   becomes markup. */
+function showInitialPassword(reg){
+  var tok=reg&&(reg.access_token||reg.token);
+  var old=document.getElementById('initPwBox');
+  if(old&&old.parentNode)old.parentNode.removeChild(old);
+  if(!tok)return;
+  var rm=document.getElementById('rm');
+  if(!rm||!rm.parentNode)return;
+  var box=document.createElement('div');
+  box.id='initPwBox';
+  box.style.cssText='margin-top:12px;text-align:left';
+  var lab=document.createElement('label');
+  lab.setAttribute('for','initPw');
+  lab.style.cssText='display:block;font-size:13px;font-weight:600;margin-bottom:6px';
+  lab.textContent='Choose your password (at least 8 characters)';
+  var inp=document.createElement('input');
+  inp.id='initPw';inp.type='password';inp.autocomplete='new-password';
+  inp.setAttribute('aria-label','Choose your password');
+  var btn=document.createElement('button');
+  btn.type='button';btn.id='initPwBtn';btn.textContent='Save my password';
+  var msg=document.createElement('div');
+  msg.id='initPwMsg';msg.className='msg';
+  box.appendChild(lab);box.appendChild(inp);box.appendChild(btn);box.appendChild(msg);
+  rm.parentNode.insertBefore(box,rm.nextSibling);
+  btn.addEventListener('click',function(){
+    var pw=inp.value;
+    if(pw.length<8){msg.className='msg e';msg.textContent='Use at least 8 characters.';return}
+    btn.disabled=true;btn.textContent='Saving...';
+    fetch('/api/v1/auth/initial-password',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+tok},body:JSON.stringify({password:pw})})
+    .then(function(r){return r.json().catch(function(){return{}}).then(function(d){return{r:r,d:d}})})
+    .then(function(res){
+      if(res.r.ok){
+        msg.className='msg ok';
+        msg.innerHTML='Password saved. <a href="/login" style="font-weight:700;text-decoration:underline">Sign in with the address you just used</a>.';
+        btn.textContent='Saved';inp.disabled=true;
+        return;
+      }
+      msg.className='msg e';
+      msg.textContent=(res.d&&(res.d.message||res.d.error))||'That did not save. Please try again.';
+      btn.disabled=false;btn.textContent='Save my password';
+    })
+    .catch(function(){msg.className='msg e';msg.textContent='Network error. Please try again.';btn.disabled=false;btn.textContent='Save my password'});
+  });
+}
+
 var want=chosenPlan();
   var sessTok=x.d&&(x.d.access_token||x.d.token);
   if(want){filePlanRequest(sessTok,want).then(function(ok){

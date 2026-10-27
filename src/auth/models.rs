@@ -11,6 +11,21 @@ pub struct Claims {
     pub exp: usize,
     pub iat: usize,
     pub perm_is_super_admin: Option<bool>,
+    /// TRUE only on the token `register` returns when it had to MINT the first password and the
+    /// mail carrying it did not leave the building. `set_initial_password` is the only handler that
+    /// accepts it, and saving a password clears `users.password_undelivered` (the latch that makes
+    /// the offer one-shot), so the claim can never be replayed into a password overwrite. Every
+    /// other mint leaves it `false`; `#[serde(default)]` keeps tokens issued before this field
+    /// existed decodable — they were all delivered-password sessions.
+    #[serde(default)]
+    pub pwd_minted: bool,
+}
+
+/// Body of `POST /api/v1/auth/initial-password` — the password a customer whose credentials mail
+/// failed chooses for themselves (kanban class 2026-10-27).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InitialPasswordRequest {
+    pub password: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

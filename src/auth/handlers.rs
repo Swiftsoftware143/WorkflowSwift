@@ -38,7 +38,8 @@ pub async fn register(
             "Password must be at least 6 characters".to_string(),
         ));
     }
-    let password = if req.password.is_empty() {
+    let minted_password = req.password.is_empty();
+    let password = if minted_password {
         super::signup::generate_temp_password()
     } else {
         req.password.clone()
@@ -152,7 +153,24 @@ pub async fn register(
     )
     .await?;
 
-    // The tier the visitor picked on the pricing page becomes a WORKABLE request (cron 2026-10-23).
+    // ── Did the first password actually reach the customer? (kanban class 2026-10-27) ───────────
+    // A reserved/harness address is WITHHELD at the sender (it answers Ok without queueing
+    // anything), so it counts as NOT delivered — otherwise a probe signup would report a mail that
+    // never existed. Same predicate the fleet's other signup doors apply to this field.
+    let credentials_emailed =
+        ids.credentials_emailed && crate::security::probe_addr::harness_domain(&email).is_none();
+
+    // THE LATCH THAT MAKES THE "choose your own password" DOOR ONE-SHOT (migration 097). Set only
+    // when this door MINTED the password and nothing delivered it — exactly the state in which the
+    // customer holds an account and no way in. `set_initial_password` clears it in the same
+    // statement that writes the password, so the offer cannot be used twice even inside one second.
+    if minted_password && !credentials_emailed {
+        sqlx::query("UPDATE users SET password_undelivered = true WHERE id = $1")
+            .bind(ids.user_id)
+            .execute(&state.db)
+            .await?;
+    }
+
     // `create_account` above may only bind a zero-priced tier, so the paid pick would otherwise be
     // dropped in silence — which is exactly what the nginx comment on the register redirect describes.
     // Filed as the same `source='plan_request'` ticket the console's request button writes.
@@ -192,6 +210,11 @@ pub async fn register(
         sub: user_id.to_string(),
         aid: aid.to_string(),
         role: "user".to_string(),
+        // THE ONE FACT THE PAGE NEEDS WHEN THE MAIL FAILS: this door MINTED the first password and
+        // nothing delivered it, so the customer holds an account whose password they have never
+        // seen. The claim is what `set_initial_password` accepts, and no other mint (login,
+        // impersonation, API key) ever sets it.
+        pwd_minted: minted_password && !credentials_emailed,
         exp: now_ts + state.config.jwt_access_expiry as usize,
         iat: now_ts,
         perm_is_super_admin: Some(false),
@@ -202,6 +225,9 @@ pub async fn register(
         sub: user_id.to_string(),
         aid: aid.to_string(),
         role: "user".to_string(),
+        // The refresh token is never a signup session and nothing in this app exchanges it, so it
+        // may not carry the minted-password privilege.
+        pwd_minted: false,
         exp: now_ts + state.config.jwt_refresh_expiry as usize,
         iat: now_ts,
         perm_is_super_admin: Some(false),
@@ -245,14 +271,9 @@ pub async fn register(
             "plan_slug": slug,
             "plan_name": name,
             })),
-            // Whether the first password reached the customer. A reserved/harness address is WITHHELD at
-            // the sender (it answers Ok without queueing anything), so it counts as NOT delivered —
-            // otherwise a probe signup would report a mail that never existed. Same predicate ADASwift's
-            // register applies to this field (kanban class 2026-10-27).
-            credentials_emailed: Some(
-                ids.credentials_emailed
-                    && crate::security::probe_addr::harness_domain(&email).is_none(),
-            ),
+            // Whether the first password reached the customer (computed above, before the claims,
+            // because the `pwd_minted` claim and the one-shot latch both depend on it).
+            credentials_emailed: Some(credentials_emailed),
         })),
     ))
 }
@@ -386,6 +407,9 @@ pub async fn login(
         sub: user.id.to_string(),
         aid: user.aid.to_string(),
         role: user.role.clone(),
+        // A sign-in proves the caller HAS a working password, so this session may never set one
+        // without the current value — `change_password` keeps that rule.
+        pwd_minted: false,
         exp: now_ts + state.config.jwt_access_expiry as usize,
         iat: now_ts,
         perm_is_super_admin: Some(user.perm_is_super_admin),
@@ -396,6 +420,8 @@ pub async fn login(
         sub: user.id.to_string(),
         aid: user.aid.to_string(),
         role: user.role.clone(),
+        // Issued by a SIGN-IN, so it may never set a password.
+        pwd_minted: false,
         exp: now_ts + state.config.jwt_refresh_expiry as usize,
         iat: now_ts,
         perm_is_super_admin: Some(user.perm_is_super_admin),
@@ -572,7 +598,8 @@ pub async fn change_password(
     // SESSION REVOCATION (kanban t_80787a0f): a password change/reset also ends every JWT
     // minted BEFORE it (`users.sessions_valid_from`), refused at the boundary read.
     sqlx::query(
-        "UPDATE users SET password_hash = $1, sessions_valid_from = NOW(), updated_at = NOW() \
+        "UPDATE users SET password_hash = $1, password_undelivered = false, \
+                sessions_valid_from = NOW(), updated_at = NOW() \
            WHERE id = $2",
     )
     .bind(&new_hash)
@@ -584,6 +611,71 @@ pub async fn change_password(
         StatusCode::OK,
         Json(json!({"message": "Password updated successfully"})),
     ))
+}
+
+/// `POST /api/v1/auth/initial-password` — `{password}`.
+///
+/// THE DOOR FOR A CUSTOMER WHOSE FIRST PASSWORD NEVER ARRIVED. `register` mints the first password
+/// and mails it; when that send fails the account exists but nobody can sign into it, and the
+/// reset-code door beside the signup message mails through the SAME mailer that just failed. This
+/// endpoint lets that ONE session — the token `register` returned, whose claim `pwd_minted` says
+/// "a password was minted and was not delivered" — choose a password directly.
+///
+/// Refused for every other credential: a `login` token, an impersonation token and an API key
+/// carry `pwd_minted: false`, so a session that already PROVES knowledge of a password can never
+/// replace it without `change_password`'s current-password check.
+///
+/// ONE-SHOT, not just claim-gated (measured on the sibling app 2026-10-27): the JWT claim alone let
+/// a SECOND call inside the same second pass the `sessions_valid_from` comparison and silently
+/// REPLACE the password the first call had set. `AND password_undelivered` (migration 097) is the
+/// latch — the flag clears in the same statement, so a replay updates zero rows and answers 401.
+///
+/// On success `sessions_valid_from` also moves to now, which ends the very token used here and
+/// every session minted before it. Answers `{"status":"ok"}`; the page then sends the customer to
+/// sign in with the password they just chose.
+pub async fn set_initial_password(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<InitialPasswordRequest>,
+) -> ApiResult<impl IntoResponse> {
+    if !claims.pwd_minted {
+        return Err(AppError::UnauthorizedWith(
+            "This session may not set a password without the current one".to_string(),
+        ));
+    }
+    if req.password.len() < 8 {
+        return Err(AppError::BadRequest(
+            "Password must be at least 8 characters".to_string(),
+        ));
+    }
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+
+    // Off the reactor, bounded by the same Argon2 semaphore the other password doors use.
+    let new_hash = argon2_hash(req.password.clone()).await?;
+
+    // `AND password_undelivered` is the whole safety of this door: it can be used exactly ONCE per
+    // account, and only while the minted first password was never delivered.
+    let updated = sqlx::query(
+        "UPDATE users SET password_hash = $1, password_undelivered = false, \
+                sessions_valid_from = NOW(), updated_at = NOW() \
+           WHERE id = $2 AND password_undelivered",
+    )
+    .bind(&new_hash)
+    .bind(user_id)
+    .execute(&state.db)
+    .await?;
+    if updated.rows_affected() == 0 {
+        return Err(AppError::UnauthorizedWith(
+            "A password has already been set for this account. Sign in with it, or use the reset code."
+                .to_string(),
+        ));
+    }
+
+    tracing::info!(
+        user = %user_id,
+        "initial password chosen by the signup session — the minted one never reached the customer"
+    );
+    Ok((StatusCode::OK, Json(json!({"status": "ok"}))))
 }
 
 /// `PUT /api/v1/auth/profile` — `{name?, username?, company?}` (programme t_2cb77960, card
@@ -1093,7 +1185,8 @@ pub async fn reset_password(
     // SESSION REVOCATION (kanban t_80787a0f): a password change/reset also ends every JWT
     // minted BEFORE it (`users.sessions_valid_from`), refused at the boundary read.
     sqlx::query(
-        "UPDATE users SET password_hash = $1, sessions_valid_from = NOW(), updated_at = NOW() \
+        "UPDATE users SET password_hash = $1, password_undelivered = false, \
+                sessions_valid_from = NOW(), updated_at = NOW() \
            WHERE id = $2",
     )
     .bind(&new_hash)
