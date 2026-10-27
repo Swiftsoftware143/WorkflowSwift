@@ -752,6 +752,39 @@ const DashboardView = () => {
   if (S.stats === null && !S.statsTried) { S.statsTried = true; loadStats(); }
   const widgets = S.widgets || [];
   const metas = { bg:'#fff', fg:'#0f172a' };
+  // cron 2026-10-27 — a BRAND-NEW workspace landed on this dashboard as a wall of zeros: six KPI
+  // widgets all reading 0, "No activity yet", and no next step anywhere on the page. Measured live
+  // on a probe account seconds after signup — the page text was the KPI grid and nothing else. The
+  // two things that make this screen mean anything (a workflow to run, and Instances to see the
+  // runs) were only discoverable by reading the rail and guessing the order.
+  //   * It paints ONLY once /dashboard/stats AND the activity feed have both answered, so a failed
+  //     read can never make a busy workspace look new.
+  //   * It removes itself the moment a workflow or a client exists — never permanent furniture.
+  //   * It promises only what this app does: a workflow is what runs, and every run is recorded in
+  //     Instances. Plan-locked templates are deliberately NOT offered here — a free plan locks
+  //     every template card, so pointing a brand-new workspace at Templates would be a dead end.
+  const firstSteps = () => {
+    const st = S.stats;
+    if (!st || typeof st.total_workflows !== 'number' || typeof st.total_clients !== 'number') return '';
+    if (st.total_workflows > 0 || st.total_clients > 0) return '';
+    if (!Array.isArray(S.timeline) || S.timeline.length > 0) return '';
+    const steps = [
+      ['Create your first workflow', 'A workflow is the automation itself — the steps WorkflowSwift runs for you. Name it here, then add what it should do in the Builder.', 'workflows', 'Create a workflow'],
+      ['Run it and see what happened', 'Every run is recorded in Instances with its status and its steps, so you can see what ran and what it did.', 'instances', 'See Instances'],
+    ];
+    return html`<div class="card" data-first-steps="1" style="margin-bottom:16px">
+      <h3 class="font-semibold" style="margin:0 0 2px">Get started</h3>
+      <p class="text-sm text-gray-500" style="margin:0 0 10px">Nothing has run yet, so the tiles below are all zero. Two steps and they start counting. This card goes away once you have a workflow or a client.</p>
+      ${steps.map((s, i) => html`<div style="display:flex;gap:12px;align-items:flex-start;padding:10px 0${i ? ';border-top:1px solid #e2e8f0' : ''}">
+        <div style="flex:0 0 24px;height:24px;border-radius:50%;background:#eef2ff;color:#4338ca;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center">${i + 1}</div>
+        <div style="flex:1">
+          <div class="font-semibold text-sm">${s[0]}</div>
+          <div class="text-sm text-gray-500" style="margin:2px 0 6px;max-width:60ch">${s[1]}</div>
+          <button type="button" class="btn text-sm" data-first-step=${s[2]} onClick=${() => setView(s[2])}>${s[3]}</button>
+        </div>
+      </div>`)}
+    </div>`;
+  };
   return html`
     <div>
       <div class="topbar">
@@ -763,6 +796,7 @@ const DashboardView = () => {
           <button class="btn-outline text-sm" onClick=${()=>{S.widgets=null;loadWidgets(slug);}} disabled=${S.loading}>${S.loading?'Loading…':'Refresh'}</button>
         </div>
       </div>
+      ${firstSteps()}
       ${S.stats ? html`<div id="dstats" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:16px">
         <div class="card flex items-center gap-4" style="padding:20px;margin-bottom:0"><div class="text-3xl">⚙️</div><div><div class="text-2xl font-bold text-gray-900" id="dstats-workflows">${S.stats.total_workflows || 0}</div><div class="text-xs text-gray-500 mt-0.5">Workflows</div></div></div>
         <div class="card flex items-center gap-4" style="padding:20px;margin-bottom:0"><div class="text-3xl">👥</div><div><div class="text-2xl font-bold text-gray-900" id="dstats-clients">${S.stats.total_clients || 0}</div><div class="text-xs text-gray-500 mt-0.5">Clients</div></div></div>
