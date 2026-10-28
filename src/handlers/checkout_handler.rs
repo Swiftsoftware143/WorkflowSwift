@@ -1012,22 +1012,44 @@ pub async fn create_checkout_session(
                     }
                 }
             }
-            if !plan_slug.is_empty() {
+            // THE FLAG AND THE SENTENCE COME FROM THE WRITE, NOT FROM THE REQUEST (2026-10-28).
+            // This arm answered `request_recorded: !plan_slug.is_empty()` — true for every press
+            // that named a plan, whether or not a ticket was written. A failed INSERT (FK, deadlock,
+            // constraint) therefore told the console "already recorded", which SUPPRESSES its own
+            // request button, so the buyer's ask was lost in silence and the sentence beside it
+            // promised a row that did not exist. `record_refused_upgrade` now answers whether an
+            // OPEN plan_request exists after the call, and both the flag and the wording follow it.
+            // The wording pair is the fleet's already-shipped one (missedcallrespondr and ADASwift).
+            let recorded = if plan_slug.is_empty() {
+                false
+            } else {
                 record_refused_upgrade(
                     &state, account_id, user_id, &plan_slug, amount, reason, None,
                 )
-                .await;
-            }
+                .await
+            };
             tracing::error!(
-                "checkout/create REFUSED: {reason} for account {account_id} asking for {plan_slug}"
+                "checkout/create REFUSED: {reason} for account {account_id} asking for {plan_slug} (recorded={recorded})"
             );
+            let message = if recorded {
+                "No charge was made — nothing was sent to a payment provider, so you cannot be \
+                 billed. Your request has been recorded for the platform team, who can switch \
+                 this workspace onto the plan you picked by hand."
+                    .to_string()
+            } else {
+                "No charge was made — nothing was sent to a payment provider, so you cannot be \
+                 billed. Upgrades are not switched on for this installation yet, and your request \
+                 could not be recorded this time. Press Upgrade again in a moment; if it keeps \
+                 failing, contact support."
+                    .to_string()
+            };
             return Ok((
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(json!({
                     "error": "payment_provider_not_configured",
-                    "message": "No charge was made — nothing was sent to a payment provider, so you cannot be billed. Upgrades are not switched on for this installation yet: your request has been recorded for the platform team, who can activate this plan for your workspace by hand.",
+                    "message": message,
                     "configured": false,
-                    "request_recorded": !plan_slug.is_empty()
+                    "request_recorded": recorded
                 })),
             ));
         }
@@ -1125,7 +1147,7 @@ async fn record_refused_upgrade(
     // (2026-10-24): the ticket then has to say so, because the operator cannot wait for a webhook a
     // hosted page will never send — they confirm the payment themselves and resolve the request.
     via_link: Option<&str>,
-) {
+) -> bool {
     let plan_name: Option<String> =
         sqlx::query_scalar("SELECT name FROM plan_tiers WHERE slug = $1")
             .bind(plan_slug)
@@ -1169,6 +1191,21 @@ async fn record_refused_upgrade(
             "checkout/create: could not record the refused upgrade as a plan request: {e:?}"
         );
     }
+    // TRUE means an OPEN plan_request for this (workspace, plan) exists AFTER this call — either
+    // the row just written or the one the WHERE NOT EXISTS dedupe found. A failed INSERT with no
+    // existing row answers FALSE and the caller must not promise the buyer anything. Same shape as
+    // ADASwift's `record_refused_upgrade`; the hand-off arm reads the same truth.
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM tickets \
+         WHERE aid = $1 AND source = 'plan_request' AND plan_slug = $2 \
+           AND lower(status) NOT IN ('closed', 'resolved', 'done')",
+    )
+    .bind(account_id)
+    .bind(plan_slug)
+    .fetch_one(&state.db)
+    .await
+    .map(|n| n > 0)
+    .unwrap_or(false)
 }
 
 /// Is this a URL a browser can be sent to in order to pay?
@@ -1244,7 +1281,7 @@ async fn hand_off_to_payment_link(
     } = hand_off;
     // The ticket TEXT says the buyer was handed to the hosted page — an operator reading "no payment
     // provider is configured" would not know a sale is in flight and waiting for their confirmation.
-    record_refused_upgrade(
+    let request_recorded = record_refused_upgrade(
         state,
         account_id,
         user_id,
@@ -1290,18 +1327,6 @@ async fn hand_off_to_payment_link(
         %account_id, plan = %plan_slug, amount,
         "checkout/create: handing the workspace to the tier's own hosted payment page"
     );
-
-    let request_recorded: bool = sqlx::query_scalar::<_, i64>(
-        "SELECT COUNT(*) FROM tickets \
-         WHERE aid = $1 AND source = 'plan_request' AND plan_slug = $2 \
-           AND lower(status) NOT IN ('closed', 'resolved', 'done')",
-    )
-    .bind(account_id)
-    .bind(plan_slug)
-    .fetch_one(&state.db)
-    .await
-    .unwrap_or(0)
-        > 0;
 
     (
         StatusCode::OK,
