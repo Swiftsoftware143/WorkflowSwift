@@ -184,6 +184,47 @@ pub async fn resolve_plan_id(db: &PgPool, aid: Uuid) -> Result<Option<Uuid>, App
     .await?)
 }
 
+/// Does this account HOLD a plan, or is it merely bounded by one? (2026-10-28)
+///
+/// [`resolve_plan_id`] has three arms: an active `account_plans` row, then `accounts.plan_id`,
+/// then the install's cheapest active tier as a FALLBACK. The first two are plans a customer (or an
+/// operator) actually put this account on; the third is only the level the write gates enforce when
+/// nobody has. The Plan & Billing screen could not tell them apart, so it badged the Free tile
+/// "Current plan" and headed the page "Your plan — Free" for a workspace that never chose anything.
+/// Measured live 2026-10-28: 7 of this install's 12 accounts are in exactly that state.
+///
+/// This answers the distinction for DISPLAY, off the same two arms `resolve_plan_id` prefers, so a
+/// label read here can never disagree with the plan the entitlement path enforces. It is not a
+/// second resolver and must not grow into one — it answers one yes/no question.
+///
+/// A database error degrades to `true`: the caller paints "the plan you hold", which is the old
+/// behaviour, and an unreadable row can never make a genuinely-subscribed workspace look plan-less.
+pub async fn plan_assigned(db: &PgPool, aid: Uuid) -> bool {
+    let from_subscription = sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT plan_id FROM account_plans WHERE aid = $1 AND status = 'active' \
+         ORDER BY started_at DESC LIMIT 1",
+    )
+    .bind(aid)
+    .fetch_optional(db)
+    .await;
+
+    match from_subscription {
+        Ok(Some(Some(_))) => true,
+        Ok(_) => {
+            let from_account =
+                sqlx::query_scalar::<_, Option<Uuid>>("SELECT plan_id FROM accounts WHERE id = $1")
+                    .bind(aid)
+                    .fetch_optional(db)
+                    .await;
+            match from_account {
+                Ok(row) => row.flatten().is_some(),
+                Err(_) => true,
+            }
+        }
+        Err(_) => true,
+    }
+}
+
 /// Resolve a numeric limit for a plan. `None` = not configured (allow).
 pub async fn resolve_limit(
     db: &PgPool,

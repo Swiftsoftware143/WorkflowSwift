@@ -210,10 +210,19 @@ pub async fn get_plan_capabilities(
     .await
     .unwrap_or(0);
 
+    // Whether the account HOLDS a plan, or is only bounded by the install's fallback tier
+    // (2026-10-28). `plan_slug`/`plan_name` above name the tier the GATES enforce, which for a
+    // plan-less account is the cheapest active one — true of the limits, and a false statement
+    // about what the customer bought. The Plan & Billing console used the name alone to badge a
+    // tile "Current plan", so it labelled a level nobody chose. Same two arms as
+    // `features::resolve_plan_id`, so the label and the enforcement cannot disagree.
+    let plan_assigned = features::plan_assigned(&state.db, aid).await;
+
     Ok(Json(json!({
         "plan_id": plan_id.to_string(),
         "plan_slug": plan_slug,
         "plan_name": plan_name,
+        "plan_assigned": plan_assigned,
         "max_industries": max_industries,
         "current_industries": current_count,
         "industries_remaining": if max_industries == -1 { -1 } else { (max_industries as i64) - current_count },

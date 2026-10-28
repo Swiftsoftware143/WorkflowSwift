@@ -91,6 +91,13 @@ pub struct MeResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub company: Option<String>,
     pub plan_name: String,
+    /// Whether this account HOLDS the plan `plan_name` names, or is only BOUNDED by it
+    /// (2026-10-28). `plan_name` always answers the tier the write gates enforce; for an account
+    /// with no active `account_plans` row that is the install's fallback tier, which is what its
+    /// limits are but not something the customer chose. A console must read this before it writes
+    /// "your plan" beside the name. `features::plan_assigned` is the one resolver for it, and it
+    /// degrades to `true`, so an unreadable row can never make a paid workspace look plan-less.
+    pub plan_assigned: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub avatar_url: Option<String>,
 }

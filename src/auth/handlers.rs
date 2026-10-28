@@ -488,6 +488,13 @@ pub async fn me(
         .map_err(|e| AppError::Internal(e.to_string()))?;
     let plan_name = plan_name_for(&state.db, aid).await;
 
+    // Whether the account HOLDS that plan, or is only bounded by the install's fallback tier
+    // (2026-10-28). `plan_name` above always answers the tier the gates enforce, so a console that
+    // reads it alone prints "your plan: Free" for a workspace that never chose one — 7 of this
+    // install's 12 accounts. One resolver (`features::plan_assigned`), so the label and the
+    // enforcement read the same two arms of `resolve_plan_id`.
+    let plan_assigned = crate::features::plan_assigned(&state.db, aid).await;
+
     // Kept for the top-level key below: `plan_name` itself is moved into `MeResponse`, and the
     // response now answers the plan twice (inside `user` for the console, flat for every client
     // that shares the fleet contract). See the note on the return value.
@@ -529,6 +536,7 @@ pub async fn me(
             .try_get("company")
             .map_err(|e| AppError::Internal(e.to_string()))?,
         plan_name,
+        plan_assigned,
         perm_is_super_admin: row
             .try_get("perm_is_super_admin")
             .map_err(|e| AppError::Internal(e.to_string()))?,
@@ -550,6 +558,11 @@ pub async fn me(
     Ok(Json(json!({
         "user": me,
         "plan_name": plan_for_top,
+        // The FLAT twin of `user.plan_assigned` (2026-10-28): a client that reads the fleet's
+        // flat `plan_name` needs the same distinction, or it re-introduces the claim the console
+        // just dropped. false = this workspace holds no plan; `plan_name` is the tier the gates
+        // fall back to, not a plan the customer chose.
+        "plan_assigned": plan_assigned,
         "tenant_id": aid,
     })))
 }
