@@ -992,6 +992,10 @@ to charge anyone: it only decides <em>where the buyer is sent</em>.</p>
       <p>Routes: <code>POST|DELETE /api/v1/auth/avatar</code> and
       <code>GET /api/v1/auth/avatar/&lt;account id&gt;</code>. The profile answer carries
       <code>avatar_url</code> with a version marker so a replacement is not served from cache.</p>
+      <p>The same screen edits your <strong>name</strong> (required), an optional
+      <strong>username</strong> and <strong>company</strong>, then saves them with
+      <strong>Update profile</strong>. A username is a short name the console can show in place of
+      the full name; clearing the box and saving removes it again.</p>
       <h2 id="operational-notes">Operational notes</h2>
       <ul>
       <li>The container runs with <code>network_mode: host</code> and publishes nothing — the API binds

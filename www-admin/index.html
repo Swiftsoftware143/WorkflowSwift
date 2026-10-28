@@ -1695,15 +1695,23 @@ function renderProfile(c){
     left.appendChild(h('label',{className:'text-xs text-gray-500'},'Name'));
     const nameIn=h('input',{className:'input mb-3',maxlength:'200'});nameIn.value=me.name||'';
     left.appendChild(nameIn);
+    // Username (kanban 2026-10-28): PUT /auth/profile has taken name/username/company since
+    // t_39cea779, /auth/me returns it, and the TENANT SPA edits it — but this screen rendered only
+    // Name and Company and sent only those two keys, so an operator working in the console could
+    // neither see nor set the field. Blank is legal and clears it (COALESCE on the server keeps
+    // only a key the caller omitted).
+    left.appendChild(h('label',{className:'text-xs text-gray-500'},'Username'));
+    const userIn=h('input',{className:'input mb-3',maxlength:'255',id:'pf-user',placeholder:'Optional'});userIn.value=me.username||'';
+    left.appendChild(userIn);
     left.appendChild(h('label',{className:'text-xs text-gray-500'},'Company'));
     const compIn=h('input',{className:'input mb-3',maxlength:'200'});compIn.value=me.company||'';
     left.appendChild(compIn);
     const saveBtn=h('button',{className:'btn btn-primary'},'Update profile');
     saveBtn.onclick=async()=>{
-      const name=nameIn.value.trim(),company=compIn.value.trim();
+      const name=nameIn.value.trim(),company=compIn.value.trim(),uname=userIn.value.trim();
       if(!name){showMsg('Name cannot be empty','error');return}
       saveBtn.disabled=true;saveBtn.textContent='Saving...';
-      const r=await api('/auth/profile',{method:'PUT',body:JSON.stringify({name,company})});
+      const r=await api('/auth/profile',{method:'PUT',body:JSON.stringify({name,company,username:uname})});
       saveBtn.disabled=false;saveBtn.textContent='Update profile';
       if(r){showMsg('Profile updated','success');renderApp();}else showMsg('Save failed: '+(LAST_ERR||'request failed'),'error');
     };
@@ -2816,7 +2824,7 @@ window.appGuidePages = {
   "integrations:n8n-proxy": { title: "n8n Proxy", desc: "The link to the automation engine: what it can call here and how it authenticates.", actions: ["Review the configuration"] },
   "integrations:bridge": { title: "Bridge", desc: "The connection that lets this app talk to the other SwiftSoftware apps.", actions: ["Check the bridge status"] },
   "support:tickets": { title: "Tickets", desc: "Support requests raised on this account, with the status of each.", actions: ["Open a ticket", "Update its status"] },
-  "profile:my-profile": { title: "My Profile", desc: "Your own profile: name, company, the address you sign in with, password and picture. What you set here is what appears across the console.", actions: ["Set your name, company and picture", "Change your sign-in email (we email a confirmation link)", "Change your password"] },
+  "profile:my-profile": { title: "My Profile", desc: "Your own profile: name, username, company, the address you sign in with, password and picture. What you set here is what appears across the console.", actions: ["Set your name, username, company and picture", "Change your sign-in email (we email a confirmation link)", "Change your password"] },
   "profile:team": { title: "Team", desc: "The people who can sign in to this account, and the role each one holds.", actions: ["Invite a team member", "Change a member's role"] },
   "profile:plans-credits": { title: "Plans & Credits", desc: "The plan this account is on, the limits that plan carries and the credits it has. A plan is a bundle of limits and features.", actions: ["See your current plan", "Compare the plans on offer", "Check your credit balance"] },
   "profile:email-branding": { title: "Email Branding", desc: "Put your own name, colour and logo on the transactional email this app sends for your account, instead of the default WorkflowSwift header. A new logo replaces the one already saved. Send me a preview email mails a sample of your own branded mail to the address you sign in with, so you see exactly what a customer receives; a reserved test address cannot receive it, so no preview is sent and the card tells you why.", actions: ["Upload your logo", "Set your brand name and colour", "Press Send me a preview email to see the real header in your own inbox"] },
