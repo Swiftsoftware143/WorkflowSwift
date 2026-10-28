@@ -1827,6 +1827,31 @@ async function renderBranding(c){
     else showMsg('Preview failed: '+LAST_ERR,'error');
   };
   left.appendChild(prevBtn);
+  // The exact bytes the mail path emits, RENDERED BY THE SERVER and returned (no send). The box
+  // lower down is painted by this browser, so it can describe a header the mailer never emits;
+  // this answers with the real message -- same template, same merge fields, same branding header.
+  const exactBtn=h('button',{className:'btn btn-ghost mt-2 ml-2',id:'brand-exact-btn'},'Show the exact email');
+  const exactWrap=h('div',{id:'brand-exact-wrap',style:'display:none;margin-top:10px'});
+  left.appendChild(exactBtn);
+  left.appendChild(exactWrap);
+  exactBtn.onclick=async()=>{
+    exactBtn.disabled=true;exactBtn.textContent='Rendering...';
+    const r=await api('/settings/branding/preview-body');
+    exactBtn.disabled=false;exactBtn.textContent='Show the exact email';
+    if(!r){showMsg('Could not render the exact email: '+LAST_ERR,'error');return}
+    const esc=(t)=>String(t||'').replace(/[&<>]/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+    exactWrap.innerHTML='';
+    exactWrap.appendChild(h('div',{style:'font:600 12px/1.4 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#334155;padding:8px 10px;background:#f1f5f9;border:1px solid #e2e8f0;border-bottom:0;border-radius:8px 8px 0 0'},'Subject: '+(r.subject||'(no subject)')));
+    const ifr=h('iframe',{title:'The exact email this account sends',sandbox:'',style:'width:100%;height:460px;border:1px solid #e2e8f0;border-radius:0 0 8px 8px;background:#fff'});
+    ifr.setAttribute('srcdoc', r.html || ('<pre style="font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;white-space:pre-wrap;padding:16px;color:#111827">'+esc(r.text)+'</pre>'));
+    exactWrap.appendChild(ifr);
+    exactWrap.style.display='block';
+    showMsg(r.logo_is_own
+      ? 'This is the exact mail, with YOUR logo and name at the top of it.'
+      : (r.branded
+        ? 'This is the exact mail. Your branding has no logo yet, so the header carries the WorkflowSwift wordmark.'
+        : 'This is the exact mail. Nothing is branded yet, so it carries the WorkflowSwift identity.'),'success');
+  };
   left.appendChild(h('p',{className:'text-xs text-gray-400 mt-1'},'Sends the real branded message to your own address — nothing is sent to a customer.'));
 
   right.appendChild(h('label',{className:'text-xs text-gray-500'},'Logo'));
