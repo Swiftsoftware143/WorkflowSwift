@@ -1260,48 +1260,8 @@ async fn send_email_fallback(
         // this app's own wordmark when they do not (kanban t_081edaac) — so the body says which,
         // instead of describing a header that is not there.
         "branding_preview" => {
-            let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
-            let app_url = vars
-                .get("app_url")
-                .and_then(|v| v.as_str())
-                .unwrap_or(crate::branding::APP_URL);
-            // `logo_url` is ALWAYS bound now (this app's wordmark is the fallback), so the copy
-            // reads the owner flag rather than testing the URL: an upload the account never made
-            // must not be described as theirs, and a header this app supplied must not be called
-            // "YOUR branding".
-            let (header_line, html_line) = if vars.get("logo_is_own").and_then(|v| v.as_str())
-                == Some("yes")
-            {
-                (
-                    "The header above this line is YOUR branding: your logo, your display name and your colour. If it is right here, it is right on every notification and account email your team receives.",
-                    "The header above this line is <strong>your</strong> branding: your logo, your display name and your colour. If it is right here, it is right on every notification and account email your team receives.",
-                )
-            } else {
-                (
-                    "No logo of your own is set yet, so this message carries the WorkflowSwift wordmark and name. Upload a logo on your console's Email Branding card, save it, and send yourself another preview to see your own.",
-                    "No logo of your own is set yet, so this message carries the <strong>WorkflowSwift</strong> wordmark and name. Upload a logo on your console's Email Branding card, save it, and send yourself another preview to see your own.",
-                )
-            };
-            let text_body = format!(
-                "Hi {name},\n\nThis is a sample of the mail WorkflowSwift sends on your behalf.\n\n{header_line}\n\nChange it any time in your console, under Profile & Account > Email Branding: {app_url}\n\n- WorkflowSwift"
-            );
-            let html_body = format!(
-                "<html><body style=\"font-family:Arial,sans-serif;line-height:1.6;color:#333\">\
-                 <p>Hi {name},</p>\
-                 <p>This is a sample of the mail WorkflowSwift sends on your behalf.</p>\
-                 <p style=\"color:#374151\">{html_line}</p>\
-                 <p style=\"color:#374151\">Change it any time in your console, under <strong>Profile &amp; Account &gt; Email Branding</strong>: <a href=\"{app_url}\" style=\"color:#4f46e5\">{app_url}</a></p>\
-                 <p style=\"font-size:13px;color:#9ca3af\">- WorkflowSwift</p></body></html>"
-            );
-            send_branded(
-                cfg,
-                to,
-                "A preview of your WorkflowSwift email branding",
-                &text_body,
-                &html_body,
-                branding,
-            )
-            .await
+            let (subject, text_body, html_body) = branding_preview_inline(vars);
+            send_branded(cfg, to, &subject, &text_body, &html_body, branding).await
         }
         _ => {
             // An unknown template_type must never mail the serialised variables: `vars` holds
@@ -1332,6 +1292,137 @@ async fn send_email_fallback(
             .await
         }
     }
+}
+
+/// The `branding_preview` sample built inline, used when the account has no template row of
+/// its own (the normal state on a fresh install). Returns `(subject, text, html)` so the SEND
+/// path ([`send_email_fallback`]) and the RENDER path ([`render_branding_preview`]) share ONE
+/// copy of the wording: a preview that drew its own sample could describe a mail the sender
+/// never emits, which is exactly the defect the exact-mail arm exists to close.
+fn branding_preview_inline(vars: &serde_json::Value) -> (String, String, String) {
+    let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
+    let app_url = vars
+        .get("app_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or(crate::branding::APP_URL);
+    // `logo_url` is ALWAYS bound now (this app's wordmark is the fallback), so the copy
+    // reads the owner flag rather than testing the URL: an upload the account never made
+    // must not be described as theirs, and a header this app supplied must not be called
+    // "YOUR branding".
+    let (header_line, html_line) = if vars.get("logo_is_own").and_then(|v| v.as_str())
+        == Some("yes")
+    {
+        (
+            "The header above this line is YOUR branding: your logo, your display name and your colour. If it is right here, it is right on every notification and account email your team receives.",
+            "The header above this line is <strong>your</strong> branding: your logo, your display name and your colour. If it is right here, it is right on every notification and account email your team receives.",
+        )
+    } else {
+        (
+            "No logo of your own is set yet, so this message carries the WorkflowSwift wordmark and name. Upload a logo on your console's Email Branding card, save it, and send yourself another preview to see your own.",
+            "No logo of your own is set yet, so this message carries the <strong>WorkflowSwift</strong> wordmark and name. Upload a logo on your console's Email Branding card, save it, and send yourself another preview to see your own.",
+        )
+    };
+    let text_body = format!(
+        "Hi {name},\n\nThis is a sample of the mail WorkflowSwift sends on your behalf.\n\n{header_line}\n\nChange it any time in your console, under Profile & Account > Email Branding: {app_url}\n\n- WorkflowSwift"
+    );
+    let html_body = format!(
+        "<html><body style=\"font-family:Arial,sans-serif;line-height:1.6;color:#333\">\
+         <p>Hi {name},</p>\
+         <p>This is a sample of the mail WorkflowSwift sends on your behalf.</p>\
+         <p style=\"color:#374151\">{html_line}</p>\
+         <p style=\"color:#374151\">Change it any time in your console, under <strong>Profile &amp; Account &gt; Email Branding</strong>: <a href=\"{app_url}\" style=\"color:#4f46e5\">{app_url}</a></p>\
+         <p style=\"font-size:13px;color:#9ca3af\">- WorkflowSwift</p></body></html>"
+    );
+    (
+        "A preview of your WorkflowSwift email branding".to_string(),
+        text_body,
+        html_body,
+    )
+}
+
+/// The mail this account's branding produces for the `branding_preview` sample, RENDERED and
+/// returned instead of sent (cron 2026-10-28, parity with FunnelSwift, IncentiveSwift and ADASwift).
+///
+/// WHY: the console's Email Branding card draws its sample in the browser, so it can describe a
+/// header the mailer never emits. This answers with the bytes the REAL path produces — the same
+/// template lookup, the same [`render_template`] merge and the same [`apply_branding`] header — so
+/// what an operator sees is what a recipient receives. Nothing is mailed and no transport config is
+/// read: an install with no provider set can still see what its mail will look like.
+pub struct BrandingPreview {
+    pub subject: String,
+    pub text: String,
+    pub html: String,
+    /// The account has a stored branding document of its own (vs this app's identity standing in).
+    pub branded: bool,
+    /// The logo above the message is the account's OWN upload, not this app's wordmark.
+    pub own_logo: bool,
+}
+
+pub async fn render_branding_preview(
+    state: &AppState,
+    aid: Uuid,
+    to: &str,
+    name: &str,
+) -> Result<BrandingPreview, String> {
+    // The SAME two steps send_email_inner takes before it sends, in the same order.
+    let stored_branding = crate::branding::load(&state.db, aid).await;
+    let branding = stored_branding.clone().unwrap_or_else(app_default_branding);
+    let mut vars = json!({
+        "name": name,
+        "email": to,
+        "app_url": crate::branding::APP_URL,
+    });
+    bind_branding(&mut vars, stored_branding.as_ref());
+
+    let template = sqlx::query_as::<_, EmailTemplateRow>(
+        r#"SELECT id, name, subject, body, html_body, is_html, is_default
+           FROM email_templates
+           WHERE template_type = $1 AND (is_default = true OR is_default IS NULL)
+           ORDER BY is_default DESC, created_at DESC
+           LIMIT 1"#,
+    )
+    .bind("branding_preview")
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+
+    let (subject, text_body, html_body) = match template {
+        Some(t) => {
+            let subject = render_template(
+                &t.subject
+                    .unwrap_or_else(|| "A preview of your WorkflowSwift email branding".into()),
+                &vars,
+                "subject",
+            );
+            let html_body = t
+                .html_body
+                .as_ref()
+                .map(|h| render_template(h, &vars, "html_body"))
+                .unwrap_or_default();
+            let text_body = render_template(&t.body.unwrap_or_default(), &vars, "text_body");
+            let use_html = t.is_html.unwrap_or(true);
+            (
+                subject,
+                text_body,
+                if use_html { html_body } else { String::new() },
+            )
+        }
+        None => branding_preview_inline(&vars),
+    };
+
+    let (text, html) = apply_branding(Some(&branding), text_body, html_body);
+    let own_logo = stored_branding
+        .as_ref()
+        .and_then(|b| b.resolve_logo_url(crate::branding::APP_URL))
+        .is_some();
+    Ok(BrandingPreview {
+        subject,
+        text,
+        html,
+        branded: stored_branding.is_some(),
+        own_logo,
+    })
 }
 
 /// The operator's own in-inbox proof that their branding is applied (cron 2026-10-24, parity with

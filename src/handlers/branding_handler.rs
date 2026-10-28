@@ -287,6 +287,53 @@ pub async fn preview_email(
     }
 }
 
+/// `GET /api/v1/settings/branding/preview-body` — the email this account's branding produces,
+/// rendered and returned, NOT sent (cron 2026-10-28, parity with FunnelSwift, IncentiveSwift and
+/// ADASwift).
+///
+/// The card's drawn sample can describe a header the mailer never emits; this answers with the
+/// bytes the real path produces, so an operator sees the mail a recipient would receive without
+/// waiting for an inbox. Nothing is mailed (`sent:false`), and the recipient is always the CALLER's
+/// own address — read from their user row, never from the request — so it cannot be used as a relay.
+pub async fn preview_body(
+    Extension(claims): Extension<Claims>,
+    State(state): State<AppState>,
+) -> ApiResult<Json<Value>> {
+    let aid = account_id(&claims)?;
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+
+    let who: Option<(String, String)> =
+        sqlx::query_as("SELECT email, name FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let (to, user_name) = who.unwrap_or_default();
+    let to = to.trim().to_string();
+    let name = {
+        let n = user_name.trim();
+        if n.is_empty() {
+            "there".to_string()
+        } else {
+            n.to_string()
+        }
+    };
+
+    let rendered = crate::email::render_branding_preview(&state, aid, &to, &name)
+        .await
+        .map_err(AppError::Internal)?;
+    // The parts are the same Option shape the send path uses: an empty html part means the message
+    // is text-only, and the console falls back to showing the text.
+    Ok(Json(json!({
+        "sent": false,
+        "to": to,
+        "subject": rendered.subject,
+        "html": rendered.html,
+        "text": rendered.text,
+        "branded": rendered.branded,
+        "logo_is_own": rendered.own_logo
+    })))
+}
+
 /// `GET /api/v1/branding/logo/:account_id` — stream an account's logo. No credential (see the module
 /// docs); ids are unguessable uuids and no other tenant datum is reachable from here.
 pub async fn get_logo(

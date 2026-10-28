@@ -2101,6 +2101,33 @@ const ProfileView = () => {
     bdPreview.busy = false; renderApp();
   };
 
+  // "Show the exact email" (cron 2026-10-28, parity with FunnelSwift / IncentiveSwift / ADASwift):
+  // the card above DRAWS its sample in this browser, so it can describe a header the mailer never
+  // emits. This asks the server to render the account's real `branding_preview` mail -- same
+  // template, same merge fields, same branding header as a real send -- and pins the returned
+  // bytes into a sandboxed frame. Nothing is mailed, and the recipient is the caller's own row.
+  const bdExact = viewState('profile_branding_exact', { busy:false, msg:'', ok:false, subject:'', html:'', shown:false });
+  const showExactMail = async () => {
+    bdExact.busy = true; bdExact.msg = ''; renderApp();
+    try {
+      const v = await API.get('/settings/branding/preview-body');
+      const esc = (t) => String(t || '').replace(/[&<>]/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;' }[c]));
+      bdExact.subject = (v && v.subject) || '';
+      bdExact.html = (v && v.html) || ('<pre style="font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;white-space:pre-wrap;padding:16px;color:#111827">' + esc(v && v.text) + '</pre>');
+      bdExact.shown = true;
+      bdExact.ok = true;
+      bdExact.msg = (v && v.logo_is_own)
+        ? 'This is the exact mail, with YOUR logo and name at the top of it.'
+        : ((v && v.branded)
+          ? 'This is the exact mail. Your branding has no logo yet, so the header carries the WorkflowSwift wordmark.'
+          : 'This is the exact mail with nothing branded yet — it carries the WorkflowSwift identity.');
+    } catch (err) {
+      bdExact.ok = false;
+      bdExact.msg = 'Could not render the exact email: ' + (err.message || 'unknown error');
+    }
+    bdExact.busy = false; renderApp();
+  };
+
   // The pane is rebuilt on every render, so the preview is repainted after the DOM exists.
   setTimeout(syncBrandPreview, 0);
 
@@ -2276,6 +2303,16 @@ const ProfileView = () => {
             <p class="text-xs text-gray-500" style="margin:0 0 8px">This box shows the header inside this page. The button mails the same sample to your own address &mdash; save your branding first, or the preview carries the default WorkflowSwift header.</p>
             <button class="btn text-sm" id="branding-preview-send" onClick=${sendBrandPreview} disabled=${bdPreview.busy || S.loading}>${bdPreview.busy ? 'Sending…' : 'Send me a preview email'}</button>
             ${bdPreview.msg ? html`<p id="branding-preview-msg" class="text-xs" style=${'margin:8px 0 0;color:' + (bdPreview.ok ? '#047857' : '#b91c1c')}>${bdPreview.msg}</p>` : ''}
+          </div>
+          <div style="margin-top:14px;padding-top:14px;border-top:1px solid #e5e7eb">
+            <div class="text-xs text-gray-500 mb-2">The exact email — rendered by our server, not drawn here</div>
+            <p class="text-xs text-gray-500" style="margin:0 0 8px">Shows the real message this workspace sends: your header, the merge fields filled in, the exact wording. Nothing is emailed. Save your branding first so the preview carries it.</p>
+            <button class="btn-outline text-sm" id="branding-exact-show" onClick=${showExactMail} disabled=${bdExact.busy || S.loading}>${bdExact.busy ? 'Rendering…' : (bdExact.shown ? 'Show it again' : 'Show the exact email')}</button>
+            ${bdExact.msg ? html`<p id="branding-exact-msg" class="text-xs" style=${'margin:8px 0 0;color:' + (bdExact.ok ? '#047857' : '#b91c1c')}>${bdExact.msg}</p>` : ''}
+            ${bdExact.shown ? html`<div id="branding-exact-box" style="margin-top:10px;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;background:#fff">
+              <div style="padding:10px 12px;border-bottom:1px solid #e5e7eb;background:#f9fafb;font-size:12px;color:#374151"><strong>Subject:</strong> ${bdExact.subject || '(no subject)'}</div>
+              <iframe id="branding-exact-frame" title="The exact email this workspace sends" sandbox="" srcdoc=${bdExact.html} style="width:100%;height:480px;border:0;display:block;background:#fff"></iframe>
+            </div>` : ''}
           </div>
         </div>
       </div>

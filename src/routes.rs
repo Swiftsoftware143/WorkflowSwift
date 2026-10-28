@@ -885,6 +885,14 @@ pub fn create_router(state: AppState) -> Router {
             "/settings/branding/preview",
             post(handlers::branding_handler::preview_email),
         )
+        // The exact mail this account's branding produces, RENDERED BY THE SERVER and returned
+        // (cron 2026-10-28, parity with FunnelSwift / IncentiveSwift / ADASwift). Nothing is mailed:
+        // the card's drawn sample can describe a header the mailer never emits, and this is the
+        // answer to "what will my recipient actually see?". Recipient is the caller's own address.
+        .route(
+            "/settings/branding/preview-body",
+            get(handlers::branding_handler::preview_body),
+        )
         .route(
             "/impersonate",
             post(crate::handlers::admin_settings_handler::admin_impersonate),
