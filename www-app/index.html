@@ -1386,7 +1386,7 @@ const CreditsView = () => {
       <header class="flex items-start justify-between mb-5"><div><h1 class="text-xl font-extrabold text-gray-900">Credits</h1><p class="text-sm text-gray-500 mt-1">Your credit balance and usage</p></div><button class="btn-outline text-sm" onClick=${loadCredits} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button></header>
       <div class="card flex items-center gap-4" style="margin-bottom:16px"><div class="text-4xl">💰</div><div><div class="text-3xl font-bold text-gray-900">${fmtAmt(bal)}</div><div class="text-xs text-gray-500 mt-0.5">Available credits</div></div></div>
       ${S.planCaps ? html`<div class="card" style="margin-bottom:16px">
-        <h3 class="font-semibold text-gray-800 mb-2">Your plan — ${S.planCaps.plan_name || S.planCaps.plan_slug || '—'}</h3>
+        <h3 class="font-semibold text-gray-800 mb-2">${S.planCaps.plan_assigned === false ? ('Running on ' + (S.planCaps.plan_name || S.planCaps.plan_slug || 'Free') + ' limits — no plan chosen yet') : ('Your plan — ' + (S.planCaps.plan_name || S.planCaps.plan_slug || '—'))}</h3>
         <p class="text-sm text-gray-600">Industries: ${fmtAmt(S.planCaps.current_industries)} of ${fmtAmt(S.planCaps.max_industries)} used${S.planCaps.industries_remaining != null ? (' — ' + fmtAmt(S.planCaps.industries_remaining) + ' left') : ''}</p>
         <div class="mt-3 flex items-center gap-3 flex-wrap">
           <button class="btn-outline text-sm" onClick=${rolloverNow} disabled=${S.loading}>Roll over unused credits</button>
@@ -1455,15 +1455,25 @@ const PlanView = () => {
   const tiers = (S.plans && (S.plans.plans || S.plans)) || [];
   const curSlug = (S.planCaps && S.planCaps.plan_slug) || '';
   const curName = (S.planCaps && S.planCaps.plan_name) || '';
+  // HOLDING a plan is not the same as being BOUNDED by one (2026-10-28). `plan_slug`/
+  // `plan_name` come from the resolver the GATES use, which falls back to the install's
+  // free tier for a workspace that holds no `account_plans` row — 7 of this install's 12
+  // accounts. The API publishes `plan_assigned` for exactly this; an absent flag (older
+  // payload) reads as assigned, so a subscribed workspace can never look plan-less.
+  const assigned = !(S.planCaps && S.planCaps.plan_assigned === false);
+  const isCurrent = p => !!(assigned && curSlug && p.slug === curSlug);
   return html`
     <div>
       <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
         <div><h1 class="text-xl font-extrabold text-gray-900">Plan & Billing</h1><p class="text-sm text-gray-500 mt-1">Your current plan and the plans this install offers</p></div>
         <button class="btn-outline text-sm" onClick=${loadPlans} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button>
       </header>
-      <div class="card" style="margin-bottom:16px">
-        <h3 class="font-semibold text-gray-800 mb-1">Your plan — ${curName || curSlug || '—'}</h3>
-        <p class="text-sm text-gray-600">${(curSlug && curSlug !== 'free') ? 'Thanks for subscribing.' : 'A paid plan lifts the template and credit limits.'}</p>
+      <div class="card" style="margin-bottom:16px" data-plan-state="${assigned ? 'assigned' : 'none'}">
+        ${assigned
+          ? html`<h3 class="font-semibold text-gray-800 mb-1">Your plan — ${curName || curSlug || '—'}</h3>
+        <p class="text-sm text-gray-600">${(curSlug && curSlug !== 'free') ? 'Thanks for subscribing.' : 'A paid plan lifts the template and credit limits.'}</p>`
+          : html`<h3 class="font-semibold text-gray-800 mb-1">No plan chosen yet</h3>
+        <p class="text-sm text-gray-600">This workspace has not picked a plan. Every screen here already enforces the <strong>${curName || 'Free'}</strong> limits, so nothing is blocked — the tiers below are what you can move to.</p>`}
       </div>
       ${S.usage ? html`<div class="card" style="margin-bottom:16px">
         <h3 class="font-semibold text-gray-800 mb-2">Your usage</h3>
@@ -1500,14 +1510,14 @@ const PlanView = () => {
       ${tiers.length === 0 ? html`<div class="empty">No plans are published for this install yet.</div>` : html`
       <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
         ${tiers.map(p => html`
-          <div class="card" style="border:${(p.slug === curSlug) ? '2px solid #2563eb' : '1px solid #e2e8f0'}">
+          <div class="card" style="border:${isCurrent(p) ? '2px solid #2563eb' : '1px solid #e2e8f0'}">
             <div class="flex items-center justify-between">
               <div class="font-bold text-gray-900">${p.name || p.slug}</div>
               <div class="text-lg font-extrabold text-gray-900">$${fmtAmt(p.price_monthly)}<span class="text-xs text-gray-500 font-normal">/mo</span></div>
             </div>
             ${p.description ? html`<p class="text-xs text-gray-500 mt-1">${p.description}</p>` : ''}
             <div class="mt-3">
-              ${(p.slug === curSlug)
+              ${isCurrent(p)
                 ? html`<span class="chip">Current plan</span>`
                 : (Number(p.price_monthly) > 0
                     ? html`<button class="btn text-sm" onClick=${() => startCheckout(p)} disabled=${S.checkoutBusy}>${S.checkoutBusy ? 'Starting…' : ('Upgrade to ' + (p.name || p.slug))}</button>`
