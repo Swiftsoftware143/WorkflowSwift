@@ -123,6 +123,22 @@ pub fn is_reserved_address(email: &str) -> bool {
     }
 }
 
+/// Validate a LEAD's address — a capture, not a login identity.
+///
+/// Empty is legal: a lead may carry only a name and a phone. A non-empty value must be something a
+/// mail system could address, because `leads.email` is the column an export or a campaign step later
+/// sends TO, and a stored `not-an-email` is a guaranteed bounce against the sending domain. The
+/// value is deliberately NOT rewritten (no trim/lowercase): a lead records what a person typed and
+/// the panel shows it back unchanged. ONE rule fleet-wide — reference implementation
+/// `FunnelSwift/src/security/email_addr.rs::check_lead_address` (a5bf9fa, proven 18/18 at five
+/// doors); the same defect was measured live on ADASwift and IncentiveSwift the same week.
+pub fn check_lead_address(raw: &str) -> Result<(), String> {
+    if raw.trim().is_empty() {
+        return Ok(());
+    }
+    normalize(raw).map(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,5 +242,25 @@ mod tests {
                 "{ok} must NOT be flagged reserved"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod lead_address_tests {
+    use super::check_lead_address;
+
+    #[test]
+    fn a_lead_address_must_be_deliverable_but_may_be_absent() {
+        // An absent address is a legal lead (name + phone only).
+        assert!(check_lead_address("").is_ok());
+        assert!(check_lead_address("   ").is_ok());
+        // The literal that exposed this class on the fleet: a lead whose mail can never be sent.
+        assert!(check_lead_address("not-an-email").is_err());
+        assert!(check_lead_address("two@at@example.org").is_err());
+        assert!(check_lead_address("has space@example.org").is_err());
+        // Real addresses stay legal, in either case.
+        assert!(check_lead_address("person@example.com").is_ok());
+        assert!(check_lead_address("Person@Example.COM").is_ok());
+        assert!(check_lead_address("a+b@example.co.uk").is_ok());
     }
 }

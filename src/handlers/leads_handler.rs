@@ -2,6 +2,7 @@
 use crate::auth::models::Claims;
 use crate::error::{ApiResult, AppError};
 use crate::handlers::coreswift_external::{push_lead_to_coreswift, CapturedLead};
+use crate::security::email_addr;
 use crate::state::AppState;
 use axum::{
     extract::{Path, Query, State},
@@ -126,6 +127,11 @@ pub async fn create(
     if name.is_empty() {
         return Err(AppError::Validation("name is required".into()));
     }
+    // A lead's address is a REAL send target (export, campaign steps): `not-an-email` stored here
+    // becomes a guaranteed bounce against the sending domain later. Empty stays legal.
+    if let Some(email) = b.email.as_deref() {
+        email_addr::check_lead_address(email).map_err(AppError::Validation)?;
+    }
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO leads (id, aid, name, email, phone, company, status, source, surface_id, workflow_id, notes) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)")
         .bind(id).bind(aid).bind(name).bind(&b.email).bind(&b.phone).bind(&b.company)
@@ -186,6 +192,12 @@ pub async fn update(
         .fetch_optional(&state.db)
         .await?
         .ok_or_else(|| AppError::NotFound("Lead not found".into()))?;
+    // The value the UPDATE will actually store: the request's own address when it sends one,
+    // otherwise the row's existing one. Validate THAT, so a stale junk value cannot be re-saved
+    // by an unrelated edit and a new junk value cannot walk in through the edit door either.
+    if let Some(email) = b.email.as_deref().or(c.email.as_deref()) {
+        email_addr::check_lead_address(email).map_err(AppError::Validation)?;
+    }
     sqlx::query(UPD)
         .bind(id)
         .bind(b.name.as_ref().unwrap_or(&c.name))
