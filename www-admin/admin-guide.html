@@ -220,6 +220,16 @@ to charge anyone: it only decides <em>where the buyer is sent</em>.</p>
       <li>On/off, <strong>support-tier promises</strong> (not code gates — see below): <code>priority_support</code>,
         <code>dedicated_support</code>, <code>sla_guarantee</code></li>
       </ul>
+      <p><strong>The industry allowance is the exception, and it has its own box (2026-10-29).</strong>
+      <code>max_industries</code> is stored in the <code>feature_limits</code> table (one row per plan and key),
+      not in <code>plan_tiers.features</code> &mdash; it is the row <code>GET /plans/capabilities</code> reads to word a
+      customer's &ldquo;Industries: n of N&rdquo; card, and the row the create-industry gate compares against.
+      Each plan form in this console therefore carries an <strong>Industries allowed</strong> box: it opens
+      prefilled with the stored number (<code>-1</code> means unlimited), a number you type replaces it, and
+      leaving it empty keeps the current value. Saving works on both doors &mdash; a NEW plan and an edited
+      one &mdash; so a tier that grants unlimited can say so without SQL. Whatever you set here is what the
+      gate enforces: once a workspace holds its allowance, adding one more industry is refused and the
+      customer is told to upgrade.</p>
       <p><strong>Retired keys (kanban t_1aa78926).</strong> <code>csv_export</code>, <code>webhook_export</code> and <code>google_sheets</code> used to be
       settable per plan and are gone — from <code>plan_tiers.features</code>, from the plan payloads and from
       <code>src/features.rs::BOOLEAN_FLAG_KEYS</code> (migration <code>074_retire_export_entitlements.sql</code>). All three were
@@ -417,7 +427,12 @@ to charge anyone: it only decides <em>where the buyer is sent</em>.</p>
       buttons to list it wearing its <em>probe</em> badge, <strong>Select probes (N)</strong> ticks exactly
       those rows, and <strong>Delete selected</strong> retires them (the live canary monitors keep their badge
       but are never ticked). The switch is the API's <code>/api/v1/admin/accounts?include_probe=1</code>, so
-      rows, badges and the count all come from one listing.</td>
+      rows, badges and the count all come from one listing. The <strong>Plan</strong> column prints the
+      tier the workspace is held to by its catalogue NAME (<em>Free</em>, <em>Professional</em>) — and when
+      nobody ever put that workspace on a plan the same cell adds <em>(no plan chosen)</em>, so a tier the
+      app falls back to never reads as one the customer bought. The <strong>Plan</strong> picker on the
+      <em>Users (Tenants)</em> screen prints the same catalogue name, but the value it sends when you
+      press <em>Set plan</em> is the tier's slug, which is what that route takes.</td>
       </tr>
       <tr>
       <td><code>/api/v1/admin/accounts/{id}/retention</code></td>
