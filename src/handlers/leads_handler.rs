@@ -192,10 +192,11 @@ pub async fn update(
         .fetch_optional(&state.db)
         .await?
         .ok_or_else(|| AppError::NotFound("Lead not found".into()))?;
-    // The value the UPDATE will actually store: the request's own address when it sends one,
-    // otherwise the row's existing one. Validate THAT, so a stale junk value cannot be re-saved
-    // by an unrelated edit and a new junk value cannot walk in through the edit door either.
-    if let Some(email) = b.email.as_deref().or(c.email.as_deref()) {
+    // Only the address the REQUEST carries is judged — the fleet reference (FunnelSwift
+    // lead_handler.rs:592) does the same. Re-checking the row's existing value would make an
+    // unrelated edit (notes, status) fail on a lead captured before this guard existed, while
+    // changing nothing about what the UPDATE stores: the address is COALESCE'd from the row.
+    if let Some(email) = b.email.as_deref() {
         email_addr::check_lead_address(email).map_err(AppError::Validation)?;
     }
     sqlx::query(UPD)
