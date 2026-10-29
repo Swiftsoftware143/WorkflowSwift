@@ -1149,6 +1149,10 @@ const ProspectingView = () => {
       </header>
       <div class="card">
         <h3 class="font-semibold text-gray-800 mb-3">🔍 Search Businesses</h3>
+        ${S.prospectErr ? html`<div class="mb-4" style="border:1px solid #f59e0b;background:#fffbeb;border-radius:8px;padding:12px">
+          <div class="font-semibold text-sm" style="color:#92400e">Prospecting is not returning results</div>
+          <p class="text-sm mt-1" style="color:#78350f">${S.prospectErr}</p>
+        </div>` : null}
         <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
           ${quickSearchField('industryInput','Industry','e.g. Dental')}
           ${quickSearchField('cityInput','City','e.g. Miami')}
@@ -1180,8 +1184,13 @@ const runSearch = async () => {
   // form fields used to be sent as industry/city/state, so the search NEVER returned results and
   // the results view — and therefore the Enrich action — was unreachable).
   const query = [industry, city, state].filter(Boolean).join(' ');
-  try { const r = await API.post('/prospecting/search', { query, limit: 20, industry, city, state }); S.searchResults = r.results || r; S.sampleData = r.sample_data === true; toast('Search complete'); setView('prospecting-results'); }
-  catch(e){ toast(e.message,'err'); } S.loading=false; renderApp();
+  try { const r = await API.post('/prospecting/search', { query, limit: 20, industry, city, state });
+    S.searchResults = r.results || r; S.sampleData = r.sample_data === true; S.prospectErr = ''; toast('Search complete'); setView('prospecting-results'); }
+  catch(e){
+    // A refusal NAMES its cause and there is nothing to show in a results grid: surface the whole
+    // sentence on the screen the customer is already looking at, instead of a toast that fades.
+    S.searchResults = []; S.prospectErr = e.message || String(e);
+  } S.loading=false; renderApp();
 };
 
 // Enrich is a per-result action on POST /prospecting/enrich {business_name, website?}.
@@ -1205,7 +1214,7 @@ const ProspectingResultsView = () => {
   const arr = Array.isArray(res) ? res : (res.items || res.results || []);
   return html`
     <div>
-      <header class="flex items-start justify-between mb-5"><div><h1 class="text-xl font-extrabold text-gray-900">Search Results</h1><p class="text-sm text-gray-500 mt-1">${arr.length} businesses found${S.sampleData ? html` &middot; <span style="color:#b45309;font-weight:600">sample data — live prospecting is not connected yet, so these businesses are illustrative, not real</span>` : ''}</p></div><button class="btn-outline text-sm" onClick=${()=>setView('prospecting')}>Back</button></header>
+      <header class="flex items-start justify-between mb-5"><div><h1 class="text-xl font-extrabold text-gray-900">Search Results</h1><p class="text-sm text-gray-500 mt-1">${arr.length} businesses found</p></div><button class="btn-outline text-sm" onClick=${()=>setView('prospecting')}>Back</button></header>
       ${arr.length === 0 ? html`<div class="empty">No results.</div>` : html`
       <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
         ${arr.map((b,i) => html`<div class="card" key=${i} style="margin-bottom:0"><h3 class="font-semibold text-gray-800">${b.name || b.business_name || 'Business '+(i+1)}</h3>
@@ -1245,12 +1254,13 @@ const BrandMonitorView = () => {
           <div class="mt-2">${(b.platforms||[]).map(p=>html`<span class="chip">${p}</span>`)}</div>
           ${b.keywords && b.keywords.length ? html`<p class="text-xs text-gray-400 mt-1">${b.keywords.join(', ')}</p>` : ''}
           <p class="text-sm text-gray-500 mt-2">${statusBadge(b.is_active?'active':'paused')}${b.last_scanned_at ? ' · scanned ' + fmtDate(b.last_scanned_at) : ''}</p>
-          <div class="mt-3 flex gap-2"><button class="btn-outline text-xs" onClick=${()=>scanBrand(b.id)} disabled=${S.scanning === b.id}>${S.scanning === b.id ? spinner() : 'Scan for mentions'}</button><button class="btn-red text-xs" onClick=${()=>delBrand(b.id)}>Delete</button></div>${(S.mentions && S.mentionsFor === b.id) ? html`<div class="mt-3" style="border-top:1px solid #e2e8f0;padding-top:8px">${(S.mentions||[]).length === 0 ? html`<p class="text-sm text-gray-500">No mentions found.</p>` : html`${(S.mentions||[]).map(m=>html`<div style="margin-bottom:8px"><p class="text-sm font-semibold text-gray-800">${m.title || '(mention)'}</p><p class="text-xs text-gray-600">${m.snippet || ''}</p><p class="text-xs text-gray-400">${m.platform || ''}${m.sentiment ? ' · ' + m.sentiment : ''}</p></div>`)}`}${S.mentionsSample ? html`<p class="text-xs mt-2" style="color:#b45309;font-weight:600">sample data — live mention search is not connected yet, so these mentions are illustrative</p>` : ''}</div>` : ''}</div>`)}
+          <div class="mt-3 flex gap-2"><button class="btn-outline text-xs" onClick=${()=>scanBrand(b.id)} disabled=${S.scanning === b.id}>${S.scanning === b.id ? spinner() : 'Scan for mentions'}</button><button class="btn-red text-xs" onClick=${()=>delBrand(b.id)}>Delete</button></div>${(S.mentions && S.mentionsFor === b.id) ? html`<div class="mt-3" style="border-top:1px solid #e2e8f0;padding-top:8px">${(S.mentions||[]).length === 0 ? html`<p class="text-sm" style=${S.mentionsErr ? 'color:#92400e' : 'color:#64748b'}>${S.mentionsErr || 'No mentions found.'}</p>` : html`${(S.mentions||[]).map(m=>html`<div style="margin-bottom:8px"><p class="text-sm font-semibold text-gray-800">${m.title || '(mention)'}</p><p class="text-xs text-gray-600">${m.snippet || ''}</p><p class="text-xs text-gray-400">${m.platform || ''}${m.sentiment ? ' · ' + m.sentiment : ''}</p></div>`)}`}${S.mentionsSample ? html`<p class="text-xs mt-2" style="color:#b45309;font-weight:600">sample data — live mention search is not connected yet, so these mentions are illustrative</p>` : ''}</div>` : ''}</div>`)}
       </div>`}
     </div>`;
 };
 const loadBrands = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.brands = (await API.get('/brand-monitors')).brand_monitors || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
-const scanBrand = async (id) => { S.scanning = id; renderApp(); try { const r = await API.post('/brand-monitors/search', { brand_monitor_id: id }); S.mentions = r.mentions || []; S.mentionsFor = id; S.mentionsSample = r.sample_data === true; toast(((r.mentions||[]).length) + ' mention(s)'); } catch(e){ toast(e.message,'err'); } S.scanning = null; renderApp(); };
+const scanBrand = async (id) => { S.scanning = id; S.mentionsErr = ''; renderApp(); try { const r = await API.post('/brand-monitors/search', { brand_monitor_id: id }); S.mentions = r.mentions || []; S.mentionsFor = id; S.mentionsSample = r.sample_data === true; toast(((r.mentions||[]).length) + ' mention(s)'); } catch(e){ // A refusal NAMES its cause: show the whole sentence under the monitor being scanned instead of a toast that fades, and leave nothing that could read as "no mentions found".
+    S.mentions = []; S.mentionsFor = id; S.mentionsErr = e.message || String(e); } S.scanning = null; renderApp(); };
 const delBrand = async (id) => { if(!confirm('Delete this monitor?'))return; try { await API.del('/brand-monitors/'+id); toast('Monitor deleted'); S.brands=null; loadBrands(); } catch(e){ toast(e.message,'err'); } };
 
 // ===== Competitors (/competitors -> {competitors: [...]}, field=name/website) =====

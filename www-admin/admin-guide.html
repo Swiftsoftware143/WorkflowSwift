@@ -758,6 +758,35 @@ to charge anyone: it only decides <em>where the buyer is sent</em>.</p>
       (<code>PROVIDER_KEY_ENC_SECRET</code>); migration <code>048</code> arms it, a DB CHECK refuses a value without the prefix,
       and a write fails closed when the master key is absent. <code>api_keys.key_hash</code> (the WorkflowSwift-issued
       keys) is argon2-hashed; <code>integration_targets.api_key</code> uses the same envelope (migration <code>053</code>).</p>
+      <h2 id="prospecting-search-provider">Prospecting — connecting the business-search provider</h2>
+      <p>Prospecting is <strong>provider-backed</strong> and per account. It never invents a company: before
+      2026-10-29 <code>POST /api/v1/prospecting/search</code> returned businesses literally named
+      <code>&lt;query&gt; Business #1..#20</code> with made-up websites, and <code>/prospecting/enrich</code> invented
+      a <code>contact@…</code> email, a <code>+1-555-####</code> phone and three "insights". Both are gone.</p>
+      <p><strong>Where the key lives:</strong> the ACCOUNT's own <code>provider_keys</code> row for provider
+      <code>google_places</code> (<code>enc:v1:</code> ciphertext, decrypted per request through
+      <code>security::provider_key_crypto</code>; the customer connects it on the console's Provider Keys
+      screen). Deliberately <strong>not</strong> a server-wide environment key: one key on the box would serve every
+      tenant and bill its owner, which is what the fleet gate's third-party-key rule forbids.</p>
+      <table>
+      <thead><tr><th>State</th><th>What the caller gets</th></tr></thead>
+      <tbody>
+      <tr><td>No active <code>google_places</code> key on the account, or a key that will not decrypt</td><td><code>424 Failed Dependency</code> with a sentence naming the missing key. The console shows that sentence in a notice card. <strong>No rows.</strong></td></tr>
+      <tr><td>Key connected</td><td>One <code>places:searchText</code> round-trip. Fields: <code>displayName</code>, <code>websiteUri</code>, <code>formattedAddress</code>, primary type, <code>nationalPhoneNumber</code>. A place with no name is dropped.</td></tr>
+      <tr><td>Provider returns non-2xx</td><td><code>424</code> carrying the provider's own words (first 300 chars) — never an empty success, which a caller cannot tell apart from "no such businesses".</td></tr>
+      <tr><td>Enrich finds no match</td><td><code>404</code> naming the business.</td></tr>
+      </tbody>
+      </table>
+      <p><strong>Enrich</strong> fills only provider-sourced fields. Headcount, contact email and social profiles
+      come back <strong>empty</strong> because Google Places does not publish them and this app will not guess.
+      The <code>base_url</code> column on the same key row overrides the endpoint
+      (default <code>https://places.googleapis.com/v1/places:searchText</code>) — that is the seam a test stub
+      uses, and it is why the path is provable without a vendor credential. 424 rather than 502 is
+      deliberate: the CDN rewrites a 502 body into its own page and would hide the sentence.</p>
+      <p>Migration <code>098</code> clears <code>available_providers.coming_soon</code> for <code>google_places</code> —
+      without it the Provider Keys screen refused to store a key for the provider, so the refusal could never
+      be resolved. <code>coming_soon</code> is read in exactly one place in this app (the provider-keys upsert
+      gate), so nothing else is armed by it.</p>
       <h2 id="integration-center-coreswift">Integration Center — CoreSwift</h2>
       <table>
       <thead>

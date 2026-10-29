@@ -354,8 +354,15 @@
       <ul>
       <li><strong>Data Cards</strong> are named widgets. Workflow: Add Widget → name → type (prospecting / partners /
         contracts) → fill with data (search, import, or connect a source).</li>
-      <li><strong>Brand Monitor</strong> and <strong>Competitor Watch are dashboard tabs, not workflows</strong> — every user gets
-        them; type a search term or competitor name and the tab renders the results.</li>
+      <li><strong>Competitor Watch</strong> is real: a competitor needs its website, and <em>Check</em> fetches that page,
+        fingerprints it and compares it with the previous check. The first check records a baseline and says so;
+        the next one says either "no change since &lt;time&gt;" or that the page changed, with both sizes. A page that
+        cannot be reached, or that resolves to a private address, is reported as not checked — never as "no
+        change".</li>
+      <li><strong>Brand Monitor</strong> needs a web-mention provider, which this app does not have connected yet.
+        <em>Scan for mentions</em> therefore tells you it is not connected and returns nothing. It does <strong>not</strong>
+        show illustrative mentions any more — the previous behaviour invented platforms, URLs, snippets and
+        sentiment scores.</li>
       <li>Data flow is <code>extension / API / n8n → dashboard display → optionally feeds a workflow</code>.
         Custom metrics come in through <code>POST /dashboard/push-widget-data</code> with a metric key.</li>
       <li>Your tenant has one tab per industry you have selected; the dashboard also exposes live stats,
@@ -611,6 +618,24 @@
         call returned 404 while <em>Test Connection</em> still reported success. Fixed in 1.2.0, which also
         drops the <code>&lt;all_urls&gt;</code> host permission (it was listed next to the explicit marketplace
         origins) and moves the base URL into one shared <code>config.js</code>.</li>
+      </ul>
+      <h2 id="prospecting">Prospecting — finding businesses to reach out to</h2>
+      <p>Prospecting searches for real businesses (by industry, city and state) and can add what the
+      provider knows about one of them. It is <strong>not</strong> a demo and it does not invent anything: if it
+      cannot reach a real data source it says so instead of showing you a made-up list.</p>
+      <ul>
+      <li><strong>It needs your own Google Places key.</strong> Connect it once under
+        <strong>Provider Keys</strong> and pick <em>Google Places API</em>. The key is stored encrypted, is only
+        ever shown back masked, and is used on this account alone.</li>
+      <li><strong>Without a key the screen tells you so.</strong> Searching shows a notice that names the
+        missing key rather than returning companies — before this change the screen returned twenty
+        invented businesses with made-up websites, and a made-up contact email and phone under Enrich.
+        Those rows are gone for good.</li>
+      <li><strong>Results are what Google Places returned:</strong> business name, website, type, address and
+        phone number where Google has one. If Google does not publish a field, it stays blank — the app
+        will not guess a headcount, an email address or a social profile.</li>
+      <li><strong>Enrich</strong> looks the business up by name and fills only the fields that came back. A
+        business it cannot find is reported as no match, not padded out with filler.</li>
       </ul>
       <h2 id="support">Support</h2>
       <p>Contact David via Telegram. Tickets: <code>GET/POST /tickets</code>.</p>
