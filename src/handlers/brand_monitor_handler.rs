@@ -109,7 +109,7 @@ pub async fn search_brand_mentions(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
-) -> ApiResult<impl IntoResponse> {
+) -> ApiResult<Json<serde_json::Value>> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let brand_monitor_id = req
@@ -135,42 +135,19 @@ pub async fn search_brand_mentions(
         .get("max_results")
         .and_then(|v| v.as_i64())
         .unwrap_or(10);
+    let _ = max_results;
 
-    // Mock search results — in production this would call external APIs
-    let mentions: Vec<BrandMention> = (0..max_results.min(20) as usize)
-        .map(|i| BrandMention {
-            platform: vec![
-                String::from("twitter"),
-                String::from("reddit"),
-                String::from("news"),
-                String::from("blogs"),
-            ][i % 4]
-                .clone(),
-            title: format!("Brand mention {} for monitor", i + 1),
-            url: format!("https://example.com/mention/{}", i + 1),
-            snippet: format!(
-                "This is a sample mention snippet #{} related to the monitored brand.",
-                i + 1
-            ),
-            sentiment: vec![
-                String::from("positive"),
-                String::from("neutral"),
-                String::from("negative"),
-            ][i % 3]
-                .clone(),
-            relevance_score: 0.85 + (i as f64 * 0.01).min(0.15),
-        })
-        .collect();
-
-    // Update last_scanned_at
-    sqlx::query("UPDATE brand_monitors SET last_scanned_at = NOW() WHERE id = $1")
-        .bind(brand_monitor_id)
-        .execute(&state.db)
-        .await?;
-
-    Ok(Json(json!({
-        "mentions": mentions,
-        "total": mentions.len(),
-        "sample_data": true,
-    })))
+    // A scan used to RETURN FOUR INVENTED MENTIONS: platform cycled through
+    // twitter/reddit/news/blogs, `https://example.com/mention/<n>` URLs, a fabricated snippet, a
+    // cycled sentiment and a made-up 0.85+ relevance score — and it still stamped `last_scanned_at`,
+    // so the panel showed a fresh scan over content nobody had found. This app has no mention
+    // provider connected (the catalogue's data provider is Google Places, which answers places, not
+    // web mentions), so a scan cannot be real. It now says so instead of pretending: 424 Failed
+    // Dependency carries the cause and the fix. Nothing is written and `last_scanned_at` is NOT
+    // touched, because no scan happened.
+    let _ = (state, _monitor);
+    Err(AppError::UpstreamRefused(
+        "Brand Monitor is not connected on this account yet: no web-mention provider is installed, so a scan cannot find real mentions. Nothing was invented for you. Connect a mention-search provider for this app, then scan again."
+            .to_string(),
+    ))
 }
