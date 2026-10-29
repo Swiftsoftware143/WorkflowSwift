@@ -69,7 +69,40 @@ pub async fn list_workflows(
         .await?
     };
 
-    Ok(Json(json!({"workflows": workflows})))
+    // How many steps each workflow carries, in ONE grouped read (no N+1). The Builder's workflow
+    // picker has always rendered `w.step_count` (www-app/index.html, the `Steps` column) and the
+    // list never published it — `SELECT *` on `workflows` cannot, the count lives in
+    // `workflow_steps` — so the column answered "—" for EVERY workflow, including ones with steps.
+    // A customer deciding what to configure read that as "this workflow has no steps". Measured
+    // live 2026-10-29 on a probe account: a workflow with one step listed `step_count` absent.
+    let ids: Vec<Uuid> = workflows.iter().map(|w| w.id).collect();
+    let counts: Vec<(Uuid, i64)> = if ids.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query_as(
+            "SELECT workflow_id, COUNT(*)::bigint FROM workflow_steps \
+             WHERE workflow_id = ANY($1) GROUP BY workflow_id",
+        )
+        .bind(&ids)
+        .fetch_all(&state.db)
+        .await?
+    };
+    let by_id: std::collections::HashMap<Uuid, i64> = counts.into_iter().collect();
+    let items: Vec<serde_json::Value> = workflows
+        .iter()
+        .map(|w| {
+            let mut v = serde_json::to_value(w).unwrap_or_else(|_| json!({}));
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert(
+                    "step_count".to_string(),
+                    json!(by_id.get(&w.id).copied().unwrap_or(0)),
+                );
+            }
+            v
+        })
+        .collect();
+
+    Ok(Json(json!({"workflows": items})))
 }
 
 pub async fn create_workflow(
