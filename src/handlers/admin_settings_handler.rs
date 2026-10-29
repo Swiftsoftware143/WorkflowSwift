@@ -633,6 +633,59 @@ fn require_hosted_payment_url(raw: &str) -> ApiResult<()> {
     ))
 }
 
+/// Write a tier's `feature_limits` overrides (`{"max_industries": 3}`) — the table
+/// `GET /plans/capabilities` reads a plan's industry allowance from — for ONE plan.
+///
+/// ONE writer for BOTH plan doors (2026-10-29). `admin_update_plan_full` has always upserted this
+/// map; `admin_create_plan` did not, so a tier created from the console could never carry an
+/// industry allowance, and the Plans panel had no box naming the field either — the only writer was
+/// SQL. Measured live 2026-10-29: `feature_limits` held a max_industries row for all four tiers and
+/// the console could not read or set one. A value that is not a whole number is refused with the
+/// field's name rather than dropped, because a silent no-op is what makes an operator believe a
+/// limit was saved (`req_i32`'s lesson, 2026-10-12).
+async fn apply_feature_limits(
+    db: &sqlx::PgPool,
+    plan_id: Uuid,
+    req: &serde_json::Value,
+) -> ApiResult<()> {
+    let Some(map) = req.get("feature_limits").and_then(|v| v.as_object()) else {
+        return Ok(());
+    };
+    for (fkey, fval) in map {
+        let limit = fval
+            .as_i64()
+            .or_else(|| fval.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
+            .ok_or_else(|| {
+                AppError::Validation(format!(
+                    "The allowance for '{fkey}' must be a whole number (-1 means unlimited)."
+                ))
+            })?;
+        // UPDATE-then-INSERT, never `ON CONFLICT`: this table has NO unique index on
+        // (plan_id, feature_key) — measured live 2026-10-29, the only index is the id primary key —
+        // so the console's save answered "Database error / there is no unique or exclusion
+        // constraint matching the ON CONFLICT specification" and no tier's allowance could be
+        // written at all. Two statements need no schema change and stay correct if an operator
+        // ever adds the index.
+        let updated = sqlx::query(
+            "UPDATE feature_limits SET limit_value = $3 WHERE plan_id = $1 AND feature_key = $2",
+        )
+        .bind(plan_id)
+        .bind(fkey)
+        .bind(limit as i32)
+        .execute(db)
+        .await?;
+        if updated.rows_affected() == 0 {
+            sqlx::query("INSERT INTO feature_limits (plan_id, feature_key, limit_value) VALUES ($1, $2, $3)")
+                .bind(plan_id)
+                .bind(fkey)
+                .bind(limit as i32)
+                .execute(db)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
 pub async fn admin_create_plan(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -731,6 +784,10 @@ pub async fn admin_create_plan(
 
     let plan_id: Uuid = plan.try_get("id")?;
     let plan_name: String = plan.try_get("name")?;
+
+    // A tier is also its industry allowance (`feature_limits`), and a tier created here must carry
+    // one: the field is part of the same console form as its price and caps (2026-10-29).
+    apply_feature_limits(&state.db, plan_id, &req).await?;
 
     Ok((
         StatusCode::CREATED,
@@ -875,23 +932,10 @@ pub async fn admin_update_plan_full(
     .execute(&state.db)
     .await?;
 
-    // Update feature limits if provided
-    if let Some(feature_overrides) = req.get("feature_limits").and_then(|v| v.as_object()) {
-        for (fkey, fval) in feature_overrides {
-            if let Some(limit) = fval.as_i64() {
-                sqlx::query(
-                    r#"INSERT INTO feature_limits (plan_id, feature_key, limit_value)
-                       VALUES ($1, $2, $3)
-                       ON CONFLICT (plan_id, feature_key) DO UPDATE SET limit_value = $3"#,
-                )
-                .bind(id)
-                .bind(fkey)
-                .bind(limit as i32)
-                .execute(&state.db)
-                .await?;
-            }
-        }
-    }
+    // Feature-limit overrides, through the SAME writer the create door uses (2026-10-29): the
+    // console posts these as text (`-1`), and the old inline arm's strict `as_i64()` dropped a
+    // string silently.
+    apply_feature_limits(&state.db, id, &req).await?;
 
     // Persist every canonical limit/flag the admin sent into `features` JSONB.
     // MERGE, never replace: the Plans UI saves one field at a time and a replace

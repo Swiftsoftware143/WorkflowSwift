@@ -664,6 +664,18 @@ async function showForm(key,label,fields,ep,id,cb,row){
     // Booleans must be REAL booleans in the JSON body: a text input hands back the string "true",
     // and the handler reads these with `as_bool()`, which answers None for a string and then
     // applies its default. A select keeps the payload typed.
+    // THE INDUSTRY ALLOWANCE IS NOT A plan_tiers COLUMN (2026-10-29): it lives in `feature_limits`
+    // (key `max_industries`), which is the one row GET /plans/capabilities reads to word a
+    // customer's "Industries: n of N" card. The API has always accepted the map; NO box named it,
+    // so the only way to set a tier's industry allowance was SQL, and the tier that grants
+    // unlimited (stored as -1) could not say so from the console at all. Posted by the collector
+    // below as `feature_limits: {max_industries: n}`; -1 means unlimited.
+    if(f==='industries_allowed'){
+      const cur=item.feature_limits&&item.feature_limits.max_industries!=null?String(item.feature_limits.max_industries):'';
+      return `<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">Industries allowed</label>`
+        +`<input class="input" name="industries_allowed" type="number" step="1" value="${cur.replace(/"/g,'&quot;')}" placeholder="Leave empty to keep the current allowance">`
+        +`<p class="text-xs text-gray-500 mt-1">How many industries this tier may switch on — <b>-1 means unlimited</b>. An empty box leaves the stored allowance alone.</p></div>`;
+    }
     if(f==='is_default'||f==='is_html'){
       const cur=String(item[f]===undefined||item[f]===null?(f==='is_html'?'true':'false'):item[f]);
       const opts=['true','false'].map(v=>`<option value="${v}"${v===cur?' selected':''}>${v}</option>`).join('');
@@ -691,6 +703,13 @@ async function showForm(key,label,fields,ep,id,cb,row){
     // Skip blank inputs: an empty string is not "unset" server-side — POST /surfaces would
     // store slug='' instead of slugifying the name, and PUT uses COALESCE (blank can't clear).
     const body={};box.querySelectorAll('#mf input,#mf textarea,#mf select').forEach(inp=>{if(String(inp.value).trim()!=='')body[inp.name]=inp.value});
+    // `industries_allowed` is a `feature_limits` row, not a plan column: send it in the ONE shape the
+    // API's feature-limit writer reads, and never as a flat field the handler would ignore.
+    const ia=box.querySelector('#mf [name="industries_allowed"]');
+    if(ia){delete body.industries_allowed;
+      if(String(ia.value).trim()!==''){const n=Number(String(ia.value).trim());
+        if(!Number.isFinite(n)){showMsg('Industries allowed must be a whole number (-1 for unlimited)','error');return;}
+        body.feature_limits={max_industries:n};}}
     // EXCEPT the tier's own payment link (2026-10-24): an EMPTY box there is not "leave it alone",
     // it is "take this tier off sale-by-link", and the server reads `checkout_url` as
     // absent = keep, `""`/null = CLEAR, a value = set. The blank-skipping rule above would silently
@@ -2600,7 +2619,7 @@ function renderAdminPlans(c){
   // `checkout_url` is the tier's OWN hosted payment page (2026-10-24): it is the one field that can
   // make a tier sellable on an install with no payment provider key, so it is settable in BOTH forms
   // and shown in the table as Set/dash rather than as a long URL.
-  const WF_PLAN_FIELDS=['name','slug','price_monthly','price_yearly','is_active','sort_order','description','max_workflows','max_users','retention_days','max_notify_per_hour','can_deploy_n8n','has_api_access','payment_provider','checkout_url'];
+  const WF_PLAN_FIELDS=['name','slug','price_monthly','price_yearly','is_active','sort_order','description','max_workflows','max_users','industries_allowed','retention_days','max_notify_per_hour','can_deploy_n8n','has_api_access','payment_provider','checkout_url'];
   renderCRUD(c.querySelector('#apldata'),'plans','Plan',['name','slug','price_monthly','price_yearly','is_active','checkout_url'],'/admin/plans',WF_PLAN_FIELDS,undefined,WF_PLAN_FIELDS);
 }
 
