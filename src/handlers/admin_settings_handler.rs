@@ -995,6 +995,16 @@ pub async fn admin_delete_plan(
         return Err(AppError::NotFound("Plan not found".to_string()));
     }
 
+    // A tier's industry allowance (`feature_limits`) is NOT a child with a foreign key — measured
+    // live 2026-10-29: `feature_limits` references plan_tiers by a plain uuid column, so deleting a
+    // tier left its row behind for ever, pointing at a plan that no longer exists. Every deleted
+    // tier therefore left an orphan the console could no longer show, and any future id reuse would
+    // inherit a stranger's allowance. Clear it with the tier.
+    sqlx::query("DELETE FROM feature_limits WHERE plan_id = $1")
+        .bind(id)
+        .execute(&state.db)
+        .await?;
+
     Ok(Json(json!({"message": "Plan deleted"})))
 }
 
