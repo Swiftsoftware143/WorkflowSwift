@@ -1042,7 +1042,22 @@ pub async fn admin_list_accounts(
                           (SELECT pt.id FROM plan_tiers pt WHERE pt.is_active = true
                             ORDER BY pt.price_monthly ASC NULLS LAST, pt.name ASC,
                                      pt.created_at ASC LIMIT 1)
-                      ) AS plan_id
+                      ) AS plan_id,
+                      -- DOES THIS ACCOUNT HOLD THAT PLAN, or is it only bounded by it? (cron
+                      -- `default`, 2026-10-29). The COALESCE above FALLS BACK to the install's
+                      -- cheapest active tier, so a workspace that never chose a plan still resolves
+                      -- to a tier — and this list answered it in a `plan` object indistinguishable
+                      -- from a purchased one. The Accounts screen therefore selected "Free" for
+                      -- every such row (measured live: 10 of 12 accounts here hold no plan at all,
+                      -- including ZaarHub, SwiftImpact, Giraudy Capital and the operator's own
+                      -- workspaces). `/auth/me` has published this distinction since 2026-10-28
+                      -- (`features::plan_assigned`); the operator's list never did, so the screen
+                      -- that ASSIGNS plans could not tell a blank row from a bought one. The two
+                      -- arms are exactly the ones `resolve_plan_id` prefers, computed in SQL so the
+                      -- list costs one query rather than one per row.
+                      (EXISTS (SELECT 1 FROM account_plans apx
+                                WHERE apx.aid = a.id AND apx.status = 'active')
+                       OR a.plan_id IS NOT NULL) AS plan_assigned
                FROM accounts a
                  WHERE $1::bool
                     OR COALESCE(a.probe_harness, '') = ''
@@ -1050,7 +1065,7 @@ pub async fn admin_list_accounts(
            )
            SELECT r.id, r.name, r.account_slug, r.is_active, r.retention_days,
                   r.retention_purge_at, r.created_at, r.probe_harness,
-                  p.name as plan_name, p.slug as plan_slug,
+                  p.name as plan_name, p.slug as plan_slug, r.plan_assigned,
                   (SELECT u.email FROM users u WHERE u.aid = r.id
                    ORDER BY CASE WHEN u.role IN ('owner','company_admin','admin','super_admin')
                                  THEN 0 ELSE 1 END,
@@ -1087,6 +1102,11 @@ pub async fn admin_list_accounts(
         let created_at: chrono::DateTime<chrono::Utc> = row.try_get("created_at")?;
         let plan_name: Option<String> = row.try_get("plan_name").ok();
         let plan_slug: Option<String> = row.try_get("plan_slug").ok();
+        // Whether this account HOLDS the plan above or is only bounded by it (2026-10-29). Read
+        // from the same two arms `features::plan_assigned` prefers, computed in the list's own
+        // SQL. `false` = nobody ever put this workspace on a plan and the tier above is the
+        // install's fallback; the console must say so rather than presenting it as a purchase.
+        let plan_assigned: bool = row.try_get("plan_assigned").unwrap_or(true);
         // The AUTHORITATIVE harness attribution (kanban t_4a744754): written at signup by the door
         // that minted the account. Published so the operator's list can badge a harness row
         // instead of GUESSING from its owner address — a harness that signed up with an
@@ -1113,7 +1133,12 @@ pub async fn admin_list_accounts(
             "retention_purge_at": retention_purge_at.map(|t| t.to_rfc3339()),
             "last_sign_in": last_sign_in.map(|t| t.to_rfc3339()),
             "created_at": created_at.to_rfc3339(),
+            // `plan` is the tier this workspace RESOLVES to (the gates' answer, fallback included);
+            // `plan_assigned` says whether a human actually put it there. The Accounts screen keys
+            // its "no plan chosen yet" wording off this, so a fallback tier is never painted as a
+            // purchase — the same pair `/auth/me` has answered since 2026-10-28.
             "plan": plan_name.map(|n| json!({"name": n, "slug": plan_slug})),
+            "plan_assigned": plan_assigned,
             "n8n_provisioned": false
         }));
     }
