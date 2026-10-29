@@ -6,12 +6,23 @@ use axum::{
 };
 use chrono::Utc;
 use serde_json::json;
+use sha2::{Digest, Sha256};
+use sqlx::Row;
+use std::time::Duration;
 use uuid::Uuid;
 
 use crate::auth::models::Claims;
 use crate::error::{ApiResult, AppError};
 use crate::models::competitor_watch::*;
 use crate::AppState;
+
+/// How many redirect hops a check will follow. Each hop is re-gated through the app's SSRF guard, so
+/// a public page that bounces to `127.0.0.1` is refused rather than fetched.
+const MAX_REDIRECTS: usize = 3;
+/// The most of a page a check will read. A snapshot is a fingerprint, not an archive.
+const MAX_SNAPSHOT_BYTES: usize = 2 * 1024 * 1024;
+const FETCH_TIMEOUT_SECS: u64 = 20;
+const FETCH_UA: &str = "WorkflowSwift-CompetitorWatch/1.0 (+https://workflowswift.com/guide.html)";
 
 pub async fn list_competitors(
     State(state): State<AppState>,
@@ -223,24 +234,183 @@ pub async fn check_competitor(
         "Active competitor not found".to_string(),
     ))?;
 
-    // Update last_checked_at
-    sqlx::query("UPDATE competitors SET last_checked_at = NOW(), updated_at = NOW() WHERE id = $1")
-        .bind(id)
-        .execute(&state.db)
-        .await?;
+    // A check has to FETCH something. Without a website there is nothing to compare, and pretending
+    // otherwise is what this endpoint used to do: it answered "No significant changes detected."
+    // without a single request.
+    let website = competitor
+        .website
+        .clone()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if website.is_empty() {
+        return Err(AppError::BadRequest(
+            "Add the competitor's website first — a check has to fetch something real.".to_string(),
+        ));
+    }
 
-    // Mock check result
+    let (final_url, body) = fetch_page(&website).await?;
+    let digest = sha256_hex(&body);
+    let size = body.len() as i64;
+
+    // What the LAST check saw. NULL means never checked, and that is answered as a baseline rather
+    // than as "unchanged": a comparison that could not be made is not a comparison that passed.
+    let prev = sqlx::query("SELECT snapshot_hash, snapshot_bytes, snapshot_at FROM competitors WHERE id = $1 AND aid = $2")
+        .bind(id)
+        .bind(aid)
+        .fetch_one(&state.db)
+        .await?;
+    let prev_hash: Option<String> = prev.try_get("snapshot_hash").ok().flatten();
+    let prev_bytes: Option<i64> = prev.try_get("snapshot_bytes").ok().flatten();
+    let prev_at: Option<chrono::DateTime<Utc>> = prev.try_get("snapshot_at").ok().flatten();
+
+    let (status, changes_detected, summary) = match prev_hash {
+        None => (
+            "baseline".to_string(),
+            false,
+            format!(
+                "First check of {final_url} — saved a baseline of {size} bytes. Run the check again to detect changes."
+            ),
+        ),
+        Some(h) if h == digest => (
+            "completed".to_string(),
+            false,
+            format!(
+                "No change at {final_url} since the last check{} ({size} bytes).",
+                prev_at
+                    .map(|t| format!(" on {}", t.format("%Y-%m-%d %H:%M UTC")))
+                    .unwrap_or_default()
+            ),
+        ),
+        Some(_) => (
+            "completed".to_string(),
+            true,
+            format!(
+                "{final_url} changed since the last check{}: {size} bytes now, {} before.",
+                prev_at
+                    .map(|t| format!(" on {}", t.format("%Y-%m-%d %H:%M UTC")))
+                    .unwrap_or_default(),
+                prev_bytes
+                    .map(|b| b.to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            ),
+        ),
+    };
+
+    sqlx::query(
+        "UPDATE competitors SET snapshot_hash = $2, snapshot_bytes = $3, snapshot_at = NOW(), \
+         last_checked_at = NOW(), updated_at = NOW() WHERE id = $1",
+    )
+    .bind(id)
+    .bind(&digest)
+    .bind(size)
+    .execute(&state.db)
+    .await?;
+
     let result = CompetitorCheckResult {
         competitor_id: competitor.id,
         name: competitor.name.clone(),
-        status: "completed".to_string(),
-        changes_detected: false,
-        summary: format!(
-            "Checked competitor '{}'. No significant changes detected.",
-            competitor.name
-        ),
+        status,
+        changes_detected,
+        summary,
         checked_at: Utc::now(),
     };
 
-    Ok(Json(json!({"check_result": result, "sample_data": true})))
+    Ok(Json(json!({
+        "check_result": result,
+        "url_checked": final_url,
+        "sample_data": false,
+    })))
+}
+
+/// Fetch one page, refusing anything the app's SSRF gate rejects and re-gating every redirect hop.
+///
+/// `security::webhook_security::gate_step_destination` is the fleet's own guard for a
+/// customer-supplied URL (it refuses loopback, private and link-local targets), and it is the reason
+/// this cannot be used to read the box's own services. The client follows NO redirects itself: a
+/// 302 to `127.0.0.1` would otherwise bypass that gate, so each hop is resolved and re-gated here.
+async fn fetch_page(start: &str) -> ApiResult<(String, Vec<u8>)> {
+    use crate::security::webhook_security;
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS))
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent(FETCH_UA)
+        .build()
+        .map_err(|e| AppError::Internal(format!("competitor fetch client: {e}")))?;
+
+    let mut current = reqwest::Url::parse(start).map_err(|_| {
+        AppError::BadRequest(
+            "That is not a full web address — it must start with http:// or https://".to_string(),
+        )
+    })?;
+
+    for hop in 0..=MAX_REDIRECTS {
+        webhook_security::gate_step_destination(current.as_str())
+            .await
+            .map_err(|e| AppError::BadRequest(format!("That address cannot be checked: {e}")))?;
+
+        let resp = client.get(current.as_str()).send().await.map_err(|e| {
+            AppError::UpstreamRefused(format!(
+                "{} could not be reached ({e}). Nothing was compared.",
+                current
+            ))
+        })?;
+
+        let status = resp.status();
+
+        if status.is_redirection() {
+            let next = resp
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.trim().to_string());
+            let Some(next) = next else {
+                return Err(AppError::UpstreamRefused(format!(
+                    "{} redirected (HTTP {}) without saying where. Nothing was compared.",
+                    current,
+                    status.as_u16()
+                )));
+            };
+            if hop == MAX_REDIRECTS {
+                return Err(AppError::UpstreamRefused(format!(
+                    "{} redirected more than {MAX_REDIRECTS} times. Nothing was compared.",
+                    start
+                )));
+            }
+            current = current.join(&next).map_err(|_| {
+                AppError::UpstreamRefused(format!(
+                    "{} redirected to an address that could not be read ({next}).",
+                    current
+                ))
+            })?;
+            continue;
+        }
+
+        if !status.is_success() {
+            return Err(AppError::UpstreamRefused(format!(
+                "{} answered HTTP {}. Nothing was compared.",
+                current,
+                status.as_u16()
+            )));
+        }
+
+        let bytes = resp.bytes().await.map_err(|e| {
+            AppError::UpstreamRefused(format!("{} stopped sending its page ({e}).", current))
+        })?;
+        let mut body = bytes.to_vec();
+        body.truncate(MAX_SNAPSHOT_BYTES);
+        return Ok((current.to_string(), body));
+    }
+
+    Err(AppError::UpstreamRefused(format!(
+        "{} could not be read. Nothing was compared.",
+        start
+    )))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut h = Sha256::new();
+    h.update(bytes);
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
