@@ -2517,14 +2517,25 @@ function renderAdminAccounts(c){
     el.innerHTML='<table class="table"><thead><tr><th style="width:32px"><input type="checkbox" id="accAll" title="Select all"></th><th>Name</th><th>Owner</th><th>Slug</th><th>Plan</th><th>Active</th><th>Last sign-in</th><th>Created</th><th></th></tr></thead><tbody>'+
       items.map(i=>{
         // The API answers the tier nested as plan:{name,slug}; the flat spellings stay as fallback.
-        const cur=(i.plan&&(i.plan.slug||i.plan.name))||i.plan_slug||i.plan_name||'';
+        // The NAME is what the cell prints: `slug` is the picker's KEY (the Users screen resolves its
+        // <option>s by it), so printing it here read "free"/"professional" - the catalogue's internal
+        // spelling - on the one screen where the operator reads a torn tier (measured 2026-10-29).
+        const cur=(i.plan&&(i.plan.name||i.plan.slug))||i.plan_name||i.plan_slug||'';
+        // `plan` above is the tier the app RESOLVES to, and for an account nobody ever put on a
+        // plan that is the install's fallback tier. The API says which one it is with
+        // `plan_assigned` (2026-10-29); the cell used to print the fallback as a bare tier, so
+        // this list claimed a plan for every workspace when 10 of 12 hold none (measured).
+        const planAssigned = i.plan_assigned !== false;
+        const planCell = cur
+          ? (planAssigned ? cur : (cur + ' <span class="text-xs text-gray-400">(no plan chosen)</span>'))
+          : '-';
         const aid=i.id||i.account_id||'';
         return '<tr data-acc="'+aid+'">'+
         '<td><input type="checkbox" class="acc-chk" value="'+aid+'"></td>'+
         '<td class="acc-name"><strong>'+(i.name||'-')+'</strong></td>'+
         '<td>'+ownerCellHtml(i)+'</td>'+
         '<td>'+(i.account_slug||i.slug||'-')+'</td>'+
-        '<td>'+(cur||'-')+'</td>'+
+        '<td>'+planCell+'</td>'+
         '<td><span class="badge '+(i.is_active?'bg-green-100 text-green-700':'bg-red-100 text-red-700')+'">'+(i.is_active?'Active':'Inactive')+'</span></td>'+
         '<td class="text-xs">'+lastSignInHtml(i)+'</td>'+
         '<td class="text-xs text-gray-400">'+((i.created_at||'').slice(0,10))+'</td>'+
