@@ -162,6 +162,10 @@ const API = (() => {
         || ('Request failed (HTTP ' + r.status + ')');
       const err = new Error(msg);
       err.status = r.status;
+      // The parsed refusal is carried on the error so a caller can read the machine-readable
+      // facts the handler sent beside its sentence (e.g. checkout/create's `request_recorded`).
+      // Additive: every existing call site reads only `message`/`status`.
+      err.body = (typeof body === 'object' && body) ? body : null;
       throw err;
     }
     return d;
@@ -1565,6 +1569,24 @@ const startCheckout = async (p) => {
     // /checkout/create never creates a session, so "nothing was charged" holds on every arm.
     const detail = (e && e.message) ? String(e.message) : '';
     const config = /provider|not configured/i.test(detail);
+    // THE SERVER'S OWN FACT BEATS THE CLIENT'S GUESS (cron 2026-10-29). POST /checkout/create
+    // answers 503 with `request_recorded: true` on an install with no payment provider, because
+    // the handler has ALREADY filed the ask as a ticket (source 'plan_request', deduped on the
+    // open workspace+plan pair — measured live on this app: one press -> one row, and the
+    // console's own follow-up POST /tickets answers already_open:true). This screen ignored that
+    // fact and filed the request a SECOND time through /tickets; when that twin call failed the
+    // buyer was told "The request could not be sent ... Please try again." about a request the
+    // server HAD recorded. Read the server's fact instead, and do not file a twin.
+    const rb = (e && e.body && typeof e.body === 'object') ? e.body : {};
+    const recorded = rb.request_recorded === true;
+    if (recorded) {
+      const alreadyOpen = !!(rb.plan_request && rb.plan_request.already_open);
+      S.checkoutMsg = 'Request recorded \u2014 nothing was charged. Our team will switch this workspace to '
+        + (p.name || p.slug) + ' and email you when it is on.'
+        + (alreadyOpen ? ' (You had already asked for this plan \u2014 the request below is that one.)' : '');
+      // The list under this card reads the server's own rows; it now has the one just written.
+      S.planReqsTried = false;
+    } else
     // The provider's own sentence is NOT the buyer's to act on (measured live 2026-10-21 in
     // Chromium on app.workflowswift.com/dashboard: pressing "Upgrade to Starter" answered 400
     // /api/v1/checkout/create and the card read "Upgrades are not open on this workspace yet,
@@ -1580,14 +1602,15 @@ const startCheckout = async (p) => {
     // act. The console already owns the ticket backend (POST /api/v1/tickets, previously reachable
     // only from the Tickets screen), so the refusal now carries a one-click request the team can see
     // and complete. Rendered only AFTER a refusal, so an install whose checkout works never shows it.
-    S.requestForPlan = p;
+    // Not when the server already recorded the ask: the card would offer to file what exists.
+    if (!recorded) S.requestForPlan = p;
     // ONE PRESS FILES IT (cron 2026-10-20). Measured LIVE in Chromium on app.workflowswift.com
     // before this change: pressing "Upgrade to Starter" answered 400 /api/v1/checkout/create and
     // only RENDERED the request button — GET /api/v1/tickets still returned 0, so a buyer who
     // pressed Upgrade once had asked for nothing. The request is filed here, on that same press;
     // the button stays on screen for the failure case, when requestPlan's catch arm leaves it
     // rendered and re-enabled so pressing it retries.
-    if (config) await requestPlan();
+    if (config && !recorded) await requestPlan();
   }
   S.checkoutBusy = false; renderApp();
 };
