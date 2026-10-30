@@ -23,6 +23,31 @@ const MAX_REDIRECTS: usize = 3;
 const MAX_SNAPSHOT_BYTES: usize = 2 * 1024 * 1024;
 const FETCH_TIMEOUT_SECS: u64 = 20;
 const FETCH_UA: &str = "WorkflowSwift-CompetitorWatch/1.0 (+https://workflowswift.com/guide.html)";
+/// The most characters `competitors.name` accepts from the form.
+///
+/// `competitors.name` is `varchar(255)` and this writer had no bound at all, so a 300-character
+/// name reached the INSERT, Postgres refused it and the customer got
+/// `500 {"message":"Database error"}` while the console's Add-competitor modal had accepted every
+/// character they typed (measured live 2026-10-30). The cap stays LOOSER than the column on
+/// purpose — the application must never refuse a value the database would have stored.
+const MAX_NAME_CHARS: usize = 200;
+
+/// Trim a competitor name and bound it to what the column can hold.
+fn competitor_name(raw: &str) -> ApiResult<String> {
+    let name = raw.trim();
+    if name.is_empty() {
+        return Err(AppError::Validation(
+            "Enter a name for this competitor.".to_string(),
+        ));
+    }
+    let len = name.chars().count();
+    if len > MAX_NAME_CHARS {
+        return Err(AppError::Validation(format!(
+            "A competitor name can be at most {MAX_NAME_CHARS} characters — this one is {len}."
+        )));
+    }
+    Ok(name.to_string())
+}
 
 pub async fn list_competitors(
     State(state): State<AppState>,
@@ -47,15 +72,8 @@ pub async fn create_competitor(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let name = req
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    if name.is_empty() {
-        return Err(AppError::Validation("name is required".to_string()));
-    }
+    // Refused BEFORE the first write: an over-long name used to be a 500 from Postgres.
+    let name = competitor_name(req.get("name").and_then(|v| v.as_str()).unwrap_or(""))?;
 
     let website = req
         .get("website")
@@ -117,9 +135,11 @@ pub async fn update_competitor(
             .await?
             .ok_or(AppError::NotFound("Competitor not found".to_string()))?;
 
-    if let Some(name) = req.get("name").and_then(|v| v.as_str()) {
+    if let Some(raw) = req.get("name").and_then(|v| v.as_str()) {
+        // Same guard as the create door: a rename must not become a 500 either.
+        let name = competitor_name(raw)?;
         sqlx::query("UPDATE competitors SET name = $1 WHERE id = $2")
-            .bind(name)
+            .bind(&name)
             .bind(id)
             .execute(&state.db)
             .await?;
