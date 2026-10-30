@@ -1324,14 +1324,31 @@ const PROVIDER_SLOTS = [
 // Every save posted {provider,key_prefix,is_active}, and the API correctly answered
 // 400 "api_key is required": the admin side had NO SLOT to enter a key. `key_prefix`
 // is not even a property of the response, so that list column was always blank too.
-function renderProviderKeys(c){
+// The provider list is the INSTALL's catalogue (GET /api/v1/available-providers), never a list kept
+// by hand in this file. Measured live 2026-10-30: `google_places` is ACTIVE in `available_providers`
+// — the table Prospecting's handler reads — yet this select carried four AI providers only, so the
+// one key that makes Prospecting work could not be entered anywhere, while the guide AND the app's
+// own refusal ("Connect the Google Places key under Provider Keys") both pointed the customer here.
+// A catalogue-driven list cannot drift from the handlers again; the hand-kept list stays only as the
+// fallback for a console that cannot reach the API.
+async function providerOptions(){
+  try {
+    const d = await api('/available-providers');
+    const rows = (d && (d.available_providers || d.providers)) || [];
+    const opts = rows.filter(p => p && p.key && !p.coming_soon).map(p => [p.key, p.name || p.key]);
+    if (opts.length) return opts;
+  } catch (e) {}
+  return PROVIDER_SLOTS;
+}
+async function renderProviderKeys(c){
+  const opts = await providerOptions();
   c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-2">Provider Keys</h2>'
     +'<p class="text-xs text-gray-400 mb-4">Per-account API keys for the providers this platform uses. '
     +'Reads only ever return a mask; the Encrypted column states whether the saved copy is encrypted at rest.</p>'
     +'<div class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end mb-5">'
     +'<div><label class="block text-xs font-medium text-gray-500 mb-1">Provider</label>'
     +'<select id="pk_provider" class="input">'
-    +PROVIDER_SLOTS.map(function(s){return '<option value="'+s[0]+'">'+s[1]+' ('+s[0]+')</option>'}).join('')
+    +opts.map(function(s){return '<option value="'+s[0]+'">'+s[1]+' ('+s[0]+')</option>'}).join('')
     +'</select></div>'
     +'<div class="md:col-span-2"><label class="block text-xs font-medium text-gray-500 mb-1">API key</label>'
     +'<input id="pk_key" class="input" type="password" autocomplete="new-password" '
@@ -1340,7 +1357,7 @@ function renderProviderKeys(c){
     +'</div><div id="pkdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
 
   const list=c.querySelector('#pkdata');
-  const short=(p)=>{const i=PROVIDER_SLOTS.findIndex(s=>s[0]===p);return i>=0?PROVIDER_SLOTS[i][1]:p};
+  const short=(p)=>{const i=opts.findIndex(s=>s[0]===p);return i>=0?opts[i][1]:p};
 
   const load=async()=>{
     const d=await api('/provider-keys');
