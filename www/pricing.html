@@ -48,40 +48,92 @@ footer a{margin-right:18px}
       <div class="card">
         
         <h3>Free</h3>
-        <div class="price"><span class="amt">$0</span><span class="per">/month</span></div>
-        <p class="yr">&nbsp;</p>
+        <div class="price" data-plan="free"><span class="amt" data-role="amt">$0</span><span class="per">/month</span></div>
+        <p class="yr" data-role="yr">&nbsp;</p>
         <ul><li>Get started with basic workflow automation</li><li>3 workflows</li><li>2 users</li><li>10 tags</li><li>Community support</li><li>10 instances</li></ul>
         <a class="cta" href="https://app.workflowswift.com/register">Start free</a>
       </div>
       <div class="card popular">
         <div class="badge">Most popular</div>
         <h3>Starter</h3>
-        <div class="price"><span class="amt">$29</span><span class="per">/month</span></div>
-        <p class="yr">Billed yearly at $290</p>
+        <div class="price" data-plan="starter"><span class="amt" data-role="amt">$29</span><span class="per">/month</span></div>
+        <p class="yr" data-role="yr">Billed yearly at $290</p>
         <ul><li>For growing teams needing more power</li><li>15 workflows</li><li>10 users</li><li>25 tags</li><li>Email support</li><li>100 instances</li><li>3 API keys</li></ul>
         <a class="cta" href="https://app.workflowswift.com/register?plan=starter">Get started</a>
       </div>
       <div class="card">
         
         <h3>Professional</h3>
-        <div class="price"><span class="amt">$79</span><span class="per">/month</span></div>
-        <p class="yr">Billed yearly at $790</p>
+        <div class="price" data-plan="professional"><span class="amt" data-role="amt">$79</span><span class="per">/month</span></div>
+        <p class="yr" data-role="yr">Billed yearly at $790</p>
         <ul><li>For businesses requiring full automation</li><li>Unlimited workflows</li><li>25 users</li><li>100 tags</li><li>Priority support</li><li>1000 instances</li><li>10 API keys</li></ul>
         <a class="cta" href="https://app.workflowswift.com/register?plan=professional">Get started</a>
       </div>
       <div class="card">
         
         <h3>Enterprise</h3>
-        <div class="price"><span class="amt">$199</span><span class="per">/month</span></div>
-        <p class="yr">Billed yearly at $1990</p>
+        <div class="price" data-plan="enterprise"><span class="amt" data-role="amt">$199</span><span class="per">/month</span></div>
+        <p class="yr" data-role="yr">Billed yearly at $1990</p>
         <ul><li>Custom solutions for large organizations</li><li>Unlimited workflows</li><li>Unlimited users</li><li>Unlimited tags</li><li>Dedicated support</li><li>Unlimited instances</li><li>Unlimited API keys</li></ul>
         <a class="cta" href="https://app.workflowswift.com/register?plan=enterprise">Get started</a>
       </div>
   </div>
   <p class="note">Prices in US dollars. Upgrades are handled by our team — if checkout is not open on your workspace, the upgrade screen files the request for you.</p>
+  <p class="note" id="priceSource">Prices on this page are read from this install’s own plan records.</p>
   <footer>
     <a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/refunds">Refunds</a><a href="/">Home</a>
   </footer>
 </div>
+<script>
+/* The amounts above are authored placeholders that MUST agree with the `plan_tiers` table; an
+   operator changing a price in the console would otherwise leave this page quoting a number the app
+   no longer charges, with nothing on the box able to see the drift. GET /api/v1/public/plans is the
+   anonymous, minimal price list. If that read fails the authored amounts stay and the line under
+   them says so. */
+(function () {
+  'use strict';
+  function money(n) {
+    var v = Number(n);
+    return isFinite(v) ? '$' + (v % 1 === 0 ? String(v) : v.toFixed(2)) : '$' + n;
+  }
+  var note = document.getElementById('priceSource');
+  fetch('/api/v1/public/plans', { headers: { 'Accept': 'application/json' } })
+    .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    .then(function (d) {
+      var plans = (d && Array.isArray(d.plans)) ? d.plans : [];
+      if (!plans.length) throw new Error('no plans returned');
+      var byslug = {};
+      plans.forEach(function (p) { byslug[p.slug] = p; });
+      var painted = 0, books = document.querySelectorAll('.price[data-plan]');
+      for (var i = 0; i < books.length; i++) {
+        var p = byslug[books[i].getAttribute('data-plan')];
+        if (!p) continue;
+        var amt = books[i].querySelector('[data-role="amt"]');
+        if (amt) { amt.textContent = money(p.price_monthly); painted++; }
+        var yr = books[i].parentNode.querySelector('p.yr[data-role="yr"]');
+        if (yr) {
+          var y = Number(p.price_yearly) || 0;
+          yr.innerHTML = y > 0
+            ? 'Billed yearly at ' + money(y)
+              + (Math.abs(y - p.price_monthly * 10) < 0.01 ? ' (two months free)' : '')
+            : '&nbsp;';
+        }
+      }
+      if (note) {
+        note.textContent = painted
+          ? 'Prices read live from this install\u2019s own plan records just now \u2014 '
+            + painted + ' plan' + (painted === 1 ? '' : 's') + ' confirmed.'
+          : 'Live prices were read, but no card on this page matched a plan this install sells.';
+      }
+    })
+    .catch(function (e) {
+      if (note) {
+        note.textContent = 'The live price list could not be read just now (' + e.message
+          + '), so the amounts above are the last published ones. Reload to try again.';
+      }
+    });
+})();
+</script>
+
 </body>
 </html>
