@@ -37,6 +37,9 @@
 //!
 //!   (+1 from kanban t_39cea779: `/api/v1/auth/avatar/{user_id}`, the account-picture READ, joins
 //!    [`PUBLIC_ROUTES`] — an `<img src>` carries no token — for 13 public + 10 internal = 23.)
+//!   (+1, 2026-10-30: `/api/v1/public/plans`, the marketing pricing page's price list. Read before
+//!    any account exists, so it cannot carry a session; it returns slug, name and the two amounts
+//!    only — for 16 public + 10 internal = 26.)
 //! ```
 //!
 //! # What this app's contribution is
@@ -120,6 +123,11 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     "/api/v1/industries",
     "/api/v1/available-providers",
     "/api/v1/provider-presets",
+    // --- the marketing price list (2026-10-30) -------------------------------------------------
+    // `www/workflowswift/pricing.html` reads this before a visitor has an account, so it cannot
+    // carry a session. Deliberately NARROWER than the authenticated `/api/v1/plans`: slug, name and
+    // the two amounts, active tiers only. No plan id, no checkout_url, no payment_provider.
+    "/api/v1/public/plans",
     // --- public download -----------------------------------------------------------------------
     // The shipped Chrome extension's own zip. It is distributed to end users who have no account
     // yet; it contains no tenant data.
@@ -398,6 +406,8 @@ mod tests {
             "/api/v1/webhooks/stripe",
             "/api/v1/webhooks/paypal",
             "/api/v1/auth/avatar/user-one",
+            // The marketing pricing page's price list: read before a visitor has an account.
+            "/api/v1/public/plans",
         ] {
             assert!(is_public_route(path), "{} must stay anonymous", path);
         }
@@ -539,7 +549,7 @@ mod tests {
     /// from the code without a test failing.
     #[test]
     fn the_census_shape_is_what_the_docs_say() {
-        assert_eq!(super::PUBLIC_ROUTES.len(), 15, "PUBLIC_ROUTES size");
+        assert_eq!(super::PUBLIC_ROUTES.len(), 16, "PUBLIC_ROUTES size");
         assert_eq!(super::INTERNAL_ROUTES.len(), 10, "INTERNAL_ROUTES size");
         // The 22 deliberate anonymous placements the census found, minus the 2 moved to the
         // protected router, plus `/api/v1/auth/avatar/{user_id}` (the account-picture READ, card
@@ -550,7 +560,7 @@ mod tests {
         // session).
         assert_eq!(
             super::PUBLIC_ROUTES.len() + super::INTERNAL_ROUTES.len(),
-            25
+            26
         );
     }
 }

@@ -35,6 +35,41 @@ pub async fn list_plans(State(state): State<AppState>) -> ApiResult<impl IntoRes
     Ok(Json(json!({"plans": plans})))
 }
 
+/// `GET /api/v1/public/plans` — the ANONYMOUS price list the marketing pricing page reads.
+///
+/// The page at `nginx/www/workflowswift/pricing.html` printed four hand-authored amounts, so an
+/// operator changing a price in the console left the public page quoting a number this install no
+/// longer charges, with nothing on the box able to see the drift — the defect FunnelSwift, ADASwift
+/// and MissedCall each closed on their own pricing pages. This is the read that lets this page show
+/// what the install actually sells; every card on it is matched to a plan by `slug`.
+///
+/// Deliberately NARROW, and narrower than the authenticated `GET /api/v1/plans`: `slug`, `name`,
+/// the two amounts and the ordering only. No plan `id`, no `checkout_url`, no `payment_provider`,
+/// no feature JSON — a visitor needs a price list, and the ids and checkout links are the operator
+/// console's business. `is_active = false` rows never reach a member of the public.
+pub async fn public_list_plans(State(state): State<AppState>) -> ApiResult<impl IntoResponse> {
+    let rows = sqlx::query(
+        "SELECT slug, name, price_monthly::text AS price_monthly, price_yearly::text AS price_yearly \
+         FROM plan_tiers WHERE is_active = true ORDER BY sort_order ASC NULLS LAST",
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    let plans: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "slug": r.try_get::<Option<String>, _>("slug").ok().flatten(),
+                "name": r.try_get::<Option<String>, _>("name").ok().flatten(),
+                "price_monthly": r.try_get::<Option<String>, _>("price_monthly").ok().flatten(),
+                "price_yearly": r.try_get::<Option<String>, _>("price_yearly").ok().flatten(),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({"plans": plans, "total": plans.len()})))
+}
+
 pub async fn create_plan(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,

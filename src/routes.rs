@@ -1136,6 +1136,13 @@ pub fn create_router(state: AppState) -> Router {
             "/industries",
             get(handlers::industry_handler::list_industries),
         )
+        // The marketing pricing page's own price list (2026-10-30). Anonymous by design: it is
+        // read before any account exists, and it carries nothing but slug, name and the two
+        // amounts — see `plan_handler::public_list_plans`.
+        .route(
+            "/public/plans",
+            get(handlers::plan_handler::public_list_plans),
+        )
         .merge(public_body_routes);
 
     // Combine: public + protected merged
