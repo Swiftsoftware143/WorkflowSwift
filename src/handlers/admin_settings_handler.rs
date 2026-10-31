@@ -1563,6 +1563,7 @@ pub async fn admin_usage_dashboard(
 pub async fn admin_create_account(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
     require_admin(&claims)?;
@@ -1668,13 +1669,25 @@ pub async fn admin_create_account(
 
     // NOT marked with `probe_harness` on purpose (kanban t_4a744754): an AUTHENTICATED admin-console create-account
     // door, not the served, unauthenticated signup that the `X-Swift-Harness` marker exists for.
+    //
+    // THE ADDRESS ARM IS STILL NEEDED HERE (cron 2026-10-31, measured live). A fleet harness that
+    // provisions a workspace through THIS door with a test address used to leave the tag NULL — so the
+    // operator's Accounts list, which hides tagged rows, presented it as a customer. Measured: the
+    // account `Verify Fixture` (owner `verify-fixture-5d797d8e@swiftsoftware.dev`, created by a
+    // `hermes verify` run on 2026-10-28) sat among twelve real workspaces and could not be told from
+    // one. `probe_harness::for_signup` already returns the header marker when a harness sends one and
+    // otherwise attributes by the OWNER ADDRESS — a fleet test/reserved domain only. A real customer's
+    // address is on neither list, so their workspace is byte-identical to before: no tag, no hidden
+    // row. Same rule the signup door applies, so the two doors cannot drift.
+    let probe_harness = crate::probe_harness::for_signup(&headers, &email);
     sqlx::query(
-        r#"INSERT INTO accounts (id, name, account_slug)
-           VALUES ($1, $2, $3)"#,
+        r#"INSERT INTO accounts (id, name, account_slug, probe_harness)
+           VALUES ($1, $2, $3, $4)"#,
     )
     .bind(account_id)
     .bind(&account_name)
     .bind(&account_slug)
+    .bind(&probe_harness)
     .execute(&state.db)
     .await?;
 
