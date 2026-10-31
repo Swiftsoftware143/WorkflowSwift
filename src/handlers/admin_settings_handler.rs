@@ -1667,6 +1667,40 @@ pub async fn admin_create_account(
                 .to_string()
         });
 
+    // TWO CUSTOMERS MAY SHARE A NAME (cron 2026-10-31, measured live). `accounts.account_slug`
+    // carries a UNIQUE constraint (`tenants_slug_key`, a legacy name), and this door wrote the slug
+    // straight from the display name — so creating a second workspace called "Acme Corp" hit
+    // `duplicate key value violates unique constraint "tenants_slug_key"`, which the handler
+    // surfaced as `500 {"error":"Database error"}`. The operator was told nothing they could act on,
+    // and the workspace was simply not created. Measured: two `POST /admin/accounts/create` calls
+    // with the same `account_name` answered 201 then 500.
+    //
+    // A slug is an internal identifier, not the customer's name: the list, the mail and the console
+    // all show `accounts.name`. So a collision is resolved the way the rest of the fleet resolves it
+    // (see `portfolio_handler` / `portfolio_sync_handler`: CONCAT the id's first 8 chars), by
+    // suffixing — not by refusing the operator's second customer. An explicitly supplied
+    // `account_slug` is still honoured verbatim (the caller asked for that exact value).
+    let account_slug = {
+        let mut candidate = account_slug;
+        let explicit = req.get("account_slug").and_then(|v| v.as_str()).is_some();
+        if !explicit {
+            let taken = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM accounts WHERE account_slug = $1",
+            )
+            .bind(&candidate)
+            .fetch_one(&state.db)
+            .await?;
+            if taken > 0 {
+                candidate = format!(
+                    "{}-{}",
+                    candidate,
+                    account_id.to_string().get(..8).unwrap_or("dup")
+                );
+            }
+        }
+        candidate
+    };
+
     // NOT marked with `probe_harness` on purpose (kanban t_4a744754): an AUTHENTICATED admin-console create-account
     // door, not the served, unauthenticated signup that the `X-Swift-Harness` marker exists for.
     //
