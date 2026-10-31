@@ -170,6 +170,7 @@
       <a href="#accounts-and-tenants" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Accounts and tenants</a>
       <a href="#admin-settings-retention-and-outbound-providers" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Admin settings, retention and outbound providers</a>
       <a href="#workspaces-agents-and-tickets" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Workspaces, agents and tickets</a>
+      <a href="#run-history-csv" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📥</span> Run history as a CSV</a>
       <a href="#byok-provider-keys" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> BYOK — provider keys</a>
       <a href="#integration-center-coreswift" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Integration Center — CoreSwift</a>
       <a href="#integration-targets-step-dispatch-operator-provisioned" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Integration targets &amp; step dispatch — operator-provisioned</a>
@@ -233,10 +234,14 @@ to charge anyone: it only decides <em>where the buyer is sent</em>.</p>
       <p><strong>Retired keys (kanban t_1aa78926).</strong> <code>csv_export</code>, <code>webhook_export</code> and <code>google_sheets</code> used to be
       settable per plan and are gone — from <code>plan_tiers.features</code>, from the plan payloads and from
       <code>src/features.rs::BOOLEAN_FLAG_KEYS</code> (migration <code>074_retire_export_entitlements.sql</code>). All three were
-      <code>true</code> on every plan including Free and <strong>no code path in the crate honoured any of them</strong>: there is
-      no CSV writer/store/download, no export contract to gate, and no Google credential, OAuth flow,
+      <code>true</code> on every plan including Free and <strong>no code path in the crate honoured any of them</strong>:
+      there was no CSV writer, no export contract to gate, and no Google credential, OAuth flow,
       provider preset or destination row. A plan that advertises an entitlement the app cannot deliver is
-      the defect, not a feature. A flag belongs here only together with the gate that enforces it.</p>
+      the defect, not a feature. A flag belongs here only together with the gate that enforces it.
+      <br><strong>Note (2026-10-31): the app now DOES stream a CSV &mdash; the account's whole run history</strong>
+      (see <a href="#run-history-csv">Run history as a CSV</a> below). The three plan keys stay retired,
+      because that download is not an entitlement: it is switched on for every workspace whatever its
+      tier, so there is no flag to sell and no gate to enforce.</p>
       <p><strong>Retired keys (kanban t_413b4aab).</strong> <code>custom_branding</code>, <code>audit_logs</code> and <code>custom_reports</code> are gone
       the same way (migration <code>075_retire_unbacked_plan_flags.sql</code>). They were off on Free but on from a
       paid tier up, and each named a software capability the crate does not have:</p>
@@ -640,8 +645,29 @@ to charge anyone: it only decides <em>where the buyer is sent</em>.</p>
   same answer). A reserved address (the fleet probes end in <code>.invalid</code>) is never attempted,
   so it is not listed as a send; it is counted once, beside the table. Before 2026-10-23 those probe
   rows filled the window and pushed real customer mail out of it, which is exactly the question the
-  history exists to answer: "did this customer get their password?".</p>
-      <h2 id="email-branding">Email branding (per account)</h2>
+  history exists to answer: "did this customer get their password?"</p>
+  <p><strong>Send reset &mdash; the remedy beside that history.</strong> Each row of the send history
+  carries a <strong>Send reset</strong> button, and it answers the one question the history cannot
+  settle: a customer who never received their credentials mail cannot use &ldquo;Forgot password?&rdquo;
+  either, because that request travels the same sender that has just failed. The button calls
+  <code>POST /api/v1/admin/email-log/send-reset</code> with <code>{"email": "&lt;address&gt;"}</code>. The
+  app resolves the identity behind that address exactly as the customer's own reset does, retires any link
+  the customer may still be holding (one live link per login &mdash; two is a support-call generator), and
+  mints a fresh 24-hour token, sending its <code>password_reset</code> template through the same send
+  funnel &mdash; so
+  the account's branding header and the reserved-address rule behave identically on this path. It reports
+  what actually happened rather than guessing: <code>sent:true</code> only when the provider took the
+  message; otherwise a sentence naming the reason &mdash; no active account uses that address, the address
+  maps to more than one login (nothing is minted for an ambiguous address), or it is a reserved test
+  address, in which case nothing is mailed, the answer is <code>sent:false, withheld:true</code>, and the
+  token is issued but not returned in the answer &mdash; the customer's inbox is still the only delivery
+  path.</p>
+  <p><strong>Any address, not just the last 50 attempts.</strong> The customer who needs this most is
+  the one whose credentials mail failed weeks ago, and whose address has long since left the history
+  window, so the same action is offered as a box under the table: type the address the customer signed
+  up with and press <em>Send sign-in help</em>. It takes the identical path and answers in the identical
+  words &mdash; one handler behind both buttons, so the row action and the typed action cannot drift.</p>
+  <h2 id="email-branding">Email branding (per account)</h2>
       <ul>
         <li><strong>What it is:</strong> each account can put its own logo, display name and colour at
         the top of the transactional mail this app sends for it. An account with nothing configured is
@@ -711,6 +737,39 @@ to charge anyone: it only decides <em>where the buyer is sent</em>.</p>
       <p><strong>Paperclip</strong> is the agent-orchestration layer <em>above</em> WorkflowSwift (task assignment, budgets,
       execution history). It is not a WorkflowSwift user-facing feature and nothing in the user sidebar
       exposes it — WorkflowSwift only hands work off and receives results.</p>
+      <h2 id="run-history-csv">Run history as a CSV</h2>
+      <p>The <strong>Instances</strong> screen — the account's own run history — carries an <strong>Export CSV</strong>
+      button in its header. Pressing it downloads the account's <em>whole</em> history as one file, not the page
+      on screen: the server names it <code>workflowswift-run-history-YYYY-MM-DD.csv</code> and the console saves it
+      under that name. Seven columns, in this order: <code>Run</code>, <code>Workflow</code>, <code>Status</code>,
+      <code>Started</code>, <code>Completed</code>, <code>Duration (min)</code>, <code>Error</code>. Only a finished run
+      prints a duration — a run still in flight leaves that cell empty rather than showing a number that grows
+      every time the file is regenerated. Timestamps are UTC (RFC&nbsp;3339) and a workflow that has since been
+      deleted still exports its runs with the workflow name left blank.</p>
+      <p>The download is authenticated like every other console call: the button fetches the file with the
+      session token and hands the bytes to the browser, so a bare link would not work. A refusal is shown in
+      words — <em>Export failed: the server answered HTTP 400</em> — never as an empty file. The only refusal it
+      can answer is a format it does not serve; <code>?format=csv</code> is optional (it is the default) and any
+      other value is refused by name, e.g. <code>format 'xlsx' is not supported — this export serves csv</code>.</p>
+      <table>
+      <thead>
+      <tr>
+      <th>Endpoint</th>
+      <th>Method</th>
+      <th>Description</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+      <td><code>/api/v1/instances/export?format=csv</code></td>
+      <td>GET</td>
+      <td>The signed-in account's whole run history as a CSV file (<code>text/csv</code>, an attachment)</td>
+      </tr>
+      </tbody>
+      </table>
+      <p><strong>Every workspace has it.</strong> The export is not gated by plan or feature flag: no
+      <code>csv_export</code> entitlement exists any more (see <a href="#plan-limits-settable-and-enforced">Plan
+      limits</a>), so a Free workspace downloads exactly the same file a paid one does.</p>
       <h2 id="byok-provider-keys">BYOK — provider keys</h2>
       <p>Keys the <strong>customer</strong> brings (OpenAI, Resend/SendGrid, social, CoreSwift, …) are stored in
       <code>provider_keys</code> <strong>per tenant</strong> (<code>aid</code>), one row per (tenant, provider), entered in the app UI.</p>
