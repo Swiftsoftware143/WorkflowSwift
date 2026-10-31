@@ -1010,6 +1010,25 @@ pub async fn admin_delete_plan(
 
 // ── Account-level retention override ──
 
+/// Is this workspace's OWNER address fleet machinery rather than a customer?
+///
+/// Two arms, both the fleet's own definitions:
+///  * `security::probe_addr::attribution_domain` — the harness domains the mail layer attributes
+///    (`swiftsoftware.dev/.net/.local`, `sw.dev`, `example.*`, `.invalid`, `.test`) plus the fleet's
+///    disposable inbox (`maxxspace.com`). A workspace minted on one is a probe BY CONSTRUCTION.
+///  * `security::email_addr::is_reserved_address` — the RFC 2606/6761 class that can never receive
+///    mail, so it cannot be a customer's login.
+///
+/// An ordinary address on a routable domain answers `false`, so a real customer row is untouched.
+fn owner_is_fleet_machinery(email: &str) -> bool {
+    let addr = email.trim();
+    if addr.is_empty() {
+        return false;
+    }
+    crate::security::probe_addr::attribution_domain(addr).is_some()
+        || crate::security::email_addr::is_reserved_address(addr)
+}
+
 /// GET /api/v1/admin/accounts — list accounts with retention info
 pub async fn admin_list_accounts(
     State(state): State<AppState>,
@@ -1094,6 +1113,25 @@ pub async fn admin_list_accounts(
         // `owner_email` carries the same value under the fleet-wide spelling the FunnelSwift and
         // missedcallrespondr operator lists use, so one operator tool reads all three.
         let email: Option<String> = row.try_get("owner_email").ok().flatten();
+        // A HARNESS THAT NEVER SENT THE TAG IS STILL NOT A CUSTOMER (measured live 2026-10-31).
+        // `accounts.probe_harness` is written only by the door from the `X-Swift-Harness` header,
+        // so the nightly tenancy canaries (`probe-canary-a/b@swiftsoftware.dev`) carry NO tag and
+        // this list served them as customers — 12 accounts, 2 of them machinery — while the
+        // operator's console already badges exactly those rows "a probe, not a customer" from the
+        // owner address and its own comment says the server holds probe rows back. The two
+        // surfaces disagreed about the same row.
+        //
+        // The owner address is the second signal every account has, applied here the same way the
+        // tagged arm is: held back from the default answer, published with `reserved_owner: true`
+        // when `?include_probe=1` asks for the full list. An account with no user row has no
+        // address to judge by and is left alone, exactly as before.
+        let reserved_owner = email
+            .as_deref()
+            .map(owner_is_fleet_machinery)
+            .unwrap_or(false);
+        if reserved_owner && !include_probe {
+            continue;
+        }
         let slug: Option<String> = row.try_get("account_slug").ok();
         let is_active: bool = row.try_get("is_active")?;
         let retention_days: Option<i32> = row.try_get("retention_days").ok();
@@ -1129,6 +1167,10 @@ pub async fn admin_list_accounts(
             "slug": slug,
             "is_active": is_active,
             "probe_harness": probe_harness,
+            // true => the owner sits on a reserved / fleet-harness address, so this row is
+            // fleet machinery rather than a customer. Only reachable with `?include_probe=1`,
+            // the same field MissedCall, IncentiveSwift, FunnelSwift and ADASwift publish.
+            "reserved_owner": reserved_owner,
             "retention_days": retention_days,
             "retention_purge_at": retention_purge_at.map(|t| t.to_rfc3339()),
             "last_sign_in": last_sign_in.map(|t| t.to_rfc3339()),
