@@ -2248,10 +2248,28 @@ function renderAdminSettings(c){
     const esc2=s=>String(s==null?'':s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
     const tone=st=>st==='sent'?'background:#dcfce7;color:#166534':(st==='withheld'?'background:#fef3c7;color:#92400e':'background:#fee2e2;color:#991b1b');
     const label=st=>st==='sent'?'sent':(st==='withheld'?'not sent':'FAILED');
-    el.innerHTML='<table class="w-full text-sm"><thead><tr class="text-xs text-gray-500 text-left"><th class="py-1">When</th><th>To</th><th>Email</th><th>Result</th></tr></thead><tbody>'
-      +sd.sends.map(s=>'<tr class="border-t"><td class="py-1 whitespace-nowrap text-xs text-gray-500">'+esc2(s.at?new Date(s.at).toLocaleString():'')+'</td><td class="text-xs font-mono">'+esc2(s.to)+'</td><td class="text-xs">'+esc2(s.template||'')+'</td><td><span style="padding:1px 8px;border-radius:9999px;font-size:11px;'+tone(s.status)+'" title="'+esc2(s.detail||'')+'">'+label(s.status)+'</span></td></tr>').join('')
+    el.innerHTML='<table class="w-full text-sm"><thead><tr class="text-xs text-gray-500 text-left"><th class="py-1">When</th><th>To</th><th>Email</th><th>Result</th><th></th></tr></thead><tbody>'
+      +sd.sends.map(s=>'<tr class="border-t"><td class="py-1 whitespace-nowrap text-xs text-gray-500">'+esc2(s.at?new Date(s.at).toLocaleString():'')+'</td><td class="text-xs font-mono">'+esc2(s.to)+'</td><td class="text-xs">'+esc2(s.template||'')+'</td><td><span style="padding:1px 8px;border-radius:9999px;font-size:11px;'+tone(s.status)+'" title="'+esc2(s.detail||'')+'">'+label(s.status)+'</span></td><td class="text-right"><button class="btn btn-sm btn-ghost" data-reset="'+esc2(s.to)+'" title="Mail this customer a fresh password-reset link">Send reset</button></td></tr>').join('')
       +'</tbody></table>'
+      +'<p class="text-xs text-gray-400 mt-2">A customer who never received their credentials mail cannot use &ldquo;forgot password&rdquo; &mdash; that mail fails the same way. <strong>Send reset</strong> mints a fresh link and mails it through the same sender, so branding and the reserved-address withhold behave identically.</p>'
+      +'<p id="esendresetresult" class="text-xs mt-1"></p>'
       +'<p class="text-xs text-gray-400 mt-2">Reserved/test addresses (the fleet\'s own probes) are not listed here &mdash; '+(sd.withheld_7d||0)+' withheld in the last 7 days, and none of them were attempts.</p>';
+    // The remedy beside the history (POST /admin/email-log/send-reset, 2026-10-31). The answer is a
+    // plain sentence, and it says truthfully which arm it took: a reserved test address reports that
+    // NOTHING was sent rather than "on its way".
+    el.querySelectorAll('button[data-reset]').forEach(b=>b.onclick=async()=>{
+      const to=b.getAttribute('data-reset');
+      const out=()=>el.querySelector('#esendresetresult');
+      b.disabled=true;
+      if(out()){out().textContent='Sending a reset link to '+to+'\u2026';out().style.color='#374151';}
+      const r=await api('/admin/email-log/send-reset',{method:'POST',body:JSON.stringify({email:to})});
+      b.disabled=false;
+      const msg=(r&&r.message)?r.message:'The request failed \u2014 nothing was sent.';
+      // A real send appends a row the operator should see; a withheld/failed one appends nothing
+      // listed, so the sentence stays where it was written.
+      if(r&&r.sent===true){ try{ await loadSends(); }catch(e){} }
+      if(out()){out().textContent=msg;out().style.color=(r&&r.sent===true)?'#166534':((r&&r.withheld)?'#92400e':'#b91c1c');}
+    });
   };
   loadSends();
 

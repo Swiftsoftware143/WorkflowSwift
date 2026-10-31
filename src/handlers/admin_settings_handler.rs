@@ -2205,6 +2205,121 @@ pub async fn email_log(
     Ok(Json(json!({ "sends": sends, "withheld_7d": withheld })))
 }
 
+/// `POST /api/v1/admin/email-log/send-reset` — the operator's "this customer never got in" action.
+///
+/// The history above answers *what left this installation*; it gave the operator nothing to DO when
+/// a customer says the credentials mail never arrived. Telling that customer to use "forgot
+/// password" cannot work — no mail from this app reaches them, so that flow fails the same way.
+///
+/// This mints a fresh reset token for the identity behind the address the operator clicked and sends
+/// the app's own `password_reset` template through [`crate::email::send_email`], the SAME door every
+/// customer mail takes: one template lookup, one branding header, one transport, and the
+/// reserved/harness suppression arm all behave identically. Parity with the arms FunnelSwift,
+/// ADASwift, IncentiveSwift and MissedCall Respondr ship.
+///
+/// Body: `{"email": "<address>"}`. Every arm that is not a server fault answers 200 with a plain
+/// sentence; `sent` is true only when the provider hand-off actually happened.
+#[derive(Debug, serde::Deserialize)]
+pub struct SendResetForLogRequest {
+    pub email: String,
+}
+
+pub async fn admin_send_reset(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<SendResetForLogRequest>,
+) -> ApiResult<impl IntoResponse> {
+    require_admin(&claims)?;
+    let wanted = req.email.trim().to_ascii_lowercase();
+    if wanted.is_empty() {
+        return Err(AppError::Validation(
+            "An email address is required.".to_string(),
+        ));
+    }
+
+    // The identity behind the address, resolved by the SAME key `forgot_password` uses, so the
+    // operator's click and the customer's own request mint from the same place. An address that
+    // maps to more than one login mints NOTHING here either: a token for an arbitrary row would
+    // silently reset another workspace's identity.
+    let found = crate::security::address_identity::resolve_address(
+        &state.db,
+        &wanted,
+        |user: &crate::auth::models::User| user.password_hash.as_str(),
+    )
+    .await?;
+    let user = match found {
+        crate::security::address_identity::AddressIdentity::Unique(u) => u,
+        crate::security::address_identity::AddressIdentity::Unknown => {
+            return Ok(Json(json!({
+                "sent": false,
+                "reason": "no_account",
+                "message": "No account uses that address, so there is nobody to send sign-in help to.",
+            })));
+        }
+        crate::security::address_identity::AddressIdentity::Ambiguous { rows, .. } => {
+            tracing::warn!(
+                rows,
+                "operator reset refused: one address maps to more than one identity"
+            );
+            return Ok(Json(json!({
+                "sent": false,
+                "reason": "ambiguous",
+                "message": format!(
+                    "That address is used by {rows} logins, so a reset cannot pick one automatically. Ask the customer to use the reset link on the sign-in page."
+                ),
+            })));
+        }
+    };
+
+    let token = Uuid::new_v4().to_string();
+    let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
+    // Retire any link the customer may still be holding: two live reset links for one login is a
+    // support-call generator. Same 24h window as `forgot_password`, so both routes agree and the
+    // panel's sentence is true.
+    sqlx::query("UPDATE password_resets SET used = true WHERE user_id = $1 AND used = false")
+        .bind(user.id)
+        .execute(&state.db)
+        .await
+        .ok();
+    sqlx::query("INSERT INTO password_resets (user_id, token, expires_at) VALUES ($1, $2, $3)")
+        .bind(user.id)
+        .bind(&token)
+        .bind(expires_at)
+        .execute(&state.db)
+        .await?;
+
+    // Decided BEFORE the attempt, because `send_email` reports a deliberately-withheld message as
+    // `Ok(())` (nothing was attempted, so nothing failed). Reading the flag afterwards would let
+    // the panel tell the operator "on its way" for mail that never left the box.
+    let withheld = crate::security::probe_addr::harness_domain(&user.email);
+    let attempt = crate::email::send_reset_email(&state, Some(user.aid), &user.email, &token).await;
+    if let Some(domain) = withheld {
+        return Ok(Json(json!({
+            "sent": false,
+            "withheld": true,
+            "reason": "reserved_address",
+            "message": format!(
+                "{} is a reserved test address ('{}'), so nothing was sent. A reset link was still issued for it.",
+                user.email, domain
+            ),
+        })));
+    }
+    match attempt {
+        Ok(()) => Ok(Json(json!({
+            "sent": true,
+            "message": format!("A reset link is on its way to {}.", user.email),
+        }))),
+        Err(e) => Ok(Json(json!({
+            "sent": false,
+            "reason": "send_failed",
+            "message": format!(
+                "The provider refused the message: {}",
+                e.chars().take(200).collect::<String>()
+            ),
+        }))),
+    }
+}
+
 /// Tenant-admin gate. The canonical 403 for this app (`{"code":403,"error":true,
 /// "message":"Admin access required"}`) — reused by surfaces_handler so there is exactly
 /// one place that decides who may write tenant-wide definitions.

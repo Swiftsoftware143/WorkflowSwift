@@ -708,6 +708,15 @@ pub fn create_router(state: AppState) -> Router {
             "/email-log",
             get(handlers::admin_settings_handler::email_log),
         )
+        // The operator's remedy beside that history (2026-10-31): a customer who never received
+        // their credentials mail has NO working self-serve path — the "forgot password" mail fails
+        // the same way, because no mail from this app reaches them. This mints a fresh reset link
+        // for the address on the log row and sends it through the same sender the public flow uses.
+        // Parity with FunnelSwift / ADASwift / IncentiveSwift / MissedCall Respondr.
+        .route(
+            "/email-log/send-reset",
+            post(handlers::admin_settings_handler::admin_send_reset),
+        )
         // The SMS provider's own proof-of-configuration (kanban t_d3ff37ef), the sibling of the
         // email test above.
         .route(
