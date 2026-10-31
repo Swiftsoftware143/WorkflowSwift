@@ -405,7 +405,7 @@ function content(){
     // `req.get("status")`, so the default ['name'] Edit box prefilled the instance name and saved it
     // into a request field nothing looks at — a green 200 and no change. Edit now offers the one
     // field the route honours, and the create control is therefore withdrawn.
-    else if(s==='instances')renderCRUD(c,'instances','Instance',['workflow_id','status','created_at'],'/instances',['status'],undefined,false);
+    else if(s==='instances')renderCRUD(c,'instances','Instance',['workflow_id','status','created_at'],'/instances',['status'],undefined,false,'/instances/export?format=csv');
     // Templates are HAND-WRITTEN, not renderCRUD (kanban t_be118f36). POST /templates REQUIRES
     // `steps: Vec<TemplateStep>`, and a flat text form cannot express a step list — which is why
     // `+ Add` was withdrawn. The panel now authors the steps WITH the template: renderTemplates.
@@ -542,7 +542,7 @@ function unwrapOne(d){
 // `addFields` (optional) = the fields the ADD form exposes when they differ from the COLUMN set —
 // a resource whose table is deliberately narrow (Plans) still needs its whole settable surface in
 // the Add form. Omitted -> the columns are also the Add form, exactly as before.
-async function renderCRUD(container,key,label,fields,ep,editFields,extraAction,addFields){
+async function renderCRUD(container,key,label,fields,ep,editFields,extraAction,addFields,exportEp){
   // `ep` is normally the resource path. It may also be {list,create,del} when a resource's list and
   // its create live at different paths (Team: GET /users, POST /users/invite).
   const EP=(typeof ep==='string')?{list:ep,create:ep,del:ep}:ep;
@@ -561,7 +561,38 @@ async function renderCRUD(container,key,label,fields,ep,editFields,extraAction,a
   // text form cannot express one. It is hand-written now — see renderTemplates, kanban t_be118f36 —
   // so `+ Add` is back there, backed by a real step editor.)
   const canAdd=addFields!==false;
-  container.innerHTML=`<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">${label}s</h2>${canAdd?'<button class="btn btn-primary btn-sm" id="addBtn">+ Add</button>':''}</div><div id="list"><p class="text-gray-400 text-sm">Loading...</p></div></div>`;
+  // `exportEp` (optional) = a path that answers a real FILE for this resource. Rendering a button
+  // for it is only honest when the route exists — the Instances panel is the first: GET
+  // /instances/export?format=csv streams the account's whole run history (kanban, run-history CSV).
+  container.innerHTML=`<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">${label}s</h2><div class="flex items-center gap-2" id="hdrBtns">${canAdd?'<button class="btn btn-primary btn-sm" id="addBtn">+ Add</button>':''}</div></div><div id="list"><p class="text-gray-400 text-sm">Loading...</p></div></div>`;
+  // The export button is a real DOM node, not template markup: its label is fixed text and it is
+  // only drawn when the caller named a route that answers a file, so nothing here can inject.
+  if(exportEp){
+    const xb=h('button',{className:'btn btn-sm btn-ghost',id:'exportBtn'},'Export CSV');
+    container.querySelector('#hdrBtns').prepend(xb);
+  }
+  // The export is a real authenticated file download: fetch it with the session token (a bare
+  // <a href> could not carry the Authorization header), then hand the bytes to the browser under the
+  // name the server chose. A failure is shown in words — never an empty file the operator would only
+  // discover when they opened it.
+  const xb=container.querySelector('#exportBtn');
+  if(xb)xb.onclick=async()=>{
+    const was=xb.textContent;xb.disabled=true;xb.textContent='Preparing…';
+    try{
+      const res=await fetch(API+exportEp,{headers:{'Authorization':'Bearer '+TOKEN}});
+      if(!res.ok){showMsg('Export failed: the server answered HTTP '+res.status,'error');return;}
+      const blob=await res.blob();
+      const cd=res.headers.get('content-disposition')||'';
+      const m=/filename="([^"]+)"/.exec(cd);
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);
+      a.download=m?m[1]:('export.csv');
+      document.body.appendChild(a);a.click();a.remove();
+      setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+      showMsg('Exported '+a.download,'success');
+    }catch(e){showMsg('Export failed: '+e,'error');}
+    finally{xb.disabled=false;xb.textContent=was;}
+  };
   const data=await api(EP.list);
   const items=unwrapList(data);
   const list=container.querySelector('#list');
@@ -2923,7 +2954,7 @@ window.appGuidePages = {
   "dashboard:competitor-watch": { title: "Competitor Watch", desc: "The competitors this account tracks.", actions: ["Add a competitor", "Open a competitor's record"] },
   "dashboard:prospecting": { title: "Prospecting", desc: "Potential customers the platform has surfaced for this account.", actions: ["Review a prospect", "Move a prospect into your CRM"] },
   "workflows:all-workflows": { title: "Workflows", desc: "The workflows this account runs: each one is a series of steps that run in order.", actions: ["Create a workflow", "Open a workflow to edit its steps", "Run a workflow"] },
-  "workflows:instances": { title: "Workflow Instances", desc: "Every run of a workflow, with the status of each and how long it took.", actions: ["See a run's steps", "Retry a failed run"] },
+  "workflows:instances": { title: "Workflow Instances", desc: "Every run of a workflow, with the status of each and how long it took. Export CSV downloads every run this workspace has ever had as a spreadsheet — the run's name, the workflow it belongs to, its status, when it started and finished, how many minutes it took, and the error text if it failed — so you can hand the whole record to a client, an auditor or your own bookkeeping.", actions: ["See a run's steps", "Retry a failed run", "Press Export CSV to download the whole run history"] },
   "workflows:templates": { title: "Templates", desc: "Reusable workflow blueprints you can start a new workflow from.", actions: ["Preview a template", "Create a workflow from a template"] },
   "automation:automations": { title: "Automations", desc: "Rules that run without anyone watching: when something happens, do something.", actions: ["Create an automation", "Enable or disable one"] },
   "automation:agents": { title: "Agents", desc: "The AI agents attached to this account and what they are set up to do.", actions: ["Open an agent", "Edit an agent's instructions"] },

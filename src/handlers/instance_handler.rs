@@ -876,3 +876,114 @@ fn trim_workflow_error(body: &serde_json::Value) -> serde_json::Value {
     }
     v
 }
+
+/// One RFC-4180 field: quote it when it carries the delimiter, a quote or a line break, and double
+/// any embedded quote. A run is named by whoever started it, so one typed comma in a name must not
+/// shift every later column of that row.
+fn csv_field(value: &str) -> String {
+    if value.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
+}
+
+/// Query of the run-history export. `format` is optional and only `csv` is served — an unknown
+/// value is a 400 that names the valid set rather than a silent JSON body saved as `.csv`.
+#[derive(Debug, serde::Deserialize)]
+pub struct ExportInstancesQuery {
+    pub format: Option<String>,
+}
+
+/// `GET /api/v1/instances/export?format=csv` — this account's WHOLE run history as a CSV file.
+///
+/// The Instances panel lists runs but offers no way to obtain them: `GET /instances` answers JSON
+/// and the panel shows one screen of it. A customer asked by an auditor, a client or their own
+/// bookkeeper for "every run you did" had nothing to hand over. This is that read — one row per
+/// run, newest first, scoped by the caller's OWN `aid` from the token (never a payload id), exactly
+/// the ownership rule `list_instances` uses. The workflow NAME is joined in because a reader of the
+/// file cannot resolve a uuid; a run whose workflow row is gone still exports, with an empty name.
+pub async fn export_instances(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    axum::extract::Query(q): axum::extract::Query<ExportInstancesQuery>,
+) -> ApiResult<impl IntoResponse> {
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+
+    if let Some(f) = q.format.as_deref() {
+        if !f.eq_ignore_ascii_case("csv") {
+            return Err(AppError::BadRequest(format!(
+                "format '{f}' is not supported — this export serves csv"
+            )));
+        }
+    }
+
+    let rows = sqlx::query_as::<
+        _,
+        (
+            String,
+            Option<String>,
+            String,
+            Option<chrono::DateTime<chrono::Utc>>,
+            Option<chrono::DateTime<chrono::Utc>>,
+            Option<String>,
+        ),
+    >(
+        "SELECT i.name, w.name, i.status, i.started_at, i.completed_at, i.error_text \
+           FROM workflow_instances i \
+           LEFT JOIN workflows w ON w.id = i.workflow_id \
+          WHERE i.aid = $1 \
+          ORDER BY i.created_at DESC",
+    )
+    .bind(aid)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut out = String::with_capacity(rows.len() * 96 + 96);
+    out.push_str("Run,Workflow,Status,Started,Completed,Duration (min),Error\n");
+    for (name, workflow, status, started, completed, error) in &rows {
+        // Only a FINISHED run has a duration. A running one would otherwise print a number that
+        // grows every time the file is regenerated, which reads as a measured fact and is not.
+        let duration = match (started, completed) {
+            (Some(s), Some(c)) => {
+                let mins = (*c - *s).num_minutes();
+                if mins < 0 {
+                    String::new()
+                } else {
+                    mins.to_string()
+                }
+            }
+            _ => String::new(),
+        };
+        let row = [
+            csv_field(name),
+            csv_field(workflow.as_deref().unwrap_or("")),
+            csv_field(status),
+            csv_field(&started.map(|d| d.to_rfc3339()).unwrap_or_default()),
+            csv_field(&completed.map(|d| d.to_rfc3339()).unwrap_or_default()),
+            duration,
+            csv_field(error.as_deref().unwrap_or("")),
+        ];
+        out.push_str(&row.join(","));
+        out.push('\n');
+    }
+
+    let filename = format!(
+        "workflowswift-run-history-{}.csv",
+        chrono::Utc::now().format("%Y-%m-%d")
+    );
+    Ok((
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "text/csv; charset=utf-8".to_string(),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+            (axum::http::header::CACHE_CONTROL, "no-store".to_string()),
+        ],
+        out,
+    ))
+}

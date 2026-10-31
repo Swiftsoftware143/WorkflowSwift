@@ -161,6 +161,9 @@ pub fn create_router(state: AppState) -> Router {
 
     let instance_routes = Router::new()
         .route("/", get(handlers::instance_handler::list_instances))
+        // The account's WHOLE run history as a CSV file. Static segment, so it is matched ahead of
+        // `/{id}` (matchit 0.8) — the export is a read, never an instance id lookup.
+        .route("/export", get(handlers::instance_handler::export_instances))
         .route(
             "/{id}",
             get(handlers::instance_handler::get_instance)
