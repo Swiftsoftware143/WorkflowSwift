@@ -347,7 +347,13 @@ function sidebar(){
     const meName=imp?String(imp.user_name||'Customer account'):String(me.name||me.email||'Account');
     const mePlan=imp?'':String(me.plan_name==null?'':me.plan_name).trim();
     const av=h('div',{style:'width:28px;height:28px;border-radius:50%;background:#4f46e5;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;flex-shrink:0'},(meName.charAt(0)||'?').toUpperCase());
-    const sub=imp?'Support session':(mePlan||'\u2014');
+    // A workspace that holds NO plan row still has a tier NAME here: it is the install's
+    // free tier, which the gates enforce on it (`features::plan_assigned` is the same
+    // resolver the limits read). Painting that name alone claims the customer bought it --
+    // the mirror image of the "bare user" label. Say which it is.
+    const meAssigned=!!(me&&me.plan_assigned);
+    const mePlanTxt=!mePlan?'\u2014':(meAssigned?mePlan:'No plan chosen \u2014 running on '+mePlan);
+    const sub=imp?'Support session':mePlanTxt;
     nav.appendChild(h('div',{className:'mx-3 mb-3 px-2 pb-3 flex items-center gap-2',style:'border-bottom:1px solid #f1f5f9'},
       av,
       h('div',{style:'min-width:0'},
@@ -1759,7 +1765,9 @@ function renderProfile(c){
     right.appendChild(h('label',{className:'text-xs text-gray-500'},'Role'));
     right.appendChild(h('p',{className:'font-semibold mb-3'},roleLabel(me.role)));
     right.appendChild(h('label',{className:'text-xs text-gray-500'},'Plan'));
-    right.appendChild(h('p',{className:'font-semibold mb-4'},me.plan_name||'\u2014'));
+    // Same rule as the account header: name the tier the gates enforce, but never present
+    // the install's fallback as a plan the customer holds (`plan_assigned` is false there).
+    right.appendChild(h('p',{className:'font-semibold mb-4'},(!me.plan_name)?'\u2014':(me.plan_assigned?me.plan_name:'No plan chosen \u2014 running on '+me.plan_name)));
 
     right.appendChild(h('label',{className:'text-xs text-gray-500'},'Change password'));
     const curIn=h('input',{className:'input mb-2',type:'password',autocomplete:'current-password',placeholder:'Current password'});
@@ -2253,23 +2261,32 @@ function renderAdminSettings(c){
       +'</tbody></table>'
       +'<p class="text-xs text-gray-400 mt-2">A customer who never received their credentials mail cannot use &ldquo;forgot password&rdquo; &mdash; that mail fails the same way. <strong>Send reset</strong> mints a fresh link and mails it through the same sender, so branding and the reserved-address withhold behave identically.</p>'
       +'<p id="esendresetresult" class="text-xs mt-1"></p>'
-      +'<p class="text-xs text-gray-400 mt-2">Reserved/test addresses (the fleet\'s own probes) are not listed here &mdash; '+(sd.withheld_7d||0)+' withheld in the last 7 days, and none of them were attempts.</p>';
-    // The remedy beside the history (POST /admin/email-log/send-reset, 2026-10-31). The answer is a
-    // plain sentence, and it says truthfully which arm it took: a reserved test address reports that
-    // NOTHING was sent rather than "on its way".
-    el.querySelectorAll('button[data-reset]').forEach(b=>b.onclick=async()=>{
-      const to=b.getAttribute('data-reset');
+      +'<p class="text-xs text-gray-400 mt-2">Reserved/test addresses (the fleet\'s own probes) are not listed here &mdash; '+(sd.withheld_7d||0)+' withheld in the last 7 days, and none of them were attempts.</p>'
+      +'<div class="mt-3 flex gap-2 items-center"><input id="esendresetaddr" type="email" placeholder="customer@company.com" style="max-width:280px;padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"><button class="btn btn-sm btn-ghost" id="esendresetany">Send sign-in help</button></div>';
+    // The remedy is NOT limited to the last 50 attempts (2026-10-31): the customer who needs it most
+    // is the one whose credentials mail failed months ago, whose address is no longer in this window.
+    // The same call is therefore offered for ANY typed address, through ONE handler so the two doors
+    // cannot drift.
+    const sendResetTo=async(to,btn)=>{
       const out=()=>el.querySelector('#esendresetresult');
-      b.disabled=true;
+      if(btn)btn.disabled=true;
       if(out()){out().textContent='Sending a reset link to '+to+'\u2026';out().style.color='#374151';}
       const r=await api('/admin/email-log/send-reset',{method:'POST',body:JSON.stringify({email:to})});
-      b.disabled=false;
+      if(btn)btn.disabled=false;
       const msg=(r&&r.message)?r.message:'The request failed \u2014 nothing was sent.';
       // A real send appends a row the operator should see; a withheld/failed one appends nothing
       // listed, so the sentence stays where it was written.
       if(r&&r.sent===true){ try{ await loadSends(); }catch(e){} }
       if(out()){out().textContent=msg;out().style.color=(r&&r.sent===true)?'#166534':((r&&r.withheld)?'#92400e':'#b91c1c');}
-    });
+    };
+    el.querySelectorAll('button[data-reset]').forEach(b=>b.onclick=()=>sendResetTo(b.getAttribute('data-reset'),b));
+    const anyBtn=el.querySelector('#esendresetany');
+    if(anyBtn)anyBtn.onclick=()=>{
+      const inp=el.querySelector('#esendresetaddr');
+      const to=((inp&&inp.value)||'').trim();
+      if(!to){const o=el.querySelector('#esendresetresult');if(o){o.textContent='Type the address the customer signed up with.';o.style.color='#b91c1c';}return;}
+      return sendResetTo(to,anyBtn);
+    };
   };
   loadSends();
 
