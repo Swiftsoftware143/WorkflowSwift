@@ -1044,6 +1044,27 @@ const setTplSurface = (v) => { S.tplSurface = v; S.templates = null; loadTemplat
 // defaults (the template's name/description) and answers 201 (kanban t_6c589b6b).
 const installTemplate = async (id) => { try { await API.post('/templates/'+id+'/install', {}); toast('Template installed as workflow'); setView('workflows'); S.workflows=null; } catch(e){ toast(e.message,'err'); } };
 const exportTemplate = async (id, name) => { try { const data = await API.get('/templates/'+id+'/export'); const payload = (data && data.template) || data; const blob = new Blob([JSON.stringify(payload,null,2)], { type:'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = (name||'template').replace(/[^A-Za-z0-9._-]/g,'_') + '.workflowswift.json'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url), 4000); toast('Template exported'); } catch(e){ toast(e.message,'err'); } };
+// Run-history CSV: GET /api/v1/instances/export?format=csv is scoped by the caller's OWN
+// account id from the token, so a workspace owner downloads THEIR runs (and nobody else's).
+// The operator console has the same button; this one was missing here, so a customer asked by
+// an auditor or a client for "every run you did" had nothing to hand over (kanban, run-history
+// export). A failure is said in words — never an empty file the user only discovers on opening.
+const exportRuns = async () => {
+  const t = sessionStorage.getItem('wf_token') || localStorage.getItem('ws_fs_token');
+  try {
+    const res = await fetch('/api/v1/instances/export?format=csv', { headers: t ? { 'Authorization': 'Bearer ' + t } : {} });
+    if (!res.ok) { toast('Export failed: the server answered HTTP ' + res.status, 'err'); return; }
+    const blob = await res.blob();
+    const cd = res.headers.get('content-disposition') || '';
+    const m = /filename="([^"]+)"/.exec(cd);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = m ? m[1] : 'run-history.csv';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    toast('Exported ' + a.download);
+  } catch (e) { toast('Export failed: ' + e.message, 'err'); }
+};
 const onTemplateFile = async (ev) => { const file = ev.target.files && ev.target.files[0]; ev.target.value = ''; if(!file) return; try { const text = await file.text(); const j = JSON.parse(text); const payload = (j && j.template) ? j.template : j; await API.post('/templates/import', payload); toast('Template imported'); S.templates=null; loadTemplates(); } catch(e){ toast('Import failed: ' + e.message, 'err'); } };
 
 // ===== Instances =====
@@ -1054,7 +1075,10 @@ const InstancesView = () => {
     <div>
       <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
         <div><h1 class="text-xl font-extrabold text-gray-900">Instances</h1><p class="text-sm text-gray-500 mt-1">Running and historical workflow instances</p></div>
-        <button class="btn-outline text-sm" onClick=${loadInstances} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button>
+        <div class="flex gap-2">
+          <button class="btn-outline text-sm" onClick=${exportRuns} title="Download every run this workspace has had as a spreadsheet">Export CSV</button>
+          <button class="btn-outline text-sm" onClick=${loadInstances} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button>
+        </div>
       </header>
       ${list.length === 0 ? html`<div class="empty">No instances yet.</div>` : html`
       <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Status</th><th>Step</th><th>Started</th><th>Completed</th><th></th></tr></thead><tbody>
