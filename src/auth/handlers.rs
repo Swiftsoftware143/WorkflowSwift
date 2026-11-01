@@ -626,6 +626,73 @@ pub async fn change_password(
     ))
 }
 
+/// `POST /api/v1/auth/logout-all` — end every OTHER signed-in device on this account.
+///
+/// The machinery already existed and nothing could reach it: `change_password` and
+/// `set_initial_password` bump `users.sessions_valid_from`, and the boundary read
+/// (`middleware::session_predates_password_change`) refuses any JWT minted before it. Measured
+/// 2026-11-01: no route and no console control bumped that column on its own, so a customer who
+/// believes someone else is in their account had exactly one option — change a password they
+/// already know — and a customer whose intruder is "an old phone I sold" had none.
+///
+/// This is that missing verb. It moves the session line and then mints a FRESH token for the
+/// caller, so the device that pressed the button stays signed in while every other JWT dies at
+/// its next request. The new token is in the response because the caller's old token is dead too:
+/// a 200 that silently signed the customer out of the tab they were looking at would be a trap.
+///
+/// The fresh `iat` is the value the UPDATE itself wrote (`RETURNING`), not a second clock read:
+/// the boundary compares whole seconds, and taking the instant from the same statement makes
+/// app/DB clock skew unable to strand the pressing device. Idempotent — pressing twice only moves
+/// the line forward. The caller's account comes from its own token, so there is no id in the path
+/// to spoof, and the re-minted claims are read from the ROW (not echoed from the old claim) so a
+/// role or platform flag that was narrowed since cannot be re-blessed here.
+pub async fn logout_all(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+
+    let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = $1 AND is_active = true")
+        .bind(user_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+
+    let valid_from: i64 = sqlx::query_scalar(
+        "UPDATE users SET sessions_valid_from = NOW(), updated_at = NOW() \
+           WHERE id = $1 \
+       RETURNING floor(EXTRACT(EPOCH FROM sessions_valid_from))::bigint",
+    )
+    .bind(user.id)
+    .fetch_one(&state.db)
+    .await?;
+
+    let now_ts = valid_from.max(0) as usize;
+    let claims = Claims {
+        sub: user.id.to_string(),
+        aid: user.aid.to_string(),
+        role: user.role.clone(),
+        // Pressing this button is not a sign-in: it proves nothing about a password, so the
+        // session may never set one without the current value.
+        pwd_minted: false,
+        exp: now_ts + state.config.jwt_access_expiry as usize,
+        iat: now_ts,
+        perm_is_super_admin: Some(user.perm_is_super_admin),
+    };
+    let token = create_token(&claims, &state.config.jwt_secret)?;
+
+    tracing::info!(
+        user = %user.id,
+        "signed out every other device — the session line moved, a fresh token was minted for the caller"
+    );
+
+    Ok(Json(json!({
+        "status": "ok",
+        "message": "Every other device has been signed out. This one stays signed in.",
+        "token": token,
+    })))
+}
+
 /// `POST /api/v1/auth/initial-password` — `{password}`.
 ///
 /// THE DOOR FOR A CUSTOMER WHOSE FIRST PASSWORD NEVER ARRIVED. `register` mints the first password

@@ -130,7 +130,7 @@ window.appGuidePages = {
   "provider-keys": { title: "Provider Keys", desc: "The credentials for the outside services your workflows use. Stored here so a step can reach them.", actions: ["Add a provider key", "Update one that expired"] },
   team:          { title: "Team", desc: "The people who share this workspace and what each of them is allowed to do.", actions: ["Invite someone", "Change a role"] },
   tickets:       { title: "Tickets", desc: "Support requests \u2014 yours to us, and any raised inside the workspace.", actions: ["Open a ticket", "Check a reply"] },
-  profile:       { title: "Profile", desc: "Your account details and sign-in for this workspace.", actions: ["Update your name and password"] }
+  profile:       { title: "Profile", desc: "Your account details and sign-in for this workspace.", actions: ["Update your name and password", "Sign out a device you no longer use"] }
 };
 </script>
 <script src="/inline-guide-widget.js?v=20261021a"></script>
@@ -220,6 +220,11 @@ const API = (() => {
       if (r.status === 401 && !fieldRefusal) sessionEnded();
       const err = new Error(msg); err.status = r.status; err.field = fieldRefusal; throw err;
     }),
+    // "Sign out of every other device" (cron 2026-11-01). The server moves the account's session
+    // line and mints a FRESH token for this tab, because the caller's own old token dies with the
+    // others; the caller must adopt the new one or it is silently signed out of the page it is
+    // looking at. Idempotent, and it names no account — the session decides whose sessions end.
+    logoutAll: () => send(base + '/auth/logout-all', { method:'POST', headers: headers() }).then(handle),
     updateProfile: (patch) => send(base + '/auth/profile', { method:'PUT', headers: headers(), body: JSON.stringify(patch) }).then(handle),
     // Ask to move the account's SIGN-IN ADDRESS. The server writes a PENDING request and mails the
     // confirmation link to the NEW address; `users.email` moves only when that link is opened, so a
@@ -2258,6 +2263,26 @@ const ProfileView = () => {
     S.loading = false; renderApp();
   };
 
+  // End every OTHER signed-in device (cron 2026-11-01). Sessions are bearer tokens, so a phone
+  // that was sold or lost stays signed in until the account's session line moves. This button
+  // moves it; the server answers a fresh token for THIS tab, which is adopted here — the caller's
+  // own old token dies with the others, so skipping the adoption would sign the customer out of
+  // the page they are looking at.
+  const dv = viewState('profile_devices', { busy:false, msg:'', ok:false });
+  const signOutOthers = async () => {
+    dv.busy = true; dv.msg = ''; renderApp();
+    try {
+      const v = await API.logoutAll();
+      if (v && v.token) API.setAuth(v.token, API.user);
+      dv.ok = true;
+      dv.msg = (v && v.message) || 'Every other device has been signed out.';
+    } catch (err) {
+      dv.ok = false;
+      dv.msg = err.message || 'Could not sign the other devices out';
+    }
+    dv.busy = false; renderApp();
+  };
+
   // Ask for a NEW sign-in address (cron 2026-10-18). Nothing on `users` moves here: the server
   // writes a pending `email_changes` row and mails the confirmation link to the NEW mailbox, so the
   // sentence this paints is the honest one — "check that inbox", never "your email is now X".
@@ -2391,6 +2416,13 @@ const ProfileView = () => {
           ${pw.error ? html`<div id="pw-error" role="alert" style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:10px 12px;border-radius:10px;font-size:13px">${pw.error}</div>` : ''}
           <button class="btn text-sm" id="pw-save" disabled=${S.loading}>${S.loading?spinner():'Update password'}</button>
         </form>
+      </div>
+
+      <div class="card">
+        <h2 class="text-base font-bold text-gray-900 mb-1">Signed-in devices</h2>
+        <p class="text-sm text-gray-500 mb-4">If you are still signed in somewhere you no longer control — an old phone, a shared laptop — this ends every other session on your account. This browser stays signed in, so you do not have to find your password again.</p>
+        <button class="btn text-sm" id="profile-signout-others" onClick=${signOutOthers} disabled=${dv.busy || S.loading}>${dv.busy ? 'Signing the other devices out…' : 'Sign out of every other device'}</button>
+        ${dv.msg ? html`<div id="profile-devices-msg" role="status" style=${'margin-top:10px;padding:10px 12px;border-radius:10px;font-size:13px;' + (dv.ok ? 'background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46' : 'background:#fef2f2;border:1px solid #fecaca;color:#b91c1c')}>${dv.msg}</div>` : ''}
       </div>
 
       <div class="card flex gap-2">

@@ -450,6 +450,12 @@ mod tests {
         assert!(mounted("/api/v1/auth/password").is_some());
         assert!(mounted("/api/v1/auth/profile").is_some());
         assert!(mounted("/api/v1/auth/me").is_some());
+        // "Sign out of every other device" (cron 2026-11-01): mounted, and PRIVATE — the account
+        // comes from the caller's own token, so an anonymous caller must be refused at the
+        // boundary rather than reach the handler. Both directions, so neither assertion is vacuous.
+        assert!(mounted("/api/v1/auth/logout-all").is_some());
+        assert!(!is_public_route("/api/v1/auth/logout-all"));
+        assert!(!is_internal_route("/api/v1/auth/logout-all"));
     }
 
     #[test]

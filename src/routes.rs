@@ -70,6 +70,14 @@ pub fn create_router(state: AppState) -> Router {
         // The fleet contract's spelling of the same handler (card t_39cea779). Kept alongside
         // this app's original POST path so no existing caller breaks.
         .route("/password", put(auth::change_password))
+        // "Sign out of every other device" (cron 2026-11-01). The machinery behind it already
+        // existed — a password change bumps `users.sessions_valid_from` and the boundary refuses
+        // every session minted before it — but no route and no console control could bump that
+        // column on its own, so a customer whose old phone was still signed in had no way to end
+        // that session without changing the password they knew. This route moves the line and
+        // answers a fresh token for the device that pressed it. Private like its neighbours: the
+        // account comes from the caller's own token, so there is no id in the path to spoof.
+        .route("/logout-all", post(auth::logout_all))
         .route("/profile", put(auth::update_profile))
         // Ask to move the caller's OWN sign-in address. The row it writes is `email_changes`
         // (pending), never `users.email` — the address moves only when the NEW mailbox confirms.
