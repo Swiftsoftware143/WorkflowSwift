@@ -1527,12 +1527,35 @@ pub async fn admin_assign_plan(
 pub async fn admin_usage_dashboard(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
 ) -> ApiResult<impl IntoResponse> {
     require_admin(&claims)?;
+
+    // FLEET MACHINERY IS NOT A CUSTOMER — this screen counted it as one (measured live 2026-11-01).
+    //
+    // `/admin/accounts` has held probe rows back since 2026-10-21 (the `probe_harness` tag) and
+    // since 2026-10-31 (an owner on a reserved/harness address), and publishes `?include_probe=1`
+    // to show them. This dashboard — the operator's one view of "how many workspaces are out
+    // there" — applied neither arm: it answered **12 workspaces** where the Accounts screen showed
+    // **9**, the extra three being the two tenancy canaries (`probe-canary-a/b@swiftsoftware.dev`)
+    // and a `verify-fixture-…@swiftsoftware.dev` harness workspace. So the platform's headline
+    // customer count, the per-account table and the plan picker beside it all presented test
+    // machinery as paying customers, and the two screens disagreed about the same rows.
+    //
+    // Both arms are reused here rather than re-invented: the `probe_harness` tag predicate (with
+    // the `CNRY` canary fixtures deliberately kept visible, as the list does), and
+    // `owner_is_fleet_machinery` for the owner address. They are applied in Rust after ONE
+    // unfiltered read so `probe_hidden` can report how many rows were withheld — a total that is
+    // silently short is the same defect in a different coat.
+    let include_probe = params
+        .get("include_probe")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
 
     let rows = sqlx::query(
         r#"WITH resolved AS (
                SELECT a.id as aid, a.name as account_name, a.created_at,
+                      COALESCE(a.probe_harness, '') AS probe_harness,
                       COALESCE(
                           (SELECT ap.plan_id FROM account_plans ap
                             WHERE ap.aid = a.id AND ap.status = 'active'
@@ -1544,12 +1567,17 @@ pub async fn admin_usage_dashboard(
                       ) AS plan_id
                FROM accounts a
            )
-           SELECT r.aid, r.account_name, r.created_at,
+           SELECT r.aid, r.account_name, r.created_at, r.probe_harness,
             COALESCE(ct.balance, 0) as credits_balance,
             COALESCE(wf.run_count, 0) as workflows_run,
             CASE WHEN n8n.aid IS NOT NULL THEN true ELSE false END as n8n_provisioned,
             p.name as plan_name,
-            p.slug as plan_slug
+            p.slug as plan_slug,
+            (SELECT u.email FROM users u WHERE u.aid = r.aid
+             ORDER BY CASE WHEN u.role IN ('owner','company_admin','admin','super_admin')
+                           THEN 0 ELSE 1 END,
+                      u.created_at ASC
+             LIMIT 1) AS owner_email
            FROM resolved r
            LEFT JOIN (
                SELECT aid, SUM(amount) as balance
@@ -1569,9 +1597,29 @@ pub async fn admin_usage_dashboard(
     .await?;
 
     let mut result = Vec::new();
+    let mut hidden = 0usize;
     for row in &rows {
         let aid: Uuid = row.try_get("aid")?;
         let account_name: Option<String> = row.try_get("account_name").ok();
+        // The account's OWNER address — the same arm `/admin/accounts` judges, and the reason a
+        // row can be fleet machinery even though no harness ever tagged it (the two tenancy
+        // canaries are minted by a cron monitor, not by the tagged signup door).
+        let owner_email: Option<String> = row.try_get("owner_email").ok().flatten();
+        let probe_harness: String = row.try_get("probe_harness").unwrap_or_default();
+        let reserved_owner = owner_email
+            .as_deref()
+            .map(owner_is_fleet_machinery)
+            .unwrap_or(false);
+        // Two independent arms, the same pair the Accounts list applies: an owner on a reserved /
+        // harness address, or a `probe_harness` tag written by the tagged signup door. The `CNRY`
+        // tag is the tenancy-canary fixture, which the list deliberately KEEPS visible so it stays
+        // deletable by eye — match that, or the two screens disagree again.
+        let canary_fixture = probe_harness.to_ascii_uppercase().starts_with("CNRY");
+        let machinery = reserved_owner || (!probe_harness.is_empty() && !canary_fixture);
+        if machinery && !include_probe {
+            hidden += 1;
+            continue;
+        }
         let credits_balance: i64 = row.try_get("credits_balance").unwrap_or(0);
         let workflows_run: i64 = row.try_get("workflows_run").unwrap_or(0);
         let n8n_provisioned: bool = row.try_get("n8n_provisioned").unwrap_or(false);
@@ -1585,6 +1633,12 @@ pub async fn admin_usage_dashboard(
         result.push(json!({
             "aid": aid.to_string(),
             "account_name": account_name,
+            "owner_email": owner_email,
+            "probe_harness": probe_harness,
+            // true => this row is fleet machinery (a harness-minted workspace or an owner on a
+            // reserved address). Only reachable with `?include_probe=1`, the same field the
+            // Accounts list publishes, so the console can badge it instead of counting it.
+            "reserved_owner": reserved_owner,
             "credits_balance": credits_balance,
             "workflows_run": workflows_run,
             "n8n_provisioned": n8n_provisioned,
@@ -1594,7 +1648,13 @@ pub async fn admin_usage_dashboard(
         }));
     }
 
-    Ok(Json(json!({"accounts": result, "total": result.len()})))
+    // `total` counts what the caller was SHOWN; `probe_hidden` says how many rows the default
+    // answer held back, so the number on the screen is never silently short.
+    Ok(Json(json!({
+        "accounts": result,
+        "total": result.len(),
+        "probe_hidden": hidden,
+    })))
 }
 
 // ── Admin Account Creation ──
