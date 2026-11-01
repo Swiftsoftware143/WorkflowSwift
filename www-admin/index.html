@@ -2148,12 +2148,20 @@ function renderList(c,key,label,ep){
 // with the raw answer kept behind a disclosure for support. Each row also carries the workspace's
 // PLAN TIER, read from the same field /admin/accounts reports (the tier the gates enforce), so an
 // operator can see who is on what without switching screens.
+// The probe-visibility switch's state lives OUTSIDE the render (same reason as
+// ACC_SHOW_PROBES on the Accounts pane): a flag inside renderAdminUsage would be
+// reset to false by its own change handler.
+let USAGE_SHOW_PROBES=false;
 function renderAdminUsage(c){
-  c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-1"><h2 class="text-xl font-bold">Platform Usage</h2><span class="text-xs text-gray-400" id="utot"></span></div>'
-   +'<p class="text-xs text-gray-400 mb-4">One row per workspace: the plan it is on, its credit balance, how many workflow runs it has made, and whether its automation backend is provisioned. Totals for the platform sit above the table.</p>'
+  c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-1"><h2 class="text-xl font-bold">Platform Usage</h2>'
+   +'<div class="flex items-center gap-2"><label class="flex items-center gap-1 text-xs text-gray-600" title="Probe workspaces (harness-minted, or owned by an address on a reserved test domain) are not customers. Hidden by default, exactly as on the Accounts screen; tick this to include them in the table and the totals."><input type="checkbox" id="usageShowProbes" data-usage="show-probes"'+ (USAGE_SHOW_PROBES?' checked':'') +'> show probe workspaces</label>'
+   +'<span class="text-xs text-gray-400" id="utot"></span></div></div>'
+   +'<p class="text-xs text-gray-400 mb-4">One row per workspace: the plan it is on, its credit balance, how many workflow runs it has made, and whether its automation backend is provisioned. Totals for the platform sit above the table. Test machinery this app runs itself (the tenancy canaries and any harness workspace) is counted as a customer only while the switch above is ticked.</p>'
    +'<div id="udata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
   const fail=()=>{const h=c.querySelector('#udata');if(h)h.innerHTML='<p class="text-red-400">Not available.</p>'};
-  Promise.all([api('/admin/usage'),api('/admin/plans')]).then(res=>{
+  const spBox=c.querySelector('#usageShowProbes');
+  if(spBox) spBox.addEventListener('change',()=>{ USAGE_SHOW_PROBES=!!spBox.checked; renderAdminUsage(c); });
+  Promise.all([api('/admin/usage'+(USAGE_SHOW_PROBES?'?include_probe=1':'')),api('/admin/plans')]).then(res=>{
     const d=res[0];
     const PD=res[1];
     const PLANS=((PD&&(PD.plans||PD.items))||[]).filter(p=>p&&p.is_active!==false&&p.slug);
@@ -2186,7 +2194,8 @@ function renderAdminUsage(c){
     html+='<div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="text-left text-xs uppercase text-gray-400 border-b">'
       +'<th class="py-2">Workspace</th><th class="py-2">Plan</th><th class="py-2">Credits</th><th class="py-2">Workflow runs</th><th class="py-2">Automation</th><th class="py-2">Created</th></tr></thead><tbody>';
     rows.forEach(r=>{
-      html+='<tr class="border-b last:border-0"><td class="py-2 font-medium">'+esc(r.account_name||'(untitled workspace)')+'</td>'
+      const probeBadge=r.reserved_owner||r.probe_harness?' <span class="badge badge-yellow" title="Fleet machinery, not a customer: a harness-minted workspace or an owner on a reserved test domain. Hidden unless the switch above is ticked.">probe</span>':'';
+      html+='<tr class="border-b last:border-0"><td class="py-2 font-medium">'+esc(r.account_name||'(untitled workspace)')+probeBadge+'</td>'
         +'<td class="py-2">'+planPicker(r)+'</td>'
         +'<td class="py-2">'+Number(r.credits_balance||0).toLocaleString()+'</td>'
         +'<td class="py-2">'+Number(r.workflows_run||0).toLocaleString()+'</td>'
@@ -2207,7 +2216,7 @@ function renderAdminUsage(c){
         renderAdminUsage(c);
       };
     });
-    const tot=c.querySelector('#utot');if(tot)tot.textContent=rows.length+' workspaces';
+    const tot=c.querySelector('#utot');if(tot)tot.textContent=rows.length+' workspaces'+(Number(d.probe_hidden||0)>0?' (+'+d.probe_hidden+' probe hidden)':'');
   }).catch(fail);
 }
 
@@ -2977,7 +2986,7 @@ window.appGuidePages = {
   "profile:payments": { title: "Payment Providers", desc: "The payment accounts this install can take money through at checkout, and whether each is in test or live mode. A platform administrator manages them here.", actions: ["Add a payment provider", "Switch a provider between test and live", "Remove a provider from checkout"] },
   "profile:checkout-sessions": { title: "Checkout Sessions", desc: "Every payment session this account has started. A read-only history of what was attempted.", actions: ["Match a session to a plan change"] },
   "comms:webhooks": { title: "Webhooks", desc: "Outgoing notifications: when something happens here, we POST it to a URL you control.", actions: ["Add a webhook URL", "Choose the events it receives", "Review recent deliveries"] },
-  "admin:usage": { title: "Platform Usage", desc: "One row per workspace: the plan tier the gates enforce, its credit balance, how many workflow runs it has made and whether its automation backend is provisioned, with platform totals above the table.", actions: ["Read each workspace's plan and usage", "Open the raw API answer for support"] },
+  "admin:usage": { title: "Platform Usage", desc: "One row per workspace: the plan tier the gates enforce, its credit balance, how many workflow runs it has made and whether its automation backend is provisioned, with platform totals above the table. Test machinery this app runs itself — the tenancy canaries and any workspace a probe harness minted — is not counted as a customer: those rows are held back from the table and from the totals, the header says how many were withheld, and the show probe workspaces switch brings them back marked probe so you can still see them.", actions: ["Read each workspace's plan and usage", "Tick show probe workspaces to see the test accounts that are normally held back", "Open the raw API answer for support"] },
   "admin:settings": { title: "Settings", desc: "This app's own configuration for your account, including the mail server and the other integration slots.", actions: ["Set the mail server credentials", "Check whether email is configured"] },
   "admin:users": { title: "Users (Tenants)", desc: "Every account (tenant) on this install and the plan it is on. There is no user directory here — this panel lists accounts; deleting one is done from the Accounts panel.", actions: ["Move an account to a different plan"] },
   "admin:accounts": { title: "Accounts", desc: "Every account (workspace) on this install. Select rows to delete the ones you no longer want.", actions: ["Search for an account", "Delete the selected accounts"] },

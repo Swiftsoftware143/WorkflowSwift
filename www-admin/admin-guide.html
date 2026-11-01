@@ -447,7 +447,7 @@ to charge anyone: it only decides <em>where the buyer is sent</em>.</p>
       <tr>
       <td><code>/api/v1/admin/usage</code></td>
       <td>GET</td>
-      <td>Usage dashboard — per workspace: the plan tier the gates enforce, its credits, workflow runs and whether its automation backend is provisioned, with platform totals</td>
+      <td>Usage dashboard — per workspace: the plan tier the gates enforce, its credits, workflow runs and whether its automation backend is provisioned, with platform totals. Test machinery the app runs itself (the tenancy canaries and any harness-minted workspace) is <b>not</b> counted as a customer: those rows are held back from the table and the totals, exactly as on the Accounts screen, and <code>?include_probe=1</code> shows them with <code>reserved_owner: true</code> (the answer also reports <code>probe_hidden</code>, how many rows were withheld). The console's own <b>show probe workspaces</b> switch sets that flag.</td>
       </tr>
       <tr>
       <td><code>/api/v1/admin/impersonate</code> / <code>stop-impersonation</code></td>
