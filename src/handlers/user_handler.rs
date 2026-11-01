@@ -221,29 +221,47 @@ pub async fn invite_user(
         .await?
         .unwrap_or_else(|| "Your Team".to_string());
 
-    // Send invite email
-    let result = email::send_email(
-        &state,
-        Some(aid),
-        &email,
-        "team_invite",
-        &json!({
-            "name": name,
-            "email": email,
-            "password": temp_password,
-            "account_name": account_name,
-            "app_url": "https://app.workflowswift.com",
-        }),
-    )
-    .await;
-
-    match result {
-        Ok(_) => tracing::info!("Team invite email sent to {}", email),
-        Err(ref e) => {
-            tracing::error!("Failed to send team invite email to {}: {}", email, e);
-            // Still return success — the user was created
+    // A RESERVED / HARNESS address is WITHHELD at the sender (`email::send_email` answers Ok
+    // without queueing anything), so testing `result.is_ok()` told the inviter "an invite email
+    // was sent" for a message that never existed. Measured live 2026-11-01 on a probe invite to
+    // `probe-ca-member-…@example.invalid`: the API answered `email_sent: true` while
+    // `email_send_log` recorded `withheld`. Same rule the email-change confirmation already
+    // follows (auth::handlers) and the same fix MissedCall shipped on 2026-10-30 (86212c9):
+    // name the NON-SEND instead of claiming a send, so the console can show the temporary
+    // password the inviter has to pass on themselves.
+    let withheld_domain = crate::security::probe_addr::harness_domain(&email);
+    let email_sent = if let Some(domain) = withheld_domain {
+        // Record the non-send here instead of calling send_email, so the delivery history keeps
+        // ONE row for this message rather than two.
+        email::record_withheld_send(&state, &email, "team_invite", domain).await;
+        false
+    } else {
+        match email::send_email(
+            &state,
+            Some(aid),
+            &email,
+            "team_invite",
+            &json!({
+                "name": name,
+                "email": email,
+                "password": temp_password,
+                "account_name": account_name,
+                "app_url": "https://app.workflowswift.com",
+            }),
+        )
+        .await
+        {
+            Ok(_) => {
+                tracing::info!("Team invite email sent to {}", email);
+                true
+            }
+            Err(ref e) => {
+                tracing::error!("Failed to send team invite email to {}: {}", email, e);
+                // Still return success — the user was created
+                false
+            }
         }
-    }
+    };
 
     Ok((
         StatusCode::CREATED,
@@ -257,7 +275,7 @@ pub async fn invite_user(
                 "permissions": permissions,
             },
             "temporary_password": temp_password,
-            "email_sent": result.as_ref().ok().is_some(),
+            "email_sent": email_sent,
         })),
     ))
 }
