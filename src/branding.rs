@@ -171,6 +171,36 @@ impl Branding {
     }
 }
 
+/// Put a branding header INSIDE a rendered HTML document instead of in front of it.
+///
+/// The welcome and invite mails are WHOLE documents that open with `<!DOCTYPE html>`. Prefixing the
+/// header put it before the doctype, i.e. outside `<html>` and `<body>`: a doctype that arrives
+/// after content is discarded (the message renders in quirks mode) and a client that rebuilds the
+/// body may drop what sits outside it — how an account's own logo disappears from its own mail.
+///
+/// Placement: immediately after `<body …>` when the render is a whole document, else after
+/// `<html …>`, else after `</head>`, else in front (the text-only fallback is a bare fragment, where
+/// "in front" is the only meaningful position). An empty header is a no-op, so an unbranded send
+/// stays byte-identical.
+pub fn place_header(html: &str, header: &str) -> String {
+    if header.is_empty() {
+        return html.to_string();
+    }
+    // `to_ascii_lowercase` never changes a byte COUNT, so an index into `lower` is the same index
+    // into `html` — which is what makes the slicing below safe for non-ASCII message bodies.
+    let lower = html.to_ascii_lowercase();
+    let end_of = |open: usize| html[open..].find('>').map(|j| open + j + 1);
+    for tag in ["<body", "<html"] {
+        if let Some(at) = lower.find(tag).and_then(end_of) {
+            return format!("{}{}{}", &html[..at], header, &html[at..]);
+        }
+    }
+    if let Some(at) = lower.find("</head>").map(|i| i + "</head>".len()) {
+        return format!("{}{}{}", &html[..at], header, &html[at..]);
+    }
+    format!("{header}{html}")
+}
+
 /// Load this account's branding. `None` on no row, an unreadable row, or nothing configured.
 ///
 /// A read failure is NOT fatal to a send: an email that cannot read its branding still goes out with
@@ -425,5 +455,43 @@ mod tests {
         let long = "A".repeat(200);
         let got = Branding::from_value(&json!({"brand_name": long})).unwrap();
         assert_eq!(got.brand_name.chars().count(), MAX_BRAND_NAME);
+    }
+
+    #[test]
+    fn the_header_lands_inside_the_document_not_before_the_doctype() {
+        let header = "<div style=\"text-align:center\">LOGO</div>";
+        let doc = "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"></head>\n\
+                   <body style=\"background:#f4f4f4;\"><p>Hi</p></body></html>";
+        let got = place_header(doc, header);
+        assert!(
+            got.starts_with("<!DOCTYPE html>"),
+            "doctype must stay first: {got}"
+        );
+        assert_eq!(got.matches("<!DOCTYPE").count(), 1);
+        let body_at = got.find("<body").unwrap();
+        let head_at = got.find(header).unwrap();
+        assert!(
+            head_at > body_at,
+            "header must be inside <body>, got: {got}"
+        );
+        assert!(got.find("</body>").unwrap() > head_at);
+        assert!(
+            got.contains("<p>Hi</p>"),
+            "the message body must survive: {got}"
+        );
+    }
+
+    #[test]
+    fn a_fragment_gets_the_header_in_front_and_an_empty_header_changes_nothing() {
+        let header = "<div>LOGO</div>";
+        let fragment = "<div style=\"white-space:pre-wrap\">plain text</div>";
+        assert_eq!(
+            place_header(fragment, header),
+            format!("{header}{fragment}")
+        );
+        assert_eq!(place_header(fragment, ""), fragment);
+        let headful = "<head><title>x</title></head><p>y</p>";
+        let got = place_header(headful, header);
+        assert!(got.find("</head>").unwrap() < got.find(header).unwrap());
     }
 }

@@ -81,7 +81,9 @@ fn apply_branding(branding: Option<&Branding>, text: String, html: String) -> (S
     let text_out = format!("{}{}", b.text_header(), text);
     let header = b.header_html(b.resolve_logo_url(branding::APP_URL).as_deref());
     let html_out = if !html.is_empty() {
-        format!("{header}{html}")
+        // Inside the document, never in front of it: the welcome/invite mails are whole documents,
+        // and a header before `<!DOCTYPE html>` sits outside `<body>` (see `branding::place_header`).
+        crate::branding::place_header(&html, &header)
     } else {
         format!(
             "{header}<div style=\"white-space:pre-wrap;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111827\">{}</div>",
