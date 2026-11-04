@@ -954,7 +954,15 @@ const WorkflowsView = () => {
 // show under every surface, so a filtered list is a superset by design.
 const loadWorkflows = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.workflows = (await API.get('/workflows' + (S.wfSurface ? '?surface=' + encodeURIComponent(S.wfSurface) : ''))).workflows || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
 const setWfSurface = (v) => { S.wfSurface = v; S.workflows = null; loadWorkflows(); };
-const runWf = async (id) => { try { const r = await API.post('/workflows/'+id+'/run'); const n = (r.steps_total||0); const warn = (r.warnings||[])[0]; const st = r.status || 'completed'; const pend = r.pending_steps || 0; toast(`Workflow ${st}: ${n} step(s)${pend ? `, ${pend} still pending` : ''}${warn ? ' — ' + warn : ''}`, (st !== 'completed' || warn) ? 'err' : undefined); S.instances=null; } catch(e){ toast(e.message,'err'); } };
+// ── A CREDIT REFUSAL MUST END SOMEWHERE THE CUSTOMER CAN ACT (cron 2026-11-04) ────────────────
+// The run gate answers 400 with its own sentence when the workspace cannot pay for a run. Before
+// this, pressing Run on a zero-credit workspace showed that sentence in a 3-second toast and left
+// the screen otherwise unchanged — the refusal named the price (the server now does) but offered no
+// door. The Credits screen is where a pack is REQUESTED (nothing is charged in the app), so a
+// credit refusal lands there with the server's sentence still on screen.
+const isCreditRefusal = (e) => !!e && (e.status === 402 || /credit/i.test(String(e.message || '')));
+const landOnCredits = (msg) => { setView('credits'); toast(msg || 'Request a credit pack below — nothing is charged in the app.', 'err'); };
+const runWf = async (id) => { try { const r = await API.post('/workflows/'+id+'/run', {}); const n = (r.steps_total||0); const warn = (r.warnings||[])[0]; const st = r.status || 'completed'; const pend = r.pending_steps || 0; toast(`Workflow ${st}: ${n} step(s)${pend ? `, ${pend} still pending` : ''}${warn ? ' — ' + warn : ''}`, (st !== 'completed' || warn) ? 'err' : undefined); S.instances=null; } catch(e){ toast(e.message,'err'); if (isCreditRefusal(e)) landOnCredits(e.message); } };
 const delWf = async (id) => { if(!confirm('Delete this workflow?'))return; try { await API.del('/workflows/'+id); toast('Workflow deleted'); S.workflows=null; loadWorkflows(); } catch(e){ toast(e.message,'err'); } };
 
 // ===== Templates =====
@@ -1155,7 +1163,7 @@ const AutomationsView = () => {
     </div>`;
 };
 const loadAutomations = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.automations = (await API.get('/automations')).automations || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
-const runAuto = async (id) => { try { await API.post('/automations/'+id+'/run'); toast('Automation triggered'); } catch(e){ toast(e.message,'err'); } };
+const runAuto = async (id) => { try { await API.post('/automations/'+id+'/run', {}); toast('Automation triggered'); } catch(e){ toast(e.message,'err'); } };
 
 
 // ===== Prospecting (search + results only; no list endpoint) =====

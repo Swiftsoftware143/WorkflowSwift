@@ -327,9 +327,25 @@ async fn run_in_process(
     .unwrap_or(0);
 
     if balance < 1 {
-        return Err(AppError::BadRequest(
-            "Insufficient credits. Purchase more credits to run workflows.".to_string(),
-        ));
+        // ★ A REFUSAL MUST NOT INSTRUCT THE CUSTOMER TO DO SOMETHING THAT DOES NOT EXIST
+        // (cron 2026-11-04). This sentence used to read "Insufficient credits. Purchase more
+        // credits to run workflows." There is NO self-serve purchase in this app: `POST
+        // /credits/package` is super-admin-only, and the Credits screen says in its own words
+        // "Nothing is charged on this screen: a request goes to our team, who add the credits to
+        // this workspace by hand". So the one instruction the customer was given was impossible,
+        // and it named no number. Measured in Chromium on app.workflowswift.com before this change:
+        // pressing Run on a zero-credit workspace produced a 3-second toast reading "Purchase more
+        // credits to run workflows." and left the screen otherwise unchanged — no door to the
+        // screen that owns the request.
+        //
+        // It now states the price of the press, the balance, and the ONE door that works, in the
+        // Credits screen's own vocabulary. The console pairs this with a jump to Credits
+        // (`runWf`'s catch arm in www-app/index.html), so the press always ends somewhere.
+        return Err(AppError::BadRequest(format!(
+            "This run costs 1 credit and the workspace has {balance}. Open Credits to request a \
+             credit pack — nothing is charged in the app; our team adds the credits to this \
+             workspace by hand and replies to your request."
+        )));
     }
 
     let name = req

@@ -395,9 +395,13 @@ pub async fn deduct_credit(
     .unwrap_or(0);
 
     if balance < amount {
+        // Same truth as the run gate in `workflow_handler::run_in_process` (cron 2026-11-04): there
+        // is no self-serve purchase in this app, so a refusal may not tell the caller to buy. Name
+        // the numbers and the door that actually exists.
         return Err(AppError::BadRequest(format!(
-            "Insufficient credits. Need {}, have {}. Purchase more credits.",
-            amount, balance
+            "This needs {amount} credits and the workspace has {balance}. Open Credits to request \
+             a credit pack — nothing is charged in the app; our team adds the credits to this \
+             workspace by hand and replies to your request."
         )));
     }
 

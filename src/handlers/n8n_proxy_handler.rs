@@ -164,9 +164,14 @@ async fn fire_n8n_webhook(
     .unwrap_or(0);
 
     if balance < 1 {
-        return Err(AppError::BadRequest(
-            "Insufficient credits. Please purchase more credits.".to_string(),
-        ));
+        // Same customer-facing truth as the in-process run gate (cron 2026-11-04): this app has no
+        // self-serve purchase, so the refusal names the price, the balance and the ONE door that
+        // works — the pack request on the Credits screen.
+        return Err(AppError::BadRequest(format!(
+            "This run costs 1 credit and the workspace has {balance}. Open Credits to request a \
+             credit pack — nothing is charged in the app; our team adds the credits to this \
+             workspace by hand and replies to your request."
+        )));
     }
 
     // Call n8n webhook on configured n8n instance
