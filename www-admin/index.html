@@ -1816,6 +1816,35 @@ function renderProfile(c){
     };
     right.appendChild(pwBtn);
 
+    // ── signed-in devices (2026-11-04) ──
+    // POST /api/v1/auth/logout-all has been mounted since 2026-11-01 and the customer console
+    // presses it, but this operator console had no control: an operator who believed their
+    // password had leaked could change the password yet could not end a session sitting on a
+    // device they no longer hold. The route moves the account's session line and mints a FRESH
+    // token for THIS tab (the caller's old token dies with the others), so the new token has to
+    // be adopted or the operator is silently signed out of the screen in front of them. A 200
+    // with no token is reported as a failure rather than as a sign-out that never happened.
+    // Hidden while impersonating: the session in hand there is the TENANT's, and ending a
+    // customer's devices is not this operator's click to make from a support session.
+    if(!IMPERSONATION){
+      right.appendChild(h('label',{className:'text-xs text-gray-500 mt-4'},'Signed-in devices'));
+      right.appendChild(h('p',{className:'text-xs text-gray-400 mb-2'},'Signed in somewhere you no longer control \u2014 an old phone, a shared laptop? This ends every other session on the account. This screen stays signed in.'));
+      const soBtn=h('button',{className:'btn'},'Sign out every other device');
+      soBtn.onclick=async()=>{
+        if(!window.confirm('Sign out every other device signed into this account? This screen stays signed in.'))return;
+        soBtn.disabled=true;soBtn.textContent='Signing out...';
+        const r=await api('/auth/logout-all',{method:'POST',body:'{}'});
+        soBtn.disabled=false;soBtn.textContent='Sign out every other device';
+        if(r&&r.token){
+          TOKEN=r.token;
+          try{localStorage.setItem('ws_token',TOKEN)}catch(e){}
+          showMsg(r.message||'Every other device has been signed out. This one stays signed in.','success');
+        }else{
+          showMsg('Could not sign the other devices out'+(LAST_ERR?': '+LAST_ERR:''),'error');
+        }
+      };
+      right.appendChild(soBtn);
+    }
     // ── sign-in address (cron 2026-10-20) ──
     // The change pair (POST /api/v1/auth/email-change + its public /confirm twin) shipped with no
     // console surface in this app: the Email line above is read-only, so an operator with a new
