@@ -200,7 +200,17 @@ async fn main() {
         //
         // It refuses only a caller that presents no credential at all; tenancy, roles and row scope
         // stay exactly where they were, in `auth::middleware::auth_middleware` and the handlers.
-        .layer(axum::middleware::from_fn_with_state(
+        // MOUNTED WITH `route_layer`, NOT `layer` (cron 2026-11-05). `Router::layer` wraps the
+        // FALLBACK as well as the routes, so every path that matched no route answered
+        // `401 {"error":"Authentication required"}` — measured live: `GET /api/v1/does-not-exist-xyz`
+        // -> 401 here, while IncentiveSwift / ADASwift / MissedCall answer 404 for the same request.
+        // A mistyped deep link or a stale console call therefore looked like an EXPIRED SESSION (the
+        // console treats a 401 as "sign in again"), and an anonymous route census reads a
+        // non-existent path as "present but gated". `route_layer` runs the SAME boundary on exactly
+        // the mounted routes — a guarded request still answers 401 before any handler — while an
+        // unmounted path falls through to axum's own 404. Same shape as
+        // `missedcallrespondr/src/auth/boundary.rs`'s `require_credential`.
+        .route_layer(axum::middleware::from_fn_with_state(
             state.clone(),
             crate::auth::boundary::require_credential,
         ))
