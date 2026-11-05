@@ -1090,6 +1090,18 @@ pub async fn admin_list_accounts(
                                  THEN 0 ELSE 1 END,
                             u.created_at ASC
                    LIMIT 1) AS owner_email,
+                  -- DID THIS WORKSPACE'S OWNER EVER RECEIVE THE PASSWORD WE MINTED? (2026-11-05)
+                  -- `users.password_undelivered` is set by the signup door when it mints a first
+                  -- password and the mail carrying it never leaves. The app has always known that,
+                  -- per user; this list never published it, so the operator could only learn it
+                  -- from an Email Log refusal or from the customer saying they cannot sign in.
+                  -- The SAME owner ordering as `owner_email` above, so the badge and the address
+                  -- describe one person. NULL/absent user => false (nothing to deliver).
+                  COALESCE((SELECT u.password_undelivered FROM users u WHERE u.aid = r.id
+                   ORDER BY CASE WHEN u.role IN ('owner','company_admin','admin','super_admin')
+                                 THEN 0 ELSE 1 END,
+                            u.created_at ASC
+                   LIMIT 1), false) AS owner_credentials_undelivered,
                   (SELECT MAX(lu.last_login_at) FROM users lu WHERE lu.aid = r.id) AS last_sign_in
            FROM resolved r
            LEFT JOIN plan_tiers p ON p.id = r.plan_id
@@ -1164,6 +1176,15 @@ pub async fn admin_list_accounts(
             "name": name,
             "email": email,
             "owner_email": email,
+            // TRUE => the signup door minted this workspace owner's first password and the
+            // mail carrying it never went out, so nobody has ever read it and they cannot sign
+            // in. Read from the row above; a missing column reads as FALSE so an older query
+            // can never badge a healthy customer.
+            "owner_credentials_undelivered": row
+                .try_get::<Option<bool>, _>("owner_credentials_undelivered")
+                .ok()
+                .flatten()
+                .unwrap_or(false),
             "slug": slug,
             "is_active": is_active,
             "probe_harness": probe_harness,
@@ -1186,6 +1207,103 @@ pub async fn admin_list_accounts(
     }
 
     Ok(Json(json!({"accounts": result})))
+}
+
+/// POST /api/v1/admin/accounts/:id/resend-credentials
+///
+/// THE OPERATOR'S REMEDY FOR "I never got the email and I can't sign in" (2026-11-05).
+///
+/// `users.password_undelivered` records that state, and `admin_list_accounts` now publishes it on
+/// the row (`owner_credentials_undelivered`) so the console can badge it. This is the action behind
+/// the badge: without it the operator could see a stuck customer and still had no way to help —
+/// the only other door that clears the latch is the CUSTOMER's own one-shot `initial-password`
+/// choice, which needs the session the signup returned.
+///
+/// It mints a new password with the app's own generator, hashes it off the reactor through the
+/// same Argon2 semaphore every password door uses, clears the latch, ends the account's existing
+/// sessions and mails it through the SAME `welcome` template the signup door uses. The password is
+/// returned in `handover_password` ONLY when nothing left (reserved address, or the send failed),
+/// because otherwise the operator would have nothing to hand the customer. It is never logged.
+pub async fn admin_resend_credentials(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<impl IntoResponse> {
+    require_admin(&claims)?;
+
+    // The SAME owner ordering the list publishes, so the badge and the action describe one person.
+    let row = sqlx::query(
+        r#"SELECT u.id, u.email, COALESCE(NULLIF(u.name, ''), u.email) AS name
+             FROM users u
+            WHERE u.aid = $1
+            ORDER BY CASE WHEN u.role IN ('owner','company_admin','admin','super_admin')
+                          THEN 0 ELSE 1 END,
+                     u.created_at ASC
+            LIMIT 1"#,
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| {
+        AppError::NotFound("This workspace has no user to send a password to".to_string())
+    })?;
+
+    let user_id: Uuid = row.try_get("id")?;
+    let email: String = row.try_get("email").unwrap_or_default();
+    let name: String = row.try_get("name").unwrap_or_else(|_| email.clone());
+
+    let password = crate::auth::signup::generate_temp_password();
+    let password_hash = crate::auth::api_key_auth::argon2_hash(password.clone()).await?;
+
+    sqlx::query(
+        "UPDATE users SET password_hash = $1, password_undelivered = false, \
+                sessions_valid_from = NOW(), updated_at = NOW() \
+           WHERE id = $2",
+    )
+    .bind(&password_hash)
+    .bind(user_id)
+    .execute(&state.db)
+    .await?;
+
+    // A reserved/harness address is WITHHELD at the sender (it answers Ok without queueing
+    // anything), so it counts as NOT delivered — otherwise the console would tell the operator to
+    // wait for a mail that was deliberately never sent. Same predicate `auth::register` applies.
+    let withheld = crate::security::probe_addr::harness_domain(&email).is_some();
+    let mut emailed = false;
+    if !withheld {
+        let app_url = "https://app.workflowswift.com";
+        let vars = json!({
+            "name": name,
+            "email": email,
+            "password": password,
+            "app_url": app_url,
+            "url": app_url,
+        });
+        match crate::email::send_email(&state, Some(id), &email, "welcome", &vars).await {
+            Ok(()) => emailed = true,
+            Err(e) => tracing::error!(
+                account = %id,
+                user = %user_id,
+                "operator re-issued a password but the mail failed: {e}"
+            ),
+        }
+    }
+
+    tracing::info!(
+        account = %id,
+        user = %user_id,
+        emailed,
+        withheld,
+        "operator re-issued a workspace owner's password"
+    );
+
+    Ok(Json(json!({
+        "id": user_id.to_string(),
+        "email": email,
+        "credentials_emailed": emailed,
+        "withheld": withheld,
+        "handover_password": if emailed { serde_json::Value::Null } else { json!(password) },
+    })))
 }
 
 /// DELETE /api/v1/admin/accounts/:id — permanently delete account + all data

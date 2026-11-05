@@ -799,6 +799,15 @@ pub fn create_router(state: AppState) -> Router {
             "/accounts/create",
             post(handlers::admin_settings_handler::admin_create_account),
         )
+        // The operator's remedy for "I never got the email and I can't sign in" (2026-11-05).
+        // `users.password_undelivered` marks that state and `/accounts` publishes it on the row
+        // (`owner_credentials_undelivered`); this mints a new password, mails it and clears the
+        // latch. POST, not PUT: the call mints a NEW credential, so a retry is a new password
+        // rather than an idempotent write.
+        .route(
+            "/accounts/{id}/resend-credentials",
+            post(handlers::admin_settings_handler::admin_resend_credentials),
+        )
         .route(
             "/accounts/{id}/retention",
             put(handlers::admin_settings_handler::admin_set_account_retention),
