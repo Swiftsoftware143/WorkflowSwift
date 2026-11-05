@@ -49,8 +49,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:linear-g
 </div>
 
 <div class="pane" id="paneRegister">
-  <input id="rn" name="name" type="text" maxlength="243" placeholder="Full name" autocomplete="name" aria-label="Full name">
-  <input id="re" name="email" type="email" placeholder="you@company.com" autocomplete="email" aria-label="Email">
+  <input id="rn" name="name" type="text" maxlength="243" placeholder="Full name" autocomplete="name" aria-label="Full name" onkeydown="if(event.key==='Enter'&&!document.getElementById('rb').disabled){event.preventDefault();R();}">
+  <input id="re" name="email" type="email" placeholder="you@company.com" autocomplete="email" aria-label="Email" onkeydown="if(event.key==='Enter'&&!document.getElementById('rb').disabled){event.preventDefault();R();}">
   <p class="note">No password to choose &mdash; we'll email your login details so you can confirm your address by signing in.</p>
   <!-- The tier the visitor clicked on /pricing (cron 2026-10-21). Hidden unless ?plan= names one. -->
   <div id="rplan" class="note" style="display:none;background:#eef2ff;border:1px solid #c7d2fe;color:#3730a3;border-radius:8px;padding:9px 11px;text-align:left"></div>
@@ -182,6 +182,7 @@ function showInitialPassword(reg){
   var inp=document.createElement('input');
   inp.id='initPw';inp.type='password';inp.autocomplete='new-password';
   inp.setAttribute('aria-label','Choose your password');
+  inp.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();btn.click();}});
   var btn=document.createElement('button');
   btn.type='button';btn.id='initPwBtn';btn.textContent='Save my password';
   var msg=document.createElement('div');
