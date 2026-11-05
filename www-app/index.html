@@ -1443,6 +1443,7 @@ const CreditsView = () => {
     <div>
       <header class="flex items-start justify-between mb-5"><div><h1 class="text-xl font-extrabold text-gray-900">Credits</h1><p class="text-sm text-gray-500 mt-1">Your credit balance and usage</p></div><button class="btn-outline text-sm" onClick=${loadCredits} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button></header>
       <div class="card flex items-center gap-4" style="margin-bottom:16px"><div class="text-4xl">💰</div><div><div class="text-3xl font-bold text-gray-900">${fmtAmt(bal)}</div><div class="text-xs text-gray-500 mt-0.5">Available credits</div></div></div>
+      ${bal === 0 || bal === '0' ? html`<div class="card" style="margin-bottom:16px;border-left:4px solid #f59e0b"><h3 class="font-semibold text-gray-800 mb-1">This workspace has 0 credits</h3><p class="text-sm text-gray-600">Workflows will not run until credits are added: every run is deducted from this balance, and a run with 0 credits is refused. Request a pack below — nothing is charged in the app, and our team adds the credits by hand.</p></div>` : ''}
       ${S.planCaps ? html`<div class="card" style="margin-bottom:16px">
         <h3 class="font-semibold text-gray-800 mb-2">${S.planCaps.plan_assigned === false ? ('Running on ' + (S.planCaps.plan_name || S.planCaps.plan_slug || 'Free') + ' limits — no plan chosen yet') : ('Your plan — ' + (S.planCaps.plan_name || S.planCaps.plan_slug || '—'))}</h3>
         <p class="text-sm text-gray-600">${Number(S.planCaps.max_industries) < 0 ? ('Industries: ' + fmtAmt(S.planCaps.current_industries) + ' used — Unlimited on this plan') : ('Industries: ' + fmtAmt(S.planCaps.current_industries) + ' of ' + fmtAmt(S.planCaps.max_industries) + ' used' + (S.planCaps.industries_remaining != null ? (' — ' + fmtAmt(S.planCaps.industries_remaining) + ' left') : ''))}</p>
@@ -2076,6 +2077,12 @@ const PermsModal = () => {
 // uploaded as RAW bytes; `pendingAvatar` is a module local (not reactive) so choosing a file does
 // not re-render the form under the operator's keystrokes.
 let pendingAvatar = null;
+// The size the SERVER refuses (`image_store::MAX_IMAGE_BYTES` = the 2 MB upload envelope
+// minus its 64 KB multipart headroom). Checked here too, so a phone photo over the cap is
+// refused in the picker instead of being uploaded in full and then answered 413 — the shared
+// backend module states that both consoles refuse the SAME set of files, and this one did not.
+const PICTURE_MAX_BYTES = 2031616;
+const PICTURE_TOO_BIG = 'That file is too large to upload. The maximum size is 2 MB - please choose a smaller image and try again.';
 
 // What a RECIPIENT sees — mirrors Branding::header_html (src/branding.rs): a centred logo
 // (max 56px high / 240px wide, alt = the display name); otherwise the display name in 20px bold
@@ -2144,6 +2151,7 @@ const ProfileView = () => {
   };
   const uploadBrandLogo = async () => {
     if (!bd.chosen) return toast('Choose a logo first','err');
+    if (bd.chosen.size > PICTURE_MAX_BYTES) return toast(PICTURE_TOO_BIG,'err');
     bd.uploading = true; renderApp();
     try {
       const v = await API.uploadBrandingLogo(bd.chosen);
@@ -2222,6 +2230,7 @@ const ProfileView = () => {
 
   const uploadPicture = async () => {
     if (!pendingAvatar) return toast('Choose a picture first','err');
+    if (pendingAvatar.size > PICTURE_MAX_BYTES) return toast(PICTURE_TOO_BIG,'err');
     av.uploading = true; renderApp();
     try {
       await API.uploadAvatar(pendingAvatar);
@@ -2325,7 +2334,7 @@ const ProfileView = () => {
           <${Avatar} u=${u} size=${72} stamp=${av.stamp} id="profile-picture-preview" />
           <div>
             <input id="profile-picture-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp"
-              onChange=${e=>{ pendingAvatar = (e.target.files && e.target.files[0]) || null; av.chosen = pendingAvatar ? pendingAvatar.name : ''; renderApp(); }} />
+              onChange=${e=>{ const f = (e.target.files && e.target.files[0]) || null; if (f && f.size > PICTURE_MAX_BYTES) { pendingAvatar = null; av.chosen = ''; toast(PICTURE_TOO_BIG,'err'); renderApp(); return; } pendingAvatar = f; av.chosen = f ? f.name : ''; renderApp(); }} />
             <div class="text-xs text-gray-500 mt-1">PNG, JPEG, GIF or WebP — up to 2 MB.${av.chosen ? (' Selected: ' + av.chosen) : ''}</div>
             <button class="btn text-sm mt-2" id="profile-picture-save" onClick=${uploadPicture} disabled=${av.uploading || S.loading}>${av.uploading ? 'Uploading…' : 'Upload picture'}</button>
             ${(u && u.avatar_url) ? html`<button class="btn-outline text-sm mt-2 ml-2" id="profile-picture-remove" onClick=${removePicture} disabled=${S.loading}>Remove picture</button>` : ''}
@@ -2369,7 +2378,7 @@ const ProfileView = () => {
           </div>
           <div>
             <input id="branding-logo-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp"
-              onChange=${e=>{ bd.chosen = (e.target.files && e.target.files[0]) || null; renderApp(); }} />
+              onChange=${e=>{ const f = (e.target.files && e.target.files[0]) || null; if (f && f.size > PICTURE_MAX_BYTES) { bd.chosen = null; toast(PICTURE_TOO_BIG,'err'); renderApp(); return; } bd.chosen = f; renderApp(); }} />
             <div class="text-xs text-gray-500 mt-1">PNG, JPEG, GIF or WebP — up to 2 MB.${bd.chosen ? (' Selected: ' + bd.chosen.name) : ''}</div>
             <button class="btn text-sm mt-2" id="branding-logo-save" onClick=${uploadBrandLogo} disabled=${bd.uploading || S.loading}>${bd.uploading ? 'Uploading…' : 'Upload logo'}</button>
             ${bd.logoUrl ? html`<button class="btn-outline text-sm mt-2 ml-2" id="branding-logo-remove" onClick=${removeBrandLogo} disabled=${S.loading}>Remove</button>` : ''}
