@@ -382,39 +382,43 @@ pub async fn create(
 /// and withholds reserved/harness domains, so a probe records the attempt without a message leaving
 /// the box. Best-effort: the row is the record the operator works from.
 async fn notify_customer_of_plan_request(state: &AppState, ticket: &Ticket) -> bool {
+    notify_plan_request_receipt(state, ticket.aid, &ticket.subject).await
+}
+
+/// The receipt itself, keyed on (workspace, subject) instead of a whole ticket row.
+///
+/// Extracted 2026-11-05 for `checkout_handler::record_refused_upgrade`: a press on Upgrade with no
+/// payment provider files the identical `source='plan_request'` row, and until now only the Support
+/// screen's own request path mailed the customer — the buyer who pressed the Upgrade button got a
+/// ticket and silence (the defect ADASwift 6539342 and FunnelSwift 6c645b2 closed the same day).
+/// Best-effort, exactly as before: a mail failure must never turn a recorded request into an error,
+/// and a reserved/harness address is withheld by `email::send_email` while still recording the try.
+pub(crate) async fn notify_plan_request_receipt(
+    state: &AppState,
+    aid: Uuid,
+    subject: &str,
+) -> bool {
     let owner: Option<(String, String)> = sqlx::query_as(
         "SELECT name, email FROM users WHERE aid = $1 AND is_active ORDER BY (role IN ('owner','company_admin')) DESC, sort_order NULLS LAST, created_at ASC LIMIT 1",
     )
-    .bind(ticket.aid)
+    .bind(aid)
     .fetch_optional(&state.db)
     .await
     .ok()
     .flatten();
     let Some((name, email)) = owner else {
-        tracing::warn!(
-            ticket = %ticket.id,
-            aid = %ticket.aid,
-            "plan request: the workspace has no active user to acknowledge"
-        );
+        tracing::warn!(%aid, "plan request: the workspace has no active user to acknowledge");
         return false;
     };
     let vars = json!({
         "name": name,
-        "ticket_subject": ticket.subject,
+        "ticket_subject": subject,
         "app_url": "https://app.workflowswift.com",
     });
-    match crate::email::send_email(
-        state,
-        Some(ticket.aid),
-        &email,
-        "plan_request_receipt",
-        &vars,
-    )
-    .await
-    {
+    match crate::email::send_email(state, Some(aid), &email, "plan_request_receipt", &vars).await {
         Ok(()) => true,
         Err(e) => {
-            tracing::warn!(ticket = %ticket.id, "plan-request receipt to {email} failed: {e}");
+            tracing::warn!(%aid, "plan-request receipt to {email} failed: {e}");
             false
         }
     }

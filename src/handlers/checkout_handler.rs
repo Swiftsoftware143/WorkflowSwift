@@ -1020,8 +1020,8 @@ pub async fn create_checkout_session(
             // promised a row that did not exist. `record_refused_upgrade` now answers whether an
             // OPEN plan_request exists after the call, and both the flag and the wording follow it.
             // The wording pair is the fleet's already-shipped one (missedcallrespondr and ADASwift).
-            let recorded = if plan_slug.is_empty() {
-                false
+            let (recorded, receipt_emailed) = if plan_slug.is_empty() {
+                (false, false)
             } else {
                 record_refused_upgrade(
                     &state, account_id, user_id, &plan_slug, amount, reason, None,
@@ -1032,10 +1032,16 @@ pub async fn create_checkout_session(
                 "checkout/create REFUSED: {reason} for account {account_id} asking for {plan_slug} (recorded={recorded})"
             );
             let message = if recorded {
-                "No charge was made — nothing was sent to a payment provider, so you cannot be \
-                 billed. Your request has been recorded for the platform team, who can switch \
-                 this workspace onto the plan you picked by hand."
-                    .to_string()
+                format!(
+                    "No charge was made — nothing was sent to a payment provider, so you cannot \
+                     be billed. Your request has been recorded for the platform team, who can \
+                     switch this workspace onto the plan you picked by hand.{}",
+                    if receipt_emailed {
+                        " A copy of your request has been emailed to you."
+                    } else {
+                        ""
+                    }
+                )
             } else {
                 "No charge was made — nothing was sent to a payment provider, so you cannot be \
                  billed. Upgrades are not switched on for this installation yet, and your request \
@@ -1049,7 +1055,8 @@ pub async fn create_checkout_session(
                     "error": "payment_provider_not_configured",
                     "message": message,
                     "configured": false,
-                    "request_recorded": recorded
+                    "request_recorded": recorded,
+                    "receipt_emailed": receipt_emailed
                 })),
             ));
         }
@@ -1147,7 +1154,7 @@ async fn record_refused_upgrade(
     // (2026-10-24): the ticket then has to say so, because the operator cannot wait for a webhook a
     // hosted page will never send — they confirm the payment themselves and resolve the request.
     via_link: Option<&str>,
-) -> bool {
+) -> (bool, bool) {
     let plan_name: Option<String> =
         sqlx::query_scalar("SELECT name FROM plan_tiers WHERE slug = $1")
             .bind(plan_slug)
@@ -1171,31 +1178,39 @@ async fn record_refused_upgrade(
              {user_id}."
         ),
     };
-    let inserted = sqlx::query(
+    // `RETURNING id` (2026-11-05) makes "did THIS call write the row?" answerable: the WHERE NOT
+    // EXISTS dedupe means a repeat press returns no row, and the receipt must go out once per fresh
+    // request, not once per press. Same shape as ADASwift's arm (commit 6539342).
+    let inserted: Result<Option<(Uuid,)>, sqlx::Error> = sqlx::query_as(
         r#"INSERT INTO tickets (id, aid, subject, description, status, priority, source, plan_slug)
            SELECT $1, $2, $3, $4, 'open', 'medium', 'plan_request', $5
             WHERE NOT EXISTS (
                 SELECT 1 FROM tickets
                  WHERE aid = $2 AND source = 'plan_request' AND plan_slug = $5
-                   AND lower(status) NOT IN ('closed', 'resolved', 'done'))"#,
+                   AND lower(status) NOT IN ('closed', 'resolved', 'done'))
+           RETURNING id"#,
     )
     .bind(Uuid::new_v4())
     .bind(account_id)
     .bind(format!("Upgrade request: {label} plan"))
     .bind(description)
     .bind(plan_slug)
-    .execute(&state.db)
+    .fetch_optional(&state.db)
     .await;
-    if let Err(e) = inserted {
-        tracing::error!(
-            "checkout/create: could not record the refused upgrade as a plan request: {e:?}"
-        );
-    }
+    let fresh_row = match inserted {
+        Ok(row) => row.map(|(id,)| id),
+        Err(e) => {
+            tracing::error!(
+                "checkout/create: could not record the refused upgrade as a plan request: {e:?}"
+            );
+            None
+        }
+    };
     // TRUE means an OPEN plan_request for this (workspace, plan) exists AFTER this call — either
     // the row just written or the one the WHERE NOT EXISTS dedupe found. A failed INSERT with no
     // existing row answers FALSE and the caller must not promise the buyer anything. Same shape as
     // ADASwift's `record_refused_upgrade`; the hand-off arm reads the same truth.
-    sqlx::query_scalar::<_, i64>(
+    let recorded = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM tickets \
          WHERE aid = $1 AND source = 'plan_request' AND plan_slug = $2 \
            AND lower(status) NOT IN ('closed', 'resolved', 'done')",
@@ -1205,7 +1220,19 @@ async fn record_refused_upgrade(
     .fetch_one(&state.db)
     .await
     .map(|n| n > 0)
-    .unwrap_or(false)
+    .unwrap_or(false);
+
+    // The receipt the Support screen already sends, now also for the buyer who pressed Upgrade:
+    // one message per FRESH request, never for a press the dedupe absorbed. Best-effort — the row
+    // is the record the operator works from, so a mail failure must not fail the request.
+    let receipt_emailed = match fresh_row {
+        Some(_) => {
+            let subject = format!("Upgrade request: {label} plan");
+            super::tickets_handler::notify_plan_request_receipt(state, account_id, &subject).await
+        }
+        None => false,
+    };
+    (recorded, receipt_emailed)
 }
 
 /// Is this a URL a browser can be sent to in order to pay?
@@ -1281,7 +1308,7 @@ async fn hand_off_to_payment_link(
     } = hand_off;
     // The ticket TEXT says the buyer was handed to the hosted page — an operator reading "no payment
     // provider is configured" would not know a sale is in flight and waiting for their confirmation.
-    let request_recorded = record_refused_upgrade(
+    let (request_recorded, receipt_emailed) = record_refused_upgrade(
         state,
         account_id,
         user_id,
@@ -1336,6 +1363,7 @@ async fn hand_off_to_payment_link(
             "checkout_url": url,
             "configured": false,
             "request_recorded": request_recorded,
+            "receipt_emailed": receipt_emailed,
             "amount": amount,
             "currency": currency,
             "purchasable_type": "plan",
