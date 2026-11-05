@@ -1631,6 +1631,10 @@ const startCheckout = async (p) => {
       const alreadyOpen = !!(rb.plan_request && rb.plan_request.already_open);
       S.checkoutMsg = 'Request recorded \u2014 nothing was charged. Our team will switch this workspace to '
         + (p.name || p.slug) + ' and email you when it is on.'
+        // The server emails a receipt for THIS ask (`receipt_emailed`, measured live 2026-11-05) and
+        // its own refusal sentence says so; this screen replaces that sentence with the line above, so
+        // without this arm the buyer was never told a copy exists. Claimed only on the server's flag.
+        + (rb.receipt_emailed === true ? ' A copy of your request has been emailed to you.' : '')
         + (alreadyOpen ? ' (You had already asked for this plan \u2014 the request below is that one.)' : '');
       // The list under this card reads the server's own rows; it now has the one just written.
       S.planReqsTried = false;
