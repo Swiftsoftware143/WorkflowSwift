@@ -30,6 +30,13 @@ pub struct Ticket {
     pub plan_slug: Option<String>,
     /// When the operator's resolve moved the workspace onto `plan_slug`. `None` = not applied yet.
     pub plan_applied_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// The operator's WRITTEN answer, shown to the customer on their own Tickets screen
+    /// (2026-11-06). Before this the operator could only move `status`: a customer who asked
+    /// "how do I connect X?" had their request marked resolved and was never told why or how.
+    /// Empty string = not answered yet.
+    pub reply: String,
+    /// When that answer was written; `None` = no answer yet.
+    pub replied_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Deserialize)]
@@ -68,7 +75,7 @@ pub struct UpdateInput {
 // still one literal at compile time.
 macro_rules! cols {
     () => {
-        "SELECT id, aid, subject, description, status, priority, source, created_at, updated_at, plan_slug, plan_applied_at FROM tickets"
+        "SELECT id, aid, subject, description, status, priority, source, created_at, updated_at, plan_slug, plan_applied_at, reply, replied_at FROM tickets"
     };
 }
 
@@ -525,6 +532,11 @@ pub struct AdminTicket {
     /// harness rows). Exposed, never filtered server-side: hiding a row here would make the queue
     /// lie in the other direction.
     pub account_probe: Option<String>,
+    /// The operator's written answer, so the queue shows what the customer has already been told
+    /// instead of inviting a second, different reply (2026-11-06).
+    pub reply: String,
+    /// When that answer was written; `None` = still unanswered.
+    pub replied_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -540,6 +552,10 @@ pub struct AdminListQuery {
 #[derive(Debug, Deserialize)]
 pub struct AdminStatusInput {
     pub status: String,
+    /// The sentence the CUSTOMER reads on their own Tickets screen. Optional: a plain status move
+    /// (plan resolve, credit grant) carries no answer, and an empty string is treated as "no answer".
+    #[serde(default)]
+    pub reply: Option<String>,
 }
 
 fn require_super_admin(claims: &Claims) -> Result<(), AppError> {
@@ -570,7 +586,7 @@ pub async fn list_all(
     };
     let offset = if q.page > 1 { (q.page - 1) * limit } else { 0 };
     let rows = sqlx::query_as::<_, AdminTicket>(
-        "SELECT t.id, t.aid, a.name AS account_name, t.subject, t.description, t.status, t.priority, t.source, t.created_at, t.updated_at, t.plan_slug, COALESCE(pt.name, t.plan_slug) AS plan_name, t.plan_applied_at, COALESCE(a.probe_harness, '') AS account_probe FROM tickets t LEFT JOIN accounts a ON a.id = t.aid LEFT JOIN plan_tiers pt ON pt.slug = t.plan_slug WHERE ($1::text IS NULL OR t.status = $1) AND ($2::text IS NULL OR t.source = $2) ORDER BY t.created_at DESC LIMIT $3 OFFSET $4",
+        "SELECT t.id, t.aid, a.name AS account_name, t.subject, t.description, t.status, t.priority, t.source, t.created_at, t.updated_at, t.plan_slug, COALESCE(pt.name, t.plan_slug) AS plan_name, t.plan_applied_at, COALESCE(a.probe_harness, '') AS account_probe, t.reply, t.replied_at FROM tickets t LEFT JOIN accounts a ON a.id = t.aid LEFT JOIN plan_tiers pt ON pt.slug = t.plan_slug WHERE ($1::text IS NULL OR t.status = $1) AND ($2::text IS NULL OR t.source = $2) ORDER BY t.created_at DESC LIMIT $3 OFFSET $4",
     )
     .bind(q.status.as_deref())
     .bind(q.source.as_deref())
@@ -621,11 +637,39 @@ pub async fn admin_update_status(
         return Err(AppError::NotFound("Ticket not found".into()));
     };
     let changed = prior_status != status;
-    let updated = sqlx::query("UPDATE tickets SET status = $2, updated_at = NOW() WHERE id = $1")
+    // ── The operator's WRITTEN ANSWER (2026-11-06) ─────────────────────────────────────────
+    // Status alone told the customer *that* something happened, never *what* was decided: a
+    // support question could only be marked resolved. `reply` is the sentence they read on their
+    // own Tickets screen. An absent or blank value writes nothing, so every existing caller
+    // (plan resolve, credit grant, a double-clicked "Mark handled") behaves exactly as before.
+    let reply_text: Option<String> = b
+        .reply
+        .as_deref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    if let Some(r) = reply_text.as_deref() {
+        if r.chars().count() > 4000 {
+            return Err(AppError::Validation(
+                "reply must be 4000 characters or fewer".to_string(),
+            ));
+        }
+    }
+    let updated = if let Some(r) = reply_text.as_deref() {
+        sqlx::query(
+            "UPDATE tickets SET status = $2, reply = $3, replied_at = NOW(), updated_at = NOW() WHERE id = $1",
+        )
         .bind(id)
         .bind(&status)
+        .bind(r)
         .execute(&state.db)
-        .await?;
+        .await?
+    } else {
+        sqlx::query("UPDATE tickets SET status = $2, updated_at = NOW() WHERE id = $1")
+            .bind(id)
+            .bind(&status)
+            .execute(&state.db)
+            .await?
+    };
     if updated.rows_affected() == 0 {
         return Err(AppError::NotFound("Ticket not found".into()));
     }
@@ -756,7 +800,7 @@ pub async fn admin_update_status(
     // Re-read through the SAME joined select the list uses, so the console repaints an attributable
     // row (account name included) rather than a bare ticket.
     let row = sqlx::query_as::<_, AdminTicket>(
-        "SELECT t.id, t.aid, a.name AS account_name, t.subject, t.description, t.status, t.priority, t.source, t.created_at, t.updated_at, t.plan_slug, COALESCE(pt.name, t.plan_slug) AS plan_name, t.plan_applied_at, COALESCE(a.probe_harness, '') AS account_probe FROM tickets t LEFT JOIN accounts a ON a.id = t.aid LEFT JOIN plan_tiers pt ON pt.slug = t.plan_slug WHERE t.id = $1",
+        "SELECT t.id, t.aid, a.name AS account_name, t.subject, t.description, t.status, t.priority, t.source, t.created_at, t.updated_at, t.plan_slug, COALESCE(pt.name, t.plan_slug) AS plan_name, t.plan_applied_at, COALESCE(a.probe_harness, '') AS account_probe, t.reply, t.replied_at FROM tickets t LEFT JOIN accounts a ON a.id = t.aid LEFT JOIN plan_tiers pt ON pt.slug = t.plan_slug WHERE t.id = $1",
     )
     .bind(id)
     .fetch_one(&state.db)
@@ -773,6 +817,9 @@ pub async fn admin_update_status(
         // `None` when this ticket was not a credit request: the console then says nothing about credits.
         "credits_applied": credits_applied,
         "credits_balance": credits_balance,
+        // True only when this call actually stored an answer, so the console can say the customer
+        // will read it instead of a vague "saved".
+        "reply_saved": reply_text.is_some(),
     })))
 }
 
