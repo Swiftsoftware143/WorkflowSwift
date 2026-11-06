@@ -610,19 +610,48 @@ pub async fn change_password(
 
     // SESSION REVOCATION (kanban t_80787a0f): a password change/reset also ends every JWT
     // minted BEFORE it (`users.sessions_valid_from`), refused at the boundary read.
-    sqlx::query(
+    //
+    // ...AND THE CALLER'S OWN SESSION IS RE-MINTED (cron 2026-11-06). Moving the line kills the
+    // token in hand as well, so this used to answer 200 and leave the tab that pressed the button
+    // holding a dead JWT: the Profile screen said "Password updated" while every other panel
+    // behind it answered 401 until the customer signed out and back in. `logout_all` below has
+    // carried the fix since it shipped — mint from the SAME statement's `sessions_valid_from`
+    // (whole-second, so clock skew cannot strand the caller) and return the token. Doing it here
+    // makes the fleet consistent: FunnelSwift, ADASwift and MissedCall never invalidate the
+    // caller's session on a password change; this app and IncentiveSwift did.
+    //
+    // The re-minted claims are read from the ROW, never echoed from the old claim, so a role that
+    // was narrowed since cannot be re-blessed here. `pwd_minted: false`: the caller proved the
+    // CURRENT password, so this session is a full one.
+    let valid_from: i64 = sqlx::query_scalar(
         "UPDATE users SET password_hash = $1, password_undelivered = false, \
                 sessions_valid_from = NOW(), updated_at = NOW() \
-           WHERE id = $2",
+           WHERE id = $2 \
+       RETURNING floor(EXTRACT(EPOCH FROM sessions_valid_from))::bigint",
     )
     .bind(&new_hash)
     .bind(user.id)
-    .execute(&state.db)
+    .fetch_one(&state.db)
     .await?;
+
+    let now_ts = valid_from.max(0) as usize;
+    let fresh = Claims {
+        sub: user.id.to_string(),
+        aid: user.aid.to_string(),
+        role: user.role.clone(),
+        pwd_minted: false,
+        exp: now_ts + state.config.jwt_access_expiry as usize,
+        iat: now_ts,
+        perm_is_super_admin: Some(user.perm_is_super_admin),
+    };
+    let token = create_token(&fresh, &state.config.jwt_secret)?;
 
     Ok((
         StatusCode::OK,
-        Json(json!({"message": "Password updated successfully"})),
+        Json(json!({
+            "message": "Password updated successfully",
+            "token": token,
+        })),
     ))
 }
 
