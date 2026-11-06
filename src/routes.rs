@@ -1051,6 +1051,13 @@ pub fn create_router(state: AppState) -> Router {
             "/public/support-request",
             post(handlers::tickets_handler::create_public),
         )
+        // Reading the team's ANSWER to that message (2026-11-06). The asker has no workspace and no
+        // Tickets screen, so without this the answer exists only on a row they cannot load. Reads a
+        // body (the ticket id + the address filed with), so it belongs in THIS sub-router.
+        .route(
+            "/public/support-answer",
+            post(handlers::tickets_handler::support_answer),
+        )
         // n8n writes its execution result back here. Self-authenticating: either
         // X-Internal-Key (n8n) or a user JWT scoped to the instance's account.
         .route(

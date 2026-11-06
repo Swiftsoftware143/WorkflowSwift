@@ -664,6 +664,7 @@ pub async fn admin_update_status(
         .as_deref()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
+    let reply_saved = reply_text.is_some();
     if let Some(r) = reply_text.as_deref() {
         if r.chars().count() > 4000 {
             return Err(AppError::Validation(
@@ -822,10 +823,21 @@ pub async fn admin_update_status(
     .bind(id)
     .fetch_one(&state.db)
     .await?;
-    if changed {
+    if changed || reply_saved {
         // The plan the workspace was ACTUALLY moved onto, when this resolve applied one: the
         // notice then states it instead of hedging about what a plan request might mean.
-        notify_customer(&state, &row, &status, applied_plan_name.as_deref()).await;
+        //
+        // An ANSWER on its own is news too (2026-11-06): the console files status + reply in one
+        // call, but correcting the sentence on an already-resolved ticket must still reach the
+        // person who asked. The answer travels in `vars.reply` (see `notify_customer`).
+        notify_customer(
+            &state,
+            &row,
+            &status,
+            applied_plan_name.as_deref(),
+            reply_text.as_deref(),
+        )
+        .await;
     }
     Ok(Json(json!({
         "item": row,
@@ -971,6 +983,60 @@ pub async fn create_public(
     ))
 }
 
+/// `POST /api/v1/public/support-answer` — read the team's answer to a message filed from the
+/// contact page (2026-11-06).
+///
+/// WHY THIS EXISTS: a visitor who is not signed in has no Tickets screen. The answer an operator
+/// writes would otherwise exist only on a row they can never load, and if the notice mail is lost
+/// (spam folder, mistyped address, a locked-out customer who never sees it) the answer is gone for
+/// them. The ticket id is an unguessable uuid and the address is the one they filed with, so the
+/// pair is the credential; either one alone answers the same neutral 404, which keeps the route
+/// from confirming that a ticket exists.
+///
+/// Narrow by construction: it reads ONE row, only when that row carries no workspace (a workspace
+/// ticket is read by its own signed-in users through `/tickets/{id}`), and it returns the subject,
+/// the status and the answer — never the description, never other visitors' rows, never a list.
+#[derive(Debug, Deserialize)]
+pub struct PublicAnswerInput {
+    pub ticket_id: String,
+    pub email: String,
+}
+
+pub async fn support_answer(
+    State(state): State<AppState>,
+    Json(body): Json<PublicAnswerInput>,
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    let email = body.email.trim().to_lowercase();
+    let id = Uuid::parse_str(body.ticket_id.trim()).map_err(|_| {
+        AppError::NotFound("We have no message from you with that reference.".to_string())
+    })?;
+    let row: Option<(String, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT subject, status, reply, replied_at::text FROM tickets \
+          WHERE id = $1 AND aid IS NULL AND lower(requested_by) = $2",
+    )
+    .bind(id)
+    .bind(&email)
+    .fetch_optional(&state.db)
+    .await?;
+    let Some((subject, status, reply, replied_at)) = row else {
+        return Err(AppError::NotFound(
+            "We have no message from that address with that reference. Check the reference and the \
+             email address you filed with."
+                .to_string(),
+        ));
+    };
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "id": id,
+            "subject": subject,
+            "status": status,
+            "reply": reply,
+            "replied_at": replied_at,
+        })),
+    ))
+}
+
 /// Tell the person who filed the request that it moved (2026-10-19).
 ///
 /// The operator's action is already committed when this runs, so it is best-effort by construction:
@@ -984,6 +1050,7 @@ async fn notify_customer(
     ticket: &AdminTicket,
     status: &str,
     applied_plan: Option<&str>,
+    reply: Option<&str>,
 ) {
     // ── A MESSAGE FROM THE CONTACT PAGE (2026-11-06) ─────────────────────────────────────────
     // This ticket belongs to no workspace and was filed by no user: the address to answer is the
@@ -1000,6 +1067,13 @@ async fn notify_customer(
             "ticket_subject": ticket.subject,
             "status": status,
             "plan_name": applied_plan,
+            // The operator's OWN words (2026-11-06). Without this the visitor received "your
+            // request has been resolved" and nothing else, and there is no screen they can log
+            // into to read the answer — so the answer WAS the missing half of the feature.
+            "reply": reply,
+            // The contact page's "check the answer" form posts the ticket id it was given.
+            "ticket_id": ticket.id,
+            "public_visitor": true,
             "app_url": "https://app.workflowswift.com",
         });
         if let Err(e) =
@@ -1032,6 +1106,11 @@ async fn notify_customer(
         "status": status,
         // `None` renders as JSON null, which the template arm reads as "no plan moved".
         "plan_name": applied_plan,
+        // The worker's written answer, so the person who asked reads it in the mail instead of
+        // having to sign in to find out what was decided (2026-11-06).
+        "reply": reply,
+        "ticket_id": ticket.id,
+        "public_visitor": false,
         "app_url": "https://app.workflowswift.com",
     });
     if let Err(e) = crate::email::send_email(state, Some(aid), &email, "ticket_update", &vars).await

@@ -1196,14 +1196,45 @@ async fn send_email_fallback(
             let applied_plan = vars.get("plan_name").and_then(|v| v.as_str());
             let (said, next) = ticket_update_wording(status, applied_plan);
             let safe_subject = ticket_subject.replace('<', "&lt;").replace('>', "&gt;");
+            // The operator's WRITTEN ANSWER (2026-11-06). A status word told the asker *that*
+            // something happened, never *what* was decided — and a visitor who filed from the
+            // contact page has no dashboard to sign in to, so this body is the only place they can
+            // read it. A ticket moved without an answer keeps its old wording exactly.
+            let reply = vars
+                .get("reply")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            let reply_text = match reply {
+                Some(r) => format!("\n\nOur answer:\n\n{r}\n"),
+                None => String::new(),
+            };
+            let reply_html = match reply {
+                Some(r) => format!(
+                    "<div style=\"background:#f0fdf4;border-left:3px solid #22c55e;padding:12px 14px;border-radius:6px;margin:18px 0\"><div style=\"font-size:13px;color:#166534;margin-bottom:4px\">Our answer</div><div style=\"white-space:pre-wrap\">{}</div></div>",
+                    r.replace('<', "&lt;").replace('>', "&gt;")
+                ),
+                None => String::new(),
+            };
+            // A visitor with no workspace cannot open /dashboard, so the footer tells them where
+            // their answer actually lives.
+            let foot = if vars
+                .get("public_visitor")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                format!("You can read this answer again, and file another message, at {app_url}/contact.html")
+            } else {
+                format!("You can see it any time at {app_url}/dashboard (Support).")
+            };
             let text_body = format!(
-                "Hi {name},\n\nYour WorkflowSwift request \"{ticket_subject}\" {said}.\n\n{next}\n\nYou can see it any time at {app_url}/dashboard (Support).\n\n- WorkflowSwift"
+                "Hi {name},\n\nYour WorkflowSwift request \"{ticket_subject}\" {said}.\n\n{next}\n{reply_text}\n{foot}\n\n- WorkflowSwift"
             );
             let html_body = format!(
                 "<html><body style=\"font-family:Arial,sans-serif;line-height:1.6;color:#333\">\
                  <p>Hi {name},</p>\
                  <p>Your WorkflowSwift request <strong>{safe_subject}</strong> {said}.</p>\
-                 <p style=\"color:#374151\">{next}</p>\
+                 <p style=\"color:#374151\">{next}</p>{reply_html}\
                  <p><a href=\"{app_url}/dashboard\" style=\"color:#4f46e5\">Open your dashboard</a></p>\
                  <p style=\"font-size:13px;color:#9ca3af\">- WorkflowSwift</p></body></html>"
             );

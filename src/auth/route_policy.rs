@@ -129,6 +129,14 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // form now files it into the operator's ticket queue instead. No credential, no workspace: ONE
     // ticket with a NULL aid, the address the visitor typed, at most three per address per hour.
     "/api/v1/public/support-request",
+    // --- reading the ANSWER to that message (2026-11-06) ----------------------------------------
+    // The visitor who filed it is not signed in, so the answer cannot be read behind a session.
+    // The ticket id (an unguessable uuid) plus the address they filed with ARE the credential;
+    // anything that does not match both answers one neutral 404. Narrow by construction: one row,
+    // only when it carries no workspace (a workspace ticket is read by its own users through
+    // `/tickets/{id}`), returning the subject, the status and the answer — never the description,
+    // never a list, never another visitor's row.
+    "/api/v1/public/support-answer",
     // --- the marketing price list (2026-10-30) -------------------------------------------------
     // `www/workflowswift/pricing.html` reads this before a visitor has an account, so it cannot
     // carry a session. Deliberately NARROWER than the authenticated `/api/v1/plans`: slug, name and
