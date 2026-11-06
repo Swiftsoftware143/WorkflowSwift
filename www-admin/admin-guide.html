@@ -440,6 +440,22 @@ to charge anyone: it only decides <em>where the buyer is sent</em>.</p>
       press <em>Set plan</em> is the tier's slug, which is what that route takes.</td>
       </tr>
       <tr>
+      <td><code>/api/v1/admin/accounts/{id}/resend-credentials</code></td>
+      <td>POST</td>
+      <td><strong>&ldquo;I never got the email and I can&rsquo;t sign in.&rdquo;</strong> When a signup mints a
+      workspace owner&rsquo;s first password and the mail carrying it never leaves, the account exists but nobody
+      has ever read the password &mdash; and a reset code travels the same mail path that just failed. The app
+      records that state on the user and <code>GET /api/v1/admin/accounts</code> now publishes it per row as
+      <code>owner_credentials_undelivered</code>, so the Accounts table marks that owner with a red
+      <b>no password delivered</b> badge and a <b>send new password</b> button. Pressing it mints a brand-new
+      password, emails it through the same <em>welcome</em> template the signup door uses, clears the badge and
+      ends that workspace&rsquo;s existing sessions, so the old password stops working immediately. The answer is
+      <code>{id, email, credentials_emailed, withheld, handover_password}</code>: when the address is a reserved
+      test address or the provider refuses the send, <code>credentials_emailed</code> is <code>false</code> and
+      the password comes back in <code>handover_password</code> so the console prints it on screen and you can
+      hand it over directly &mdash; it is never written to the log. Super-admin only.</td>
+      </tr>
+      <tr>
       <td><code>/api/v1/admin/accounts/{id}/retention</code></td>
       <td>PUT</td>
       <td>Per-account retention override</td>

@@ -2524,6 +2524,17 @@ function ownerCellHtml(a){
   return escHtml(oe)+(probe ? probeBadgeHtml(harness) : '');
 }
 
+// A workspace whose OWNER never received the first password we minted for them (2026-11-05).
+// The signup door sets `users.password_undelivered` when the credentials mail never left, so
+// nobody has ever read that password and the workspace cannot be signed into. The accounts list
+// publishes the flag and the remedy is POST /admin/accounts/{id}/resend-credentials — which, until
+// now, had no control anywhere in this console. The badge names the state; the button below the
+// table clears it.
+function credUndeliveredHtml(a){
+  if(!(a && a.owner_credentials_undelivered)) return '';
+  return '<div style="margin-top:4px"><span class="badge" style="background:#fef3c7;color:#92400e" title="The first password we minted for this owner was never delivered &mdash; a provider refusal, or a reserved test address withheld at source. Nobody has ever read it, so this workspace cannot be signed into until you send a new one.">password never delivered</span></div>';
+}
+
 // WHEN a workspace was last actually used (cron 2026-10-27). `last_sign_in` is the newest
 // `users.last_login_at` in the account, so an empty value means nobody in that workspace has ever
 // signed in - the signups that were minted, mailed a password and never came back. Those rows used to
@@ -2661,13 +2672,13 @@ function renderAdminAccounts(c){
         return '<tr data-acc="'+aid+'">'+
         '<td><input type="checkbox" class="acc-chk" value="'+aid+'"></td>'+
         '<td class="acc-name"><strong>'+(i.name||'-')+'</strong></td>'+
-        '<td>'+ownerCellHtml(i)+'</td>'+
+        '<td class="acc-owner">'+ownerCellHtml(i)+credUndeliveredHtml(i)+'</td>'+
         '<td>'+(i.account_slug||i.slug||'-')+'</td>'+
         '<td>'+planCell+'</td>'+
         '<td><span class="badge '+(i.is_active?'bg-green-100 text-green-700':'bg-red-100 text-red-700')+'">'+(i.is_active?'Active':'Inactive')+'</span></td>'+
         '<td class="text-xs">'+lastSignInHtml(i)+'</td>'+
         '<td class="text-xs text-gray-400">'+((i.created_at||'').slice(0,10))+'</td>'+
-        '<td class="text-right"><button class="btn btn-sm btn-ghost" onclick="event.preventDefault();startImpersonation(\''+aid+'\')">Impersonate</button></td>'+
+        '<td class="text-right">'+(i.owner_credentials_undelivered && aid ? '<button class="btn btn-sm btn-primary acc-resend" data-acc="'+aid+'" data-email="'+escHtml(String(i.owner_email||i.email||''))+'" title="Mint a brand-new password for this workspace\'s owner and email it">Send login</button> ' : '')+'<button class="btn btn-sm btn-ghost" onclick="event.preventDefault();startImpersonation(\''+aid+'\')">Impersonate</button></td>'+
       '</tr>'}).join('')+'</tbody></table>';
     const a=el.querySelector('#accAll');
     if(a)a.addEventListener('change',()=>{box().forEach(b=>{b.checked=a.checked});sync()});
@@ -2683,6 +2694,46 @@ function renderAdminAccounts(c){
       else el.appendChild(note);
     });
     reasons=[];
+    // THE OPERATOR'S REMEDY for "I never got the email and I can't sign in" (2026-11-05).
+    // POST /admin/accounts/{id}/resend-credentials mints a new password with the app's own
+    // generator, clears `users.password_undelivered`, ends the account's sessions and mails it
+    // through the welcome template. The password comes back in `handover_password` ONLY when no
+    // mail left (reserved address withheld at source, or a send failure) — so it is shown INLINE
+    // and stays on screen, never in the 3-second toast: the operator has to hand it over.
+    el.querySelectorAll('button.acc-resend').forEach(b=>b.addEventListener('click', async ()=>{
+      const aid=b.getAttribute('data-acc'), mail=b.getAttribute('data-email')||'the owner';
+      if(!aid) return;
+      if(!confirm('Send '+mail+' a brand-new password? Their current password stops working immediately.')) return;
+      b.disabled=true; const label=b.textContent; b.textContent='sending...';
+      const r=await api('/admin/accounts/'+encodeURIComponent(aid)+'/resend-credentials',{method:'POST',body:'{}'});
+      b.disabled=false; b.textContent=label;
+      const row=b.closest('tr'), cell=row&&row.querySelector('td.acc-owner');
+      const old=row&&row.querySelector('.acc-resend-msg'); if(old)old.remove();
+      const note=document.createElement('div');
+      note.className='acc-resend-msg text-xs';
+      note.style.marginTop='6px';
+      const withPassword=(prefix)=>{
+        note.textContent=prefix;
+        const code=document.createElement('code');
+        code.style.cssText='background:#f1f5f9;padding:2px 6px;border-radius:4px';
+        code.textContent=(r&&r.handover_password)||'';
+        note.appendChild(code);
+      };
+      if(!r){ note.style.color='#b91c1c'; note.textContent='Could not send a password: '+(LAST_ERR||'the request failed'); }
+      else {
+        // The latch is CLEARED server-side the moment the password is minted, whether or not a
+        // mail left — so the badge and the button describe a state that no longer exists. Drop
+        // both; keep the note, because a withheld/failed send is the operator's only copy of the
+        // password and it has to stay on screen long enough to hand over.
+        const badge=row&&row.querySelector('.badge[title*="never delivered"]');
+        if(badge&&badge.parentElement)badge.parentElement.remove();
+        if(r.credentials_emailed){ note.style.color='#15803d'; note.textContent='A new password was emailed to '+mail+'.'; }
+        else if(r.withheld){ note.style.color='#b45309'; withPassword('Nothing was emailed ('+mail+' is a reserved test address). Hand them this password: '); }
+        else { note.style.color='#b45309'; withPassword('No email left the system. Hand them this password: '); }
+        b.remove();
+      }
+      if(cell)cell.appendChild(note);
+    }));
     // The picker: count the probe rows the list actually holds, then tick exactly them.
     const pb=c.querySelector('#accProbes');
     if(pb){
