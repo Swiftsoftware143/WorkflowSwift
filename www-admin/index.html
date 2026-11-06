@@ -472,7 +472,14 @@ function content(){
     // `UpdateInput` accepts {subject,description,status,priority} — a PUT of {"name":…} answered a
     // green 200 and changed NOTHING, because no field of that name exists and every column is
     // COALESCE'd against its current value. All three now use the API's real field names.
-    if(s==='tickets')renderCRUD(c,'tickets','Ticket',['subject','status','priority'],'/tickets',['subject','description','status','priority'],undefined,['subject','description','status','priority']);
+    // 2026-11-06: the OPERATOR answers customer tickets here. `/tickets` is tenant-scoped, so the
+    // old CRUD showed only the operator's own workspace and could not reach a customer's ticket at
+    // all; `/admin/tickets` is every workspace's, and its PUT now stores the written answer the
+    // customer reads. A non-operator keeps the plain tenant CRUD, so nothing changes for them.
+    if(s==='tickets'){
+      if(showAdminTab())renderSupportQueue(c);
+      else renderCRUD(c,'tickets','Ticket',['subject','status','priority'],'/tickets',['subject','description','status','priority'],undefined,['subject','description','status','priority']);
+    }
   }else if(t==='profile'){
     // Defence in depth, the same shape as the Admin tab's below: a stale app.sub or a restored
     // session must not land a tenant on an operator-only pane.
@@ -969,6 +976,103 @@ function renderPlanRequests(c){
     });
     tbl.appendChild(tb);
     body.appendChild(tbl);
+  }
+  load();
+}
+
+// --- Support queue (2026-11-06) ---------------------------------------------------------------
+// THE OPERATOR'S ANSWER. `GET /api/v1/admin/tickets` has always returned every workspace's
+// tickets, but the only write was a status, so this app could not ANSWER a customer: the row went
+// to "resolved" and the customer was mailed that it had been handled, with no sentence in it. The
+// handler now stores `reply` on the request itself and `PUT /admin/tickets/{id}` writes it, so the
+// customer reads the answer on their own Tickets screen (same shape as FunnelSwift's support
+// requests and the ticket threads on the other apps).
+//
+// Plan and credit requests are still handled on Plan Requests: that panel MOVES a workspace onto a
+// tier or grants credits, and it must not look like a plain answer box. This panel changes nothing
+// about money.
+function renderSupportQueue(c){
+  const card=h('div',{className:'card'});
+  card.appendChild(h('h2',{className:'text-xl font-bold mb-2'},'Support tickets'));
+  card.appendChild(h('p',{className:'text-sm text-gray-500 mb-4'},
+    'Every ticket any workspace has filed, newest first. Write the answer and press Send — the '
+    +'customer reads that sentence on their own Tickets screen and is emailed that the request '
+    +'moved. Plan and credit requests are resolved on Plan Requests, where the workspace is '
+    +'actually moved onto the tier it asked for.'));
+  const bar=h('div',{className:'flex items-center gap-3 mb-3'});
+  const note=h('span',{className:'text-xs text-gray-500'},'loading…');
+  bar.appendChild(h('button',{className:'btn btn-sm btn-outline',onClick:()=>load()},'Refresh'));
+  bar.appendChild(note);
+  card.appendChild(bar);
+  const body=h('div',{});
+  card.appendChild(body);
+  c.appendChild(card);
+
+  const isOpen=t=>!/^(closed|resolved|done)$/i.test(String((t&&t.status)||'open'));
+
+  async function load(){
+    note.textContent='loading…';
+    while(body.firstChild)body.removeChild(body.firstChild);
+    const r=await api('/admin/tickets?per_page=200');
+    if(r===null){
+      note.textContent='';
+      body.appendChild(h('div',{className:'text-sm text-red-600'},
+        'Could not read the queue: '+(LAST_ERR||'request failed')));
+      return;
+    }
+    const rows=((r&&(r.items||r.tickets))||[]).slice()
+      .sort((x,y)=>String(y.created_at||'').localeCompare(String(x.created_at||'')));
+    note.textContent=rows.length+' ticket(s) — '+rows.filter(isOpen).length+' still open';
+    if(!rows.length){
+      body.appendChild(h('div',{className:'text-sm text-gray-500'},
+        'No tickets yet. A workspace files one from its own Tickets screen.'));
+      return;
+    }
+    rows.forEach(t=>{
+      const box=h('div',{className:'card',style:'margin-bottom:10px'});
+      const head=h('div',{className:'flex items-center justify-between mb-1'});
+      const who=(t.account_name||'(unknown workspace)');
+      const harness=String(t.account_probe||'').trim();
+      head.appendChild(h('div',{className:'font-semibold text-sm'},
+        who+' — '+String(t.subject||'')+(harness?' (harness)':'')));
+      head.appendChild(h('span',{className:'badge '+(isOpen(t)?'badge-yellow':'badge-green')},
+        String(t.status||'open')));
+      box.appendChild(head);
+      if(t.description){
+        box.appendChild(h('div',{className:'text-xs text-gray-600',
+          style:'white-space:pre-wrap;margin-bottom:6px'},String(t.description)));
+      }
+      if(t.reply){
+        box.appendChild(h('div',{className:'text-xs',
+          style:'background:#f0fdf4;color:#166534;border-left:3px solid #22c55e;padding:6px 8px;border-radius:6px;margin-bottom:6px'},
+          'Our answer: '+String(t.reply)));
+      }
+      if(isOpen(t)){
+        const ta=h('textarea',{rows:'2',placeholder:'Write the answer the customer will read',
+          style:'width:100%;font-size:12px;padding:6px;border:1px solid #e5e7eb;border-radius:6px'});
+        ta.value=t.reply||'';
+        box.appendChild(ta);
+        const send=h('button',{className:'btn btn-sm btn-outline',style:'margin-top:6px'},'Send answer');
+        send.onclick=async()=>{
+          const txt=String(ta.value||'').trim();
+          if(!txt){ showMsg('Write the answer first','error'); return; }
+          send.disabled=true; send.textContent='Sending…';
+          const ok=await api('/admin/tickets/'+encodeURIComponent(t.id),
+            {method:'PUT',body:JSON.stringify({status:'resolved',reply:txt})});
+          if(ok===null){
+            send.disabled=false; send.textContent='Send answer';
+            showMsg('Could not save that answer: '+(LAST_ERR||'request failed'),'error');
+            return;
+          }
+          showMsg(ok&&ok.reply_saved
+            ? 'Answer saved — the customer reads it on their Tickets screen'
+            : 'Saved');
+          load();
+        };
+        box.appendChild(send);
+      }
+      body.appendChild(box);
+    });
   }
   load();
 }
@@ -1849,6 +1953,11 @@ function renderProfile(c){
       pwBtn.disabled=true;pwBtn.textContent='Saving...';
       const r=await api('/auth/password',{method:'PUT',body:JSON.stringify({current_password:cur,new_password:nw})});
       pwBtn.disabled=false;pwBtn.textContent='Update password';
+      // A password change moves the account's session line, so the token in hand dies with it.
+      // The route now mints a FRESH token for the tab that pressed the button (cron 2026-11-06);
+      // adopt it the same way the "sign out every other device" control beside it already does,
+      // or this screen says "Password updated" while every panel behind it answers 401.
+      if(r&&r.token){TOKEN=r.token;try{localStorage.setItem('ws_token',TOKEN)}catch(e){}}
       if(r){showMsg('Password updated','success');curIn.value='';newIn.value='';}else showMsg('Password change failed: '+(LAST_ERR||'request failed'),'error');
     };
     right.appendChild(pwBtn);

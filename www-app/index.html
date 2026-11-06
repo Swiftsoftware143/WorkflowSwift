@@ -1772,7 +1772,7 @@ const TicketsView = () => {
       </header>
       ${list.length === 0 ? html`<div class="empty">No tickets.</div>` : html`
       <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Subject</th><th>Status</th><th>Priority</th><th>Created</th></tr></thead><tbody>
-        ${list.map(t => html`<tr key=${t.id}><td><div class="font-semibold">${t.subject || t.title || '—'}</div>${t.description ? html`<div class="text-xs text-gray-500" style="white-space:pre-wrap">${t.description}</div>` : ''}</td><td>${statusBadge(t.status || 'open')}</td><td>${t.priority || 'medium'}</td><td>${fmtDate(t.created_at)}</td></tr>`)}
+        ${list.map(t => html`<tr key=${t.id}><td><div class="font-semibold">${t.subject || t.title || '—'}</div>${t.description ? html`<div class="text-xs text-gray-500" style="white-space:pre-wrap">${t.description}</div>` : ''}${t.reply ? html`<div class="text-xs" style="background:#f0fdf4;color:#166534;border-left:3px solid #22c55e;padding:6px 8px;border-radius:6px;margin-top:6px;white-space:pre-wrap">Our answer: ${t.reply}</div>` : ''}</td><td>${statusBadge(t.status || 'open')}</td><td>${t.priority || 'medium'}</td><td>${fmtDate(t.created_at)}</td></tr>`)}
       </tbody></table></div>`}
     </div>`;
 };
