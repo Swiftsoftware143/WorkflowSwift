@@ -182,9 +182,17 @@ async function loadMe(){
   if(r&&r.user)ME=r.user;
 }
 
+// Sign in. Returns `{ok:true}` on success, or `{ok:false, message}` carrying the SERVER's own
+// sentence ("Invalid credentials") for the caller to print. Measured live 2026-11-05: the old
+// version raised a browser `alert('Login failed')` and threw the server's sentence away, so an
+// operator who mistyped their password got a modal dialog that named nothing.
 async function login(email,pw){
   const r=await fetch(API+'/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,password:pw})});
-  if(!r.ok){alert('Login failed');return}
+  if(!r.ok){
+    let message='Login failed';
+    try{const d=await r.json();if(d&&d.message)message=d.message}catch(e){}
+    return {ok:false,message};
+  }
   const d=await r.json();
   TOKEN=d.access_token||'';
   localStorage.setItem('ws_token',TOKEN);
@@ -193,6 +201,7 @@ async function login(email,pw){
   clearImpersonation();
   await loadMe();
   renderApp();
+  return {ok:true};
 }
 
 // Signing out ends EVERY session this console holds — the operator's own and a parked support
@@ -228,10 +237,31 @@ function renderLogin(){
     <p class="text-center mt-3"><a href="https://app.workflowswift.com/forgot-password.html" class="text-sm text-blue-600 hover:underline">Forgot password?</a></p>
     <p id="err" class="text-red-500 text-sm mt-3 hidden text-center"></p>
   `;
-  box.querySelector('#lb').onclick=()=>{
-    const e=box.querySelector('#le').value,p=box.querySelector('#lp').value;
-    login(e,p).then(()=>{if(!TOKEN){const er=box.querySelector('#err');er.className='text-red-500 text-sm mt-3 text-center';er.textContent='Login failed';}});
+  // Sign-in is one guarded submit for BOTH input methods: the button, and Enter from either field.
+  // Measured live 2026-11-05: the fields were bare <input>s with no key handler, so Enter posted
+  // NOTHING (0 requests) and a user who typed their email and pressed Enter saw no reaction at all.
+  // `busy` is the double-submit guard the button used to lack, so a held key cannot post twice.
+  const le=box.querySelector('#le'), lp=box.querySelector('#lp'), lb=box.querySelector('#lb'), er=box.querySelector('#err');
+  let busy=false;
+  const submit=async()=>{
+    if(busy)return;
+    er.className='text-red-500 text-sm mt-3 hidden text-center'; er.textContent='';
+    // Enter with no password is a user mid-typing, not a sign-in attempt: say what is missing and
+    // put the cursor in the field instead of spending a request on a 401.
+    if(!lp.value){ er.className='text-red-500 text-sm mt-3 text-center'; er.textContent='Enter your password'; lp.focus(); return; }
+    busy=true; lb.disabled=true; lb.textContent='Signing in\u2026';
+    const res=await login(le.value.trim(), lp.value);
+    busy=false; lb.disabled=false; lb.textContent='Log In';
+    if(!res.ok || !TOKEN){
+      er.className='text-red-500 text-sm mt-3 text-center';
+      er.textContent=res.ok?'Login failed':res.message;
+      lp.value=''; lp.focus();
+    }
   };
+  lb.onclick=submit;
+  const onKey=(e)=>{ if(e.key==='Enter'){ e.preventDefault(); submit(); } };
+  le.onkeydown=onKey; lp.onkeydown=onKey;
+  le.focus();
   div.appendChild(box);
   document.body.appendChild(div);
 }
