@@ -2527,6 +2527,11 @@ async fn deliver_credentials(
             .await
             .map_err(|e| format!("Password hashing failed: {}", e))?;
         let plan_slug = checkout_plan_slug(&state.db, purchasable_type, purchasable_id).await?;
+        // Attribution from the address alone: a provider-signed webhook has no browser to carry a
+        // harness header, so an address on a fleet-owned/reserved domain is the only signal there
+        // is (2026-11-06, same arm as the tag→free-account receiver). A real buyer's domain matches
+        // neither list and the answer stays `None`.
+        let probe_harness = crate::probe_harness::for_machine_door(email);
 
         let ids = crate::auth::signup::create_account(
             state,
@@ -2548,10 +2553,10 @@ async fn deliver_credentials(
                 // / admin / super_admin / agency_admin / team_member).
                 role: "user",
                 credential_delivery: crate::auth::signup::CredentialDelivery::AfterTheSend,
-                // DELIBERATELY `None` (kanban t_4a744754): this is the paid-checkout credential
-                // path (a provider-signed payment webhook), not the served, unauthenticated signup —
-                // the only door the `X-Swift-Harness` marker belongs to.
-                probe_harness: None,
+                // ATTRIBUTION FROM THE ADDRESS (2026-11-06): a provider-signed webhook cannot carry
+                // `X-Swift-Harness`, so a fleet-owned/RFC-reserved recipient domain is the only
+                // signal. A real buyer's domain matches neither list → `None`, unchanged behaviour.
+                probe_harness: probe_harness.as_deref(),
             },
         )
         .await

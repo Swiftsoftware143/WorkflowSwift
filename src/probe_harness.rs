@@ -93,6 +93,23 @@ pub fn for_signup(headers: &HeaderMap, email: &str) -> Option<String> {
     crate::security::probe_addr::attribution_domain(email).map(|domain| format!("auto-{domain}"))
 }
 
+/// Attribution for a MACHINE door — a route with no browser in front of it (the tag→free-account
+/// receiver, the provider-signed checkout webhook). Those callers cannot send `X-Swift-Harness`,
+/// so the marker must come from the ADDRESS alone: an address on a fleet-owned or RFC-reserved
+/// domain can only belong to fleet machinery, whoever rings the door.
+///
+/// WHY (measured live 2026-11-06): a probe lead at `swiftsoftware.dev` provisioned through
+/// `POST /api/v1/internal/provision-free-account` minted a workspace with `probe_harness = NULL`,
+/// so it sat in the operator's Accounts list exactly like a customer's. That door is the one
+/// David's own tag → free-account pipeline uses, so every probe tag ever fired through it left an
+/// untagged workspace behind. The header arm above cannot help a door with no browser; this can.
+///
+/// A real customer is untouched: their domain is on neither list, the answer is `None`, and the
+/// row is written exactly as it was before.
+pub fn for_machine_door(email: &str) -> Option<String> {
+    crate::security::probe_addr::attribution_domain(email).map(|domain| format!("auto-{domain}"))
+}
+
 #[cfg(test)]
 mod signup_arm_tests {
     use super::*;
@@ -189,5 +206,26 @@ mod tests {
             from_headers(&headers_with("Verify-T_4a744754")).as_deref(),
             Some("verify-t_4a744754")
         );
+    }
+
+    // The MACHINE door (tag→free-account receiver, checkout webhook) has no browser and so no
+    // header arm. Measured live 2026-11-06: a probe lead at `swiftsoftware.dev` minted a workspace
+    // with `probe_harness = NULL` through that door and showed up in the operator's list as a
+    // customer. These two assertions are what makes the fix safe in both directions.
+    #[test]
+    fn a_machine_door_attributes_a_probe_address_and_leaves_a_customer_alone() {
+        assert_eq!(
+            for_machine_door("probe-provtag-before-1793941559@swiftsoftware.dev").as_deref(),
+            Some("auto-swiftsoftware.dev")
+        );
+        assert_eq!(
+            for_machine_door("lead-42@example.invalid").as_deref(),
+            Some("auto-example.invalid")
+        );
+        // A real customer: no marker, so the row is written exactly as before this arm existed.
+        assert_eq!(for_machine_door("buyer@gmail.com"), None);
+        assert_eq!(for_machine_door("owner@uberip.com"), None);
+        // A domain that merely CONTAINS the fleet name is not the fleet's.
+        assert_eq!(for_machine_door("x@notswiftsoftware.dev"), None);
     }
 }

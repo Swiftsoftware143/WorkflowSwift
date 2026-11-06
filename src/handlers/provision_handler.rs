@@ -270,6 +270,9 @@ pub async fn provision_free_account(
     let password_hash = crate::auth::api_key_auth::argon2_hash(raw_password.clone()).await?;
     let account_slug = crate::auth::signup::unique_account_slug(&state.db, &name).await?;
 
+    // Attribution from the address alone: this door has no browser to carry a harness header.
+    let probe_harness = crate::probe_harness::for_machine_door(&email);
+
     let ids = match crate::auth::signup::create_account(
         &state,
         crate::auth::signup::NewAccount {
@@ -285,12 +288,15 @@ pub async fn provision_free_account(
             // The marketing-side provisioning has already been reported to the caller, so a
             // mail failure must never fail the account (kanban t_6d58f5be).
             credential_delivery: crate::auth::signup::CredentialDelivery::WithTheAccount,
-            // DELIBERATELY `None`: this is an AUTHENTICATED machine door (the fleet-internal
-            // provision-free-account call FunnelSwift makes when a lead is tagged), not the served
-            // signup. Only the anonymous signup records the `X-Swift-Harness` marker (kanban
-            // t_4a744754), so a workspace this door mints stays byte-identical to what it minted
-            // before.
-            probe_harness: None,
+            // ATTRIBUTION FROM THE ADDRESS (2026-11-06). This door has no browser, so it cannot
+            // carry `X-Swift-Harness`; the recipient's own domain is the signal, and an address on
+            // a fleet-owned or RFC-reserved domain can only belong to fleet machinery. Measured
+            // live before this arm: a probe lead at `swiftsoftware.dev` provisioned here landed in
+            // the operator's Accounts list with `probe_harness = NULL` — indistinguishable from a
+            // customer's workspace, through the very door David's tag → free-account pipeline calls.
+            // A real lead's domain matches neither list, so the answer stays `None` and their
+            // workspace is written exactly as before.
+            probe_harness: probe_harness.as_deref(),
         },
     )
     .await
