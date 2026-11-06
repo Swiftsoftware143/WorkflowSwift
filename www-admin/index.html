@@ -250,7 +250,14 @@ function renderLogin(){
     // put the cursor in the field instead of spending a request on a 401.
     if(!lp.value){ er.className='text-red-500 text-sm mt-3 text-center'; er.textContent='Enter your password'; lp.focus(); return; }
     busy=true; lb.disabled=true; lb.textContent='Signing in\u2026';
-    const res=await login(le.value.trim(), lp.value);
+    let res;
+    try { res=await login(le.value.trim(), lp.value); }
+    catch(e) {
+      // A blocked or dead network makes fetch throw instead of answering: without this the busy
+      // guard above left the button disabled on "Signing in…" for ever with no message at all
+      // (measured live 2026-11-05 with the login POST aborted: buttonDisabled=true, errText="").
+      res={ok:false,message:'Cannot reach the server — check your connection and try again.'};
+    }
     busy=false; lb.disabled=false; lb.textContent='Log In';
     if(!res.ok || !TOKEN){
       er.className='text-red-500 text-sm mt-3 text-center';
