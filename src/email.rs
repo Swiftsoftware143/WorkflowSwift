@@ -1492,11 +1492,12 @@ struct EmailTemplateRow {
 /// and carried the RETIRED `export` step type in the same arm (kanban t_88082a4c).
 pub const EMAIL_PROVIDERS: &[&str] = &["smtp", "mailgun", "sendgrid", "sendiio"];
 
-/// The app's OWN support address. David (2026-10-08): the reply-to/support address in a
-/// transactional mail is ALWAYS `support@` the app's own main domain — never the platform's
-/// or a sibling company's. WorkflowSwift mail carried none at all, so [`with_support_footer`]
-/// adds this to every message that leaves the app.
-pub const SUPPORT_EMAIL: &str = "support@swiftsoftware.net";
+/// The app's OWN support channel — a PAGE, not a mailbox (measured 2026-11-06 on dns.google and
+/// cloudflare-dns.com): every address this product printed lived on a domain publishing MX = 0,
+/// with nothing on this host listening on port 25, so a customer's reply BOUNCED. The app serves a
+/// contact form on its own host that files the message into the operator's support queue
+/// (`POST /api/v1/public/support-request`), so [`with_support_footer`] names that page.
+pub const SUPPORT_CONTACT: &str = "https://app.workflowswift.com/contact.html";
 
 /// Append the app's support line to one body.
 ///
@@ -1506,16 +1507,19 @@ pub const SUPPORT_EMAIL: &str = "support@swiftsoftware.net";
 /// empty (the `html_body` "" means "no HTML part" and must not become a footer-only part), and
 /// a body that already carries the address is returned untouched.
 fn with_support_footer(body: &str, html: bool) -> String {
-    if body.is_empty() || body.contains(SUPPORT_EMAIL) {
+    if body.is_empty() || body.contains(SUPPORT_CONTACT) {
         return body.to_string();
     }
     if html {
         format!(
-            "{}\n<p style=\"font-size:13px;color:#6b7280;text-align:center;\">Need help? Contact <a href=\"mailto:{}\">{}</a></p>",
-            body, SUPPORT_EMAIL, SUPPORT_EMAIL
+            "{}\n<p style=\"font-size:13px;color:#6b7280;text-align:center;\">Need help? <a href=\"{}\">Send us a message</a> — no sign-in needed.</p>",
+            body, SUPPORT_CONTACT
         )
     } else {
-        format!("{}\n\nNeed help? Contact {}\n", body, SUPPORT_EMAIL)
+        format!(
+            "{}\n\nNeed help? Send us a message at {}\n",
+            body, SUPPORT_CONTACT
+        )
     }
 }
 

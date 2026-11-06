@@ -123,6 +123,12 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     "/api/v1/industries",
     "/api/v1/available-providers",
     "/api/v1/provider-presets",
+    // --- the contact page's own filing arm (2026-11-06) ----------------------------------------
+    // A visitor who is NOT signed in files a help request. Every support address this product
+    // printed lived on a domain publishing MX = 0, so a locked-out customer's message bounced; the
+    // form now files it into the operator's ticket queue instead. No credential, no workspace: ONE
+    // ticket with a NULL aid, the address the visitor typed, at most three per address per hour.
+    "/api/v1/public/support-request",
     // --- the marketing price list (2026-10-30) -------------------------------------------------
     // `www/workflowswift/pricing.html` reads this before a visitor has an account, so it cannot
     // carry a session. Deliberately NARROWER than the authenticated `/api/v1/plans`: slug, name and
@@ -555,7 +561,7 @@ mod tests {
     /// from the code without a test failing.
     #[test]
     fn the_census_shape_is_what_the_docs_say() {
-        assert_eq!(super::PUBLIC_ROUTES.len(), 16, "PUBLIC_ROUTES size");
+        assert_eq!(super::PUBLIC_ROUTES.len(), 17, "PUBLIC_ROUTES size");
         assert_eq!(super::INTERNAL_ROUTES.len(), 10, "INTERNAL_ROUTES size");
         // The 22 deliberate anonymous placements the census found, minus the 2 moved to the
         // protected router, plus `/api/v1/auth/avatar/{user_id}` (the account-picture READ, card
@@ -566,7 +572,7 @@ mod tests {
         // session).
         assert_eq!(
             super::PUBLIC_ROUTES.len() + super::INTERNAL_ROUTES.len(),
-            26
+            27
         );
     }
 }

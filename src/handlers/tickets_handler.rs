@@ -509,7 +509,12 @@ pub async fn delete(
 #[derive(Debug, Serialize, FromRow)]
 pub struct AdminTicket {
     pub id: Uuid,
-    pub aid: Uuid,
+    /// NULL for a message filed from the contact page: that visitor has no workspace (migration
+    /// 101), and an inner assumption of a workspace would hide the row from the operator.
+    pub aid: Option<Uuid>,
+    /// The address the visitor typed on the contact page; '' on every workspace ticket.
+    #[sqlx(default)]
+    pub requested_by: String,
     pub account_name: Option<String>,
     pub subject: String,
     pub description: Option<String>,
@@ -586,7 +591,7 @@ pub async fn list_all(
     };
     let offset = if q.page > 1 { (q.page - 1) * limit } else { 0 };
     let rows = sqlx::query_as::<_, AdminTicket>(
-        "SELECT t.id, t.aid, a.name AS account_name, t.subject, t.description, t.status, t.priority, t.source, t.created_at, t.updated_at, t.plan_slug, COALESCE(pt.name, t.plan_slug) AS plan_name, t.plan_applied_at, COALESCE(a.probe_harness, '') AS account_probe, t.reply, t.replied_at FROM tickets t LEFT JOIN accounts a ON a.id = t.aid LEFT JOIN plan_tiers pt ON pt.slug = t.plan_slug WHERE ($1::text IS NULL OR t.status = $1) AND ($2::text IS NULL OR t.source = $2) ORDER BY t.created_at DESC LIMIT $3 OFFSET $4",
+        "SELECT t.id, t.aid, COALESCE(a.name, 'Website visitor') AS account_name, t.subject, t.description, t.status, t.priority, t.source, t.created_at, t.updated_at, t.plan_slug, COALESCE(pt.name, t.plan_slug) AS plan_name, t.plan_applied_at, COALESCE(a.probe_harness, '') AS account_probe, t.reply, t.replied_at, COALESCE(t.requested_by, '') AS requested_by FROM tickets t LEFT JOIN accounts a ON a.id = t.aid LEFT JOIN plan_tiers pt ON pt.slug = t.plan_slug WHERE ($1::text IS NULL OR t.status = $1) AND ($2::text IS NULL OR t.source = $2) ORDER BY t.created_at DESC LIMIT $3 OFFSET $4",
     )
     .bind(q.status.as_deref())
     .bind(q.source.as_deref())
@@ -618,7 +623,14 @@ pub async fn admin_update_status(
     // The status BEFORE this call (2026-10-19). The customer is told only when something actually
     // moved: a console that re-sends the value it already shows, or an operator double-clicking
     // "Mark handled", must not mail the same person twice about the same non-event.
-    let prior: Option<(String, Uuid, Option<String>, bool, Option<Uuid>, bool)> = sqlx::query_as(
+    let prior: Option<(
+        String,
+        Option<Uuid>,
+        Option<String>,
+        bool,
+        Option<Uuid>,
+        bool,
+    )> = sqlx::query_as(
         "SELECT status, aid, plan_slug, (plan_applied_at IS NOT NULL), credit_pack_id, \
          (credits_applied_at IS NOT NULL) FROM tickets WHERE id = $1",
     )
@@ -636,6 +648,11 @@ pub async fn admin_update_status(
     else {
         return Err(AppError::NotFound("Ticket not found".into()));
     };
+    // A message filed from the contact page has NO workspace. It can carry no plan and no credit
+    // pack, so the arms below never run for it; the nil id exists only so those binds keep their
+    // type. The reply notice is what must still reach the visitor (see `notify_customer`).
+    let public_visitor = ticket_aid.is_none();
+    let ticket_aid = ticket_aid.unwrap_or_else(Uuid::nil);
     let changed = prior_status != status;
     // ── The operator's WRITTEN ANSWER (2026-11-06) ─────────────────────────────────────────
     // Status alone told the customer *that* something happened, never *what* was decided: a
@@ -800,7 +817,7 @@ pub async fn admin_update_status(
     // Re-read through the SAME joined select the list uses, so the console repaints an attributable
     // row (account name included) rather than a bare ticket.
     let row = sqlx::query_as::<_, AdminTicket>(
-        "SELECT t.id, t.aid, a.name AS account_name, t.subject, t.description, t.status, t.priority, t.source, t.created_at, t.updated_at, t.plan_slug, COALESCE(pt.name, t.plan_slug) AS plan_name, t.plan_applied_at, COALESCE(a.probe_harness, '') AS account_probe, t.reply, t.replied_at FROM tickets t LEFT JOIN accounts a ON a.id = t.aid LEFT JOIN plan_tiers pt ON pt.slug = t.plan_slug WHERE t.id = $1",
+        "SELECT t.id, t.aid, COALESCE(a.name, 'Website visitor') AS account_name, t.subject, t.description, t.status, t.priority, t.source, t.created_at, t.updated_at, t.plan_slug, COALESCE(pt.name, t.plan_slug) AS plan_name, t.plan_applied_at, COALESCE(a.probe_harness, '') AS account_probe, t.reply, t.replied_at, COALESCE(t.requested_by, '') AS requested_by FROM tickets t LEFT JOIN accounts a ON a.id = t.aid LEFT JOIN plan_tiers pt ON pt.slug = t.plan_slug WHERE t.id = $1",
     )
     .bind(id)
     .fetch_one(&state.db)
@@ -823,6 +840,137 @@ pub async fn admin_update_status(
     })))
 }
 
+/// A message from someone who is NOT signed in — the served contact page's form.
+#[derive(Debug, Deserialize)]
+pub struct PublicTicketInput {
+    #[serde(default)]
+    pub name: String,
+    pub email: String,
+    pub subject: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// At most this many messages from one address within an hour.
+const PUBLIC_HOURLY_LIMIT: i64 = 3;
+
+/// `POST /api/v1/public/support-request` — file a help request from the contact page.
+///
+/// WHY THIS EXISTS (measured 2026-11-06 on dns.google and cloudflare-dns.com): every support
+/// address this product printed lived on a domain publishing **MX = 0**, and nothing on this host
+/// listens on port 25, so a locked-out customer's "write to support@…" message BOUNCED. This arm
+/// files the same kind of ticket the signed-in arm writes, attached to no workspace (migration 101)
+/// and filed by no user, so it lands in the operator queue the team already answers.
+///
+/// Deliberately narrow: no workspace is created, nothing is mailed at filing time, no plan moves.
+pub async fn create_public(
+    State(state): State<AppState>,
+    Json(body): Json<PublicTicketInput>,
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    let email = body.email.trim().to_lowercase();
+    let at = email.find('@').unwrap_or(0);
+    if at == 0
+        || at == email.len() - 1
+        || email.len() > 254
+        || email.chars().any(|c| c.is_whitespace() || c.is_control())
+        || !email[at + 1..].contains('.')
+    {
+        return Err(AppError::BadRequest(
+            "Enter an email address we can reply to.".to_string(),
+        ));
+    }
+    let subject: String = body
+        .subject
+        .trim()
+        .chars()
+        .take(200)
+        .collect::<String>()
+        .trim()
+        .to_string();
+    if subject.is_empty() {
+        return Err(AppError::BadRequest(
+            "Give your message a short subject so the team knows what it is about.".to_string(),
+        ));
+    }
+    let message: String = body
+        .description
+        .trim()
+        .chars()
+        .take(4000)
+        .collect::<String>()
+        .trim()
+        .to_string();
+    if message.is_empty() {
+        return Err(AppError::BadRequest(
+            "Write your message so the team knows what you need.".to_string(),
+        ));
+    }
+    let name: String = body.name.trim().chars().take(120).collect();
+    let description = if name.trim().is_empty() {
+        message
+    } else {
+        format!("{} wrote:\n\n{}", name.trim(), message)
+    };
+
+    let recent: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM tickets WHERE lower(requested_by) = $1 AND created_at > now() - interval '1 hour'",
+    )
+    .bind(&email)
+    .fetch_one(&state.db)
+    .await?;
+    if recent >= PUBLIC_HOURLY_LIMIT {
+        return Ok((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({
+                "status": 429,
+                "error": "You have sent us several messages in the last hour. Please wait a little, or reply to the email we already have from you.",
+                "retry_after_seconds": 3600
+            })),
+        ));
+    }
+
+    let existing: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM tickets WHERE aid IS NULL AND lower(requested_by) = $1 \
+           AND lower(subject) = lower($2) AND status IN ('open','in_progress') \
+         ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(&email)
+    .bind(&subject)
+    .fetch_optional(&state.db)
+    .await?;
+    if let Some(id) = existing {
+        return Ok((
+            StatusCode::OK,
+            Json(json!({
+                "id": id,
+                "status": "existing",
+                "message": "We already have your message with that subject — the team will reply to the address you gave."
+            })),
+        ));
+    }
+
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO tickets (id, aid, subject, description, status, priority, source, requested_by) \
+         VALUES ($1, NULL, $2, $3, 'open', 'medium', 'contact_form', $4)",
+    )
+    .bind(id)
+    .bind(&subject)
+    .bind(&description)
+    .bind(&email)
+    .execute(&state.db)
+    .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "id": id,
+            "status": "open",
+            "message": "Your message is with our team. We will reply to the address you gave."
+        })),
+    ))
+}
+
 /// Tell the person who filed the request that it moved (2026-10-19).
 ///
 /// The operator's action is already committed when this runs, so it is best-effort by construction:
@@ -837,10 +985,35 @@ async fn notify_customer(
     status: &str,
     applied_plan: Option<&str>,
 ) {
+    // ── A MESSAGE FROM THE CONTACT PAGE (2026-11-06) ─────────────────────────────────────────
+    // This ticket belongs to no workspace and was filed by no user: the address to answer is the
+    // one the visitor typed. Without this arm the operator's answer would be stored and the
+    // visitor told nothing — the exact dead end the contact form exists to close. A reserved /
+    // harness recipient is withheld by the send funnel itself, so a probe is never mailed.
+    if ticket.aid.is_none() {
+        let visitor = ticket.requested_by.trim().to_string();
+        if visitor.is_empty() {
+            return;
+        }
+        let vars = json!({
+            "name": "there",
+            "ticket_subject": ticket.subject,
+            "status": status,
+            "plan_name": applied_plan,
+            "app_url": "https://app.workflowswift.com",
+        });
+        if let Err(e) =
+            crate::email::send_email(state, None, &visitor, "ticket_update", &vars).await
+        {
+            tracing::warn!(ticket = %ticket.id, "public ticket notice to {visitor} failed: {e}");
+        }
+        return;
+    }
+    let aid = ticket.aid.unwrap_or_else(Uuid::nil);
     let owner: Option<(String, String)> = sqlx::query_as(
         "SELECT name, email FROM users WHERE aid = $1 AND is_active ORDER BY (role IN ('owner','company_admin')) DESC, sort_order NULLS LAST, created_at ASC LIMIT 1",
     )
-    .bind(ticket.aid)
+    .bind(aid)
     .fetch_optional(&state.db)
     .await
     .ok()
@@ -848,7 +1021,7 @@ async fn notify_customer(
     let Some((name, email)) = owner else {
         tracing::warn!(
             ticket = %ticket.id,
-            aid = %ticket.aid,
+            aid = %aid,
             "ticket status change: the workspace has no active user to notify"
         );
         return;
@@ -861,8 +1034,7 @@ async fn notify_customer(
         "plan_name": applied_plan,
         "app_url": "https://app.workflowswift.com",
     });
-    if let Err(e) =
-        crate::email::send_email(state, Some(ticket.aid), &email, "ticket_update", &vars).await
+    if let Err(e) = crate::email::send_email(state, Some(aid), &email, "ticket_update", &vars).await
     {
         tracing::warn!(
             ticket = %ticket.id,

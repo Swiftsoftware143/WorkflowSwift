@@ -1044,6 +1044,13 @@ pub fn create_router(state: AppState) -> Router {
     //   * the four password-auth routes are nested separately and keep their own, stricter bound
     //     (the in-flight ceiling's 15 s 429, `b1b93a4`), which the deadline must not pre-empt.
     let public_body_routes = Router::new()
+        // The contact page's filing arm (2026-11-06). A visitor who is NOT signed in posts here; the
+        // ticket carries no workspace (migration 101) and lands in the operator's support queue. It
+        // READS A BODY, so it belongs in this sub-router.
+        .route(
+            "/public/support-request",
+            post(handlers::tickets_handler::create_public),
+        )
         // n8n writes its execution result back here. Self-authenticating: either
         // X-Internal-Key (n8n) or a user JWT scoped to the instance's account.
         .route(
