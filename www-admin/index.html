@@ -2980,6 +2980,49 @@ function renderIndustrySources(c){
   // answered a deserialisation 4xx the moment it was saved (measured live 2026-10-14).
   const IS_FIELDS=['industry_slug','source_name','source_type','endpoint','refresh_cadence','credit_cost','is_active'];
   renderCRUD(c.querySelector('#isdata'),'industry-sources','Industry Source',IS_FIELDS,{list:'/admin/industry-sources',create:'/admin/industry-sources',del:'/admin/industry-sources',upsert:true,ints:['credit_cost']},IS_FIELDS);
+
+  // The five feeds every seeded source names (GET /api/v1/satellite/*). Until 2026-11-06 all five
+  // answered 404 while this panel listed 115 active sources pointing at them; the endpoints exist
+  // now, so the panel PROVES it with a live read instead of asking the operator to trust the
+  // stored `endpoint` string.
+  const IS_FEEDS=[['market-research','Market research'],['news','News & mentions'],['competitors','Competitors'],['leads','Leads'],['trends','Trends']];
+  const fbox=document.createElement('div');
+  fbox.className='card mt-6';
+  fbox.innerHTML='<h2 class="text-xl font-bold mb-1">Feed status</h2>'
+   +'<p class="text-xs text-gray-400 mb-4">Each source above names an endpoint in this app. This reads every one now and reports what it actually answers \u2014 a live response, not a stored flag.</p>'
+   +'<div id="isfeeds"><p class="text-gray-400 text-sm">Loading...</p></div>'
+   +'<div id="isfeeditems" class="mt-4"></div>';
+  c.appendChild(fbox);
+  (async()=>{
+    const el=fbox.querySelector('#isfeeds'), det=fbox.querySelector('#isfeeditems');
+    const out=[];
+    for(const pair of IS_FEEDS){
+      const slug=pair[0], label=pair[1];
+      const d=await api('/satellite/'+encodeURIComponent(slug));
+      if(d===null){
+        out.push('<tr><td>'+escHtml(label)+'</td><td><span class="badge badge-yellow">unavailable</span></td><td class="text-xs text-gray-400">'+escHtml(LAST_ERR||'-')+'</td><td></td></tr>');
+        continue;
+      }
+      const n=(d&&typeof d.count==='number')?d.count:((d&&d.items&&d.items.length)||0);
+      out.push('<tr><td>'+escHtml(label)+'</td><td><span class="badge badge-green">answering</span></td><td>'+n+'</td><td><button class="btn btn-sm" data-feed="'+slug+'" data-label="'+escHtml(label)+'">View</button></td></tr>');
+    }
+    if(!el)return;
+    el.innerHTML='<table class="table"><thead><tr><th>Feed</th><th>Status</th><th>Rows</th><th></th></tr></thead><tbody>'+out.join('')+'</tbody></table>';
+    el.querySelectorAll('button[data-feed]').forEach(b=>{
+      b.onclick=async()=>{
+        const slug=b.getAttribute('data-feed'), label=b.getAttribute('data-label');
+        const d=await api('/satellite/'+encodeURIComponent(slug));
+        if(d===null){det.innerHTML='<p class="text-sm">'+escHtml(LAST_ERR||'Feed unavailable')+'</p>';return}
+        const items=(d&&d.items)||[];
+        if(!items.length){det.innerHTML='<p class="text-gray-400 text-sm">'+escHtml(label)+': no rows stored for this account yet.</p>';return}
+        const cols=Object.keys(items[0]);
+        det.innerHTML='<h3 class="font-bold mb-2">'+escHtml(label)+'</h3><div class="overflow-auto"><table class="table"><thead><tr>'
+          +cols.map(k=>'<th>'+escHtml(k)+'</th>').join('')+'</tr></thead><tbody>'
+          +items.map(it=>'<tr>'+cols.map(k=>'<td class="text-xs">'+escHtml(it[k]==null?'':String(it[k]))+'</td>').join('')+'</tr>').join('')
+          +'</tbody></table></div>';
+      };
+    });
+  })();
 }
 
 // --- Checkout Sessions (GET /checkout/sessions -> {sessions:[...]}) — read-only history ---
