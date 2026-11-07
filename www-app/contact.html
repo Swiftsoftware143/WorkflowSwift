@@ -9,7 +9,9 @@
 body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:#f8fafc;color:#0f172a}
 .wrap{max-width:520px;margin:0 auto;padding:40px 20px}
 .card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:24px;box-shadow:0 1px 2px rgba(15,23,42,.05)}
+.card+.card{margin-top:18px}
 h1{font-size:20px;margin:0 0 6px}
+h2{font-size:16px;margin:0 0 6px}
 p.sub{margin:0 0 20px;color:#475569;font-size:14px;line-height:1.5}
 label{display:block;font-size:13px;font-weight:600;margin:14px 0 6px}
 input,textarea{width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #cbd5e1;border-radius:8px;font-size:14px;font-family:inherit;color:#0f172a}
@@ -23,6 +25,8 @@ button:disabled{opacity:.6;cursor:default}
 .msg.err{display:block;color:#b91c1c}
 .back{margin-top:18px;font-size:13px;text-align:center}
 .back a{color:#2563eb;text-decoration:none}
+.answer{margin-top:14px;border-left:3px solid #22c55e;background:#f0fdf4;border-radius:6px;padding:12px 14px;font-size:14px;line-height:1.55;display:none;white-space:pre-wrap}
+.answer .head{font-size:12px;color:#166534;margin-bottom:4px;white-space:normal}
 </style>
 </head>
 <body>
@@ -44,18 +48,53 @@ button:disabled{opacity:.6;cursor:default}
     </form>
     <div class="back"><a href="/login">&larr; Back to sign in</a></div>
   </div>
+
+  <!-- The team's answer, without an account (2026-11-06). A visitor who filed from this page has no
+       workspace and no Tickets screen, so the answer used to exist only on a row they could never
+       load. The reference is the one this page was handed when the message was filed; it is kept on
+       this device so the same person can come back to it, and the address is the one they typed. -->
+  <div class="card" id="checkcard">
+    <h2>Check the team's answer</h2>
+    <p class="sub" style="margin-bottom:10px">Filed a message from this page? Enter the reference we gave you and the email you used, and the team's answer appears here.</p>
+    <form id="cf" novalidate>
+      <label for="ref">Reference</label>
+      <input id="ref" type="text" autocomplete="off" spellcheck="false" maxlength="64" placeholder="Shown when your message was sent">
+      <label for="cem">Email you filed with</label>
+      <input id="cem" type="email" autocomplete="email" maxlength="254">
+      <button id="cbtn" type="submit">Show the answer</button>
+      <div id="cm" class="msg" role="status" aria-live="polite"></div>
+      <div id="ans" class="answer"><div class="head" id="anshead"></div><div id="ansbody"></div></div>
+    </form>
+  </div>
 </div>
 <script>
 (function(){
   var f=document.getElementById('f'), m=document.getElementById('m'), b=document.getElementById('send');
-  function say(t,ok){ m.textContent=t; m.className='msg '+(ok?'ok':'err'); }
+  var cf=document.getElementById('cf'), cm=document.getElementById('cm'), cb=document.getElementById('cbtn');
+  var ans=document.getElementById('ans'), anshead=document.getElementById('anshead'), ansbody=document.getElementById('ansbody');
+  var KEY='ws_support_ref';
+  function say(el,t,ok){ el.textContent=t; el.className='msg '+(ok?'ok':'err'); }
   function val(id){ return (document.getElementById(id).value||'').trim(); }
+  function remember(id,email){
+    try{ localStorage.setItem(KEY, JSON.stringify({id:id,email:email})); }catch(e){}
+  }
+  function recall(){
+    try{
+      var raw=localStorage.getItem(KEY); if(!raw) return null;
+      var o=JSON.parse(raw); if(!o||!o.id) return null; return o;
+    }catch(e){ return null; }
+  }
+  var saved=recall();
+  if(saved){
+    document.getElementById('ref').value=saved.id;
+    document.getElementById('cem').value=saved.email||'';
+  }
   f.addEventListener('submit', function(e){
     e.preventDefault();
     var email=val('em'), subject=val('sb'), body=val('bd');
-    if(!email){ say('Enter the email address we should reply to.',false); return; }
-    if(subject.length<2){ say('Give your message a short subject.',false); return; }
-    if(body.length<2){ say('Write your message so we know what you need.',false); return; }
+    if(!email){ say(m,'Enter the email address we should reply to.',false); return; }
+    if(subject.length<2){ say(m,'Give your message a short subject.',false); return; }
+    if(body.length<2){ say(m,'Write your message so we know what you need.',false); return; }
     b.disabled=true;
     fetch('/api/v1/public/support-request',{
       method:'POST',
@@ -64,18 +103,52 @@ button:disabled{opacity:.6;cursor:default}
     }).then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,body:j}; }); })
       .then(function(res){
         if(res.ok){
-          say((res.body&&res.body.message)||'Your message is with our team.',true);
+          say(m,((res.body&&res.body.message)||'Your message is with our team.')+' Keep this reference: '+((res.body&&res.body.id)||''),true);
+          if(res.body&&res.body.id){
+            remember(res.body.id,email);
+            document.getElementById('ref').value=res.body.id;
+            document.getElementById('cem').value=email;
+          }
           f.querySelectorAll('input,textarea').forEach(function(el){ el.value=''; });
           b.disabled=true; b.textContent='Sent';
         } else if(res.status===429){
-          say('You have sent us several messages in the last hour. Please wait a little, or reply to the email we already have from you.',false);
+          say(m,'You have sent us several messages in the last hour. Please wait a little, or reply to the email we already have from you.',false);
           b.disabled=false;
         } else {
-          say((res.body&&(res.body.error||res.body.message))||'That did not go through. Try again in a moment.',false);
+          say(m,(res.body&&(res.body.error||res.body.message))||'That did not go through. Try again in a moment.',false);
           b.disabled=false;
         }
       })
-      .catch(function(){ say('That did not go through. Check your connection and try again.',false); b.disabled=false; });
+      .catch(function(){ say(m,'That did not go through. Check your connection and try again.',false); b.disabled=false; });
+  });
+  cf.addEventListener('submit', function(e){
+    e.preventDefault();
+    var ref=val('ref'), email=val('cem');
+    if(!ref){ say(cm,'Enter the reference you were given.',false); return; }
+    if(!email){ say(cm,'Enter the email address you filed with.',false); return; }
+    cb.disabled=true; ans.style.display='none';
+    fetch('/api/v1/public/support-answer',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ticket_id:ref,email:email})
+    }).then(function(r){ return r.json().catch(function(){return {};}).then(function(j){ return {ok:r.ok,status:r.status,body:j}; }); })
+      .then(function(res){
+        cb.disabled=false;
+        if(!res.ok){
+          say(cm,(res.body&&(res.body.error||res.body.message))||'We have no message from that address with that reference.',false);
+          return;
+        }
+        var t=res.body||{};
+        if(t.reply){
+          cm.className='msg'; cm.textContent='';
+          anshead.textContent='Our answer to "'+(t.subject||'')+'"'+(t.status?(' — '+String(t.status).replace(/_/g,' ')):'');
+          ansbody.textContent=t.reply;
+          ans.style.display='block';
+        } else {
+          say(cm,'We have your message and the team has not answered it yet. You will also get it by email.',true);
+        }
+      })
+      .catch(function(){ cb.disabled=false; say(cm,'That did not go through. Check your connection and try again.',false); });
   });
 })();
 </script>
