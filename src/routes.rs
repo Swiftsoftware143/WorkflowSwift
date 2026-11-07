@@ -546,6 +546,23 @@ pub fn create_router(state: AppState) -> Router {
             post(handlers::prospecting_handler::enrich_business),
         );
 
+    // The five data feeds `industry_data_sources` seeds for every industry. Until this router
+    // existed all five answered 404 while the console listed 115 active sources pointing at them
+    // (measured live 2026-11-06). Each reads a store this app already keeps, scoped by the token's
+    // own account — there is no account id in the path.
+    let satellite_routes = Router::new()
+        .route(
+            "/market-research",
+            get(handlers::satellite_handler::market_research),
+        )
+        .route("/news", get(handlers::satellite_handler::news))
+        .route(
+            "/competitors",
+            get(handlers::satellite_handler::competitors),
+        )
+        .route("/leads", get(handlers::satellite_handler::leads))
+        .route("/trends", get(handlers::satellite_handler::trends));
+
     let bridge_routes = Router::new()
         .route("/ingest", post(handlers::bridge_handler::ingest_data))
         .route("/commands", get(handlers::bridge_handler::get_commands))
@@ -883,6 +900,7 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/brand-monitors", brand_monitor_routes)
         .nest("/competitors", competitor_routes)
         .nest("/prospecting", prospecting_routes)
+        .nest("/satellite", satellite_routes)
         .nest("/bridge", bridge_routes)
         .nest("/n8n", n8n_routes)
         .nest("/provider-keys", provider_keys_routes)
