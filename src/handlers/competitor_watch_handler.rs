@@ -236,6 +236,55 @@ pub async fn delete_competitor(
     Ok(Json(json!({"message": "Competitor deleted successfully"})))
 }
 
+/// GET /api/v1/competitors/{id}/changes — what the checks have found over time.
+///
+/// The snapshot columns on `competitors` are overwritten by every check, so this is the ONLY place a
+/// past difference survives. The competitor is looked up in the caller's own account FIRST: a
+/// stranger's id answers 404 rather than an empty list, so the route cannot be used to ask whether
+/// some other account tracks a given competitor.
+pub async fn list_competitor_changes(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<impl IntoResponse> {
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+
+    let owned =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM competitors WHERE id = $1 AND aid = $2")
+            .bind(id)
+            .bind(aid)
+            .fetch_one(&state.db)
+            .await?;
+    if owned == 0 {
+        return Err(AppError::NotFound("Competitor not found".to_string()));
+    }
+
+    let rows = sqlx::query(
+        "SELECT id::text, change_type, description, source_url, detected_at::text \
+         FROM competitor_changes WHERE competitor_id = $1 AND aid = $2 \
+         ORDER BY detected_at DESC LIMIT 200",
+    )
+    .bind(id)
+    .bind(aid)
+    .fetch_all(&state.db)
+    .await?;
+
+    let changes: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|r| {
+            json!({
+                "id": r.try_get::<&str, _>("id").unwrap_or(""),
+                "change_type": r.try_get::<&str, _>("change_type").unwrap_or(""),
+                "description": r.try_get::<&str, _>("description").unwrap_or(""),
+                "source_url": r.try_get::<&str, _>("source_url").unwrap_or(""),
+                "detected_at": r.try_get::<&str, _>("detected_at").unwrap_or(""),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({"changes": changes, "count": changes.len()})))
+}
+
 pub async fn check_competitor(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -284,6 +333,9 @@ pub async fn check_competitor(
     let prev_bytes: Option<i64> = prev.try_get("snapshot_bytes").ok().flatten();
     let prev_at: Option<chrono::DateTime<Utc>> = prev.try_get("snapshot_at").ok().flatten();
 
+    // Read before the match below consumes the option (a moved value cannot be inspected after).
+    let had_baseline = prev_hash.is_some();
+
     let (status, changes_detected, summary) = match prev_hash {
         None => (
             "baseline".to_string(),
@@ -326,6 +378,32 @@ pub async fn check_competitor(
     .bind(size)
     .execute(&state.db)
     .await?;
+
+    // A DETECTED CHANGE MUST SURVIVE THE NEXT CHECK (migration 102). The snapshot columns above
+    // hold only the LATEST page, so before this the second check overwrote the first and the fact
+    // that the page changed on a given day was lost — the operator was told "it changed" and had no
+    // record of when or by how much. Record the baseline once, and every later difference, so
+    // `GET /competitors/{id}/changes` can show a history instead of one pair of numbers.
+    let record_kind = if !had_baseline {
+        Some("baseline")
+    } else if changes_detected {
+        Some("website_change")
+    } else {
+        None
+    };
+    if let Some(kind) = record_kind {
+        sqlx::query(
+            "INSERT INTO competitor_changes (competitor_id, aid, change_type, description, source_url) \
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(competitor.id)
+        .bind(aid)
+        .bind(kind)
+        .bind(&summary)
+        .bind(&final_url)
+        .execute(&state.db)
+        .await?;
+    }
 
     let result = CompetitorCheckResult {
         competitor_id: competitor.id,

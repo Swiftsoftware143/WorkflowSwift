@@ -1312,9 +1312,16 @@ const CompetitorsView = () => {
       </header>
       ${list.length === 0 ? html`<div class="empty">No competitors tracked yet.</div>` : html`
       <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Website</th><th>Status</th><th>Last Checked</th><th></th></tr></thead><tbody>
-        ${list.map(c => html`<tr key=${c.id}><td class="font-semibold">${c.name}</td><td>${c.website ? html`<a class="text-blue-600" href=${c.website} target="_blank">${c.website}</a>` : '—'}</td><td>${statusBadge(c.is_active?'active':'paused')}</td><td>${fmtDate(c.last_checked_at)}</td><td class="text-right"><button class="btn-outline text-xs" onClick=${()=>checkCompetitor(c.id)}>Check</button> <button class="btn-red text-xs" onClick=${()=>delCompetitor(c.id)}>Del</button></td></tr>`)}
+        ${list.map(c => html`<tr key=${c.id}><td class="font-semibold">${c.name}</td><td>${c.website ? html`<a class="text-blue-600" href=${c.website} target="_blank">${c.website}</a>` : '—'}</td><td>${statusBadge(c.is_active?'active':'paused')}</td><td>${fmtDate(c.last_checked_at)}</td><td class="text-right" style="white-space:nowrap"><button class="btn-outline text-xs" onClick=${()=>checkCompetitor(c.id)}>Check</button><button class="btn-outline text-xs" style="margin-left:4px" onClick=${()=>openCompetitorEdit(c)}>Edit</button><button class="btn-outline text-xs" style="margin-left:4px" onClick=${()=>showCompetitorHistory(c)}>History</button><button class="btn-red text-xs" style="margin-left:4px" onClick=${()=>delCompetitor(c.id)}>Delete</button></td></tr>`)}
       </tbody></table></div>`}
-      ${S.checkResult ? html`<div class="card" style="margin-top:16px">
+            ${S.compHistory ? html`<div class="card" style="margin-top:16px">
+        <div class="flex items-center justify-between mb-3"><h3 class="font-semibold text-gray-800">${S.compHistoryName || 'Competitor'} &mdash; change history</h3><button class="btn-outline text-xs" onClick=${()=>{S.compHistory=null;renderApp();}}>Close</button></div>
+        ${(S.compHistory||[]).length === 0 ? html`<p class="text-sm text-gray-500">No checks recorded yet — press Check to take the first snapshot.</p>` : html`
+        <table class="table"><thead><tr><th>When</th><th>What</th><th>Detail</th></tr></thead><tbody>
+          ${S.compHistory.map(h => html`<tr key=${h.id}><td class="text-xs text-gray-500" style="white-space:nowrap">${fmtDate(h.detected_at)}</td><td><span class="chip">${h.change_type === 'baseline' ? 'first check' : 'page changed'}</span></td><td class="text-sm text-gray-700">${h.description || ''}</td></tr>`)}
+        </tbody></table>`}
+      </div>` : ''}
+${S.checkResult ? html`<div class="card" style="margin-top:16px">
         <h3 class="font-semibold text-gray-800">${S.checkResult.name || 'Competitor'} — last check</h3>
         <p class="text-sm text-gray-600 mt-1">${S.checkResult.summary || ''}</p>
         <p class="text-xs text-gray-400 mt-1">checked ${fmtDate(S.checkResult.checked_at)}</p>
@@ -1325,6 +1332,11 @@ const CompetitorsView = () => {
 const loadCompetitors = async () => { if(S.loading)return; S.loading=true; renderApp(); try { S.competitors = (await API.get('/competitors')).competitors || []; } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
 const checkCompetitor = async (id) => { try { const r = await API.post('/competitors/'+id+'/check'); S.checkResult = r.check_result || r; S.checkSample = r.sample_data === true; toast('Check complete'); renderApp(); } catch(e){ toast(e.message,'err'); } };
 const delCompetitor = async (id) => { if(!confirm('Delete this competitor?'))return; try { await API.del('/competitors/'+id); toast('Competitor removed'); S.competitors=null; loadCompetitors(); } catch(e){ toast(e.message,'err'); } };
+// Edit an existing competitor: the check refuses a competitor with no website, so a typo made at
+// creation had no way back — the operator was told to add the website and the screen offered no
+// field. PUT /competitors/{id} accepts name, website, description and is_active.
+const openCompetitorEdit = (c) => { S.formSeeded=false; S.compEdit = { id:c.id, name:c.name||'', website:c.website||'', description:c.description||'', is_active:c.is_active!==false }; S.modal='compedit'; renderApp(); };
+const showCompetitorHistory = async (c) => { S.compHistoryName = c.name || 'Competitor'; S.compHistory = []; renderApp(); try { const r = await API.get('/competitors/'+c.id+'/changes'); S.compHistory = r.changes || []; } catch(e){ toast(e.message,'err'); S.compHistory=null; } renderApp(); };
 
 // ===== Leads (/leads -> {leads: [...], count}, fields: name/email/phone/company/status) =====
 const LeadsView = () => {
@@ -2572,6 +2584,16 @@ const CompetitorModal = () => {
     <div class="mb-4"><label class="label">Website</label><input class="input" value=${f.web} onInput=${e=>f.web=e.target.value} placeholder="https://competitor.com" /></div>
     <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Add Competitor'}</button>
   <//>`; };
+const CompetitorEditModal = () => {
+  const d = S.compEdit || {};
+  const save = async () => { if(!String(d.name||'').trim()) return toast('Name required','err'); S.loading=true; renderApp(); try { await API.put('/competitors/'+d.id, { name: d.name, website: d.website, description: d.description, is_active: d.is_active!==false }); toast('Competitor updated'); S.competitors=null; S.compEdit=null; closeModal(); } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
+  return html`<${ModalShell} title="Edit Competitor" onClose=${()=>{S.compEdit=null;closeModal();}}>
+    <div class="mb-4"><label class="label">Competitor Name</label><input class="input" value=${d.name||''} onInput=${e=>{d.name=e.target.value;}} placeholder="Competitor Inc" /></div>
+    <div class="mb-4"><label class="label">Website</label><input class="input" value=${d.website||''} onInput=${e=>{d.website=e.target.value;}} placeholder="https://competitor.com" /></div>
+    <div class="mb-4"><label class="label">Notes</label><input class="input" value=${d.description||''} onInput=${e=>{d.description=e.target.value;}} placeholder="What you watch about them" /></div>
+    <label class="flex items-center gap-2 mb-4 text-sm"><input type="checkbox" checked=${d.is_active!==false} onChange=${e=>{d.is_active=e.target.checked;}} /> Watch this competitor (uncheck to pause checks)</label>
+    <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Save changes'}</button>
+  <//>`; };
 // ===== Builder (kanban t_ef3b13f4) =====
 // GET/POST /workflows/{id}/steps, PUT/DELETE /workflows/{id}/steps/{step_id},
 // PUT /workflows/{id}/steps/reorder and POST /workflows/validate-steps were all served and
@@ -3038,7 +3060,7 @@ const App = () => {
         <${Current} key=${S.current + "|" + S.dataVer} />
       </main>
     </div>
-    ${S.modal && (S.modal==='wf' ? html`<${WfModal} />` : S.modal==='lead' ? html`<${LeadModal} />` : S.modal==='ticket' ? html`<${TicketModal} />` : S.modal==='brand' ? html`<${BrandModal} />` : S.modal==='comp' ? html`<${CompetitorModal} />` : S.modal==='apikey' ? html`<${ApiKeyModal} />` : S.modal==='invite' ? html`<${InviteModal} />` : S.modal==='perms' ? html`<${PermsModal} />` : S.modal==='industry' ? html`<${IndustryPickerView} asModal />` : S.modal==='step' ? html`<${StepModal} />` : S.modal==='logs' ? html`<${LogsModal} />` : null)}
+    ${S.modal && (S.modal==='wf' ? html`<${WfModal} />` : S.modal==='lead' ? html`<${LeadModal} />` : S.modal==='ticket' ? html`<${TicketModal} />` : S.modal==='brand' ? html`<${BrandModal} />` : S.modal==='comp' ? html`<${CompetitorModal} />` : S.modal==='compedit' ? html`<${CompetitorEditModal} />` : S.modal==='apikey' ? html`<${ApiKeyModal} />` : S.modal==='invite' ? html`<${InviteModal} />` : S.modal==='perms' ? html`<${PermsModal} />` : S.modal==='industry' ? html`<${IndustryPickerView} asModal />` : S.modal==='step' ? html`<${StepModal} />` : S.modal==='logs' ? html`<${LogsModal} />` : null)}
     ${S.toast && html`<div class="toast ${S.toast.type}">${S.toast.msg}</div>`}
     ${S.loading && html`<div style="position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:60"><span class="spinner"></span></div>`}
   `;

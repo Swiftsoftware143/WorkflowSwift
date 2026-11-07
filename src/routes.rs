@@ -534,6 +534,12 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/{id}/check",
             post(handlers::competitor_watch_handler::check_competitor),
+        )
+        // What the checks have found over time (migration 102). Without this the console could only
+        // ever show the LATEST snapshot pair, because the check overwrites it.
+        .route(
+            "/{id}/changes",
+            get(handlers::competitor_watch_handler::list_competitor_changes),
         );
 
     let prospecting_routes = Router::new()
