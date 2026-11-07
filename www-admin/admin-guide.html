@@ -212,6 +212,13 @@ to charge anyone: it only decides <em>where the buyer is sent</em>.</p>
       <strong>canonical key names</strong>, mirrored into the legacy dedicated columns (<code>max_workflows</code>,
       <code>max_users</code>, <code>retention_days</code>, <code>can_deploy_n8n</code>, <code>has_api_access</code>) so both views of
       a plan agree.</p>
+      <p>
+<strong>The public pricing page reads these limits live.</strong> <code>workflowswift.com/pricing</code>
+paints each plan's workflow, user, tag, instance, API-key and history allowance from the same plan
+record this console writes, so raising a plan's allowance here changes the public page too — there is
+no second copy of the numbers to keep in step. A limit you do not set is left off the card; <code>-1</code>
+prints as <em>Unlimited</em>. <code>credits_monthly</code> prints as a monthly workflow-credit allowance
+when it is set.</p>
       <p><strong>The keys:</strong></p>
       <ul>
       <li>Numeric: <code>max_workflows</code>, <code>max_templates</code>, <code>max_instances</code>, <code>max_users</code>, <code>max_automations</code>,
@@ -1003,6 +1010,12 @@ to charge anyone: it only decides <em>where the buyer is sent</em>.</p>
       <h2 id="credits-payments-and-affiliates">Credits, payments and affiliates</h2>
       <ul>
       <li><strong>1 credit per execution</strong>; a run without credits is refused.</li>
+      <li><strong>Credits included per month</strong> — each plan tier carries its own monthly credit
+        grant, set on <strong>Admin -&gt; Plans</strong> in the <em>Credits Monthly</em> box (stored as the
+        tier's <code>features.credits_monthly</code>). A new workspace is granted that many credits by its
+        own signup, and the balance screen reports when the next reset is due. An empty box means the tier
+        grants no credits, so a workspace on it starts at zero and can only run once credits are bought or
+        granted by hand.</li>
       <li>Checkout: <code>/api/v1/checkout/create</code>, <code>/checkout/sessions</code>; providers configured per plan via
         <code>/api/v1/payment-providers</code>. Webhooks: <code>POST /api/v1/webhooks/stripe</code>,
         <code>POST /api/v1/webhooks/paypal</code>.</li>
