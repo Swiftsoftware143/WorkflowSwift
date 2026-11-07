@@ -157,6 +157,46 @@ pub async fn upsert_payment_provider(
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
+    // THE MASKED ROUND-TRIP (measured live 2026-11-07 on FunnelSwift; see
+    // `provider_key_crypto::is_mask_like`). Every credential on this screen is displayed to the
+    // operator as a masked preview, and re-saving that preview used to replace the REAL credential
+    // with it — the screen then looks unchanged while the integration is dead. A preview now means
+    // what an empty field already means on the update arm below: keep the stored credential. On the
+    // create arm, where a key is mandatory, it is refused by name instead of stored.
+    let stored_creds: Option<(String, String)> = sqlx::query_as(
+        "SELECT COALESCE(api_key_encrypted,''), COALESCE(webhook_secret_encrypted,'') \
+           FROM payment_providers WHERE provider_type = $1",
+    )
+    .bind(provider_type)
+    .fetch_optional(&state.db)
+    .await?;
+    let has_stored_key = stored_creds
+        .as_ref()
+        .map(|(k, _)| !k.trim().is_empty())
+        .unwrap_or(false);
+    let has_stored_secret = stored_creds
+        .as_ref()
+        .map(|(_, s)| !s.trim().is_empty())
+        .unwrap_or(false);
+    let key_kept = crate::security::provider_key_crypto::is_mask_like(api_key);
+    let secret_kept = crate::security::provider_key_crypto::is_mask_like(webhook_secret);
+    if key_kept && !has_stored_key {
+        return Err(AppError::BadRequest(
+            "That is the masked preview of a saved key, not the key itself — paste the full credential."
+                .into(),
+        ));
+    }
+    if secret_kept && !has_stored_secret {
+        return Err(AppError::BadRequest(
+            "That is the masked preview of a saved signing secret, not the secret itself — paste the full webhook signing secret."
+                .into(),
+        ));
+    }
+    // Empty == "keep the stored credential" on the four UPDATE literals below and on the create
+    // arm's mandatory-key check, so the preview maps to empty.
+    let api_key = if key_kept { "" } else { api_key };
+    let webhook_secret = if secret_kept { "" } else { webhook_secret };
+
     // Seal both credentials BEFORE either is bound (kanban t_6104de65). Migration 041 named these
     // columns after a promise ("Encrypted API credentials (encrypted-at-rest via app-layer
     // encryption)") that this write path never kept: the raw request value went straight into

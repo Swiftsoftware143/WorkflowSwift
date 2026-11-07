@@ -170,7 +170,33 @@ pub async fn upsert_provider_key(
 
     // Encrypt the credential BEFORE it reaches the database. Nothing is stored in the clear:
     // a missing master key fails the request (see crate::security::provider_key_crypto).
-    let encrypted_key = key_crypto::encrypt_for_storage(&state.db, api_key).await?;
+    //
+    // THE MASKED ROUND-TRIP (measured live 2026-11-07 on FunnelSwift; see
+    // `provider_key_crypto::is_mask_like`). This pane shows every saved key as `sk-...xyz`, and
+    // this route used to write whatever string it was handed straight over the stored ciphertext —
+    // so re-saving the displayed preview replaced a working credential with it and the pane then
+    // looked unchanged. A preview keeps the stored ciphertext untouched; a preview with nothing
+    // stored is refused, because storing it would create a key that can never authenticate.
+    let stored_key: Option<String> = sqlx::query_scalar(
+        "SELECT COALESCE(api_key,'') FROM provider_keys WHERE aid = $1 AND provider = $2",
+    )
+    .bind(aid)
+    .bind(&provider)
+    .fetch_optional(&state.db)
+    .await?;
+    let stored_key = stored_key.unwrap_or_default();
+    let key_kept = key_crypto::is_mask_like(api_key);
+    if key_kept && stored_key.trim().is_empty() {
+        return Err(AppError::BadRequest(
+            "That is the masked preview of a saved key, not the key itself — paste the full credential."
+                .to_string(),
+        ));
+    }
+    let encrypted_key = if key_kept {
+        stored_key.trim().to_string()
+    } else {
+        key_crypto::encrypt_for_storage(&state.db, api_key).await?
+    };
 
     // Upsert. `aid` is the account scope in this app; `tenant_id` is the legacy column from
     // before the tenant->account rename (migration 034) and is mirrored with the account id

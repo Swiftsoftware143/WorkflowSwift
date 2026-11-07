@@ -124,6 +124,24 @@ pub fn is_encrypted(stored: &str) -> bool {
     stored.starts_with(ENC_PREFIX)
 }
 
+/// True when a submitted credential is really the MASKED PREVIEW of a value already saved, rather
+/// than a new credential — the "masked round-trip".
+///
+/// Measured live 2026-11-07 on FunnelSwift: saving a key and then re-saving the value the panel
+/// displays replaced a 38-character credential with the 15-byte preview (the encrypted column shrank
+/// 143 -> 115 bytes) and the payment provider was then handed the DISPLAY STRING
+/// (`Invalid API Key provided: sk_test_***0000`). The screen looks unchanged, so the only symptom is
+/// a cryptic provider refusal at checkout.
+///
+/// Recognition is by MARKER, never by length: `provider_keys_handler::mask_key` emits `sk-...xyz`,
+/// the payment pane's read-back emits an ellipsis, the mail-config panels use a bullet, and an
+/// operator who copies a provider's own error text brings the provider's asterisks with it. A real
+/// payment/integration credential is alphanumeric plus `_`/`-`, so none of these occur inside one.
+pub fn is_mask_like(v: &str) -> bool {
+    let t = v.trim();
+    t.contains('…') || t.contains('•') || t.contains('*') || t.contains("...")
+}
+
 /// Encrypt a provider credential for storage. Fail-closed: without a master key this errors
 /// instead of returning the plaintext.
 pub async fn encrypt_for_storage(db: &PgPool, plaintext: &str) -> Result<String, CryptoError> {
@@ -167,4 +185,26 @@ pub async fn decrypt_from_storage(db: &PgPool, stored: &str) -> Result<String, C
             .await?;
 
     Ok(plaintext)
+}
+
+#[cfg(test)]
+mod masked_round_trip_tests {
+    use super::*;
+
+    #[test]
+    fn the_displayed_masks_are_recognised() {
+        assert!(is_mask_like("sk-...xyz"));
+        assert!(is_mask_like("sk_test_***0000"));
+        assert!(is_mask_like("sk_test_…0000"));
+        assert!(is_mask_like("••••••••"));
+        assert!(is_mask_like("****"));
+    }
+
+    #[test]
+    fn real_credentials_and_blanks_are_not_masks() {
+        assert!(!is_mask_like("sk-proj-PROBE_FAKE_KEY_000000000000"));
+        assert!(!is_mask_like("key-1a2b3c4d5e6f7a8b9c0d"));
+        assert!(!is_mask_like(""));
+        assert!(!is_mask_like("   "));
+    }
 }
