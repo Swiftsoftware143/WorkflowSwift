@@ -2568,7 +2568,11 @@ function renderAdminSettings(c){
     c.querySelector('#eresult').textContent=r?'Saved email provider: '+value.provider:'Save failed.';
   };
   if(etest)etest.onclick=async()=>{
-    const to=prompt('Send a test email to:');if(!to)return;
+    // Default the recipient to the operator's own sign-in address: the person proving outbound mail
+    // is the person who should receive it, and a typed address is one more thing to get wrong.
+    let own='';
+    try{ const mm=await api('/auth/me'); own=String((mm&&((mm.user&&mm.user.email)||mm.email))||''); }catch(e){}
+    const to=prompt('Send a test email to:',own);if(!to)return;
     c.querySelector('#eresult').textContent='Sending...';
     const r=await api('/admin/settings/email/test',{method:'POST',body:JSON.stringify({to})});
     c.querySelector('#eresult').textContent=r?JSON.stringify(r,null,2):'Request failed.';
