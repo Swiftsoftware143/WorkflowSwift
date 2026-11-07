@@ -1133,6 +1133,70 @@ pub async fn create_checkout_session(
     ))
 }
 
+/// `GET /checkout/status` — what the till can actually do for THIS install, so the buyer's own
+/// console can offer a real purchase instead of only a request nobody can charge for.
+///
+/// MEASURED 2026-11-07 (cron `default`): the customer Plans & Credits screen rendered only a
+/// "Request this plan" button for every paid tier and never called `POST /checkout/create`, so this
+/// app's whole checkout ladder — a charge through a live provider, the tier's own hosted payment
+/// page, and the refusal that files the ask — was unreachable from the console. The admin tier
+/// editor even promised the operator "with a link set, a customer pressing Upgrade is taken straight
+/// to it", which the buyer's screen never did. This route answers the two facts that screen needs:
+/// whether a provider is armed, and how many tiers carry a usable hosted payment page.
+///
+/// The provider is resolved with the SAME precedence `create_checkout_session` applies — a tier's own
+/// `payment_provider` column, else this install's default — because a status that disagreed with the
+/// till would be worse than no status.
+pub async fn checkout_status(
+    State(state): State<AppState>,
+    Extension(_claims): Extension<Claims>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let plan_provider = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT payment_provider FROM plan_tiers WHERE is_active = true \
+         ORDER BY sort_order ASC NULLS LAST, name LIMIT 1",
+    )
+    .fetch_optional(&state.db)
+    .await?
+    .flatten();
+    let provider_type = plan_provider
+        .filter(|p| !p.trim().is_empty() && !p.eq_ignore_ascii_case("none"))
+        .unwrap_or_else(|| DEFAULT_PAYMENT_PROVIDER.to_string());
+
+    // Tiers the operator has already given a hosted payment page. COUNTED, never assumed: the column
+    // is operator-typed, so `is_hosted_payment_url` — the till's own predicate — is what decides
+    // whether a link can actually be handed to a buyer. This can therefore never promise a hand-off
+    // the sale would refuse.
+    let links: Vec<String> = sqlx::query_scalar(
+        "SELECT COALESCE(BTRIM(checkout_url), '') FROM plan_tiers WHERE is_active = true",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    let sellable_links = links
+        .iter()
+        .filter(|u| is_hosted_payment_url(u.as_str()))
+        .count();
+
+    // Fail CLOSED and quietly: an unreadable credential must not 500 the screen it informs.
+    let (configured, reason) = match get_active_provider(&state.db, &provider_type).await {
+        Ok(Some(p)) if !p["api_key"].as_str().unwrap_or("").trim().is_empty() => (true, None),
+        Ok(Some(_)) => (false, Some("payment_provider_key_missing")),
+        Ok(None) => (false, Some("payment_provider_not_configured")),
+        Err(e) => {
+            tracing::error!("checkout/status: provider credential could not be read: {e:?}");
+            (false, Some("payment_provider_key_unreadable"))
+        }
+    };
+
+    Ok(Json(json!({
+        "configured": configured,
+        "reason": reason,
+        "provider_type": provider_type,
+        "sellable_links": sellable_links,
+        // A sale can complete on either arm `create_checkout_session` implements.
+        "can_purchase": configured || sellable_links > 0,
+    })))
+}
+
 /// Record a refused plan checkout as this workspace's plan request (2026-10-23).
 ///
 /// The destination is `tickets` with `source = 'plan_request'`: the table the console's own

@@ -2186,6 +2186,37 @@ async function renderBranding(c){
 // No payment is taken here and the message says so; the ask carries `plan_slug` so the operator's
 // Resolve can actually move the workspace onto it, and a second click on a plan that already has an
 // OPEN ask is refused locally AND by the server, so the queue cannot be spammed.
+// ── THE TILL (2026-11-07) ──────────────────────────────────────────────────
+// Every paid tier used to offer ONE action — "Request this plan" — which files a ticket and takes no
+// money, even when the operator had pasted a hosted payment page into the tier or armed a provider
+// key. MEASURED 2026-11-07: `POST /checkout/create` could charge through a provider, hand the buyer to
+// the tier's own payment page, or record the refusal as the very same ticket — and NOTHING in this
+// console ever called it, so both ways this install can be paid were unreachable from the screen that
+// sells. This is that call. `GET /checkout/status` says whether the install can take money at all;
+// when it is not answered (an older build) the screen keeps the request-only behaviour rather than
+// offering a purchase it cannot complete.
+async function buyPlan(btn){
+  const id=btn.getAttribute('data-plan-id')||'';
+  const price=Number(btn.getAttribute('data-plan-price')||'0');
+  if(!id||!(price>0)){return requestPlan(btn);}   // nothing to charge: filing the ask is the honest path
+  const label=btn.textContent;
+  btn.disabled=true; btn.textContent='Opening checkout…';
+  const r=await api('/checkout/create',{method:'POST',body:JSON.stringify({
+    purchasable_type:'plan',purchasable_id:id,amount:price,currency:'USD'})});
+  const url=(r&&(r.checkout_url||r.url))||'';
+  if(url){
+    // A provider's own session page, or the tier's hosted payment page. On a hosted hand-off the
+    // server has ALREADY filed the plan request, so the operator's queue shows the sale in flight.
+    showMsg('Taking you to the payment page…');
+    window.location.assign(url);
+    return;
+  }
+  // No page was opened. The server's refusal sentence says which case this is — provider not
+  // configured, and whether the ask was recorded — so print it verbatim and leave the button live.
+  showMsg(LAST_ERR||'Could not open a payment page. Nothing was charged — please try again.','error');
+  btn.textContent=label; btn.disabled=false;
+}
+
 async function requestPlan(btn){
   const name=btn.getAttribute('data-plan-name')||'';
   const slug=btn.getAttribute('data-plan-slug')||'';
@@ -2242,6 +2273,12 @@ async function renderPlansCredits(c){
   const me=await api('/auth/me');
   const cat=await api('/plans');
   const plans=(cat&&Array.isArray(cat.plans))?cat.plans:[];
+  // What the till can do on THIS install (2026-11-07). A 404 from an older build (or a network miss)
+  // leaves `sale` null and the screen keeps the request-only behaviour it shipped with, rather than
+  // offering a purchase that cannot complete.
+  let sale=null;
+  try{ sale=await api('/checkout/status'); }catch(e){ sale=null; }
+  const canSell=!!(sale&&(sale.configured||Number(sale.sellable_links)>0));
   // `/auth/me` answers `{"user": {...}}` — the server wraps MeResponse (src/auth/handlers.rs::me ends
   // with `json!({ "user": me })`), so the tier lives at `me.user.plan_name`. Measured live
   // 2026-10-18: that field answers "Professional" for the operator account.
@@ -2259,8 +2296,12 @@ async function renderPlansCredits(c){
       h('span',{className:'badge',style:'background:#d1fae5;color:#065f46'},'current plan')));
     const price=mine?(mine.price_monthly!=null?mine.price_monthly:mine.price):null;
     el.appendChild(h('p',{className:'text-sm text-gray-500 mt-2'},
-      price!=null&&price!==''?('$'+price+' per month. Pick another plan in the list below and press Request — nothing is charged here.')
-                             :'This is the plan your account runs on.'));
+      price!=null&&price!==''
+        ?('$'+price+' per month. '+(
+            canSell
+              ? 'Pick another plan in the list below and press Buy to pay on the payment page this installation provides — your request is filed with it, so the team can seat you either way.'
+              : 'Pick another plan in the list below and press Request — nothing is charged here.'))
+        :'This is the plan your account runs on.'));
     // A tier's `features` is a JSONB OBJECT of enforced limits (max_users, max_instances,
     // max_tags ...), not a list of sentences: print only the caps the app actually enforces,
     // with -1 / "unlimited" read as unlimited. Retired and support-promise keys are never
@@ -2293,13 +2334,21 @@ async function renderPlansCredits(c){
         +'<div class="flex items-center gap-3">'
         +'<span class="font-semibold text-sm">$'+escHtml(pr==null?'0':pr)+'/mo</span>'
         +(paid&&!isMine
-          ? '<button class="btn btn-primary btn-sm" data-plan-slug="'+escHtml(p.slug||'')+'" '
-            +'data-plan-name="'+escHtml(p.name||'')+'" data-plan-price="'+escHtml(String(pr))+'">Request this plan</button>'
+          ? (canSell
+              ? '<button class="btn btn-primary btn-sm" data-buy-plan="'+escHtml(p.id||'')+'" '
+                +'data-plan-id="'+escHtml(p.id||'')+'" '
+                +'data-plan-name="'+escHtml(p.name||'')+'" data-plan-price="'+escHtml(String(pr))+'" '
+                +'title="Opens the payment page this installation provides. The plan request is filed at the same time, so nothing is lost if the payment does not complete.">Buy this plan</button>'
+              : '<button class="btn btn-primary btn-sm" data-plan-slug="'+escHtml(p.slug||'')+'" '
+                +'data-plan-name="'+escHtml(p.name||'')+'" data-plan-price="'+escHtml(String(pr))+'">Request this plan</button>')
           : '')
         +'</div></div>';
     }).join('');
     all.querySelectorAll('button[data-plan-slug]').forEach(btn=>{
       btn.onclick=()=>requestPlan(btn);
+    });
+    all.querySelectorAll('button[data-buy-plan]').forEach(btn=>{
+      btn.onclick=()=>buyPlan(btn);
     });
   }
 

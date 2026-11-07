@@ -206,6 +206,12 @@ Payment link box. Paste the checkout address your payment provider gives you for
 Leave the box empty when the plan is free, or when you take payment some other way — the
 plan then behaves exactly as it did before. The link is stored with the plan and is never used
 to charge anyone: it only decides <em>where the buyer is sent</em>.</p>
+<p><strong>The buyer's own screen asks the till first.</strong> Plans &amp; Credits asks
+<code>GET /api/v1/checkout/status</code> before it offers anything: when a provider key is armed, or
+any plan carries a usable payment link, each paid plan shows <strong>Buy this plan</strong>. Pressing it
+opens the payment page and files the same plan request in your queue at the same moment, so a sale
+that does not complete is still in front of you. On an installation with neither, the button reads
+<strong>Request this plan</strong>, takes no money, and the message says so.</p>
       <p>This is the part of the platform that controls revenue, so it is worth stating exactly how it
       works.</p>
       <p><strong>One source of truth.</strong> A plan's limits live in <code>plan_tiers</code>, in the <code>features</code> JSONB under the

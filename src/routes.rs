@@ -953,6 +953,14 @@ pub fn create_router(state: AppState) -> Router {
             "/checkout/create",
             post(handlers::checkout_handler::create_checkout_session),
         )
+        // What the till can do on THIS install (2026-11-07): the buyer's Plans screen asks before it
+        // offers a purchase, so a tier with a hosted payment page — or a live provider — is actually
+        // sellable from the console instead of only requestable. Same auth class as `create`: not in
+        // route_policy::PUBLIC_ROUTES, so an anonymous caller is refused at the boundary.
+        .route(
+            "/checkout/status",
+            get(handlers::checkout_handler::checkout_status),
+        )
         // The two bridge LISTINGS (kanban t_061a4e26). They were anonymous: the handlers take only
         // `State` and read /opt/ai-bridge/{inbound,outbound}/*.json off the host filesystem, so an
         // anonymous caller listed those files' parsed contents. Every caller presents a credential
