@@ -50,7 +50,7 @@ footer a{margin-right:18px}
         <h3>Free</h3>
         <div class="price" data-plan="free"><span class="amt" data-role="amt">$0</span><span class="per">/month</span></div>
         <p class="yr" data-role="yr">&nbsp;</p>
-        <ul><li>Get started with basic workflow automation</li><li>3 workflows</li><li>2 users</li><li>10 tags</li><li>Community support</li><li>10 instances</li></ul>
+        <ul data-role="feats"><li>Get started with basic workflow automation</li><li data-role="limit">3 workflows</li><li data-role="limit">2 users</li><li data-role="limit">10 tags</li><li>Community support</li><li data-role="limit">10 instances</li></ul>
         <a class="cta" href="https://app.workflowswift.com/register">Start free</a>
       </div>
       <div class="card popular">
@@ -58,7 +58,7 @@ footer a{margin-right:18px}
         <h3>Starter</h3>
         <div class="price" data-plan="starter"><span class="amt" data-role="amt">$29</span><span class="per">/month</span></div>
         <p class="yr" data-role="yr">Billed yearly at $290</p>
-        <ul><li>For growing teams needing more power</li><li>15 workflows</li><li>10 users</li><li>25 tags</li><li>Email support</li><li>100 instances</li><li>3 API keys</li></ul>
+        <ul data-role="feats"><li>For growing teams needing more power</li><li data-role="limit">15 workflows</li><li data-role="limit">10 users</li><li data-role="limit">25 tags</li><li>Email support</li><li data-role="limit">100 instances</li><li data-role="limit">3 API keys</li></ul>
         <a class="cta" href="https://app.workflowswift.com/register?plan=starter">Get started</a>
       </div>
       <div class="card">
@@ -66,7 +66,7 @@ footer a{margin-right:18px}
         <h3>Professional</h3>
         <div class="price" data-plan="professional"><span class="amt" data-role="amt">$79</span><span class="per">/month</span></div>
         <p class="yr" data-role="yr">Billed yearly at $790</p>
-        <ul><li>For businesses requiring full automation</li><li>Unlimited workflows</li><li>25 users</li><li>100 tags</li><li>Priority support</li><li>1000 instances</li><li>10 API keys</li></ul>
+        <ul data-role="feats"><li>For businesses requiring full automation</li><li data-role="limit">Unlimited workflows</li><li data-role="limit">25 users</li><li data-role="limit">100 tags</li><li>Priority support</li><li data-role="limit">1000 instances</li><li data-role="limit">10 API keys</li></ul>
         <a class="cta" href="https://app.workflowswift.com/register?plan=professional">Get started</a>
       </div>
       <div class="card">
@@ -74,7 +74,7 @@ footer a{margin-right:18px}
         <h3>Enterprise</h3>
         <div class="price" data-plan="enterprise"><span class="amt" data-role="amt">$199</span><span class="per">/month</span></div>
         <p class="yr" data-role="yr">Billed yearly at $1990</p>
-        <ul><li>Custom solutions for large organizations</li><li>Unlimited workflows</li><li>Unlimited users</li><li>Unlimited tags</li><li>Dedicated support</li><li>Unlimited instances</li><li>Unlimited API keys</li></ul>
+        <ul data-role="feats"><li>Custom solutions for large organizations</li><li data-role="limit">Unlimited workflows</li><li data-role="limit">Unlimited users</li><li data-role="limit">Unlimited tags</li><li>Dedicated support</li><li data-role="limit">Unlimited instances</li><li data-role="limit">Unlimited API keys</li></ul>
         <a class="cta" href="https://app.workflowswift.com/register?plan=enterprise">Get started</a>
       </div>
   </div>
@@ -95,6 +95,42 @@ footer a{margin-right:18px}
   function money(n) {
     var v = Number(n);
     return isFinite(v) ? '$' + (v % 1 === 0 ? String(v) : v.toFixed(2)) : '$' + n;
+  }
+  function count(v, one, many) {
+    if (v === 'unlimited') return 'Unlimited ' + many;
+    if (typeof v === 'number' || typeof v === 'string') {
+      var n = Number(v);
+      if (isFinite(n)) return n + ' ' + (n === 1 ? one : many);
+    }
+    return null;
+  }
+  /* Paint the included allowances from the SAME plan record the price came from, replacing the
+     hand-authored bullets. An operator raising a plan's allowance in the console therefore changes
+     this page too, instead of leaving it advertising the old number. A limit the plan does not
+     declare is left out rather than guessed. */
+  function paintLimits(priceEl, lim) {
+    var ul = priceEl.parentNode.querySelector('ul[data-role="feats"]');
+    if (!ul) return;
+    var rows = [
+      count(lim.workflows, 'workflow', 'workflows'),
+      count(lim.users, 'user', 'users'),
+      count(lim.tags, 'tag', 'tags'),
+      count(lim.instances, 'instance', 'instances'),
+      count(lim.api_keys, 'API key', 'API keys'),
+      count(lim.retention_days, 'day of history', 'days of history'),
+      count(lim.credits_monthly, 'workflow credit a month', 'workflow credits a month')
+    ].filter(function (t) { return t; });
+    if (!rows.length) return;
+    var old = ul.querySelectorAll('li[data-role="limit"]');
+    for (var i = 0; i < old.length; i++) old[i].parentNode.removeChild(old[i]);
+    var first = ul.querySelector('li');
+    var after = first ? first.nextSibling : null;
+    for (var r = 0; r < rows.length; r++) {
+      var li = document.createElement('li');
+      li.setAttribute('data-role', 'limit');
+      li.textContent = rows[r];
+      ul.insertBefore(li, after);
+    }
   }
   var note = document.getElementById('priceSource');
   fetch('/api/v1/public/plans', { headers: { 'Accept': 'application/json' } })
@@ -119,9 +155,14 @@ footer a{margin-right:18px}
             : '&nbsp;';
         }
       }
+      var cards = document.querySelectorAll('.price[data-plan]');
+      for (var c = 0; c < cards.length; c++) {
+        var plan = byslug[cards[c].getAttribute('data-plan')];
+        if (plan && plan.limits) paintLimits(cards[c], plan.limits);
+      }
       if (note) {
         note.textContent = painted
-          ? 'Prices read live from this install\u2019s own plan records just now \u2014 '
+          ? 'Prices and included limits read live from this install\u2019s own plan records just now \u2014 '
             + painted + ' plan' + (painted === 1 ? '' : 's') + ' confirmed.'
           : 'Live prices were read, but no card on this page matched a plan this install sells.';
       }
