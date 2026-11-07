@@ -1761,7 +1761,7 @@ function renderApiKeys(c){
       +items.map(k=>'<tr><td><strong>'+escHtml(k.name||'-')+'</strong></td>'
         +'<td class="text-xs text-gray-500">'+escHtml(k.prefix||'-')+'…</td>'
         +'<td class="text-xs text-gray-500">'+String(k.created_at||'').slice(0,10)+'</td>'
-        +'<td class="text-xs text-gray-500">'+(k.last_used_at?String(k.last_used_at).slice(0,16).replace('T',' '):'never')+'</td>'
+        +'<td class="text-xs text-gray-500">'+(k.last_used_at?(()=>{const d=new Date(k.last_used_at);return isNaN(d.getTime())?String(k.last_used_at):d.toLocaleString()})():'never')+'</td>'
         +'<td>'+(k.is_active?'Yes':'No')+'</td>'
         +'<td class="text-right"><button class="btn btn-sm btn-danger" data-del="'+escHtml(k.id)+'">Delete</button></td></tr>').join('')
       +'</tbody></table>';
@@ -3042,7 +3042,7 @@ function renderCheckoutSessions(c){
      +items.map(s=>'<tr><td>'+String(s.provider_type||'-')+'</td><td>'+String(s.purchasable_type||'-')+'</td>'
        +'<td>'+String(s.amount==null?'-':s.amount)+' '+String(s.currency||'')+'</td>'
        +'<td><span class="badge">'+String(s.status||'-')+'</span></td>'
-       +'<td class="text-xs text-gray-400">'+String(s.created_at||'').replace('T',' ').slice(0,19)+'</td>'
+       +'<td class="text-xs text-gray-400">'+(s.created_at?(()=>{const d=new Date(s.created_at);return isNaN(d.getTime())?String(s.created_at):d.toLocaleString()})():'')+'</td>'
        +'<td class="text-xs text-gray-400">'+String(s.id||'').slice(0,8)+'</td></tr>').join('')+'</tbody></table>';
   });
 }
