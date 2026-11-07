@@ -128,7 +128,7 @@ function adoptImpersonation(){
 // operator-only Admin tab to a tenant user whose calls under it would all answer 403.
 let ME=null;
 function showAdminTab(){return !!(ME&&ME.perm_is_super_admin)&&!IMPERSONATION;}
-let app={tab:'dashboard',sub:'overview',data:{}};
+let app={tab:'dashboard',sub:'overview',data:{},openTickets:0};
 // Last failed request's server message. api() otherwise swallows the body (returns null),
 // so a refused write (e.g. the 403 on surface CRUD for non-admins, or the Duplicate slug
 // error) had no way to reach the operator. showForm surfaces this on failure.
@@ -404,6 +404,13 @@ function sidebar(){
   // admin token.
   tabs.filter(t=>t.id!=='admin'||showAdminTab()).forEach(t=>{
     const btn=h('button',{className:'tab-btn'+(app.tab===t.id?' active':''),onclick:()=>{app.tab=t.id;app.sub=subSlug(t.subs[0]);renderApp()}},t.label);
+    // HOW MANY SUPPORT REQUESTS ARE STILL WAITING (2026-11-07). A request filed from the public
+    // contact page or a workspace's own Tickets screen lands in the operator queue, and until now
+    // the only way to know one had arrived was to open the screen. `open_count` is the database's
+    // own count (not the page the console loaded), so the badge cannot stop at the page cap.
+    if(t.id==='support'&&(app.openTickets||0)>0){
+      btn.appendChild(h('span',{id:'support-badge',className:'badge',style:'margin-left:6px;background:#fef3c7;color:#92400e',title:app.openTickets+(app.openTickets===1?' support request is':' support requests are')+' still waiting for an answer'},String(app.openTickets)));
+    }
     nav.appendChild(btn);
     if(app.tab===t.id){
       // Operator-only subs, hidden from a tenant for the same reason the Admin tab is:
@@ -3008,7 +3015,14 @@ function renderAdminPlans(c){
   // `checkout_url` is the tier's OWN hosted payment page (2026-10-24): it is the one field that can
   // make a tier sellable on an install with no payment provider key, so it is settable in BOTH forms
   // and shown in the table as Set/dash rather than as a long URL.
-  const WF_PLAN_FIELDS=['name','slug','price_monthly','price_yearly','is_active','sort_order','description','max_workflows','max_users','industries_allowed','retention_days','max_notify_per_hour','can_deploy_n8n','has_api_access','payment_provider','checkout_url'];
+  // ── CREDITS INCLUDED PER MONTH (2026-11-07) ────────────────────────────────────────────────
+  // The signup grants a new workspace `features->>'credits_monthly'` credits when its tier declares
+  // them (src/auth/signup.rs). No tier declared one and NO box on this screen could write it, so the
+  // grant never fired: every new workspace started at 0 credits and the dashboard told the customer
+  // "Workflows will not run until credits are added" with no way for the operator to fund a tier.
+  // `credits_monthly` is accepted by both plan doors (collect_plan_limits) and echoed by
+  // GET /admin/plans, so the box prefills what is stored and saving it is what the grant reads.
+  const WF_PLAN_FIELDS=['name','slug','price_monthly','price_yearly','is_active','sort_order','description','max_workflows','max_users','industries_allowed','retention_days','max_notify_per_hour','credits_monthly','can_deploy_n8n','has_api_access','payment_provider','checkout_url'];
   renderCRUD(c.querySelector('#apldata'),'plans','Plan',['name','slug','price_monthly','price_yearly','is_active','checkout_url'],'/admin/plans',WF_PLAN_FIELDS,undefined,WF_PLAN_FIELDS);
 }
 
@@ -3256,6 +3270,20 @@ function renderSiteConfig(c){
 // document.body is still null — renderApp()/renderLogin() both start with
 // document.body.innerHTML='' and threw "Cannot set properties of null", leaving
 // admin.workflowswift.com a blank page for every account. Wait for the DOM instead.
+/// (JS) Refresh the Support tab's waiting count from the operator queue (2026-11-07).
+/// The route answers `open_count` from the DATABASE over the whole queue, so the badge is the real
+/// backlog and a workspace's own ticket or a contact-page message both raise it. Read-only, admin
+/// only (a tenant token would be refused 403, and the tab is hidden from a tenant anyway).
+function refreshSupportBadge(){
+  if(!TOKEN||!showAdminTab())return;
+  api('/admin/tickets?per_page=1').then(r=>{
+    const n=Number(r&&r.open_count);
+    if(!isFinite(n))return;
+    if(n===(app.openTickets||0))return;
+    app.openTickets=n;
+    if(app.tab)renderApp();
+  }).catch(()=>{});
+}
 function boot(){
   // Nothing to adopt without the operator's own session: drop any parked tenant session too, so a
   // stale support token cannot sit in storage waiting for someone else's sign-in.
@@ -3270,6 +3298,8 @@ function boot(){
     if(adoptImpersonation())showMsg('Resumed the support session as '+(IMPERSONATION.user_name||IMPERSONATION.tenant_id));
     else if(hadParked)showMsg('The support session has ended','error');
     renderApp();
+    // The Support tab's waiting count, once the operator's own session is known (2026-11-07).
+    refreshSupportBadge();
   });
 }
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
@@ -3299,7 +3329,7 @@ window.appGuidePages = {
   "integrations:api-keys": { title: "API Keys", desc: "The keys this app issues so other systems can call it on this account's behalf.", actions: ["Create a key", "Copy a key once at creation", "Revoke a key"] },
   "integrations:n8n-proxy": { title: "n8n Proxy", desc: "The link to the automation engine: what it can call here and how it authenticates.", actions: ["Review the configuration"] },
   "integrations:bridge": { title: "Bridge", desc: "The connection that lets this app talk to the other SwiftSoftware apps.", actions: ["Check the bridge status"] },
-  "support:tickets": { title: "Tickets", desc: "Support requests raised on this account, with the status of each.", actions: ["Open a ticket", "Update its status"] },
+  "support:tickets": { title: "Tickets", desc: "Every support request on this install, newest first: the ones a workspace files from its own Tickets screen, the plan requests filed from a customer's Plan & Billing screen, and the messages a visitor with no account sends from the public contact page. An answer you write here is stored on the request and emailed to whoever asked &mdash; a message from the contact page reaches the address they typed. Closing a plan request applies the plan it named. The number on the Support tab is how many requests are still waiting for an answer.", actions: ["Read every request with the workspace or address it came from", "Write the answer and mark it resolved or closed", "Apply the plan a plan request named", "The number on the Support tab is the waiting count"] },
   "profile:my-profile": { title: "My Profile", desc: "Your own profile: name, username, company, the address you sign in with, password and picture. What you set here is what appears across the console.", actions: ["Set your name, username, company and picture", "Change your sign-in email (we email a confirmation link)", "Change your password"] },
   "profile:team": { title: "Team", desc: "The people who can sign in to this account, and the role each one holds.", actions: ["Invite a team member", "Change a member's role"] },
   "profile:plans-credits": { title: "Plans & Credits", desc: "The plan this account is on, the limits that plan carries and the credits it has. A plan is a bundle of limits and features.", actions: ["See your current plan", "Compare the plans on offer", "Check your credit balance"] },
