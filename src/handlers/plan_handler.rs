@@ -43,13 +43,28 @@ pub async fn list_plans(State(state): State<AppState>) -> ApiResult<impl IntoRes
 /// and MissedCall each closed on their own pricing pages. This is the read that lets this page show
 /// what the install actually sells; every card on it is matched to a plan by `slug`.
 ///
+/// The INCLUDED LIMITS travel with the price (2026-11-07). They were hand-authored in the same page,
+/// so raising a plan's workflow/user/tag allowance in the console left the public page advertising
+/// the old allowance — the same drift as the prices, one field over. The numbers below are read from
+/// the columns and `features` keys the enforcement paths actually consult
+/// (`features::limit_alias` owns that vocabulary: `max_workflows`, `max_users`, `max_tags`,
+/// `max_instances`, `max_api_keys`, `retention_days`); `-1` and the literal `"unlimited"` both mean
+/// no cap and are reported as `"unlimited"` so a page never prints "-1 workflows".
+///
 /// Deliberately NARROW, and narrower than the authenticated `GET /api/v1/plans`: `slug`, `name`,
-/// the two amounts and the ordering only. No plan `id`, no `checkout_url`, no `payment_provider`,
-/// no feature JSON — a visitor needs a price list, and the ids and checkout links are the operator
-/// console's business. `is_active = false` rows never reach a member of the public.
+/// the two amounts, the limits a buyer is being sold, and the ordering only. No plan `id`, no
+/// `checkout_url`, no `payment_provider`, no raw feature JSON — a visitor needs a price list, and
+/// the ids and checkout links are the operator console's business. `is_active = false` rows never
+/// reach a member of the public.
 pub async fn public_list_plans(State(state): State<AppState>) -> ApiResult<impl IntoResponse> {
     let rows = sqlx::query(
-        "SELECT slug, name, price_monthly::text AS price_monthly, price_yearly::text AS price_yearly \
+        "SELECT slug, name, price_monthly::text AS price_monthly, price_yearly::text AS price_yearly, \
+         max_workflows, max_users, \
+         (features->>'max_tags') AS max_tags, \
+         (features->>'max_instances') AS max_instances, \
+         (features->>'max_api_keys') AS max_api_keys, \
+         COALESCE(features->>'retention_days', retention_days::text) AS retention_days, \
+         (features->>'credits_monthly') AS credits_monthly \
          FROM plan_tiers WHERE is_active = true ORDER BY sort_order ASC NULLS LAST",
     )
     .fetch_all(&state.db)
@@ -63,11 +78,38 @@ pub async fn public_list_plans(State(state): State<AppState>) -> ApiResult<impl 
                 "name": r.try_get::<Option<String>, _>("name").ok().flatten(),
                 "price_monthly": r.try_get::<Option<String>, _>("price_monthly").ok().flatten(),
                 "price_yearly": r.try_get::<Option<String>, _>("price_yearly").ok().flatten(),
+                "limits": {
+                    "workflows": limit_value(r.try_get::<Option<i32>, _>("max_workflows").ok().flatten().map(|n| n.to_string())),
+                    "users": limit_value(r.try_get::<Option<i32>, _>("max_users").ok().flatten().map(|n| n.to_string())),
+                    "tags": limit_value(r.try_get::<Option<String>, _>("max_tags").ok().flatten()),
+                    "instances": limit_value(r.try_get::<Option<String>, _>("max_instances").ok().flatten()),
+                    "api_keys": limit_value(r.try_get::<Option<String>, _>("max_api_keys").ok().flatten()),
+                    "retention_days": limit_value(r.try_get::<Option<String>, _>("retention_days").ok().flatten()),
+                    "credits_monthly": limit_value(r.try_get::<Option<String>, _>("credits_monthly").ok().flatten()),
+                },
             })
         })
         .collect();
 
     Ok(Json(json!({"plans": plans, "total": plans.len()})))
+}
+
+/// One plan limit as the public page should print it: `null` when the plan does not declare it (so
+/// the page says nothing rather than inventing a number), `"unlimited"` for `-1` / `"unlimited"`,
+/// the number itself when it parses, and the raw string otherwise. Zero is a REAL limit (an operator
+/// may sell a tier with no API keys), so it is printed, not dropped.
+fn limit_value(raw: Option<String>) -> serde_json::Value {
+    let Some(raw) = raw.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) else {
+        return serde_json::Value::Null;
+    };
+    if raw.eq_ignore_ascii_case("unlimited") {
+        return json!("unlimited");
+    }
+    match raw.parse::<i64>() {
+        Ok(n) if n < 0 => json!("unlimited"),
+        Ok(n) => json!(n),
+        Err(_) => json!(raw),
+    }
 }
 
 pub async fn create_plan(
