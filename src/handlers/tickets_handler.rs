@@ -599,7 +599,28 @@ pub async fn list_all(
     .bind(offset)
     .fetch_all(&state.db)
     .await?;
-    Ok(Json(json!({ "items": rows, "count": rows.len() })))
+
+    // THE REAL SIZE OF THE QUEUE (2026-11-07). `count` used to be `rows.len()`, i.e. the PAGE
+    // length: a console that paged 200 of 400 was told `count: 200`, and a badge built on it would
+    // stop at the page cap. Two numbers, both from the database and both honouring the same
+    // filters as the page: `count` is every matching ticket, `open_count` is the ones still waiting
+    // on an operator (`closed`/`resolved` are the two terminal states `admin_update_status`
+    // accepts). A caller that only wants the page still reads `items`.
+    let (count, open_count): (i64, i64) = sqlx::query_as(
+        "SELECT COUNT(*), COUNT(*) FILTER (WHERE status NOT IN ('closed', 'resolved')) \
+           FROM tickets t \
+          WHERE ($1::text IS NULL OR t.status = $1) AND ($2::text IS NULL OR t.source = $2)",
+    )
+    .bind(q.status.as_deref())
+    .bind(q.source.as_deref())
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(json!({
+        "items": rows,
+        "count": count,
+        "open_count": open_count,
+    })))
 }
 
 /// `PUT /api/v1/admin/tickets/{id}` — move ANY workspace's ticket to a new status.
