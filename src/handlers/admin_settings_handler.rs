@@ -25,6 +25,22 @@ fn collect_plan_limits(req: &serde_json::Value) -> serde_json::Map<String, serde
             if k == "features" {
                 continue;
             }
+            // `credits_monthly` is read by the SIGNUP with a hard cast
+            // (`(features->>'credits_monthly')::integer`, src/auth/signup.rs), so an empty box must
+            // never reach the JSONB: `''` would raise inside the signup transaction and fail every
+            // signup on that tier. A whole number is stored as a JSON NUMBER; blank/absent leaves
+            // the key exactly as it was, which is what "this tier grants no credits" means.
+            if k == "credits_monthly" {
+                let n = v
+                    .as_i64()
+                    .or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()));
+                if let Some(n) = n {
+                    if n >= 0 {
+                        out.insert(k.clone(), serde_json::json!(n));
+                    }
+                }
+                continue;
+            }
             if plan_limits::NUMERIC_LIMIT_KEYS.contains(&k.as_str())
                 || plan_limits::BOOLEAN_FLAG_KEYS.contains(&k.as_str())
                 || matches!(k.as_str(), "can_deploy_n8n" | "has_api_access")
@@ -569,6 +585,17 @@ pub async fn admin_list_plans(
         // means too. It was absent from this response, so the Edit form rendered the field
         // blank for a tier whose cap WAS stored and an operator could not see it.
         let max_notify_per_hour: Option<i32> = row.try_get("max_notify_per_hour").ok();
+        // ── CREDITS INCLUDED PER MONTH (2026-11-07) ─────────────────────────────────────────
+        // `signup::create_account` grants a new workspace `plan_tiers.features->>'credits_monthly'`
+        // credits when the tier declares them — but NO tier declared one and NO surface wrote the
+        // key, so every new workspace (free or paid) started at 0 credits while the dashboard told
+        // it "Workflows will not run until credits are added". That made the grant path dead code
+        // and left the operator no way to fund a tier. The value is read from the SAME place the
+        // signup reads it (`features` JSONB), so panel == grant by construction.
+        let credits_monthly = features
+            .as_ref()
+            .and_then(|f| f.get("credits_monthly"))
+            .cloned();
 
         // Get feature_limits for this plan
         let limits =
@@ -603,6 +630,7 @@ pub async fn admin_list_plans(
             "has_api_access": has_api_access,
             "payment_provider": payment_provider,
             "max_notify_per_hour": max_notify_per_hour,
+            "credits_monthly": credits_monthly,
             "feature_limits": limits_map
         }));
     }
