@@ -56,11 +56,18 @@
 //!    no key check — then read `/opt/ai-bridge/{inbound,outbound}/*.json` off the host filesystem
 //!    and return the parsed contents. They are NOT deliberate public surfaces: every caller sends a
 //!    credential. The only console panel that reads them (`www-admin/index.html::renderBridge`) goes
-//!    through the panel's `api()` helper, which attaches `Authorization: Bearer <jwt>`; and the
+//!    through the panel's `api()` helper, which attaches a bearer token, and the
 //!    fleet's own admin sweep (`/opt/swift/bin/ws-admin-api-sweep.py`, which mints a super-admin
 //!    token) reads `/api/v1/bridge-tasks` the same way. They are now mounted on the PROTECTED router
 //!    — same paths, so both callers are unaffected (proved live: 200 with a token before and after,
 //!    401 anonymous after).
+//!
+//!    Being on the protected router only proved a credential was PRESENT (kanban t_9aee74f9): the
+//!    queue these two read is the platform's own, with no account id to filter by, so a signed-in
+//!    tenant of any account still read every file. Both handlers now answer `403` unless
+//!    `claims.perm_is_super_admin` is set — the same flag this app's admin surface refuses on — and
+//!    the console hides the Bridge screen from a tenant. Measured after the gate: tenant 403,
+//!    operator 200, anonymous 401.
 //! 2. **The default-allow shape that remains** is placement itself: with the old arrangement the
 //!    only thing keeping a newly mounted route private was the author registering it in the right
 //!    sub-router, and there was no committed list, no test, and no boundary. This module is that
