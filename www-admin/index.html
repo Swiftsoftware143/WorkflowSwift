@@ -1812,10 +1812,10 @@ function renderN8N(c){
 }
 
 function renderBridge(c){
-  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">Bridge (OpenClaw)</h2><div id="bridata"></div></div>';
+  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">AI Bridge</h2><div id="bridata"></div></div>';
   api('/bridge-tasks').then(d=>{
     const el=c.querySelector('#bridata');
-    if(!d||!d.tasks||!d.tasks.length){el.innerHTML='<p class="text-gray-400 text-sm">No pending bridge tasks.</p>';return}
+    if(!d||!d.tasks||!d.tasks.length){el.innerHTML='<p class="text-gray-400 text-sm">No inbound AI task files are queued.</p>';return}
     el.innerHTML=d.tasks.map(t=>`<div class="p-3 border-b"><strong>${escHtml(t.name||t.id)}</strong><span class="text-xs text-gray-500 ml-2">${escHtml(t.status)}</span></div>`).join('');
   });
 }
@@ -3328,7 +3328,7 @@ window.appGuidePages = {
   "integrations:provider-keys": { title: "Provider Keys", desc: "Your own API keys for the third-party services this app uses. Keys are stored encrypted and are never shown again in full.", actions: ["Save a provider key", "See which providers are connected", "Replace or remove a key"] },
   "integrations:api-keys": { title: "API Keys", desc: "The keys this app issues so other systems can call it on this account's behalf.", actions: ["Create a key", "Copy a key once at creation", "Revoke a key"] },
   "integrations:n8n-proxy": { title: "n8n Proxy", desc: "The link to the automation engine: what it can call here and how it authenticates.", actions: ["Review the configuration"] },
-  "integrations:bridge": { title: "Bridge", desc: "The connection that lets this app talk to the other SwiftSoftware apps.", actions: ["Check the bridge status"] },
+  "integrations:bridge": { title: "AI Bridge", desc: "The server-side queue of inbound AI task files this install has been handed, and the results written back for them. It is a platform-level queue, not a per-workspace setting.", actions: ["Review the queued inbound tasks"] },
   "support:tickets": { title: "Tickets", desc: "Every support request on this install, newest first: the ones a workspace files from its own Tickets screen, the plan requests filed from a customer's Plan & Billing screen, and the messages a visitor with no account sends from the public contact page. An answer you write here is stored on the request and emailed to whoever asked &mdash; a message from the contact page reaches the address they typed. Closing a plan request applies the plan it named. The number on the Support tab is how many requests are still waiting for an answer.", actions: ["Read every request with the workspace or address it came from", "Write the answer and mark it resolved or closed", "Apply the plan a plan request named", "The number on the Support tab is the waiting count"] },
   "profile:my-profile": { title: "My Profile", desc: "Your own profile: name, username, company, the address you sign in with, password and picture. What you set here is what appears across the console.", actions: ["Set your name, username, company and picture", "Change your sign-in email (we email a confirmation link)", "Change your password"] },
   "profile:team": { title: "Team", desc: "The people who can sign in to this account, and the role each one holds.", actions: ["Invite a team member", "Change a member's role"] },
