@@ -305,6 +305,7 @@ const API = (() => {
     // authenticated (an anonymous call answers 401), so the catalogue is read with the tenant token.
     listPlans: () => send(base + '/plans', { headers: headers() }).then(handle),
     createCheckout: (b) => send(base + '/checkout/create', { method:'POST', headers: headers(), body: JSON.stringify(b) }).then(handle),
+  checkoutStatus: () => send(base + '/checkout/status', { headers: headers() }).then(handle),
     listCheckoutSessions: () => send(base + '/checkout/sessions', { headers: headers() }).then(handle),
     rolloverCredits: () => send(base + '/credits/rollover', { method:'POST', headers: headers(), body: JSON.stringify({}) }).then(handle),
     removeAccountIndustry: (slug) => send(base + '/accounts/industry/' + encodeURIComponent(slug), { method:'DELETE', headers: headers() }).then(handle),
@@ -344,7 +345,7 @@ const API = (() => {
   };
 })();
 
-const S = { view:'login', sessionEnded:false, loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, accLoadFailed:false, accPromise:null, dataVer:0, apiKeys:null, extBuild:null, hexKey:null, hexKeyInput:'', enrich:null, enriching:null, newApiKey:null, builder:null, steps:null, stepsWf:null, stepValidation:null, stepDraft:null, widgetCat:null, notifyChannels:null, notifyRecipients:null, rendSummary:null, renditions:null, rendWf:'', rendStatus:'active', rendSel:null, stitchName:'', modalErr:null, plans:null, plansTried:false, checkoutMsg:null, checkoutBusy:false, requestForPlan:null, requestPlanBusy:false, requestPlanMsg:null, planReqs:null, planReqsTried:false, planReqWithdrawBusy:false, planReqMsg:null };
+const S = { view:'login', sessionEnded:false, loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, accLoadFailed:false, accPromise:null, dataVer:0, apiKeys:null, extBuild:null, hexKey:null, hexKeyInput:'', enrich:null, enriching:null, newApiKey:null, builder:null, steps:null, stepsWf:null, stepValidation:null, stepDraft:null, widgetCat:null, notifyChannels:null, notifyRecipients:null, rendSummary:null, renditions:null, rendWf:'', rendStatus:'active', rendSel:null, stitchName:'', modalErr:null, plans:null, plansTried:false, checkoutStatus:null, checkoutStatusTried:false, checkoutMsg:null, checkoutBusy:false, requestForPlan:null, requestPlanBusy:false, requestPlanMsg:null, planReqs:null, planReqsTried:false, planReqWithdrawBusy:false, planReqMsg:null };
 
 // Views call their loaders from inside render (the house pattern: `if(!S.x) loadX();`), and
 // every loader calls renderApp() again — a *re-entrant* preact render. The inner render
@@ -1523,6 +1524,7 @@ const PlanView = () => {
   if (!S.planCaps && !S.planCapsTried) { S.planCapsTried = true; loadPlanCaps(); }
   if (!S.usage && !S.usageTried) { S.usageTried = true; loadUsage(); }
   if (!S.planReqsTried) { S.planReqsTried = true; loadPlanRequests(); }
+  if (!S.checkoutStatusTried) { S.checkoutStatusTried = true; loadCheckoutStatus(); }
   const tiers = (S.plans && (S.plans.plans || S.plans)) || [];
   const curSlug = (S.planCaps && S.planCaps.plan_slug) || '';
   const curName = (S.planCaps && S.planCaps.plan_name) || '';
@@ -1557,6 +1559,7 @@ const PlanView = () => {
         </div>
       </div>` : ''}
       ${S.usageTried && !S.usage ? html`<div class="card" style="margin-bottom:16px"><p class="text-sm text-gray-600">Your usage figures could not be read just now.</p></div>` : ''}
+      ${(S.checkoutStatus && S.checkoutStatus.can_purchase === false) ? html`<div class="card" id="billing-till-closed" style="margin-bottom:16px;border-left:4px solid #f59e0b"><p class="text-sm text-gray-700"><strong>Card payment is not switched on for this installation yet.</strong> Nothing can be charged here, so the buttons below ask our team to switch your workspace instead of opening a payment page.</p></div>` : ''}
       ${S.checkoutMsg ? html`<div class="card" style="margin-bottom:16px;border-left:4px solid #f59e0b"><p class="text-sm text-gray-700">${S.checkoutMsg}</p></div>` : ''}
       ${S.requestForPlan ? html`<div class="card" id="billing-request" style="margin-bottom:16px;border-left:4px solid #2563eb">
         <h3 class="font-semibold text-gray-800 mb-1">Ask our team to switch you to ${(S.requestForPlan.name || S.requestForPlan.slug)}</h3>
@@ -1591,7 +1594,9 @@ const PlanView = () => {
               ${isCurrent(p)
                 ? html`<span class="chip">Current plan</span>`
                 : (Number(p.price_monthly) > 0
-                    ? html`<button class="btn text-sm" onClick=${() => startCheckout(p)} disabled=${S.checkoutBusy}>${S.checkoutBusy ? 'Starting…' : ('Upgrade to ' + (p.name || p.slug))}</button>`
+                    ? (S.checkoutStatus && S.checkoutStatus.can_purchase === false
+                        ? html`<button class="btn text-sm" data-ask-plan="${p.id}" onClick=${() => askForPlan(p)}>${'Request ' + (p.name || p.slug)}</button>`
+                        : html`<button class="btn text-sm" onClick=${() => startCheckout(p)} disabled=${S.checkoutBusy}>${S.checkoutBusy ? 'Starting…' : ('Upgrade to ' + (p.name || p.slug))}</button>`)
                     : html`<span class="text-xs text-gray-400">Free — no payment needed</span>`)}
             </div>
           </div>`)}
@@ -1603,6 +1608,24 @@ const loadPlans = async () => {
   S.loading = true; renderApp();
   try { S.plans = await API.listPlans(); } catch (e) { S.plans = null; toast(e.message, 'err'); }
   S.loading = false; renderApp();
+};
+// ASK THE TILL BEFORE INVITING A PURCHASE (2026-11-08, parity with FunnelSwift's checkout/status
+// gate). GET /checkout/status answers whether a provider is armed and whether any active tier
+// carries a usable hosted payment page — the two arms `create_checkout_session` can actually sell
+// through. Until now this screen offered "Upgrade to <plan>" on every paid tier and only learned
+// the install cannot sell after the customer pressed it and the sale refused. A failed or absent
+// read leaves the old behaviour in place: the refusal path below is honest, so the screen must
+// not hide a working purchase because a status call was slow.
+const loadCheckoutStatus = async () => {
+  try { S.checkoutStatus = await API.checkoutStatus(); } catch (e) { S.checkoutStatus = null; }
+  renderApp();
+};
+const askForPlan = (p) => {
+  S.checkoutMsg = null; S.requestPlanMsg = null; S.requestForPlan = p; renderApp();
+  setTimeout(() => {
+    const el = document.getElementById('billing-request');
+    if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, 0);
 };
 // `create_checkout_session` takes the amount from the REQUEST (checkout_handler.rs:474), so the
 // console sends the tier's own stored price_monthly rather than inventing one.
