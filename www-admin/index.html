@@ -346,10 +346,12 @@ window.startImpersonation=startImpersonation;
 // panel. Same for '⚙️ Workflows' -> 'All Workflows'. One slug function, used by both callers.
 const subSlug=s=>s.toLowerCase().replace(/\s+&?\s*/g,'-').replace(/[^a-z0-9-]/g,'');
 
-// Panes that belong to the platform operator even though they sit under a tenant tab.
-// "Payments" is the gateway configuration the operator manages; a tenant opening it used to get a
-// raw 403 from GET /api/v1/payment-providers and an empty card.
-const OPERATOR_ONLY_SUBS=new Set(['Payments']);
+// Panes that belong to the PLATFORM operator even though they sit under a tenant tab: hidden from a
+// tenant in the sidebar and refused by a defence-in-depth pane below. `Payments` is the gateway
+// configuration the operator manages; `Bridge` reads /opt/ai-bridge — the platform-wide AI queue,
+// which no account owns (kanban t_9aee74f9; its two listings answer 403 to anything but the
+// operator flag). A tenant opening either used to get a raw 403 from the API and an empty card.
+const OPERATOR_ONLY_SUBS=new Set(['Payments','Bridge']);
 function subLabel(t,s){const tab=tabs.find(x=>x.id===t);if(!tab)return '';const hit=tab.subs.find(x=>subSlug(x)===s);return hit||''}
 const tabs=[
   {id:'dashboard',label:'📊 Dashboard',subs:['Overview','Brand Monitor','Competitor Watch','Prospecting']},
@@ -493,7 +495,7 @@ function content(){
     if(!showAdminTab()&&OPERATOR_ONLY_SUBS.has(subLabel(t,s))){
       c.appendChild(h('div',{className:'card'},
         h('h2',{className:'text-xl font-bold mb-4'},'Access Denied'),
-        h('p',{className:'text-sm text-gray-500'},'Payment provider settings are available to the platform operator only.')));
+        h('p',{className:'text-sm text-gray-500'},'This screen shows platform-wide settings and is available to the platform operator only.')));
       return c;
     }
     if(s==='my-profile')renderProfile(c);
@@ -1815,7 +1817,11 @@ function renderBridge(c){
   c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">AI Bridge</h2><div id="bridata"></div></div>';
   api('/bridge-tasks').then(d=>{
     const el=c.querySelector('#bridata');
-    if(!d||!d.tasks||!d.tasks.length){el.innerHTML='<p class="text-gray-400 text-sm">No inbound AI task files are queued.</p>';return}
+    // A REFUSED read is not an empty queue (kanban t_9aee74f9). The listing is the platform
+    // operator's — the queue lives on the server's own filesystem, not in any workspace — so a 403
+    // must say so instead of printing "nothing is queued", which would be a lie to a tenant.
+    if(!d){el.innerHTML='<p class="text-sm" style="color:#991b1b">'+escHtml(LAST_ERR||'The queue could not be read.')+'</p>';return}
+    if(!d.tasks||!d.tasks.length){el.innerHTML='<p class="text-gray-400 text-sm">No inbound AI task files are queued.</p>';return}
     el.innerHTML=d.tasks.map(t=>`<div class="p-3 border-b"><strong>${escHtml(t.name||t.id)}</strong><span class="text-xs text-gray-500 ml-2">${escHtml(t.status)}</span></div>`).join('');
   });
 }
@@ -3328,7 +3334,7 @@ window.appGuidePages = {
   "integrations:provider-keys": { title: "Provider Keys", desc: "Your own API keys for the third-party services this app uses. Keys are stored encrypted and are never shown again in full.", actions: ["Save a provider key", "See which providers are connected", "Replace or remove a key"] },
   "integrations:api-keys": { title: "API Keys", desc: "The keys this app issues so other systems can call it on this account's behalf.", actions: ["Create a key", "Copy a key once at creation", "Revoke a key"] },
   "integrations:n8n-proxy": { title: "n8n Proxy", desc: "The link to the automation engine: what it can call here and how it authenticates.", actions: ["Review the configuration"] },
-  "integrations:bridge": { title: "AI Bridge", desc: "The server-side queue of inbound AI task files this install has been handed, and the results written back for them. It is a platform-level queue, not a per-workspace setting.", actions: ["Review the queued inbound tasks"] },
+  "integrations:bridge": { title: "AI Bridge", desc: "The server-side queue of inbound AI task files this install has been handed, and the results written back for them. It is a platform-level queue, not a per-workspace setting, so the platform operator is the only one who can read it.", actions: ["Review the queued inbound tasks"] },
   "support:tickets": { title: "Tickets", desc: "Every support request on this install, newest first: the ones a workspace files from its own Tickets screen, the plan requests filed from a customer's Plan & Billing screen, and the messages a visitor with no account sends from the public contact page. An answer you write here is stored on the request and emailed to whoever asked &mdash; a message from the contact page reaches the address they typed. Closing a plan request applies the plan it named. The number on the Support tab is how many requests are still waiting for an answer.", actions: ["Read every request with the workspace or address it came from", "Write the answer and mark it resolved or closed", "Apply the plan a plan request named", "The number on the Support tab is the waiting count"] },
   "profile:my-profile": { title: "My Profile", desc: "Your own profile: name, username, company, the address you sign in with, password and picture. What you set here is what appears across the console.", actions: ["Set your name, username, company and picture", "Change your sign-in email (we email a confirmation link)", "Change your password"] },
   "profile:team": { title: "Team", desc: "The people who can sign in to this account, and the role each one holds.", actions: ["Invite a team member", "Change a member's role"] },

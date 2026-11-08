@@ -967,13 +967,19 @@ pub fn create_router(state: AppState) -> Router {
             "/checkout/status",
             get(handlers::checkout_handler::checkout_status),
         )
-        // The two bridge LISTINGS (kanban t_061a4e26). They were anonymous: the handlers take only
-        // `State` and read /opt/ai-bridge/{inbound,outbound}/*.json off the host filesystem, so an
-        // anonymous caller listed those files' parsed contents. Every caller presents a credential
-        // (`www-admin/index.html::renderBridge` goes through the panel's `api()` helper, which adds
-        // `Authorization: Bearer <jwt>`; `/opt/swift/bin/ws-admin-api-sweep.py` mints a super-admin
-        // token), so the paths moved here unchanged and both callers are unaffected. `bridge-ping`
-        // (a constant `{"status":"bridge-ok"}`) stays public.
+        // The two bridge LISTINGS (kanban t_061a4e26, then t_9aee74f9). They were anonymous: the
+        // handlers took only `State` and read /opt/ai-bridge/{inbound,outbound}/*.json off the host
+        // filesystem, so an anonymous caller listed those files' parsed contents. Every caller
+        // presents a credential (`www-admin/index.html::renderBridge` goes through the panel's
+        // `api()` helper, which adds `Authorization: Bearer <jwt>`;
+        // `/opt/swift/bin/ws-admin-api-sweep.py` mints a super-admin token), so the paths moved
+        // here unchanged and both callers are unaffected. `bridge-ping` (a constant `{"status":"bridge-ok"}`) stays public.
+        //
+        // t_9aee74f9: being on `protected_routes` only proved SOME credential was present — a
+        // signed-in tenant of any account still listed the platform-wide queue, because the
+        // handlers take no `aid` (the directory has no tenant column). Both now call
+        // `bridge_handler::can_read_bridge_queue`, which answers `403` to anything but the operator
+        // flag, so the route table's authorisation is the handler's, not this nesting.
         .route(
             "/bridge-tasks",
             get(handlers::bridge_handler::list_inbound_tasks),
@@ -1177,7 +1183,8 @@ pub fn create_router(state: AppState) -> Router {
     // list those files' parsed contents. Neither has an anonymous caller: `www-admin/index.html`
     // reads them through its `api()` helper (which attaches `Authorization: Bearer <jwt>`) and the
     // fleet's own `/opt/swift/bin/ws-admin-api-sweep.py` mints a super-admin token. They are now on
-    // `protected_routes` — same paths, so both callers are unchanged.
+    // `protected_routes` — same paths, so both callers are unchanged — and (t_9aee74f9) each handler
+    // refuses anything but the operator flag, because the queue they read is platform-wide.
     let public_routes = Router::new()
         .nest("/auth", auth_public)
         .route("/health", get(health_check))

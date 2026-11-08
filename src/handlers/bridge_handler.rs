@@ -97,8 +97,40 @@ struct ExtensionCommand {
     created_at: DateTime<Utc>,
 }
 
-/// GET /api/v1/bridge/inbound — list inbound task files
-pub async fn list_inbound_tasks(State(_s): State<AppState>) -> Result<impl IntoResponse, AppError> {
+/// Who may read the AI Bridge queue (kanban t_9aee74f9).
+///
+/// Both listings below walk `/opt/ai-bridge/{inbound,outbound}` — the PLATFORM's own filesystem
+/// queue, which no account owns and whose files carry every tenant's hand-offs — and return each
+/// file's parsed contents. Neither handler takes an `aid` filter, because there is nothing to
+/// filter by: the directory has no tenant column. So the only honest authorisation is the platform
+/// operator, the flag the app's admin surface (`auth::middleware`) and the admin console's own
+/// Admin tab (`www-admin/index.html::showAdminTab`) already refuse on.
+///
+/// Measured live 2026-11-07 (before this predicate) on 127.0.0.1:8085: a token minted for a
+/// tenant with `perm_is_super_admin = false` answered `200` on BOTH listings and read a canary
+/// file out of the container's `/opt/ai-bridge/inbound` — a cross-tenant read of platform files,
+/// latent only because nothing on this box writes that directory. The previous card (t_061a4e26)
+/// moved these two paths off the ANONYMOUS router, which closed the unauthenticated caller and
+/// left every signed-in tenant with the same access.
+///
+/// An API-key credential resolves to the same `Claims` in `auth_middleware`, so a key caller is
+/// covered here too — no second gate is needed.
+fn can_read_bridge_queue(claims: &Claims) -> bool {
+    claims.perm_is_super_admin.unwrap_or(false)
+}
+
+/// `GET /api/v1/bridge-tasks` — list the inbound task files of the platform's AI Bridge queue.
+///
+/// Super admin only: the directory is platform state, not tenant data; see
+/// [`can_read_bridge_queue`]. A refusal is a `403`, never an empty list — an empty list over a
+/// readable queue would be a lie to the caller.
+pub async fn list_inbound_tasks(
+    State(_s): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
+    if !can_read_bridge_queue(&claims) {
+        return Err(AppError::Forbidden("Admin access required".to_string()));
+    }
     let inbound_dir = std::path::PathBuf::from("/opt/ai-bridge/inbound");
     let mut tasks = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&inbound_dir) {
@@ -116,10 +148,16 @@ pub async fn list_inbound_tasks(State(_s): State<AppState>) -> Result<impl IntoR
     Ok(Json(json!({"tasks": tasks})))
 }
 
-/// GET /api/v1/bridge/outbound — list outbound result files
+/// `GET /api/v1/bridge-results` — list the outbound result files of the platform's AI Bridge queue.
+///
+/// Super admin only, for the same reason as its inbound twin; see [`can_read_bridge_queue`].
 pub async fn list_outbound_results(
     State(_s): State<AppState>,
-) -> Result<impl IntoResponse, AppError> {
+    Extension(claims): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
+    if !can_read_bridge_queue(&claims) {
+        return Err(AppError::Forbidden("Admin access required".to_string()));
+    }
     let outbound_dir = std::path::PathBuf::from("/opt/ai-bridge/outbound");
     let mut results = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&outbound_dir) {
@@ -263,4 +301,44 @@ pub struct AcknowledgedCommand {
     pub acknowledged_at: Option<DateTime<Utc>>,
     pub result: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::can_read_bridge_queue;
+    use crate::auth::models::Claims;
+    use uuid::Uuid;
+
+    fn claims(role: &str, super_admin: Option<bool>) -> Claims {
+        Claims {
+            sub: Uuid::new_v4().to_string(),
+            aid: Uuid::new_v4().to_string(),
+            role: role.to_string(),
+            exp: 0,
+            iat: 0,
+            perm_is_super_admin: super_admin,
+            pwd_minted: false,
+        }
+    }
+
+    /// The platform queue has no tenant column, so the operator flag is the whole decision
+    /// (kanban t_9aee74f9). A tenant session — the credential every signup mints — is refused.
+    #[test]
+    fn a_tenant_session_cannot_read_the_platform_queue() {
+        assert!(!can_read_bridge_queue(&claims("user", Some(false))));
+        assert!(!can_read_bridge_queue(&claims("owner", Some(false))));
+        assert!(!can_read_bridge_queue(&claims(
+            "company_admin",
+            Some(false)
+        )));
+        // A token minted before the flag existed carries no claim at all: refuse, never default in.
+        assert!(!can_read_bridge_queue(&claims("admin", None)));
+    }
+
+    #[test]
+    fn the_operator_flag_is_what_grants_the_read() {
+        assert!(can_read_bridge_queue(&claims("super_admin", Some(true))));
+        // The flag decides, not the role word: the app's admin middleware reads the same pair.
+        assert!(can_read_bridge_queue(&claims("user", Some(true))));
+    }
 }
