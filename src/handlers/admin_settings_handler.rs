@@ -1118,7 +1118,7 @@ pub async fn admin_list_accounts(
                     OR a.probe_harness ~* '^CNRY'
            )
            SELECT r.id, r.name, r.account_slug, r.is_active, r.retention_days,
-                  r.retention_purge_at, r.created_at, r.probe_harness,
+                  r.retention_purge_at, r.created_at, r.probe_harness, r.credits_balance,
                   p.name as plan_name, p.slug as plan_slug, r.plan_assigned,
                   (SELECT u.email FROM users u WHERE u.aid = r.id
                    ORDER BY CASE WHEN u.role IN ('owner','company_admin','admin','super_admin')
