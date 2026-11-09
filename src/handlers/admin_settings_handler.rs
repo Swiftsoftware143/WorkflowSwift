@@ -2123,6 +2123,117 @@ pub async fn admin_list_email_templates(
     Ok(Json(json!({"templates": result, "count": result.len()})))
 }
 
+/// GET /api/v1/admin/email-templates/types — the template types this app sends, the merge fields
+/// each one fills, and whether a stored (editable) row exists for it.
+///
+/// The console cannot invent this. `render_template` substitutes only the keys a caller binds, so a
+/// template naming a field nobody binds is delivered with the placeholder left in the message (the
+/// sender WARNs about the leftovers, after the customer has already been sent one). Every list below
+/// is taken from the app's own `send_email(...)` call sites, plus the three keys `render_template`
+/// always binds.
+pub async fn admin_email_template_types(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
+    require_admin(&claims)?;
+
+    // Which types already have a row an operator can edit HERE, and which still use the built-in
+    // wording. Read from the same table the sender resolves against.
+    let stored: Vec<String> = sqlx::query_scalar(
+        "SELECT DISTINCT template_type FROM email_templates WHERE template_type IS NOT NULL",
+    )
+    .fetch_all(&state.db)
+    .await
+    .unwrap_or_default();
+
+    // (type, what it is, the fields that call site binds)
+    let specs: [(&str, &str, &[&str]); 11] = [
+        (
+            "welcome",
+            "A new account's login details.",
+            &["name", "email", "password", "plan_name"],
+        ),
+        (
+            "password_reset",
+            "The reset link a signed-out user asked for.",
+            &["name", "token"],
+        ),
+        (
+            "email_change",
+            "Confirms a new email address and carries its link.",
+            &["name", "new_email", "token", "link"],
+        ),
+        (
+            "team_invite",
+            "An invitation to join a workspace.",
+            &["name", "email", "password", "account_name"],
+        ),
+        (
+            "purchase_confirmed",
+            "A paid plan's receipt.",
+            &["name", "email", "plan_name"],
+        ),
+        (
+            "plan_request_receipt",
+            "Acknowledges a plan request (nothing is charged).",
+            &["name", "ticket_subject"],
+        ),
+        (
+            "plan_request_operator_alert",
+            "Tells the operator a plan was requested.",
+            &["requester", "workspace", "plan", "admin_url"],
+        ),
+        (
+            "ticket_update",
+            "A support ticket's reply or status change.",
+            &[
+                "name",
+                "ticket_id",
+                "ticket_subject",
+                "reply",
+                "plan_name",
+                "public_visitor",
+            ],
+        ),
+        (
+            "workflow_notify",
+            "A workflow's own notification email.",
+            &["name", "email", "subject"],
+        ),
+        (
+            "email_test",
+            "The test message from Admin > Settings > Email.",
+            &["name"],
+        ),
+        (
+            "branding_preview",
+            "The preview of an account's branding.",
+            &["name", "email"],
+        ),
+    ];
+
+    let types: Vec<serde_json::Value> = specs
+        .iter()
+        .map(|(t, what, fields)| {
+            let mut merge: Vec<&str> = fields.to_vec();
+            // `render_template` binds these three on EVERY send, whatever the caller passed.
+            for universal in ["app_name", "app_url", "login_url"] {
+                if !merge.contains(&universal) {
+                    merge.push(universal);
+                }
+            }
+            json!({
+                "type": t,
+                "description": what,
+                "merge_fields": merge,
+                "editable": stored.iter().any(|s| s == t),
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({ "types": types, "count": types.len() })))
+}
+
 /// POST /api/v1/admin/email-templates — create a new email template
 pub async fn admin_create_email_template(
     State(state): State<AppState>,

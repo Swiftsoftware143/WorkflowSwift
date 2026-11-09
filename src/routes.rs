@@ -848,6 +848,12 @@ pub fn create_router(state: AppState) -> Router {
             get(handlers::admin_settings_handler::admin_list_email_templates)
                 .post(handlers::admin_settings_handler::admin_create_email_template),
         )
+        // Which types exist, what each one fills, and whether it is editable — the console's
+        // merge-field guide. Static segment, so it wins over `/email-templates/{id}`.
+        .route(
+            "/email-templates/types",
+            get(handlers::admin_settings_handler::admin_email_template_types),
+        )
         .route(
             "/email-templates/{id}",
             put(handlers::admin_settings_handler::admin_update_email_template)
