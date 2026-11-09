@@ -1286,6 +1286,44 @@ async fn send_email_fallback(
             )
             .await
         }
+        // The OPERATOR's copy of the same event (2026-11-09). `POST /api/v1/tickets` with
+        // source='plan_request' (and the Upgrade button's refused checkout) already mails the
+        // customer a receipt; nothing told the person who can actually move the row. On an
+        // installation with no payment provider the request IS the buying path, so an ask nobody is
+        // told about is a sale nobody makes. Destination is the operator's own address, stored in
+        // `admin_settings.billing.operator_alert_email` (Admin -> Platform Settings); unset sends
+        // nothing and this code never invents a mailbox.
+        "plan_request_operator_alert" => {
+            let workspace = vars
+                .get("workspace")
+                .and_then(|v| v.as_str())
+                .unwrap_or("A workspace");
+            let plan = vars
+                .get("plan")
+                .and_then(|v| v.as_str())
+                .unwrap_or("a plan");
+            let requester = vars
+                .get("requester")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(unknown)");
+            let admin_url = vars
+                .get("admin_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("https://admin.workflowswift.com");
+            let text_body = format!(
+                "{workspace} asked to be moved onto {plan}.\n\nRequested by: {requester}\nPlan: {plan}\n\nThe request is waiting in the admin console (Plans -> Plan requests). Moving it to done puts that workspace on the plan: {admin_url}\n\n- WorkflowSwift"
+            );
+            let html_body = format!(
+                "<html><body style=\"font-family:Arial,sans-serif;line-height:1.6;color:#333\">\
+                 <p><strong>{workspace}</strong> asked to be moved onto <strong>{plan}</strong>.</p>\
+                 <p>Requested by: <strong>{requester}</strong></p>\
+                 <p>The request is waiting in the admin console (Plans &rarr; Plan requests). Moving it to <em>done</em> puts that workspace on the plan.</p>\
+                 <p><a href=\"{admin_url}\" style=\"color:#4f46e5\">Open the admin console</a></p>\
+                 <p style=\"font-size:13px;color:#9ca3af\">Nothing has been charged. This message is sent once per request.<br>- WorkflowSwift</p></body></html>"
+            );
+            let subject = format!("A customer asked to buy {plan}");
+            send_branded(cfg, to, &subject, &text_body, &html_body, branding).await
+        }
         // The operator's own branding PREVIEW (cron 2026-10-24, parity with FunnelSwift,
         // IncentiveSwift and ADASwift). Reached whenever the account has no `branding_preview`
         // template row, which is the normal state on a fresh install — the sample must render
@@ -1477,6 +1515,73 @@ pub async fn send_branding_preview_email(
         "app_url": crate::branding::APP_URL,
     });
     send_email(state, Some(aid), to, "branding_preview", &vars).await
+}
+
+/// Tell the OPERATOR that a workspace asked to buy a plan (2026-11-09).
+///
+/// The customer already gets a receipt (see `notify_plan_request_receipt` in the tickets handler);
+/// this is the other half of the same event — until it existed, nothing told the person who can
+/// actually move the request row. On an installation with no payment provider configured the
+/// request IS the buying path, so an ask nobody is told about is a sale nobody makes (the same gap
+/// FunnelSwift closed on 2026-11-09).
+///
+/// The destination is the operator's own address, stored beside the billing settings
+/// (`admin_settings.billing.operator_alert_email`, set from Admin -> Platform Settings). An unset
+/// address sends nothing — this code never invents a mailbox. Sent through the SYSTEM mail
+/// configuration (`None`), not the asking workspace's, so it arrives even when that workspace's own
+/// mail server is the thing that is broken.
+///
+/// Best effort by design: the request row is already written and the console's queue reads it, so a
+/// mail failure must never turn a recorded request into an error. Returns whether a send was
+/// attempted and queued, which is what the caller logs.
+pub async fn send_plan_request_operator_alert(
+    state: &AppState,
+    aid: Uuid,
+    subject: &str,
+    requester_email: &str,
+) -> bool {
+    let billing: Option<serde_json::Value> =
+        match sqlx::query_scalar("SELECT value FROM admin_settings WHERE key = 'billing'")
+            .fetch_optional(&state.db)
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("operator alert: could not read the billing settings: {e}");
+                return false;
+            }
+        };
+    let Some(to) = billing
+        .as_ref()
+        .and_then(|v| v.get("operator_alert_email"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+    else {
+        // Nothing configured is a normal state, not a failure: no mailbox is invented.
+        return false;
+    };
+    let workspace: String = sqlx::query_scalar("SELECT name FROM accounts WHERE id = $1")
+        .bind(aid)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "A workspace".to_string());
+    let vars = json!({
+        "workspace": workspace,
+        "plan": subject,
+        "requester": requester_email,
+        "admin_url": "https://admin.workflowswift.com",
+    });
+    match send_email(state, None, &to, "plan_request_operator_alert", &vars).await {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(%aid, "plan-request operator alert to {to} failed: {e}");
+            false
+        }
+    }
 }
 
 /// Compatibility wrapper — used by password reset flow which has no AppState

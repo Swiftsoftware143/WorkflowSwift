@@ -417,6 +417,12 @@ pub(crate) async fn notify_plan_request_receipt(
         tracing::warn!(%aid, "plan request: the workspace has no active user to acknowledge");
         return false;
     };
+    // The OTHER half of this event (2026-11-09): tell the operator who can actually move the row.
+    // Deliberately fired BEFORE the customer's receipt and independent of its outcome — the operator
+    // must hear about an ask even when the workspace's own mail server is what is broken. Best
+    // effort, and silent when no operator address is configured.
+    let _operator_alerted =
+        crate::email::send_plan_request_operator_alert(state, aid, subject, &email).await;
     let vars = json!({
         "name": name,
         "ticket_subject": subject,
