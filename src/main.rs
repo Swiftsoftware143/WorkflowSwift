@@ -29,6 +29,7 @@ mod path_rejection;
 // Attribution for a workspace a test harness mints through the public signup
 // (`X-Swift-Harness`, kanban t_4a744754) — see `probe_harness`.
 mod probe_harness;
+mod probe_sweep;
 mod rate_limit;
 mod routes;
 mod security;
@@ -189,6 +190,13 @@ async fn main() {
     // t_1ff4b916). It only wakes steps whose due time has passed and hands them
     // to the same engine (src/execution.rs) — it is not a second executor.
     execution_worker::spawn(state.clone());
+
+    // Retire harness-tagged workspaces older than the fleet's 14-day residue window (kanban cron
+    // 2026-11-09). The signup door already stamps `accounts.probe_harness` from the harness header
+    // and the operator lists already hide those rows as "not a customer" — but nothing ever DELETED
+    // them, so they accumulated for ever. First tick is immediate, so the deploy retires the
+    // backlog; never fatal, a janitor must not take the app down.
+    probe_sweep::spawn_probe_sweeper(state.db.clone());
 
     let app = routes::create_router(state.clone())
         .layer(TraceLayer::new_for_http())
