@@ -1081,6 +1081,13 @@ pub async fn admin_list_accounts(
                SELECT a.id, a.name, a.account_slug, a.is_active, a.retention_days,
                       a.retention_purge_at, a.created_at,
                       COALESCE(a.probe_harness, '') AS probe_harness,
+                      -- The workspace's credit balance, on the row that shows its tier (2026-11-09).
+                      -- `POST /admin/accounts/{id}/credits` can now ADD or REMOVE credits, and a
+                      -- control that moves a number the operator cannot see is a coin toss: every
+                      -- row here reads the SAME `SUM(amount)` over `credit_transactions` the run
+                      -- gate enforces, so the figure on the panel is the figure the app spends.
+                      (SELECT COALESCE(SUM(ct.amount), 0)
+                         FROM credit_transactions ct WHERE ct.aid = a.id) AS credits_balance,
                       COALESCE(
                           (SELECT ap.plan_id FROM account_plans ap
                             WHERE ap.aid = a.id AND ap.status = 'active'
@@ -1198,6 +1205,9 @@ pub async fn admin_list_accounts(
         // ANYONE in it got in; NULL means nobody ever did, which the console renders as "Never".
         let last_sign_in: Option<chrono::DateTime<chrono::Utc>> =
             row.try_get("last_sign_in").ok().flatten();
+        // The balance the panel row prints beside the tier (2026-11-09). Same ledger the run gate
+        // sums, so `Adjust credits` moves the number this row shows.
+        let credits_balance: i64 = row.try_get("credits_balance").unwrap_or(0);
 
         result.push(json!({
             "id": id.to_string(),
@@ -1230,6 +1240,8 @@ pub async fn admin_list_accounts(
             // purchase — the same pair `/auth/me` has answered since 2026-10-28.
             "plan": plan_name.map(|n| json!({"name": n, "slug": plan_slug})),
             "plan_assigned": plan_assigned,
+            // The workspace's live credit balance (2026-11-09) — the figure `Adjust credits` moves.
+            "credits_balance": credits_balance,
             "n8n_provisioned": false
         }));
     }
