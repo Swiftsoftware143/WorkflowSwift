@@ -835,6 +835,16 @@ pub fn create_router(state: AppState) -> Router {
             "/accounts/{id}/retention",
             put(handlers::admin_settings_handler::admin_set_account_retention),
         )
+        // The operator's CREDIT ADJUSTMENT (2026-11-09). A `credit_pack_request` ticket is resolved
+        // by granting its pack (`tickets_handler::admin_update_status`), but nothing could CORRECT a
+        // balance — a refund, a goodwill top-up, or reversing a grant made to the wrong workspace —
+        // while the customer's own `/credits/deduct` is tenant-scoped and can only spend. This
+        // writes the same `credit_transactions` row every other movement writes, so the balance the
+        // run gate enforces and the history the customer reads stay one ledger.
+        .route(
+            "/accounts/{id}/credits",
+            post(handlers::admin_settings_handler::admin_adjust_credits),
+        )
         // Entitlement: moving an account onto a plan. The only supported path — there is no
         // self-serve checkout (`billing.enabled = false`), and without this an account stuck on
         // a tier that denies `api_access` could never be moved off it.

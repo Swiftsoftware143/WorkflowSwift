@@ -1576,6 +1576,119 @@ pub async fn admin_set_account_retention(
     })))
 }
 
+/// POST /api/v1/admin/accounts/:id/credits — move a workspace's credit balance by hand.
+///
+/// WHY THIS EXISTS (2026-11-09): every credit movement this app shipped is a SIGNUP grant,
+/// workflow USAGE, a rollover, or the resolve of a `credit_pack_request` ticket. None of them can
+/// CORRECT a balance — a refund, a goodwill top-up, or reversing a grant that went to the wrong
+/// workspace had no route at all, so the operator had to open SQL — while the customer's own
+/// `/credits/deduct` is tenant-scoped and can only SPEND. This writes the same row every other
+/// movement writes (`credit_transactions`), because the balance the run gate enforces, the history
+/// the customer reads and the figure the operator's account list prints are all `SUM(amount)` over
+/// that one ledger.
+///
+/// Refusals are 4xx and NOTHING is written: a zero amount, a note shorter than 3 characters (an
+/// unexplained money movement is not auditable), an account that does not exist, and a deduction
+/// larger than the balance (credits are not a debt).
+pub async fn admin_adjust_credits(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<impl IntoResponse> {
+    require_admin(&claims)?;
+
+    let amount = req.get("amount").and_then(|v| v.as_i64()).ok_or_else(|| {
+        AppError::Validation("amount is required (a signed whole number of credits)".to_string())
+    })?;
+    if amount == 0 {
+        return Err(AppError::Validation(
+            "amount must not be zero — there is nothing to record".to_string(),
+        ));
+    }
+    const MAX_ADJUST: i64 = 1_000_000;
+    if amount.abs() > MAX_ADJUST {
+        return Err(AppError::Validation(format!(
+            "amount must be within +/-{MAX_ADJUST} credits in one adjustment"
+        )));
+    }
+    let note = req
+        .get("note")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if note.chars().count() < 3 {
+        return Err(AppError::Validation(
+            "note is required — say why the balance is moving (at least 3 characters)".to_string(),
+        ));
+    }
+    if note.chars().count() > 200 {
+        return Err(AppError::Validation(
+            "note: 200 characters at most".to_string(),
+        ));
+    }
+
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM accounts WHERE id = $1)")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
+    if !exists {
+        return Err(AppError::NotFound("No account with that id".to_string()));
+    }
+
+    // Who moved the money: the ledger line has to name a person, not only an id.
+    let admin_email: String =
+        sqlx::query_scalar("SELECT COALESCE(email, '') FROM users WHERE id = $1")
+            .bind(Uuid::parse_str(&claims.sub).unwrap_or(Uuid::nil()))
+            .fetch_optional(&state.db)
+            .await?
+            .unwrap_or_default();
+
+    let before: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
+    let after = before + amount;
+    if after < 0 {
+        return Err(AppError::Validation(format!(
+            "That would leave the workspace at {after} credits. It has {before}, so at most {} can be removed.",
+            before.max(0)
+        )));
+    }
+
+    let tx_id = Uuid::new_v4();
+    let description = if admin_email.is_empty() {
+        format!("Admin adjustment: {note}")
+    } else {
+        format!("Admin adjustment by {admin_email}: {note}")
+    };
+    sqlx::query(
+        r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
+           VALUES ($1, $2, $3, 'admin_adjust', $4)"#,
+    )
+    .bind(tx_id)
+    .bind(id)
+    .bind(amount as i32)
+    .bind(&description)
+    .execute(&state.db)
+    .await?;
+
+    Ok(Json(json!({
+        "message": if amount > 0 {
+            format!("Added {amount} credits")
+        } else {
+            format!("Removed {} credits", -amount)
+        },
+        "transaction_id": tx_id.to_string(),
+        "amount": amount,
+        "balance_before": before,
+        "balance": after,
+    })))
+}
+
 /// PUT /api/v1/admin/accounts/:id/plan — put an account on a plan (platform admin only).
 ///
 /// This is the only supported way to change which tier an account is entitled to. Before it
