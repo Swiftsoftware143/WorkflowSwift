@@ -2475,6 +2475,9 @@ function renderAdminSettings(c){
   c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-1">Tag &rarr; free account</h2>'
    +'<p class="text-xs text-gray-500 mb-4">When FunnelSwift tags one of its leads with WorkflowSwift, this app creates a free account for that business on the plan you pick here and emails them their login. On by default &mdash; switch it off here if you do not want tags to create accounts.</p>'
    +'<div id="provbody"><p class="text-gray-400 text-sm">Loading...</p></div></div>'
+   +'<div class="card mt-4"><h2 class="text-xl font-bold mb-1">Sales alerts</h2>'
+   +'<p class="text-xs text-gray-500 mb-3">When a workspace asks to buy a plan &mdash; from its Plan &amp; Billing screen, or by pressing Upgrade while checkout is not switched on &mdash; the request lands in Plans &rarr; Plan requests. Put your own address here and WorkflowSwift emails you the moment the ask is filed, so you are told about the row you have to move. Leave it empty to send nothing.</p>'
+   +'<div class="flex gap-2 items-center flex-wrap"><input id="oa_email" type="email" placeholder="you@yourdomain.com" style="max-width:320px;padding:7px 9px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"><button class="btn btn-primary btn-sm" id="oa_save">Save alert address</button><span id="oa_msg" class="text-xs"></span></div></div>'
    +'<div class="card mt-4"><h2 class="text-xl font-bold mb-4">Platform Settings</h2><div id="sdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>'
    +'<div class="card mt-4"><h2 class="text-xl font-bold mb-1">Email Provider</h2>'
    +'<p class="text-xs text-gray-500 mb-4">Pick the transport WorkflowSwift sends with. These credentials live in the database and are read at send time &mdash; no server environment variables are consulted. Save, then send a test to prove it works.</p>'
@@ -2506,6 +2509,27 @@ function renderAdminSettings(c){
     };
     if(on)on.onchange=save;
     if(pl)pl.onchange=save;
+  });
+
+  // Sales alerts (2026-11-09): the operator's own address for "someone asked to buy a plan".
+  // Stored beside the billing settings so the backend reads it from one place; saving merges the
+  // WHOLE billing object back, because PUT /admin/settings/billing replaces the row.
+  api('/admin/settings/billing').then(d=>{
+    const inp=c.querySelector('#oa_email'), btn=c.querySelector('#oa_save'), msg=c.querySelector('#oa_msg');
+    if(!inp||!btn)return;
+    const v=(d&&d.value)||{};
+    inp.value=v.operator_alert_email||'';
+    btn.onclick=async()=>{
+      const addr=(inp.value||'').trim();
+      if(addr&&!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(addr)){
+        if(msg){msg.textContent='That does not look like an email address.';msg.style.color='#b91c1c';}
+        return;
+      }
+      const merged=Object.assign({},v,{operator_alert_email:addr});
+      const r=await api('/admin/settings/billing',{method:'PUT',body:JSON.stringify({value:merged})});
+      if(r)v.operator_alert_email=addr;
+      if(msg){msg.textContent=r?'Saved':('Save failed: '+(LAST_ERR||'request failed'));msg.style.color=r?'#166534':'#b91c1c';}
+    };
   });
 
   api('/admin/settings').then(d=>{

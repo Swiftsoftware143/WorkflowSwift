@@ -668,6 +668,15 @@ when it is set.</p>
       from the provider configured above. That is deliberately not an <code>emailSend</code>/SMTP node — that node
       type declares an <code>smtp</code> credential this n8n does not hold, and ONE such node made a tenant's entire
       generated workflow un-activatable (<code>Missing required credential: smtp</code>).</p>
+  <p><strong>Sales alerts.</strong> The <strong>Sales alerts</strong> card on this screen takes the
+  address you want told when a workspace asks to buy a plan. Filing a plan request &mdash; from the
+  customer's Plan &amp; Billing screen, or by pressing Upgrade while checkout is not switched on &mdash;
+  already emails the customer a receipt; with an address in that box the same moment also emails you,
+  naming the workspace, the plan it asked for and who asked, so the row you have to move does not wait
+  for you to notice it. Leave the box empty and nothing is sent &mdash; no mailbox is invented &mdash;
+  and the request still lands in Plans &rarr; Plan requests. The alert travels through this
+  installation's own email provider (the card below), so a broken transport fails it the same way as
+  any other message.</p>
   <p><strong>Recent sends is real sends only.</strong> The list under the Email Provider card
   (<code>GET /api/v1/admin/email-log</code>) keeps the last 50 <em>attempts</em> and says how many
   reserved test recipients were <em>withheld</em> in the last 7 days (<code>withheld_7d</code> in the
