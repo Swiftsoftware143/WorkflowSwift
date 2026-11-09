@@ -538,36 +538,10 @@ function content(){
     // predicate is `template_type = $1 AND (is_default = true OR is_default IS NULL)`; and (c) the
     // BODY - the thing the screen exists to change - could not be edited at all, though
     // admin_update_email_template sets body/html_body/is_html/template_type for any of them.
-    else if(s==='email-templates'){
-      renderCRUD(c,'admin-email-templates','Email Template',
-        ['name','template_type','subject','body','html_body','is_default'],
-        '/admin/email-templates',
-        ['name','template_type','subject','body','html_body','is_default']);
-      // WHAT EACH TYPE FILLS. `GET /admin/email-templates/types` shipped 2026-11-09 with no screen
-      // reading it, so the panel still typed blind: `render_template` substitutes only the keys a
-      // sender binds, and a placeholder nobody binds is delivered to the customer as literal text.
-      // Read the server's own list (never a map written here) and print it under the table.
-      (async()=>{
-        try{
-          const res=await fetch(API+'/admin/email-templates/types',{headers:{'Authorization':'Bearer '+TOKEN}});
-          if(!res.ok)return;
-          const d=await res.json();
-          const types=(d&&d.types)||[];
-          if(!types.length)return;
-          const rows=types.map(t=>'<tr><td class="text-xs" style="font-family:monospace">'+escHtml(t.type)+'</td>'
-            +'<td class="text-xs">'+escHtml(t.description||'')+'</td>'
-            +'<td class="text-xs" style="font-family:monospace">'+((t.merge_fields||[]).map(f=>'{'+escHtml(f)+'}').join(' '))+'</td>'
-            +'<td class="text-xs">'+(t.editable?'<span class="badge badge-green">has its own row</span>':'built-in wording')+'</td></tr>').join('');
-          const box=document.createElement('div');
-          box.className='card';
-          box.id='et-type-map';
-          box.innerHTML='<h3 class="text-sm font-bold mb-1">What each type fills</h3>'
-            +'<p class="text-xs text-gray-500 mb-3">Read from the app&rsquo;s own senders. A placeholder that is not in a type&rsquo;s list reaches the customer as literal text. The last column says whether you already have your own row for that type.</p>'
-            +'<table class="table"><thead><tr><th>Type</th><th>What it is</th><th>Placeholders it fills</th><th>Wording</th></tr></thead><tbody>'+rows+'</tbody></table>';
-          c.appendChild(box);
-        }catch(e){}
-      })();
-    }
+    else if(s==='email-templates')renderCRUD(c,'admin-email-templates','Email Template',
+      ['name','template_type','subject','body','html_body','is_default'],
+      '/admin/email-templates',
+      ['name','template_type','subject','body','html_body','is_default']);
     else if(s==='industry-sources')renderIndustrySources(c);
     else if(s==='site-config')renderSiteConfig(c);
   }
@@ -675,6 +649,32 @@ async function renderCRUD(container,key,label,fields,ep,editFields,extraAction,a
   const data=await api(EP.list);
   const items=unwrapList(data);
   const list=container.querySelector('#list');
+  // ── Merge-field guide (2026-11-09) ────────────────────────────────────────────────────────────
+  // A template that names a field the sender never binds is DELIVERED with the {placeholder} left
+  // in the message, so the operator has to know which keys the chosen type actually fills. The
+  // list comes from the app itself (GET /admin/email-templates/types — the same call sites the
+  // sender uses), never from a copy kept here, so it cannot drift. Only this panel draws it.
+  if(key==='admin-email-templates' && !container.querySelector('#tplMerge')){
+    const g=document.createElement('div');
+    g.id='tplMerge'; g.className='mt-5';
+    g.innerHTML='<p class="text-sm text-gray-400">Loading the merge-field guide…</p>';
+    container.querySelector('.card').appendChild(g);
+    api('/admin/email-templates/types').then(r=>{
+      const types=(r&&Array.isArray(r.types))?r.types:unwrapList(r);
+      if(!types.length){g.remove();return;}
+      g.innerHTML='<h3 class="font-semibold mb-1">Fields you can use</h3>'+
+        '<p class="text-sm text-gray-500 mb-2">Write a field in double braces — <code>{{name}}</code>. '+
+        'Only the DEFAULT row of a type is the one that gets sent; a type marked “built-in” has no stored row '+
+        'yet, so its wording is not editable on this screen.</p>'+
+        '<table class="text-sm"><thead><tr><th class="text-left pr-4">Type</th>'+
+        '<th class="text-left pr-4">When it is sent</th><th class="text-left">Fields</th></tr></thead><tbody>'+
+        types.map(t=>'<tr><td class="pr-4"><code>'+escHtml(t.type||'')+'</code>'+
+          (t.editable?'':' <span class="text-gray-400">(built-in)</span>')+'</td>'+
+          '<td class="pr-4">'+escHtml(t.description||'')+'</td><td>'+
+          ((t.merge_fields||[]).map(f=>'<code class="mr-1">'+escHtml('{{'+f+'}}')+'</code>').join(''))+
+          '</td></tr>').join('')+'</tbody></table>';
+    }).catch(()=>{ g.textContent='The merge-field guide is unavailable right now.'; });
+  }
   const openAdd=()=>showForm(key,label,(addFields&&addFields.length)?addFields:fields,EP,null,()=>renderPage());
   if(!items.length){
     list.innerHTML='<p class="text-gray-400 text-sm">No items yet.</p>';
