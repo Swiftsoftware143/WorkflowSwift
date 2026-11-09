@@ -198,6 +198,32 @@ pub async fn register(
         None => None,
     };
 
+    // ── TELL THE OPERATOR A CUSTOMER ARRIVED (2026-11-09, parity with FunnelSwift) ──────────────
+    // The account, its tenant, its plan and its credentials mail are all done by now; until this,
+    // nothing told the person who runs the install. The plan-request and support-request arms next
+    // door already mail `operator_alert_email`, and a new workspace is the one event the operator
+    // most wants to see. Best effort: the signup is already committed, so a mail failure is logged
+    // and the 201 stands. A harness-attributed or reserved-address signup is SILENT — exactly like
+    // its credentials mail — because machinery must never mail the operator.
+    let harness_signup = crate::probe_harness::for_signup(&headers, &email).is_some()
+        || crate::security::probe_addr::harness_domain(&email).is_some();
+    if !harness_signup
+        && !crate::email::send_signup_operator_alert(
+            &state,
+            ids.account_id,
+            &req.name,
+            &email,
+            plan_slug.as_str(),
+            "the signup page",
+        )
+        .await
+    {
+        tracing::debug!(
+            email = %email,
+            "signup: operator alert not sent (no operator address configured, or the send was refused)"
+        );
+    }
+
     let aid = ids.account_id;
     let user_id = ids.user_id;
     let account_name = ids.account_name;
