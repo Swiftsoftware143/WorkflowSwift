@@ -1324,6 +1324,56 @@ async fn send_email_fallback(
             let subject = format!("A customer asked to buy {plan}");
             send_branded(cfg, to, &subject, &text_body, &html_body, branding).await
         }
+        // The OPERATOR's copy of an ORDINARY help request (2026-11-09) — reached when no stored
+        // template row exists, which is true of every install today. Measured live on the sibling
+        // app: the contact-page door answered 201 "Your message is with our team" and queued ZERO
+        // mail, and the signed-in door alerted only for a PLAN request — so "I cannot sign in"
+        // waited in a console nobody had been told to open.
+        "support_request_operator_alert" => {
+            let who = vars
+                .get("who")
+                .and_then(|v| v.as_str())
+                .unwrap_or("A customer");
+            let reply_to = vars
+                .get("reply_to")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(unknown)");
+            let ask = vars
+                .get("subject_line")
+                .and_then(|v| v.as_str())
+                .unwrap_or("a support request");
+            let message = vars.get("message").and_then(|v| v.as_str()).unwrap_or("");
+            let admin_url = vars
+                .get("admin_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("https://admin.workflowswift.com");
+            let esc = |s: &str| {
+                s.replace('&', "&amp;")
+                    .replace('<', "&lt;")
+                    .replace('>', "&gt;")
+                    .replace('"', "&quot;")
+            };
+            let notice = format!(
+                "{who} wrote to support.\n\nSubject: {ask}\nReply to: {reply_to}\n\n{message}\n\n                 Answer it in the admin console (Support -> Tickets) and the asker is mailed your                  reply: {admin_url}\n\n- WorkflowSwift"
+            );
+            let html_body = format!(
+                "<html><body style=\"font-family:Arial,sans-serif;line-height:1.6;color:#333\">\
+                 <p><strong>{}</strong> wrote to support.</p>\
+                 <p>Subject: <strong>{}</strong></p>\
+                 <p>Reply to: <strong>{}</strong></p>\
+                 <pre style=\"white-space:pre-wrap;font-family:inherit\">{}</pre>\
+                 <p>Answer it in the admin console (Support &rarr; Tickets) and the asker is mailed                  your reply.</p>\
+                 <p><a href=\"{}\" style=\"color:#4f46e5\">Open the admin console</a></p>\
+                 <p style=\"font-size:13px;color:#9ca3af\">- WorkflowSwift</p></body></html>",
+                esc(who),
+                esc(ask),
+                esc(reply_to),
+                esc(message),
+                admin_url,
+            );
+            let subject = format!("A support request needs an answer: {ask}");
+            send_branded(cfg, to, &subject, &notice, &html_body, branding).await
+        }
         // The operator's own branding PREVIEW (cron 2026-10-24, parity with FunnelSwift,
         // IncentiveSwift and ADASwift). Reached whenever the account has no `branding_preview`
         // template row, which is the normal state on a fresh install — the sample must render
@@ -1515,6 +1565,64 @@ pub async fn send_branding_preview_email(
         "app_url": crate::branding::APP_URL,
     });
     send_email(state, Some(aid), to, "branding_preview", &vars).await
+}
+
+/// Tell the OPERATOR that somebody wrote to support (2026-11-09).
+///
+/// WHY THIS EXISTS (measured live on the sibling app the same day): `POST /api/v1/public/support-request`
+/// — the contact page's form, the door a LOCKED-OUT customer has — answers 201 "Your message is with
+/// our team" and queued ZERO mail, while the signed-in door alerted the operator only for a PLAN
+/// request. Any ordinary "I cannot sign in" ticket therefore waited in a console nobody had been
+/// told to open. FunnelSwift closed the identical gap at 10:59 that morning.
+///
+/// Destination = the operator's own `operator_alert_email`, stored beside the system mail settings
+/// (`admin_settings.billing.operator_alert_email`, Admin -> Platform Settings). An unset address
+/// sends nothing: this code never invents a mailbox. Sent through the SYSTEM configuration (`None`),
+/// never the asking workspace's, so it arrives even when that workspace's own mail is the broken
+/// thing. Best effort — the row is the record, so a failure never turns a filed request into a 500.
+pub async fn send_support_request_operator_alert(
+    state: &AppState,
+    who: &str,
+    reply_to: &str,
+    subject_line: &str,
+    message: &str,
+) -> bool {
+    let billing: Option<serde_json::Value> =
+        match sqlx::query_scalar("SELECT value FROM admin_settings WHERE key = 'billing'")
+            .fetch_optional(&state.db)
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("support operator alert: could not read the billing settings: {e}");
+                return false;
+            }
+        };
+    let Some(to) = billing
+        .as_ref()
+        .and_then(|v| v.get("operator_alert_email"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+    else {
+        // Nothing configured is a normal state, not a failure: no mailbox is invented.
+        return false;
+    };
+    let vars = json!({
+        "who": if who.trim().is_empty() { "A customer" } else { who.trim() },
+        "reply_to": reply_to,
+        "subject_line": subject_line,
+        "message": message,
+        "admin_url": "https://admin.workflowswift.com",
+    });
+    match send_email(state, None, &to, "support_request_operator_alert", &vars).await {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!("support operator alert to {to} failed: {e}");
+            false
+        }
+    }
 }
 
 /// Tell the OPERATOR that a workspace asked to buy a plan (2026-11-09).

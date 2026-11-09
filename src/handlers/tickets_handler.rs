@@ -373,6 +373,34 @@ pub async fn create(
     let acknowledged = if is_plan_request(&source) {
         notify_customer_of_plan_request(&state, &row).await
     } else {
+        // An ORDINARY help request (2026-11-09): the plan arm above only ever covered a request to
+        // buy, so "I cannot sign in" or "my runs are blank" wrote a row and told nobody. One alert
+        // per filed ticket; the plan arm is exclusive, so this can never double-mail.
+        let workspace: String = sqlx::query_scalar(
+            "SELECT COALESCE(NULLIF(btrim(name), ''), 'A workspace') FROM accounts WHERE id = $1",
+        )
+        .bind(aid)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "A workspace".to_string());
+        let reply_to: String =
+            sqlx::query_scalar("SELECT COALESCE(email, '') FROM users WHERE id::text = $1")
+                .bind(&claims.sub)
+                .fetch_optional(&state.db)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_default();
+        let _notified = crate::email::send_support_request_operator_alert(
+            &state,
+            &workspace,
+            &reply_to,
+            &b.subject,
+            &description,
+        )
+        .await;
         false
     };
     Ok((
@@ -999,6 +1027,19 @@ pub async fn create_public(
     .bind(&email)
     .execute(&state.db)
     .await?;
+
+    // TELL THE OPERATOR (2026-11-09). The row above is the record; this is the notification. Until it
+    // existed a locked-out customer's only way back in was a console nobody had been told to open.
+    // Best effort: the row is already written, so a mail failure is logged and the 201 kept.
+    let notified = crate::email::send_support_request_operator_alert(
+        &state,
+        name.trim(),
+        &email,
+        &subject,
+        &description,
+    )
+    .await;
+    tracing::info!(ticket = %id, operator_notified = notified, "public support request filed");
 
     Ok((
         StatusCode::CREATED,
