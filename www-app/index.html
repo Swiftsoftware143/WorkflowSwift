@@ -709,6 +709,13 @@ const retryWidgets = async () => {
   S.loading = false; renderApp();
 };
 const loadDashTabs = async (slug) => { try { const r = await API.getDashboardTabs(slug || currentIndustrySlug()); S.dashboardTabs = r.tabs || r.items || r || []; } catch(e){ S.dashboardTabs=[]; } };
+// The API names a tab `tab_label` (dashboard_tab_config.tab_label); reading only title/name left every
+// pill empty and the button with no accessible name (kanban t_ef3ffc95).
+const tabLabel = (t) => {
+  if (typeof t === 'string') return t;
+  if (!t || typeof t !== 'object') return 'Dashboard tab';
+  return t.tab_label || t.title || t.name || t.label || t.tab_type || 'Dashboard tab';
+};
 // GET /dashboard/timeline was served but uncalled — the account's own activity feed.
 const loadTimeline = async () => { try { const r = await API.getTimeline(); S.timeline = r.timeline || r.items || []; } catch(e){ S.timeline=[]; } renderApp(); };
 // GET /dashboard/workspace -- the "running now" tile (kanban t_b2f20b5b). Silent on failure:
@@ -814,7 +821,7 @@ const DashboardView = () => {
       <div class="topbar">
         <div><div class="dash-title">${dashTitle()}</div><p class="text-sm text-gray-500 mt-1">${kpiSubtitle()}</p></div>
         <div class="flex items-center gap-2">
-          ${(S.dashboardTabs||[]).length ? html`<div class="tb-tabs">${S.dashboardTabs.map(t=>html`<button class="tb-tab" onClick=${()=>toast('Tab: '+ (t.title||t.name||t) )}>${(t.title||t.name||t)}</button>`)}</div>` : ''}
+          ${(S.dashboardTabs||[]).length ? html`<div class="tb-tabs">${S.dashboardTabs.map(t=>html`<button class="tb-tab" aria-label=${tabLabel(t)} title=${tabLabel(t)} onClick=${()=>toast('Tab: '+tabLabel(t))}>${tabLabel(t)}</button>`)}</div>` : ''}
           <button class="ind-switch" onClick=${openIndustryPicker}>🏷 ${currentIndustryName()} ▾</button>
           <button class="btn-outline text-sm" onClick=${seedSampleData} disabled=${S.loading} title="Push sample KPI values to populate widgets">⚡ Sample data</button>
           <button class="btn-outline text-sm" onClick=${()=>{S.widgets=null;loadWidgets(slug);}} disabled=${S.loading}>${S.loading?'Loading…':'Refresh'}</button>
