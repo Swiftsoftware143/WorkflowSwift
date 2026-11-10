@@ -1710,7 +1710,9 @@ const startCheckout = async (p, term) => {
     // only from the Tickets screen), so the refusal now carries a one-click request the team can see
     // and complete. Rendered only AFTER a refusal, so an install whose checkout works never shows it.
     // Not when the server already recorded the ask: the card would offer to file what exists.
-    if (!recorded) S.requestForPlan = p;
+    // The fallback request must name the TERM the buyer pressed: a refused YEARLY purchase that
+    // files a "monthly" request would have the team invoice the wrong amount (2026-11-10).
+    if (!recorded) S.requestForPlan = Object.assign({}, p, { _term: chosen.term });
     // ONE PRESS FILES IT (cron 2026-10-20). Measured LIVE in Chromium on app.workflowswift.com
     // before this change: pressing "Upgrade to Starter" answered 400 /api/v1/checkout/create and
     // only RENDERED the request button — GET /api/v1/tickets still returned 0, so a buyer who
