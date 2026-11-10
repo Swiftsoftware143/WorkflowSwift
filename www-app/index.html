@@ -270,7 +270,14 @@ const API = (() => {
     // really deliver on, and which of the account's own people a step may reach.
     notifyChannels: () => send(base + '/notify/channels', { headers: headers() }).then(handle),
     notifyRecipients: () => send(base + '/notify/recipients', { headers: headers() }).then(handle),
-    saveProviderKey: (provider, api_key) => send(base + '/provider-keys', { method:'POST', headers: headers(), body: JSON.stringify({ provider, api_key }) }).then(handle),
+    // GET /api/v1/available-providers -- the catalogue this app actually accepts: every ACTIVE
+    // provider with its own name, its `coming_soon` flag and whether it takes a custom base URL.
+    // The Provider Keys screen used to keep its own hardcoded list of ten, so five providers the
+    // API accepts (twilio, funnelswift, incentiveswift, google_places, hexomatic) could not be
+    // connected from the UI at all, and a provider whose account needs its own endpoint had
+    // nowhere to put it.
+    availableProviders: () => send(base + '/available-providers', { headers: headers() }).then(handle),
+    saveProviderKey: (provider, api_key, base_url) => send(base + '/provider-keys', { method:'POST', headers: headers(), body: JSON.stringify(base_url ? { provider, api_key, base_url } : { provider, api_key }) }).then(handle),
     deleteProviderKey: (provider) => send(base + '/provider-keys/' + encodeURIComponent(provider), { method:'DELETE', headers: headers() }).then(handle),
     // --- Team management (see TeamView). NOTE: /users and /users/team are registered WITHOUT a
     // trailing slash — a request to /api/v1/users/ answers 404 while /api/v1/users answers 200.
@@ -368,7 +375,7 @@ const setView = (v, params) => { S.current = v; S.viewParams = params || {}; ren
 const closeModal = () => { S.modal = null; renderApp(); };
 // Team / plan / timeline state (kept out of the S literal above so the two lanes editing this
 // file do not collide on one very long line).
-Object.assign(S, { users:null, teamErr:null, invited:null, permsTarget:null, timeline:null, planCaps:null, rolloverMsg:null, timelineTried:false, planCapsTried:false, wsDash:null, wsDashTried:false, stats:null, statsTried:false, usage:null, usageTried:false });
+Object.assign(S, { users:null, teamErr:null, invited:null, permsTarget:null, timeline:null, planCaps:null, rolloverMsg:null, timelineTried:false, planCapsTried:false, wsDash:null, wsDashTried:false, stats:null, statsTried:false, usage:null, usageTried:false, availableProviders:null, providersTried:false });
 // The rows GET /auth/me/usage reports, in the order a tenant reads them. Declared here, with the
 // state, so the Plan & Billing pane can never render before they exist.
 const USAGE_ROWS = [
@@ -1882,6 +1889,26 @@ const PROVIDER_SLOTS = [
   ['mailgun','Mailgun'], ['sendgrid','SendGrid'], ['sendiio','Sendiio'],
   ['n8n','n8n'], ['coreswift','CoreSwift CRM'], ['smtp','SMTP'],
 ];
+// The dropdown offers what the SERVER accepts, and nothing else. `PROVIDER_SLOTS` above is only the
+// fallback for the moment before the catalogue answers (or if it cannot be read at all): the list it
+// carries had drifted from `available_providers` twice, and every drift is a provider a tenant can
+// see in the Integrations page but cannot connect here. `GET /available-providers` is the same
+// catalogue `POST /provider-keys` itself validates against, so the two can no longer disagree.
+// Providers flagged `coming_soon` stay VISIBLE and are marked, unselectable (label, don't hide).
+const providerSlots = () => {
+  const cat = S.availableProviders;
+  if (cat && cat.length) {
+    return cat.map(p => ({ key: p.key, name: p.name || p.key, coming: p.coming_soon === true, base: p.requires_base_url === true }));
+  }
+  return PROVIDER_SLOTS.map(p => ({ key: p[0], name: p[1], coming: false, base: false }));
+};
+const loadAvailableProviders = async () => {
+  if (S.providersTried) return;
+  S.providersTried = true;
+  try { const r = await API.availableProviders(); S.availableProviders = (r && r.available_providers) || []; }
+  catch (e) { S.availableProviders = null; }
+  renderApp();
+};
 // The providers the AI Action step can run on — the same four the API accepts for `ai-action`
 // (src/ai_llm.rs AI_PROVIDERS). Kept as a separate list because PROVIDER_SLOTS above also carries
 // the mail/CRM/integration slots that have nothing to do with an LLM call.
@@ -1891,8 +1918,11 @@ const connectedProviderSet = () => new Set((S.providerKeys || [])
   .map(k => k.provider));
 const ProviderKeysView = () => {
   if (!S.providerKeys && !S.loading) loadProviderKeys();
+  if (!S.providersTried) loadAvailableProviders();
   const list = S.providerKeys || [];
-  const sel = S.pkDraft && S.pkDraft.provider || PROVIDER_SLOTS[0][0];
+  const slots = providerSlots();
+  const sel = (S.pkDraft && S.pkDraft.provider) || (slots[0] && slots[0].key) || PROVIDER_SLOTS[0][0];
+  const selSlot = slots.filter(s => s.key === sel)[0] || {};
   return html`
     <div>
       <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
@@ -1904,7 +1934,7 @@ const ProviderKeysView = () => {
         <div style="margin-bottom:12px">
           <label class="label">Provider</label>
           <select value=${sel} onChange=${e => { S.pkDraft = Object.assign({}, S.pkDraft, { provider: e.target.value }); renderApp(); }}>
-            ${PROVIDER_SLOTS.map(p => html`<option key=${p[0]} value=${p[0]}>${p[1]} (${p[0]})</option>`)}
+            ${slots.map(p => html`<option key=${p.key} value=${p.key} disabled=${p.coming}>${p.name} (${p.key})${p.coming ? ' — Coming Soon' : ''}</option>`)}
           </select>
         </div>
         <div>
@@ -1912,6 +1942,12 @@ const ProviderKeysView = () => {
           <input type="password" class="input" autocomplete="new-password" placeholder="paste the provider key" value=${(S.pkDraft && S.pkDraft.api_key) || ''}
             onInput=${e => { S.pkDraft = Object.assign({}, S.pkDraft, { api_key: e.target.value }); }} />
         </div>
+        ${selSlot.base ? html`<div style="margin-top:12px">
+          <label class="label">Endpoint (only if yours differs)</label>
+          <input type="text" class="input" placeholder="https://api.example.com — leave blank for the provider's own endpoint" value=${(S.pkDraft && S.pkDraft.base_url) || ''}
+            onInput=${e => { S.pkDraft = Object.assign({}, S.pkDraft, { base_url: e.target.value }); }} />
+          <p class="text-xs text-gray-400 mt-1">Most providers do not need this. Fill it in when your account uses an endpoint of its own — a regional Mailgun domain, a self-hosted or proxy AI endpoint, an SMTP host.</p>
+        </div>` : ''}
         <div class="flex gap-2 mt-3">
           <button class="btn text-sm" disabled=${S.pkSaving} onClick=${saveProviderKeyNow}>${S.pkSaving?'Saving…':'Save key'}</button>
         </div>
@@ -1936,10 +1972,12 @@ const loadProviderKeys = async () => { if(S.loading)return; S.loading=true; rend
   try { const r = await API.listProviderKeys(); S.providerKeys = r.provider_keys || []; }
   catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
 const saveProviderKeyNow = async () => {
-  const d = S.pkDraft || {}; const provider = d.provider || PROVIDER_SLOTS[0][0]; const val = (d.api_key || '').trim();
+  const d = S.pkDraft || {}; const slots = providerSlots();
+  const provider = d.provider || (slots[0] && slots[0].key) || PROVIDER_SLOTS[0][0];
+  const val = (d.api_key || '').trim();
   if (!val) { toast('Paste the key value first','err'); return; }
   S.pkSaving = true; renderApp();
-  try { await API.saveProviderKey(provider, val); toast('Stored key for ' + provider); S.pkDraft = { provider }; await loadProviderKeys(); }
+  try { await API.saveProviderKey(provider, val, (d.base_url || '').trim() || undefined); toast('Stored key for ' + provider); S.pkDraft = { provider }; await loadProviderKeys(); }
   catch(e){ toast(e.message,'err'); }
   S.pkSaving = false; renderApp();
 };
