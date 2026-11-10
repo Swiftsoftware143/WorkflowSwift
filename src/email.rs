@@ -916,6 +916,78 @@ pub(crate) fn ticket_update_wording(status: &str, applied_plan: Option<&str>) ->
     (said, next)
 }
 
+/// The exact subject / plain text / HTML of the failed-run notice.
+///
+/// Split out from the `"workflow_failed"` arm so the WORDING can be asserted without a provider:
+/// a withheld (reserved-address) send never reaches the renderer, so a `format!` slip inside the arm
+/// would otherwise stay invisible until a real customer's run failed.
+fn workflow_failed_bodies(app_url: &str, vars: &serde_json::Value) -> (String, String, String) {
+    let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
+    let workflow_name = vars
+        .get("workflow_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("your workflow");
+    let run_name = vars
+        .get("run_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("a run");
+    let failure = vars.get("failure").and_then(|v| v.as_str()).unwrap_or("");
+    let failed_steps = vars
+        .get("failed_steps")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(1)
+        .max(1);
+    let console_url = vars
+        .get("console_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or(app_url);
+    let steps_word = if failed_steps == 1 { "step" } else { "steps" };
+    // The subject and the plain-text part carry the raw values; only the HTML part escapes them,
+    // because a workflow NAME and a run NAME are customer-supplied strings and a step's message is
+    // whatever the upstream service sent back.
+    let esc = |v: &str| {
+        v.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+    };
+    let safe_name = esc(name);
+    let safe_workflow = esc(workflow_name);
+    let safe_run = esc(run_name);
+    let safe_failure = esc(failure);
+    let subject = format!("WorkflowSwift: {} failed", workflow_name);
+    let html_body = format!(
+        r#"<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin:0;padding:0;background:#f4f4f4;">
+<table style="width:100%;max-width:600px;margin:20px auto;background:#fff;border-radius:8px;overflow:hidden;">
+<tr><td style="padding:30px 40px;background:linear-gradient(135deg,#dc2626,#b91c1c);text-align:center;">
+<h1 style="color:#fff;font-size:26px;margin:0;">A workflow run failed</h1></td></tr>
+<tr><td style="padding:40px;">
+<p style="font-size:16px;color:#374151;">Hello <strong>{safe_name}</strong>,</p>
+<p style="font-size:16px;color:#374151;">Your workflow <strong>{safe_workflow}</strong> failed on its latest run (<strong>{safe_run}</strong>) &mdash; {failed_steps} {steps_word} did not complete.</p>
+<div style="background:#fef2f2;padding:18px;border-radius:8px;margin:24px 0;border-left:4px solid #dc2626;">
+<p style="margin:0;font-size:14px;color:#7f1d1d;"><strong>What the run reported:</strong></p>
+<p style="margin:8px 0 0;font-size:14px;color:#111827;font-family:monospace;word-break:break-word;">{safe_failure}</p></div>
+<table style="margin:26px auto;"><tr><td style="background:#dc2626;border-radius:6px;text-align:center;">
+<a href="{console_url}" style="display:inline-block;padding:14px 36px;color:#fff;text-decoration:none;font-size:16px;font-weight:bold;">Open my run list</a>
+</td></tr></table>
+<p style="font-size:14px;color:#374151;">Your other workflows keep running &mdash; this notice exists so a stopped automation does not go unnoticed.</p>
+<p style="font-size:14px;color:#9ca3af;text-align:center;margin-top:30px;">- The WorkflowSwift Team</p>
+</td></tr></table></body></html>"#,
+        safe_name = safe_name,
+        safe_workflow = safe_workflow,
+        safe_run = safe_run,
+        failed_steps = failed_steps,
+        steps_word = steps_word,
+        safe_failure = safe_failure,
+        console_url = console_url
+    );
+    let text_body = format!(
+        "Hello {name},\n\nYour workflow '{workflow_name}' failed on its latest run ('{run_name}') - {failed_steps} {steps_word} did not complete.\n\nWhat the run reported:\n{failure}\n\nOpen your run list: {console_url}\n\nYour other workflows keep running - this notice exists so a stopped automation does not go unnoticed.\n\n- WorkflowSwift"
+    );
+    (subject, text_body, html_body)
+}
+
 async fn send_email_fallback(
     cfg: &EmailConfig,
     to: &str,
@@ -1174,61 +1246,7 @@ async fn send_email_fallback(
         // run was a row in the console's run list and nothing else, so an automation that stopped
         // delivering was indistinguishable from one that had simply not been needed.
         "workflow_failed" => {
-            let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
-            let workflow_name = vars
-                .get("workflow_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("your workflow");
-            let run_name = vars
-                .get("run_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("a run");
-            let failure = vars.get("failure").and_then(|v| v.as_str()).unwrap_or("");
-            let failed_steps = vars
-                .get("failed_steps")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(1)
-                .max(1);
-            let console_url = vars
-                .get("console_url")
-                .and_then(|v| v.as_str())
-                .unwrap_or(app_url);
-            let steps_word = if failed_steps == 1 { "step" } else { "steps" };
-            let safe_failure = failure
-                .replace('&', "&amp;")
-                .replace('<', "&lt;")
-                .replace('>', "&gt;");
-            let subject = format!("WorkflowSwift: {} failed", workflow_name);
-            let html_body = format!(
-                r#"<!DOCTYPE html>
-<html><head><meta charset="utf-8"></head>
-<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin:0;padding:0;background:#f4f4f4;">
-<table style="width:100%;max-width:600px;margin:20px auto;background:#fff;border-radius:8px;overflow:hidden;">
-<tr><td style="padding:30px 40px;background:linear-gradient(135deg,#dc2626,#b91c1c);text-align:center;">
-<h1 style="color:#fff;font-size:26px;margin:0;">A workflow run failed</h1></td></tr>
-<tr><td style="padding:40px;">
-<p style="font-size:16px;color:#374151;">Hello <strong>{name}</strong>,</p>
-<p style="font-size:16px;color:#374151;">Your workflow <strong>{workflow_name}</strong> failed on its latest run (<strong>{run_name}</strong>) &mdash; {failed_steps} {steps_word} did not complete.</p>
-<div style="background:#fef2f2;padding:18px;border-radius:8px;margin:24px 0;border-left:4px solid #dc2626;">
-<p style="margin:0;font-size:14px;color:#7f1d1d;"><strong>What the run reported:</strong></p>
-<p style="margin:8px 0 0;font-size:14px;color:#111827;font-family:monospace;word-break:break-word;">{safe_failure}</p></div>
-<table style="margin:26px auto;"><tr><td style="background:#dc2626;border-radius:6px;text-align:center;">
-<a href="{console_url}" style="display:inline-block;padding:14px 36px;color:#fff;text-decoration:none;font-size:16px;font-weight:bold;">Open my run list</a>
-</td></tr></table>
-<p style="font-size:14px;color:#374151;">Your other workflows keep running &mdash; this notice exists so a stopped automation does not go unnoticed.</p>
-<p style="font-size:14px;color:#9ca3af;text-align:center;margin-top:30px;">- The WorkflowSwift Team</p>
-</td></tr></table></body></html>"#,
-                name = name,
-                workflow_name = workflow_name,
-                run_name = run_name,
-                failed_steps = failed_steps,
-                steps_word = steps_word,
-                safe_failure = safe_failure,
-                console_url = console_url
-            );
-            let text_body = format!(
-                "Hello {name},\n\nYour workflow '{workflow_name}' failed on its latest run ('{run_name}') - {failed_steps} {steps_word} did not complete.\n\nWhat the run reported:\n{failure}\n\nOpen your run list: {console_url}\n\nYour other workflows keep running - this notice exists so a stopped automation does not go unnoticed.\n\n- WorkflowSwift"
-            );
+            let (subject, text_body, html_body) = workflow_failed_bodies(app_url, vars);
             send_branded(cfg, to, &subject, &text_body, &html_body, branding).await
         }
         // The CUSTOMER's notice that their own request moved (2026-10-19). A plan request is filed
@@ -2338,6 +2356,69 @@ async fn send_via_smtp(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_failed_run_notice_names_the_workflow_and_the_run_list() {
+        let vars = json!({
+            "name": "Dana",
+            "workflow_name": "Invoice chaser",
+            "run_name": "Nightly run",
+            "failed_steps": 2,
+            "failure": "upstream returned HTTP 503",
+            "console_url": "https://app.workflowswift.com/#instances",
+        });
+        let (subject, text, html) = workflow_failed_bodies("https://app.workflowswift.com", &vars);
+        assert!(subject.contains("Invoice chaser"), "subject={subject}");
+        assert!(
+            text.contains("Invoice chaser") && text.contains("Nightly run"),
+            "text={text}"
+        );
+        assert!(
+            text.contains("2 steps"),
+            "the count is pluralised: text={text}"
+        );
+        assert!(
+            text.contains("https://app.workflowswift.com/#instances"),
+            "text={text}"
+        );
+        assert!(
+            html.contains("https://app.workflowswift.com/#instances"),
+            "html lacks the link"
+        );
+        assert!(
+            html.contains("upstream returned HTTP 503"),
+            "html lacks the reason"
+        );
+
+        // A step message is customer-supplied text, so it must not be able to inject markup.
+        let hostile = json!({
+            "name": "Dana",
+            "workflow_name": "<script>x</script>",
+            "run_name": "run",
+            "failed_steps": 1,
+            "failure": "<img src=x onerror=alert(1)>",
+            "console_url": "https://app.workflowswift.com/#instances",
+        });
+        let (subject, text, html) =
+            workflow_failed_bodies("https://app.workflowswift.com", &hostile);
+        assert!(
+            subject.contains("<script>x</script>"),
+            "subject is an escaped field: {subject}"
+        );
+        assert!(
+            !html.contains("<script>x</script>"),
+            "the html arm must escape the name"
+        );
+        assert!(
+            !html.contains("<img src=x"),
+            "the html arm must escape the reason"
+        );
+        assert!(
+            text.contains("<img src=x onerror=alert(1)>"),
+            "plain text keeps the raw reason"
+        );
+        assert!(text.contains("1 step "), "singular wording: text={text}");
+    }
 
     #[test]
     fn a_resolve_that_moved_the_plan_says_which_plan() {
