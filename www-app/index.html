@@ -2442,7 +2442,7 @@ const ProfileView = () => {
         <div class="flex items-center gap-4 flex-wrap">
           <${Avatar} u=${u} size=${72} stamp=${av.stamp} id="profile-picture-preview" />
           <div>
-            <input id="profile-picture-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp"
+            <input id="profile-picture-input" type="file" aria-label="Profile picture to upload" accept="image/png,image/jpeg,image/gif,image/webp"
               onChange=${e=>{ const f = (e.target.files && e.target.files[0]) || null; if (f && f.size > PICTURE_MAX_BYTES) { pendingAvatar = null; av.chosen = ''; toast(PICTURE_TOO_BIG,'err'); renderApp(); return; } pendingAvatar = f; av.chosen = f ? f.name : ''; renderApp(); }} />
             <div class="text-xs text-gray-500 mt-1">PNG, JPEG, GIF or WebP — up to 2 MB.${av.chosen ? (' Selected: ' + av.chosen) : ''}</div>
             <button class="btn text-sm mt-2" id="profile-picture-save" onClick=${uploadPicture} disabled=${av.uploading || S.loading}>${av.uploading ? 'Uploading…' : 'Upload picture'}</button>
@@ -2486,7 +2486,7 @@ const ProfileView = () => {
               : html`<div class="text-xs text-gray-400" id="branding-logo-empty">No logo yet</div>`}
           </div>
           <div>
-            <input id="branding-logo-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp"
+            <input id="branding-logo-input" type="file" aria-label="Email logo image to upload" accept="image/png,image/jpeg,image/gif,image/webp"
               onChange=${e=>{ const f = (e.target.files && e.target.files[0]) || null; if (f && f.size > PICTURE_MAX_BYTES) { bd.chosen = null; toast(PICTURE_TOO_BIG,'err'); renderApp(); return; } bd.chosen = f; renderApp(); }} />
             <div class="text-xs text-gray-500 mt-1">PNG, JPEG, GIF or WebP — up to 2 MB.${bd.chosen ? (' Selected: ' + bd.chosen.name) : ''}</div>
             <button class="btn text-sm mt-2" id="branding-logo-save" onClick=${uploadBrandLogo} disabled=${bd.uploading || S.loading}>${bd.uploading ? 'Uploading…' : 'Upload logo'}</button>
@@ -2536,9 +2536,9 @@ const ProfileView = () => {
         <h2 class="text-base font-bold text-gray-900 mb-1">Change password</h2>
         <p class="text-sm text-gray-500 mb-4">We emailed you a password when you signed up. Replace it here with one of your own.</p>
         <form onSubmit=${changePw} class="space-y-3">
-          <div><label class="label">New password</label><input type="password" class="input" id="pw-new" autocomplete="new-password" value=${pw.next} onInput=${e=>pw.next=e.target.value} /></div>
-          <div><label class="label">Confirm new password</label><input type="password" class="input" id="pw-confirm" autocomplete="new-password" value=${pw.confirm} onInput=${e=>pw.confirm=e.target.value} /></div>
-          <div><label class="label">Current password</label><input type="password" class="input" id="pw-current" autocomplete="current-password" value=${pw.current} onInput=${e=>{pw.current=e.target.value; if (pw.error) pw.error='';}} /><div class="text-xs text-gray-500 mt-1">For your security, confirm the password you signed in with.</div></div>
+          <div><label class="label" for="pw-new">New password</label><input type="password" class="input" id="pw-new" autocomplete="new-password" value=${pw.next} onInput=${e=>pw.next=e.target.value} /></div>
+          <div><label class="label" for="pw-confirm">Confirm new password</label><input type="password" class="input" id="pw-confirm" autocomplete="new-password" value=${pw.confirm} onInput=${e=>pw.confirm=e.target.value} /></div>
+          <div><label class="label" for="pw-current">Current password</label><input type="password" class="input" id="pw-current" autocomplete="current-password" value=${pw.current} onInput=${e=>{pw.current=e.target.value; if (pw.error) pw.error='';}} /><div class="text-xs text-gray-500 mt-1">For your security, confirm the password you signed in with.</div></div>
           ${pw.error ? html`<div id="pw-error" role="alert" style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:10px 12px;border-radius:10px;font-size:13px">${pw.error}</div>` : ''}
           <button class="btn text-sm" id="pw-save" disabled=${S.loading}>${S.loading?spinner():'Update password'}</button>
         </form>
