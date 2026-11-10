@@ -363,6 +363,9 @@ async fn send_email_inner(
                     // The receipt is not the answer: it says the request arrived and nothing was
                     // charged (cron 2026-10-20).
                     "plan_request_receipt" => "We have your plan request".into(),
+                    // The operator's diagnostic is not a notification: the subject has to say it
+                    // was a test, or the mail is indistinguishable from real traffic in an inbox.
+                    "email_test" => "WorkflowSwift test email".into(),
                     _ => "WorkflowSwift Notification".into(),
                 }),
                 vars,
@@ -1426,6 +1429,43 @@ async fn send_email_fallback(
                 admin_url,
             );
             let subject = format!("New workspace: {workspace}");
+            send_branded(cfg, to, &subject, &text_body, &html_body, branding).await
+        }
+        // The operator's diagnostic from Admin > Settings > Email (cron 2026-11-10, kanban card
+        // raised by the live log line below). `email_test` is DECLARED in the template catalog as
+        // "The test message from Admin > Settings > Email", but had no branch here — so pressing
+        // "Send test email" fell through to the generic arm and the operator received
+        // "You have a new notification from WorkflowSwift", which reads like real traffic and
+        // proves nothing about the delivery it exists to prove. Measured in the running container:
+        //   WARN ... send_email_fallback: no inline branch for this template_type
+        //        template_type="email_test"
+        // The message now says what it is, that the saved provider accepted it, and that no action
+        // follows. `name` is bound by the caller (the handler always sends "Admin").
+        "email_test" => {
+            let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
+            let name = name
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;");
+            let sent_at = chrono::Utc::now().format("%Y-%m-%d %H:%M UTC").to_string();
+            let subject = format!("WorkflowSwift test email — delivery confirmed ({sent_at})");
+            let text_body = format!(
+                "Hi {name},\n\nThis is a TEST email from WorkflowSwift, sent at {sent_at}.\n\n\
+                 If you are reading it, the mail settings saved in Admin > Settings > Email are \
+                 working: WorkflowSwift handed this message to your mail provider and the provider \
+                 accepted it for delivery to this address.\n\n\
+                 Nothing else was sent, and there is nothing for you to do.\n\n- WorkflowSwift"
+            );
+            let html_body = format!(
+                "<html><body style=\"font-family:Arial,sans-serif;line-height:1.6;color:#333\">\
+                 <p>Hi {name},</p>\
+                 <p>This is a <strong>TEST email</strong> from WorkflowSwift, sent at {sent_at}.</p>\
+                 <p>If you are reading it, the mail settings saved in <strong>Admin &gt; Settings \
+                 &gt; Email</strong> are working: WorkflowSwift handed this message to your mail \
+                 provider, and the provider accepted it for delivery to this address.</p>\
+                 <p>Nothing else was sent, and there is nothing for you to do.</p>\
+                 <p style=\"font-size:13px;color:#9ca3af\">- WorkflowSwift</p></body></html>"
+            );
             send_branded(cfg, to, &subject, &text_body, &html_body, branding).await
         }
         // The operator's own branding PREVIEW (cron 2026-10-24, parity with FunnelSwift,
