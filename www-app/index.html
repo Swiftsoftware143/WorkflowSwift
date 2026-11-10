@@ -1593,13 +1593,13 @@ const PlanView = () => {
               </div>
             </div>
             ${p.description ? html`<p class="text-xs text-gray-500 mt-1">${p.description}</p>` : ''}
-            <div class="mt-3">
+            <div class="mt-3 flex gap-2" style="flex-wrap:wrap">
               ${isCurrent(p)
                 ? html`<span class="chip">Current plan</span>`
-                : (Number(p.price_monthly) > 0
+                : (planTerms(p).length
                     ? (S.checkoutStatus && S.checkoutStatus.can_purchase === false
-                        ? html`<button class="btn text-sm" data-ask-plan="${p.id}" onClick=${() => askForPlan(p)}>${'Request ' + (p.name || p.slug)}</button>`
-                        : html`<button class="btn text-sm" onClick=${() => startCheckout(p)} disabled=${S.checkoutBusy}>${S.checkoutBusy ? 'Starting…' : ('Upgrade to ' + (p.name || p.slug))}</button>`)
+                        ? planTerms(p).map(t => html`<button class="btn text-sm" data-ask-plan="${p.id}" data-plan-term="${t.term}" onClick=${() => askForPlan(p, t.term)}>${'Request ' + (p.name || p.slug) + ' — ' + t.label}</button>`)
+                        : planTerms(p).map(t => html`<button class="btn text-sm" data-plan-term="${t.term}" onClick=${() => startCheckout(p, t.term)} disabled=${S.checkoutBusy}>${S.checkoutBusy ? 'Starting…' : ('Upgrade — ' + t.label)}</button>`))
                     : html`<span class="text-xs text-gray-400">Free — no payment needed</span>`)}
             </div>
           </div>`)}
@@ -1619,26 +1619,43 @@ const loadPlans = async () => {
 // the install cannot sell after the customer pressed it and the sale refused. A failed or absent
 // read leaves the old behaviour in place: the refusal path below is honest, so the screen must
 // not hide a working purchase because a status call was slow.
+// ONE BUTTON PER TERM THE TIER REALLY CARRIES (2026-11-10). The card has always printed both
+// prices, but the single Upgrade button only ever sent `price_monthly`, so the yearly offer in the
+// catalogue could not be bought at all. `planTerms` is the one place that decides what is on sale.
+const planTerms = (p) => {
+  const out = [];
+  const m = Number(p.price_monthly) || 0, y = Number(p.price_yearly) || 0;
+  if (m > 0) out.push({ term: 'monthly', amount: m, label: 'monthly — $' + fmtAmt(m) + '/mo' });
+  if (y > 0) out.push({ term: 'yearly', amount: y, label: 'yearly — $' + fmtAmt(y) + '/yr' });
+  return out;
+};
 const loadCheckoutStatus = async () => {
   try { S.checkoutStatus = await API.checkoutStatus(); } catch (e) { S.checkoutStatus = null; }
   renderApp();
 };
-const askForPlan = (p) => {
-  S.checkoutMsg = null; S.requestPlanMsg = null; S.requestForPlan = p; renderApp();
+const askForPlan = (p, term) => {
+  // The chosen term travels with the ask, so the request the team receives names the price the
+  // customer actually picked (monthly or yearly) instead of assuming monthly.
+  S.checkoutMsg = null; S.requestPlanMsg = null;
+  S.requestForPlan = Object.assign({}, p, { _term: (term === 'yearly' ? 'yearly' : 'monthly') });
+  renderApp();
   setTimeout(() => {
     const el = document.getElementById('billing-request');
     if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, 0);
 };
-// `create_checkout_session` takes the amount from the REQUEST (checkout_handler.rs:474), so the
-// console sends the tier's own stored price_monthly rather than inventing one.
-const startCheckout = async (p) => {
+// `create_checkout_session` judges the amount against the CATALOGUE price of the TERM the buyer
+// chose, so the console sends `price_monthly` or `price_yearly` — never an invented figure — and
+// names the term (2026-11-10).
+const startCheckout = async (p, term) => {
   if (S.checkoutBusy) return;
+  const chosen = planTerms(p).find(t => t.term === (term === 'yearly' ? 'yearly' : 'monthly'));
+  if (!chosen) return;
   S.checkoutBusy = true; S.checkoutMsg = null; S.requestForPlan = null; S.requestPlanMsg = null; renderApp();
   try {
     const r = await API.createCheckout({
       purchasable_type: 'plan', purchasable_id: p.id, provider_type: 'stripe',
-      amount: Number(p.price_monthly) || 0, currency: 'USD',
+      amount: chosen.amount, currency: 'USD', billing_cycle: chosen.term,
       success_url: '/', cancel_url: '/',
     });
     if (r && r.checkout_url) { S.checkoutMsg = 'Opening the secure checkout…'; window.location = r.checkout_url; return; }
@@ -1711,11 +1728,13 @@ const requestPlan = async () => {
   if (!p || S.requestPlanBusy) return;
   S.requestPlanBusy = true; S.requestPlanMsg = null; renderApp();
   const name = p.name || p.slug;
+  const term = (p._term === 'yearly') ? 'yearly' : 'monthly';
+  const chosen = planTerms(p).find(t => t.term === term) || planTerms(p)[0] || { amount: Number(p.price_monthly) || 0, term: 'monthly' };
   try {
     await API.post('/tickets', {
-      subject: 'Upgrade request: ' + name + ' plan',
-      description: 'This workspace asked to move to the ' + name + ' plan ($' + fmtAmt(p.price_monthly)
-        + '/month) from Plan & Billing. Self-serve checkout is not open yet, so the switch has to be'
+      subject: 'Upgrade request: ' + name + ' plan (' + term + ')',
+      description: 'This workspace asked to move to the ' + name + ' plan ($' + fmtAmt(chosen.amount)
+        + '/' + (term === 'yearly' ? 'year' : 'month') + ') from Plan & Billing. Self-serve checkout is not open yet, so the switch has to be'
         + ' made by the team.',
       priority: 'medium',
       // 'plan_request' (not 'billing'): it is the source the operator's Plan requests screen

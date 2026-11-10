@@ -935,6 +935,24 @@ pub async fn create_checkout_session(
         .and_then(|v| v.as_f64())
         .ok_or_else(|| AppError::BadRequest("amount is required".into()))?;
 
+    // ── WHICH BILLING TERM THE BUYER CHOSE (2026-11-10) ──────────────────────────────────────
+    // MEASURED 2026-11-10: the plan card prints "$X billed yearly" for every tier that carries a
+    // yearly price, but this route only ever sold the monthly one — `billing_cycle` was nowhere in
+    // the request, so the annual offer in the catalogue could not be bought at all. The field is
+    // OPTIONAL and defaults to the monthly behaviour every existing caller already gets.
+    let billing_cycle: String = match req.get("billing_cycle").and_then(|v| v.as_str()) {
+        None => "monthly".to_string(),
+        Some(raw) => match raw.trim().to_ascii_lowercase().as_str() {
+            "" | "month" | "monthly" | "mo" => "monthly".to_string(),
+            "year" | "yearly" | "annual" | "annually" | "yr" => "yearly".to_string(),
+            other => {
+                return Err(AppError::BadRequest(format!(
+                    "billing_cycle must be \"month\" or \"year\" — got \"{other}\". Nothing was charged."
+                )))
+            }
+        },
+    };
+
     // The tier's SLUG travels out of this block with its price: a REFUSED plan checkout is recorded
     // as this workspace's plan request (see the refusal arm below), and the operator's queue keys
     // the ask by the slug and seats the workspace from it.
@@ -942,33 +960,64 @@ pub async fn create_checkout_session(
         let pid = purchasable_id.ok_or_else(|| {
             AppError::BadRequest("purchasable_id is required for plan checkout".into())
         })?;
-        let plan: Option<(String, Option<f64>, String)> = sqlx::query_as(
-            "SELECT name, price_monthly::float8, slug FROM plan_tiers WHERE id = $1 AND is_active = true",
+        let plan: Option<(String, Option<f64>, Option<f64>, String)> = sqlx::query_as(
+            "SELECT name, price_monthly::float8, price_yearly::float8, slug \
+             FROM plan_tiers WHERE id = $1 AND is_active = true",
         )
         .bind(pid)
         .fetch_optional(&state.db)
         .await?;
-        let Some((plan_name, plan_price, slug)) = plan else {
+        let Some((plan_name, monthly, yearly, slug)) = plan else {
             return Err(AppError::NotFound(
                 "That plan is not on sale any more. Nothing was charged.".into(),
             ));
         };
-        let price = plan_price.unwrap_or(0.0);
-        if !price.is_finite() || price <= 0.0 {
+        let monthly = monthly.filter(|p| p.is_finite() && *p > 0.0).unwrap_or(0.0);
+        let yearly = yearly.filter(|p| p.is_finite() && *p > 0.0).unwrap_or(0.0);
+        if monthly <= 0.0 && yearly <= 0.0 {
             return Err(AppError::BadRequest(format!(
                 "The {} plan has no price set, so there is nothing to check out. \
                  Ask the operator to put a price on it.",
                 plan_name
             )));
         }
-        if (requested_amount - price).abs() > 0.005 {
+        // The TERM decides which catalogue figure the amount is judged against. A yearly ask is
+        // priced from `price_yearly` and refused by name when the tier carries none — the buyer is
+        // never sold a year at the monthly rate, and never at a rate they typed.
+        let (term_price, term_label, other_price, other_label) = if billing_cycle == "yearly" {
+            (yearly, "a year", monthly, "a month")
+        } else {
+            (monthly, "a month", yearly, "a year")
+        };
+        if term_price > 0.0 {
+            if (requested_amount - term_price).abs() > 0.005 {
+                return Err(AppError::BadRequest(format!(
+                    "The {} plan costs {:.2} for {} — the request asked for {:.2}. \
+                     Nothing was charged; please reload the Plans screen and try again.",
+                    plan_name, term_price, term_label, requested_amount
+                )));
+            }
+            (term_price, slug)
+        } else if other_price > 0.0 && (requested_amount - other_price).abs() <= 0.005 {
+            // No price for the chosen term, but the other term IS priced: say so, instead of selling
+            // a term this tier does not carry.
             return Err(AppError::BadRequest(format!(
-                "The {} plan costs {:.2} — the request asked for {:.2}. \
+                "The {} plan has no {} price — it is sold at {:.2} for {}. Nothing was charged; \
+                 choose that term on the Plans screen.",
+                plan_name, billing_cycle, other_price, other_label
+            )));
+        } else {
+            let (priced, label) = if other_price > 0.0 {
+                (other_price, other_label)
+            } else {
+                (term_price, term_label)
+            };
+            return Err(AppError::BadRequest(format!(
+                "The {} plan costs {:.2} for {} — the request asked for {:.2}. \
                  Nothing was charged; please reload the Plans screen and try again.",
-                plan_name, price, requested_amount
+                plan_name, priced, label, requested_amount
             )));
         }
-        (price, slug)
     } else {
         (requested_amount, String::new())
     };
@@ -997,7 +1046,15 @@ pub async fn create_checkout_session(
         .and_then(|v| v.as_str())
         .unwrap_or("/");
 
-    let metadata = req.get("metadata").cloned().unwrap_or(json!({}));
+    let mut metadata = req.get("metadata").cloned().unwrap_or(json!({}));
+    // The term rides on the session so the payment that settles it and the operator's request queue
+    // both name the term the buyer chose.
+    if !metadata.is_object() {
+        metadata = json!({});
+    }
+    if let Some(obj) = metadata.as_object_mut() {
+        obj.insert("billing_cycle".into(), json!(billing_cycle));
+    }
 
     // ── AN UNCONFIGURED INSTALL IS NOT THE BUYER'S ERROR, AND THE ASK MUST NOT BE LOST ────────
     // MEASURED LIVE 2026-10-23 (cron `default`): this app's arm answered `400 {"error":"No active
@@ -1046,6 +1103,7 @@ pub async fn create_checkout_session(
                                 amount,
                                 currency,
                                 url,
+                                billing_cycle: &billing_cycle,
                             },
                         )
                         .await);
@@ -1064,7 +1122,13 @@ pub async fn create_checkout_session(
                 (false, false)
             } else {
                 record_refused_upgrade(
-                    &state, account_id, user_id, &plan_slug, amount, reason, None,
+                    &state,
+                    account_id,
+                    user_id,
+                    &plan_slug,
+                    quoted(amount, &billing_cycle),
+                    reason,
+                    None,
                 )
                 .await
             };
@@ -1237,6 +1301,24 @@ pub async fn checkout_status(
     })))
 }
 
+/// The amount a buyer was quoted and the UNIT it is per ("month"/"year"), as one value.
+struct QuotedPrice {
+    amount: f64,
+    unit: &'static str,
+}
+
+/// Build a [`QuotedPrice`] from the amount and the billing term the buyer chose.
+fn quoted(amount: f64, billing_cycle: &str) -> QuotedPrice {
+    QuotedPrice {
+        amount,
+        unit: if billing_cycle == "yearly" {
+            "year"
+        } else {
+            "month"
+        },
+    }
+}
+
 /// Record a refused plan checkout as this workspace's plan request (2026-10-23).
 ///
 /// The destination is `tickets` with `source = 'plan_request'`: the table the console's own
@@ -1252,7 +1334,9 @@ async fn record_refused_upgrade(
     account_id: Uuid,
     user_id: Uuid,
     plan_slug: &str,
-    amount: f64,
+    // The amount the buyer was quoted AND the unit it is per, in ONE value: the ticket text cannot
+    // quote a yearly price as "/month" if the two can only travel together (2026-11-10).
+    price: QuotedPrice,
     reason: &str,
     // `Some(the tier's own payment page)` when the buyer was HANDED OVER to it rather than refused
     // (2026-10-24): the ticket then has to say so, because the operator cannot wait for a webhook a
@@ -1265,11 +1349,12 @@ async fn record_refused_upgrade(
             .fetch_optional(&state.db)
             .await
             .unwrap_or(None);
+    let QuotedPrice { amount, unit } = price;
     let label = plan_name.unwrap_or_else(|| plan_slug.to_string());
     let description = match via_link {
         Some(url) => format!(
             "This workspace pressed Upgrade on Plan & Billing and asked for the {label} plan \
-             (${amount:.2}/month), and was handed to the tier's own hosted payment page ({url}). \
+             (${amount:.2}/{unit}), and was handed to the tier's own hosted payment page ({url}). \
              Nothing was charged by this installation and no payment can be confirmed \
              automatically — a hosted page tells it nothing — so the workspace is NOT seated yet. \
              Confirm the payment with your provider, then resolve this request to seat the workspace \
@@ -1277,7 +1362,7 @@ async fn record_refused_upgrade(
         ),
         None => format!(
             "This workspace pressed Upgrade on Plan & Billing and asked for the {label} plan \
-             (${amount:.2}/month). Self-serve checkout is not open on this installation yet \
+             (${amount:.2}/{unit}). Self-serve checkout is not open on this installation yet \
              ({reason}), so the team makes the switch by hand. Nothing was charged. Filed by \
              {user_id}."
         ),
@@ -1296,7 +1381,7 @@ async fn record_refused_upgrade(
     )
     .bind(Uuid::new_v4())
     .bind(account_id)
-    .bind(format!("Upgrade request: {label} plan"))
+    .bind(format!("Upgrade request: {label} plan ({unit}ly)"))
     .bind(description)
     .bind(plan_slug)
     .fetch_optional(&state.db)
@@ -1331,7 +1416,7 @@ async fn record_refused_upgrade(
     // is the record the operator works from, so a mail failure must not fail the request.
     let receipt_emailed = match fresh_row {
         Some(_) => {
-            let subject = format!("Upgrade request: {label} plan");
+            let subject = format!("Upgrade request: {label} plan ({unit}ly)");
             super::tickets_handler::notify_plan_request_receipt(state, account_id, &subject).await
         }
         None => false,
@@ -1388,6 +1473,7 @@ struct PaymentLinkHandOff<'a> {
     amount: f64,
     currency: &'a str,
     url: String,
+    billing_cycle: &'a str,
 }
 
 /// Hand a buyer to the tier's own hosted payment page instead of refusing the sale.
@@ -1409,6 +1495,7 @@ async fn hand_off_to_payment_link(
         amount,
         currency,
         url,
+        billing_cycle,
     } = hand_off;
     // The ticket TEXT says the buyer was handed to the hosted page — an operator reading "no payment
     // provider is configured" would not know a sale is in flight and waiting for their confirmation.
@@ -1417,7 +1504,7 @@ async fn hand_off_to_payment_link(
         account_id,
         user_id,
         plan_slug,
-        amount,
+        quoted(amount, billing_cycle),
         "hosted_payment_link",
         Some(&url),
     )
@@ -1444,6 +1531,7 @@ async fn hand_off_to_payment_link(
         "plan_id": plan_id.to_string(),
         "plan_slug": plan_slug,
         "checkout_url": url,
+        "billing_cycle": billing_cycle,
     }))
     .execute(&state.db)
     .await;
