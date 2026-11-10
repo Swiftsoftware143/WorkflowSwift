@@ -1170,6 +1170,67 @@ async fn send_email_fallback(
             let text_body = format!("Hi {name},\n\nA workflow you own sent you this notification:\n\n{message}\n\n- WorkflowSwift");
             send_branded(cfg, to, subject, &text_body, &html_body, branding).await
         }
+        // The OWNER's notice that a run FAILED (cron 2026-11-10). Before this arm existed a failed
+        // run was a row in the console's run list and nothing else, so an automation that stopped
+        // delivering was indistinguishable from one that had simply not been needed.
+        "workflow_failed" => {
+            let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
+            let workflow_name = vars
+                .get("workflow_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("your workflow");
+            let run_name = vars
+                .get("run_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("a run");
+            let failure = vars.get("failure").and_then(|v| v.as_str()).unwrap_or("");
+            let failed_steps = vars
+                .get("failed_steps")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(1)
+                .max(1);
+            let console_url = vars
+                .get("console_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or(app_url);
+            let steps_word = if failed_steps == 1 { "step" } else { "steps" };
+            let safe_failure = failure
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;");
+            let subject = format!("WorkflowSwift: {} failed", workflow_name);
+            let html_body = format!(
+                r#"<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin:0;padding:0;background:#f4f4f4;">
+<table style="width:100%;max-width:600px;margin:20px auto;background:#fff;border-radius:8px;overflow:hidden;">
+<tr><td style="padding:30px 40px;background:linear-gradient(135deg,#dc2626,#b91c1c);text-align:center;">
+<h1 style="color:#fff;font-size:26px;margin:0;">A workflow run failed</h1></td></tr>
+<tr><td style="padding:40px;">
+<p style="font-size:16px;color:#374151;">Hello <strong>{name}</strong>,</p>
+<p style="font-size:16px;color:#374151;">Your workflow <strong>{workflow_name}</strong> failed on its latest run (<strong>{run_name}</strong>) &mdash; {failed_steps} {steps_word} did not complete.</p>
+<div style="background:#fef2f2;padding:18px;border-radius:8px;margin:24px 0;border-left:4px solid #dc2626;">
+<p style="margin:0;font-size:14px;color:#7f1d1d;"><strong>What the run reported:</strong></p>
+<p style="margin:8px 0 0;font-size:14px;color:#111827;font-family:monospace;word-break:break-word;">{safe_failure}</p></div>
+<table style="margin:26px auto;"><tr><td style="background:#dc2626;border-radius:6px;text-align:center;">
+<a href="{console_url}" style="display:inline-block;padding:14px 36px;color:#fff;text-decoration:none;font-size:16px;font-weight:bold;">Open my run list</a>
+</td></tr></table>
+<p style="font-size:14px;color:#374151;">Your other workflows keep running &mdash; this notice exists so a stopped automation does not go unnoticed.</p>
+<p style="font-size:14px;color:#9ca3af;text-align:center;margin-top:30px;">- The WorkflowSwift Team</p>
+</td></tr></table></body></html>"#,
+                name = name,
+                workflow_name = workflow_name,
+                run_name = run_name,
+                failed_steps = failed_steps,
+                steps_word = steps_word,
+                safe_failure = safe_failure,
+                console_url = console_url
+            );
+            let text_body = format!(
+                "Hello {name},\n\nYour workflow '{workflow_name}' failed on its latest run ('{run_name}') - {failed_steps} {steps_word} did not complete.\n\nWhat the run reported:\n{failure}\n\nOpen your run list: {console_url}\n\nYour other workflows keep running - this notice exists so a stopped automation does not go unnoticed.\n\n- WorkflowSwift"
+            );
+            send_branded(cfg, to, &subject, &text_body, &html_body, branding).await
+        }
         // The CUSTOMER's notice that their own request moved (2026-10-19). A plan request is filed
         // as a real ticket from the dashboard's Plan & Billing screen (`source='plan_request'`) and
         // reaches the operator's cross-tenant queue — and until this arm existed that was the end of
@@ -1659,6 +1720,71 @@ pub async fn send_branding_preview_email(
         "app_url": crate::branding::APP_URL,
     });
     send_email(state, Some(aid), to, "branding_preview", &vars).await
+}
+
+/// Tell the ACCOUNT OWNER their workflow run FAILED (cron 2026-11-10).
+///
+/// The run row already said `failed` and the console's run list showed it, but nothing reached a
+/// human: a customer whose automation had stopped delivering had to go looking. The recipient is
+/// the account's own owner (`users`, owner/company_admin first), never a free-text address, and the
+/// message goes through [`send_email`] — the one door every customer mail takes — so a
+/// reserved/harness address is withheld at source and recorded as a non-send instead of bouncing
+/// against the sending domain's reputation.
+///
+/// Best effort: the run is already recorded, so a mail failure is logged and dropped.
+pub async fn alert_run_failed(
+    state: &AppState,
+    aid: Uuid,
+    workflow_id: Uuid,
+    instance_id: Uuid,
+    failed_steps: i32,
+    first_failure: &str,
+) {
+    let owner: Option<(String, String)> = sqlx::query_as(
+        "SELECT name, email FROM users WHERE aid = $1 AND is_active \
+         ORDER BY (role IN ('owner','company_admin')) DESC, sort_order NULLS LAST, created_at ASC \
+         LIMIT 1",
+    )
+    .bind(aid)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+    let Some((name, email)) = owner else { return };
+
+    let workflow_name: String = sqlx::query_scalar(
+        "SELECT COALESCE(NULLIF(name, ''), 'your workflow') FROM workflows WHERE id = $1",
+    )
+    .bind(workflow_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| "your workflow".to_string());
+
+    let run_name: String = sqlx::query_scalar(
+        "SELECT COALESCE(NULLIF(name, ''), 'a run') FROM workflow_instances WHERE id = $1",
+    )
+    .bind(instance_id)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| "a run".to_string());
+
+    let vars = json!({
+        "name": name,
+        "email": email,
+        "workflow_name": workflow_name,
+        "run_name": run_name,
+        "failed_steps": failed_steps,
+        "failure": first_failure.chars().take(400).collect::<String>(),
+        "app_url": crate::branding::APP_URL,
+        "console_url": format!("{}/#instances", crate::branding::APP_URL),
+    });
+    if let Err(e) = send_email(state, Some(aid), &email, "workflow_failed", &vars).await {
+        tracing::warn!(%instance_id, to = %email, "failed-run notice could not be sent: {e}");
+    }
 }
 
 /// Tell the OPERATOR that somebody wrote to support (2026-11-09).

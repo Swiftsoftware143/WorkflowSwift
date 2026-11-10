@@ -1828,6 +1828,16 @@ async fn walk(
 
     let terminal = instance_status == "completed" || instance_status == "failed";
 
+    // The status this instance carried BEFORE this walk settled it. A run that is resumed and
+    // re-settles as failed must not alert a human a second time, so the transition — not the
+    // state — is what the notice below fires on.
+    let status_before: Option<String> =
+        sqlx::query_scalar("SELECT status FROM workflow_instances WHERE id = $1")
+            .bind(instance_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
+
     sqlx::query(
             "UPDATE workflow_instances SET status = $1, completed_at = $2, updated_at = NOW() WHERE id = $3"
         )
@@ -1837,6 +1847,26 @@ async fn walk(
         .execute(&state.db)
         .await
         .map_err(|e| AppError::Internal(format!("DB error: {}", e)))?;
+
+    // TELL A HUMAN THE RUN FAILED (cron 2026-11-10). Until this existed the failure was only a row
+    // in the console's run list: a customer whose automation stopped delivering had to notice on
+    // their own. Best effort by design — a mail failure must never turn a recorded run into a 500.
+    if instance_status == "failed" && status_before.as_deref() != Some("failed") {
+        let first_failure = step_results
+            .iter()
+            .find(|r| classify_step_status(r) == "failed")
+            .and_then(step_error_text)
+            .unwrap_or_else(|| "a step did not complete".to_string());
+        crate::email::alert_run_failed(
+            state,
+            aid,
+            workflow_id,
+            instance_id,
+            failed_steps,
+            &first_failure,
+        )
+        .await;
+    }
 
     Ok(ExecutionOutcome {
         steps: step_results,
