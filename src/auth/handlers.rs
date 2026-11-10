@@ -552,11 +552,18 @@ pub async fn me(
     // that shares the fleet contract). See the note on the return value.
     let plan_for_top = plan_name.clone();
 
-    let has_avatar: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM user_avatars WHERE user_id = $1)")
-            .bind(user_id)
-            .fetch_one(&state.db)
-            .await?;
+    // The picture's CACHE STAMP (cron `default`, 2026-11-10). `?v=` is what makes a REPLACED
+    // picture reach the browser: the avatar URL is otherwise immutable per user, so an `<img>` a
+    // page already holds keeps painting the OLD bytes out of the HTTP cache while the row holds the
+    // new ones — measured live on this app (upload → GET returned the new bytes, but the URL was
+    // byte-identical to the previous one, so a browser had no reason to re-fetch). IncentiveSwift,
+    // ADASwift and FunnelSwift already stamp the same way; this app and MissedCall did not.
+    let avatar_stamp: Option<i64> = sqlx::query_scalar(
+        "SELECT EXTRACT(EPOCH FROM updated_at)::bigint FROM user_avatars WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?;
 
     let me = MeResponse {
         id: row
@@ -593,11 +600,7 @@ pub async fn me(
         perm_is_super_admin: row
             .try_get("perm_is_super_admin")
             .map_err(|e| AppError::Internal(e.to_string()))?,
-        avatar_url: if has_avatar {
-            Some(format!("/api/v1/auth/avatar/{user_id}"))
-        } else {
-            None
-        },
+        avatar_url: avatar_stamp.map(|v| format!("/api/v1/auth/avatar/{user_id}?v={v}")),
     };
 
     // THE PLAN IS READABLE AT THE TOP LEVEL TOO (cron `default`, 2026-10-25). Every sibling app's
@@ -954,20 +957,23 @@ pub async fn upload_avatar(
     let (content_type, bytes) =
         crate::image_store::read_request_image(&state, &headers, request).await?;
 
-    sqlx::query(
+    let stamp: i64 = sqlx::query_scalar(
         "INSERT INTO user_avatars (user_id, bytes, content_type, updated_at) VALUES ($1, $2, $3, NOW()) \
          ON CONFLICT (user_id) DO UPDATE SET bytes = EXCLUDED.bytes, \
-         content_type = EXCLUDED.content_type, updated_at = NOW()",
+         content_type = EXCLUDED.content_type, updated_at = NOW() \
+         RETURNING EXTRACT(EPOCH FROM updated_at)::bigint",
     )
     .bind(user_id)
     .bind(&bytes)
     .bind(&content_type)
-    .execute(&state.db)
+    .fetch_one(&state.db)
     .await?;
 
     Ok(Json(json!({
         "status": "ok",
-        "avatar_url": format!("/api/v1/auth/avatar/{user_id}"),
+        // Stamped with the row's own `updated_at`, so a REPLACED picture is a DIFFERENT URL and the
+        // browser re-fetches instead of painting the cached old bytes (see `me()`).
+        "avatar_url": format!("/api/v1/auth/avatar/{user_id}?v={stamp}"),
     })))
 }
 
