@@ -488,6 +488,26 @@ async fn plan_name_for(db: &sqlx::PgPool, aid: Uuid) -> String {
         .unwrap_or_else(|| "Free".to_string())
 }
 
+/// The SLUG of the tier [`plan_name_for`] names — the fleet's identifier for a plan (cron
+/// `default`, 2026-11-09).
+///
+/// Same resolution as `plan_name_for` (`features::resolve_plan_id`: the active `account_plans` row,
+/// then `accounts.plan_id`, then the install's cheapest active tier), so the slug can never name a
+/// different tier than the display name beside it. `None` only when the tier row itself has no slug
+/// or the plan cannot be read — the route keeps answering, `plan_name` carries the label as before.
+async fn plan_slug_for(db: &sqlx::PgPool, aid: Uuid) -> Option<String> {
+    let pid = crate::features::resolve_plan_id(db, aid)
+        .await
+        .ok()
+        .flatten()?;
+    sqlx::query_scalar::<_, String>("SELECT slug FROM plan_tiers WHERE id = $1")
+        .bind(pid)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten()
+}
+
 /// `GET /api/v1/auth/me` — the signed-in account, INCLUDING the real plan tier (card t_39cea779).
 ///
 /// Before this card the route answered the raw user row, which names no tier, so the console could
@@ -520,6 +540,12 @@ pub async fn me(
     // install's 12 accounts. One resolver (`features::plan_assigned`), so the label and the
     // enforcement read the same two arms of `resolve_plan_id`.
     let plan_assigned = crate::features::plan_assigned(&state.db, aid).await;
+
+    // The tier's SLUG (cron `default`, 2026-11-09): the fleet's plan identifier, resolved by the
+    // SAME function `plan_name` uses so the two cannot disagree. Published nested (inside `user`)
+    // and flat, like `plan_name`/`plan_assigned`, because the fleet contract reads the flat keys.
+    let plan_slug = plan_slug_for(&state.db, aid).await;
+    let plan_slug_flat = plan_slug.clone();
 
     // Kept for the top-level key below: `plan_name` itself is moved into `MeResponse`, and the
     // response now answers the plan twice (inside `user` for the console, flat for every client
@@ -563,6 +589,7 @@ pub async fn me(
             .map_err(|e| AppError::Internal(e.to_string()))?,
         plan_name,
         plan_assigned,
+        plan_slug,
         perm_is_super_admin: row
             .try_get("perm_is_super_admin")
             .map_err(|e| AppError::Internal(e.to_string()))?,
@@ -589,6 +616,10 @@ pub async fn me(
         // just dropped. false = this workspace holds no plan; `plan_name` is the tier the gates
         // fall back to, not a plan the customer chose.
         "plan_assigned": plan_assigned,
+        // The FLAT twin of `user.plan_slug` (cron `default`, 2026-11-09): the fleet's plan
+        // identifier, so a client that reads the flat keys (the provisioning contract,
+        // `source_app` + `plan_slug`) learns the tier without joining `plan_tiers`.
+        "plan_slug": plan_slug_flat,
         "tenant_id": aid,
     })))
 }

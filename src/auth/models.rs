@@ -98,6 +98,14 @@ pub struct MeResponse {
     /// "your plan" beside the name. `features::plan_assigned` is the one resolver for it, and it
     /// degrades to `true`, so an unreadable row can never make a paid workspace look plan-less.
     pub plan_assigned: bool,
+    /// The SLUG of the tier `plan_name` names — the fleet's identifier for a plan (cron `default`,
+    /// 2026-11-09). The tag→free-account provisioning contract names a tier by `source_app` +
+    /// `plan_slug`, and every sibling app now publishes it on this route (ADASwift `plan_slug`,
+    /// FunnelSwift since 2026-11-09); this one answered only the display NAME, so a client had to
+    /// join `plan_tiers` itself to learn which tier a workspace holds. None when the row carries no
+    /// slug — additive, so no existing reader of `plan_name`/`plan_assigned` moves.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_slug: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub avatar_url: Option<String>,
 }
