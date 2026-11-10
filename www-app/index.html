@@ -1587,7 +1587,10 @@ const PlanView = () => {
           <div class="card" style="border:${isCurrent(p) ? '2px solid #2563eb' : '1px solid #e2e8f0'}">
             <div class="flex items-center justify-between">
               <div class="font-bold text-gray-900">${p.name || p.slug}</div>
-              <div class="text-lg font-extrabold text-gray-900">$${fmtAmt(p.price_monthly)}<span class="text-xs text-gray-500 font-normal">/mo</span></div>
+              <div class="text-right">
+                <div class="text-lg font-extrabold text-gray-900">$${fmtAmt(p.price_monthly)}<span class="text-xs text-gray-500 font-normal">/mo</span></div>
+                ${Number(p.price_yearly) > 0 ? html`<div class="text-xs text-gray-500" data-plan-yearly=${String(p.price_yearly)}>$${fmtAmt(p.price_yearly)} billed yearly</div>` : ''}
+              </div>
             </div>
             ${p.description ? html`<p class="text-xs text-gray-500 mt-1">${p.description}</p>` : ''}
             <div class="mt-3">
