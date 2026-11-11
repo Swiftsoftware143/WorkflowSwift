@@ -976,6 +976,17 @@ when it is set.</p>
       <p>Plan changes sync to FunnelSwift's <code>affiliate_products</code>: create → <code>action: create</code>, update →
       <code>action: update</code>, delete → <code>action: deactivate</code>. The sync is asynchronous and needs
       <code>FUNNELSWIFT_URL</code> (default <code>http://localhost:8080</code>).</p>
+      <h2 id="buyers-cannot-pay">When nobody can pay: the dashboard says so</h2>
+      <p>The <strong>Dashboard Overview</strong> carries a red <strong>Buyers cannot pay</strong> card whenever this installation
+      cannot take money: no payment provider is connected under <strong>Profile &amp; Account → Payments</strong> and no plan
+      tier carries its own hosted payment page. In that state every press on Upgrade is refused before any charge and
+      recorded as a plan request instead, so the operator was relying on a line in the server log nobody reads. The card
+      names the fix and carries the button that opens <strong>Payments</strong>.</p>
+      <p>The card is painted only from a read that <strong>succeeded</strong>: a refused or failed read paints nothing (an
+      unreadable answer must never be reported as a shut till), and once a provider is connected — or a tier carries a
+      working payment page — the card does not appear at all. <code>GET /payment-providers</code> answers the provider
+      list and <code>GET /checkout/status</code> answers whether a purchase can complete; the card is the agreement of the
+      two.</p>
       <h2 id="industries-and-dashboards">Industries and dashboards</h2>
       <p>The platform ships <strong>6 industries</strong>: site-flipping, e-commerce, saas, government-contracting,
       real-estate, marketing-agency. Each account gets a dashboard tab per selected industry, seeded

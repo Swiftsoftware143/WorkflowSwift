@@ -1420,7 +1420,8 @@ function renderDashboardOverview(c){
   const planHead=plan
     ?'<div class="flex items-center gap-2" title="The plan this account is on. The same tier the app\'s limits enforce."><span class="text-xs text-gray-500">Plan</span><span class="badge" id="acctPlan">'+escHtml(plan)+'</span></div>'
     :'';
-  c.innerHTML='<div class="card"><div class="card-head flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Dashboard Overview</h2>'+planHead+'</div><div id="stats" class="grid grid-cols-3 gap-4"><p class="text-gray-400">Loading...</p></div></div>';
+  c.innerHTML='<div class="card"><div class="card-head flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Dashboard Overview</h2>'+planHead+'</div><div id="stats" class="grid grid-cols-3 gap-4"><p class="text-gray-400">Loading...</p></div></div><div id="payCard"></div>';
+  refreshPaymentHealth();
   api('/dashboard/stats').then(d=>{
     const s=c.querySelector('#stats');
     if(!d||!d.stats){s.innerHTML='<p class="text-gray-400">No stats available.</p>';return}
@@ -1432,6 +1433,52 @@ function renderDashboardOverview(c){
     s.innerHTML=[{l:'Workflows',v:d.stats.total_workflows||0},{l:'Active instances',v:d.stats.active_instances||0},{l:'Templates',v:d.stats.total_templates||0}]
       .map(x=>`<div class="card text-center"><div class="text-3xl font-bold text-blue-600">${x.v}</div><div class="text-sm text-gray-500">${x.l}</div></div>`).join('');
   }).catch(()=>c.querySelector('#stats').innerHTML='<p class="text-red-400">Failed.</p>');
+}
+
+// ── CAN ANYBODY PAY? the operator finally learns it from the dashboard they already open ────────
+// A workspace that presses Upgrade while no payment provider is armed is refused BEFORE any charge
+// (`POST /checkout/create` -> `payment_provider_not_configured`, and the press is recorded as a plan
+// request). The BUYER is told; the enforcement is silent to the OPERATOR: the Payments screen shows
+// an empty list only to whoever opens it, and the only other trace is a line in `docker logs` that
+// nobody reads until a customer complains. Measured 2026-11-11 01:00 EST: `payment_providers` holds
+// 0 rows on this install and no plan tier carries a hosted payment page, so EVERY paid tier is
+// refused at the till and nothing on the dashboard said so (kanban t_f11f71fb; the same card shipped
+// on FunnelSwift 14b70d2, ADASwift `data-console=payments-closed` and IncentiveSwift
+// `data-console=money-readiness`).
+//
+// NON-VACUITY — the card is painted ONLY when BOTH reads SUCCEED and agree:
+//   * `GET /payment-providers` answered with zero rows (the platform's own provider list — the one
+//     the till resolves first). A FAILED read (`api()` answers null: 403/500/network) paints NOTHING;
+//     "I could not check" must never be shown as "buyers cannot pay".
+//   * `GET /checkout/status` answered and says `can_purchase: false`. That is the till's own verdict:
+//     no armed provider AND no active tier carrying a usable hosted payment page. If a tier carries
+//     its own payment page the second arm can still take money, so no card is painted — which is also
+//     what a workspace with its OWN provider (a row in the list) sees: no card at all.
+// Operator only: `/payment-providers` is platform configuration (403 for a tenant), so a tenant
+// session would only ever produce a failed read. `showAdminTab()` is this console's one operator test.
+var PAY_GAP = null;
+async function refreshPaymentHealth(){
+  if(!showAdminTab())return;
+  PAY_GAP = null;
+  const [pv, cs] = await Promise.all([api('/payment-providers'), api('/checkout/status')]);
+  // Either read failing leaves PAY_GAP null, and paintPaymentHealth paints nothing.
+  if(!pv||!Array.isArray(pv.providers))return;
+  if(!cs||typeof cs.can_purchase!=='boolean')return;
+  PAY_GAP = { rows: pv.providers.length, canPurchase: cs.can_purchase };
+  paintPaymentHealth();
+}
+function paintPaymentHealth(){
+  const box=document.getElementById('payCard');
+  if(!box||!PAY_GAP)return;
+  if(PAY_GAP.rows>0||PAY_GAP.canPurchase){box.innerHTML='';return;}
+  box.innerHTML='<div class="card" data-console="payments-closed" data-payment-provider-missing="1" style="border-left:4px solid #dc2626;margin-bottom:16px">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">'
+    +'<div><div style="font-size:12px;color:#64748b;text-transform:uppercase;letter-spacing:.04em">Checkout is switched off</div>'
+    +'<div style="font-size:20px;font-weight:800">Buyers cannot pay</div>'
+    +'<div style="color:#475569;font-size:13px;margin-top:2px">No payment provider is connected to WorkflowSwift and no plan carries its own payment page, so a buyer who presses Upgrade on any paid plan is turned away before a charge is made — the press is recorded as a plan request for you to switch by hand. Add a Stripe or PayPal key under Payments and buyers can pay again.</div></div>'
+    +'<button class="btn" data-open-payments="1">Connect a payment provider</button></div></div>';
+  const btn=box.querySelector('[data-open-payments]');
+  if(btn)btn.onclick=()=>{app.tab='profile';app.sub='payments';renderApp()};
 }
 
 // --- Integration Targets (GET/POST/PUT/DELETE /integration-targets) --------------------------
@@ -3388,7 +3435,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 // renderApp() below re-points the guide after every render because this console rebuilds
 // document.body and switches views in JS with no path or hash change.
 window.appGuidePages = {
-  "dashboard:overview": { title: "Dashboard - Overview", desc: "This account at a glance: the plan it is on (the same tier the app's limits enforce), then how many workflows it holds, how many instances are running right now, and how many templates exist. Every number comes from this account's own data.", actions: ["See recent runs", "Open Workflows to build or edit one"] },
+  "dashboard:overview": { title: "Dashboard - Overview", desc: "This account at a glance: the plan it is on (the same tier the app's limits enforce), then how many workflows it holds, how many instances are running right now, and how many templates exist. Every number comes from this account's own data. When nobody can be charged — no payment provider is connected and no plan carries its own payment page — a red Buyers cannot pay card sits above the figures, with the button that opens Payments so you can connect a Stripe or PayPal key.", actions: ["See recent runs", "Open Workflows to build or edit one", "If Buyers cannot pay is showing, press Connect a payment provider"] },
   "dashboard:brand-monitor": { title: "Brand Monitor", desc: "Mentions of your brand that the platform has picked up, so you can watch what is being said.", actions: ["Review a mention", "Add a brand to watch"] },
   "dashboard:competitor-watch": { title: "Competitor Watch", desc: "The competitors this account tracks.", actions: ["Add a competitor", "Open a competitor's record"] },
   "dashboard:prospecting": { title: "Prospecting", desc: "Potential customers the platform has surfaced for this account.", actions: ["Review a prospect", "Move a prospect into your CRM"] },
