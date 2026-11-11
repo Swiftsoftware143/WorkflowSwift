@@ -642,3 +642,278 @@ pub async fn check_provider_health(
         "has_base_url": base_url.is_some(),
     })))
 }
+
+// ── Auto-provisioned, retrievable keys (kanban t_7863696b) ─────────────────────────────────────
+//
+// David, 2026-11-11 (withdrawing "shown once, never again"): every account is created with a key,
+// and the key stays viewable. `key_hash` (argon2) is the only thing the api-key authenticator
+// reads; `key_encrypted` (fleet provider-key envelope) exists ONLY so the owner can see and copy
+// the key again.
+
+/// A key that was just minted. `raw_key` is the plaintext: sealed before the row is written,
+/// handed to the caller's UI, never logged.
+pub struct MintedUserKey {
+    pub id: Uuid,
+    pub raw_key: String,
+    pub prefix: String,
+    pub key_type: String,
+}
+
+/// Mint one key and INSERT it on the caller's connection. The ONE writer for every mint in this
+/// app: the signup transaction, the integration-centre "generate" action, regenerate and the
+/// one-time backfill.
+pub async fn mint_user_key_on(
+    conn: &mut sqlx::PgConnection,
+    user_id: Uuid,
+    aid: Uuid,
+    key_type: &str,
+    label: Option<&str>,
+) -> Result<MintedUserKey, AppError> {
+    let random_part: String = (0..32)
+        .map(|_| {
+            let idx = rand::thread_rng().gen_range(0..36);
+            "0123456789abcdefghijklmnopqrstuvwxyz"[idx..idx + 1].to_string()
+        })
+        .collect();
+    let type_prefix = match key_type {
+        "primary" => "wf_swift_",
+        "webhook_secret" => "whsec_",
+        "surface_token" => "sf_",
+        _ => "key_",
+    };
+    let raw_key = format!("{}{}", type_prefix, random_part);
+    let key_hash = crate::auth::api_key_auth::argon2_hash(raw_key.clone()).await?;
+    let prefix_display = raw_key[..raw_key.len().min(12)].to_string();
+
+    // Fail closed: without PROVIDER_KEY_ENC_SECRET this errors rather than storing a key nobody can
+    // ever read back.
+    let sealed = crate::security::provider_key_crypto::seal_in(&mut *conn, &raw_key)
+        .await
+        .map_err(|e| AppError::Internal(format!("could not seal the API key: {e}")))?;
+
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO user_api_keys (id, user_id, aid, key_type, key_hash, key_prefix, label, key_encrypted)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    )
+    .bind(id)
+    .bind(user_id)
+    .bind(aid)
+    .bind(key_type)
+    .bind(&key_hash)
+    .bind(&prefix_display)
+    .bind(label.filter(|l| !l.is_empty()))
+    .bind(&sealed)
+    .execute(&mut *conn)
+    .await?;
+
+    Ok(MintedUserKey {
+        id,
+        raw_key,
+        prefix: prefix_display,
+        key_type: key_type.to_string(),
+    })
+}
+
+fn verify_account_password(stored_hash: &str, given: &str) -> bool {
+    use argon2::{Argon2, PasswordHash, PasswordVerifier};
+    match PasswordHash::new(stored_hash) {
+        Ok(parsed) => Argon2::default()
+            .verify_password(given.as_bytes(), &parsed)
+            .is_ok(),
+        Err(_) => false,
+    }
+}
+
+/// POST /api/v1/user-keys/{id}/reveal — show the key again (repeatable).
+pub async fn reveal_user_key(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+    Json(body): Json<serde_json::Value>,
+) -> ApiResult<impl IntoResponse> {
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+    let password = body
+        .get("password")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if password.is_empty() {
+        return Err(AppError::BadRequest("password is required".into()));
+    }
+
+    let row = sqlx::query(
+        "SELECT key_prefix, key_encrypted FROM user_api_keys
+         WHERE id = $1 AND user_id = $2 AND is_active = true",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("API key not found".into()))?;
+
+    let prefix: String = row.get("key_prefix");
+    let sealed: Option<String> = row.get("key_encrypted");
+
+    // ── re-authenticate ───────────────────────────────────────────────────────────────────────
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1 AND is_active = true")
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let stored = stored.ok_or(AppError::Unauthorized)?;
+    if stored.is_empty() || !verify_account_password(&stored, &password) {
+        return Err(AppError::Unauthorized);
+    }
+
+    let sealed = sealed.ok_or_else(|| {
+        AppError::BadRequest(
+            "This key was created before keys were stored recoverably, so it cannot be displayed. \
+             Regenerate it to get a key you can view and copy."
+                .into(),
+        )
+    })?;
+    let raw_key = crate::security::provider_key_crypto::open_in(&state.db, &sealed)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, key = %id, "API key reveal: sealed copy could not be opened");
+            AppError::Internal(
+                "This key could not be opened by the server's encryption key. Regenerate it.".into(),
+            )
+        })?;
+    if raw_key.is_empty() {
+        return Err(AppError::Internal(
+            "This key could not be opened by the server's encryption key. Regenerate it.".into(),
+        ));
+    }
+
+    let aid = Uuid::parse_str(&claims.aid).ok();
+    if let Err(e) = sqlx::query(
+        "INSERT INTO api_key_reveals (id, key_id, aid, user_id, key_prefix)
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(id)
+    .bind(aid)
+    .bind(user_id)
+    .bind(&prefix)
+    .execute(&state.db)
+    .await
+    {
+        tracing::error!(error = %e, key = %id, "API key reveal: audit row could not be written");
+    }
+    tracing::info!(key = %id, key_prefix = %prefix, user = %user_id, "API key REVEALED");
+
+    Ok(Json(json!({ "id": id, "prefix": prefix, "key": raw_key })))
+}
+
+/// POST /api/v1/user-keys/{id}/regenerate — one atomic revoke-and-issue.
+pub async fn regenerate_user_key(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    axum::extract::Path(id): axum::extract::Path<Uuid>,
+) -> ApiResult<impl IntoResponse> {
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+
+    let row = sqlx::query(
+        "SELECT key_type, label FROM user_api_keys
+         WHERE id = $1 AND user_id = $2 AND is_active = true",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| AppError::NotFound("API key not found".into()))?;
+    let key_type: String = row.get("key_type");
+    let label: Option<String> = row.get("label");
+
+    // Insert the replacement and delete the old row in ONE transaction: a failure at either step
+    // leaves the customer with the key they already had; once it commits the old key's hash is
+    // gone and the very next authentication attempt fails.
+    let mut tx = state.db.begin().await?;
+    let minted = mint_user_key_on(&mut tx, user_id, aid, &key_type, label.as_deref()).await?;
+    sqlx::query("DELETE FROM user_api_keys WHERE id = $1 AND user_id = $2")
+        .bind(id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+
+    tracing::info!(
+        new_key = %minted.id,
+        old_key = %id,
+        key_prefix = %minted.prefix,
+        "API key REGENERATED — the previous key no longer authenticates"
+    );
+
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "id": minted.id,
+            "rotated_from": id,
+            "key_type": minted.key_type,
+            "prefix": minted.prefix,
+            "key": minted.raw_key,
+            "note": "The previous key no longer works. This one can be viewed and copied again at any time."
+        })),
+    ))
+}
+
+/// One-time backfill: every account that exists today gets a primary key it can view.
+/// Gated on the `fleet_data_backfills` marker so it runs ONCE — an account whose keys were
+/// deliberately revoked is never re-minted behind its back.
+pub async fn backfill_missing_keys(db: &sqlx::PgPool) -> Result<usize, AppError> {
+    const MARKER: &str = "api_keys_auto_v1";
+    let done: Option<String> =
+        sqlx::query_scalar("SELECT name FROM fleet_data_backfills WHERE name = $1")
+            .bind(MARKER)
+            .fetch_optional(db)
+            .await?;
+    if done.is_some() {
+        return Ok(0);
+    }
+
+    let mut tx = db.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(7263114005)")
+        .execute(&mut *tx)
+        .await?;
+
+    let users: Vec<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT u.id, u.aid FROM users u
+         WHERE u.is_active = true
+           AND NOT EXISTS (
+                SELECT 1 FROM user_api_keys k WHERE k.user_id = u.id AND k.is_active = true
+           )
+         ORDER BY u.created_at",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let mut minted = 0usize;
+    for (user_id, aid) in users {
+        mint_user_key_on(&mut tx, user_id, aid, "primary", Some("auto-provisioned")).await?;
+        minted += 1;
+    }
+
+    let unrecoverable: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM user_api_keys WHERE is_active = true AND key_encrypted IS NULL",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO fleet_data_backfills (name, detail) VALUES ($1, $2)
+         ON CONFLICT (name) DO NOTHING",
+    )
+    .bind(MARKER)
+    .bind(format!(
+        "minted {minted} key(s) for accounts with none; {unrecoverable} pre-existing key(s) have no \
+         sealed copy (plaintext unrecoverable — regenerate to hand off)"
+    ))
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(minted)
+}

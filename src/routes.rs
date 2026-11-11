@@ -704,6 +704,15 @@ pub fn create_router(state: AppState) -> Router {
             "/{id}",
             delete(handlers::integration_center_handler::revoke_user_key),
         )
+        // View the SAME key again (re-auth + audit) and rotate it atomically (kanban t_7863696b).
+        .route(
+            "/{id}/reveal",
+            post(handlers::integration_center_handler::reveal_user_key),
+        )
+        .route(
+            "/{id}/regenerate",
+            post(handlers::integration_center_handler::regenerate_user_key),
+        )
         .route(
             "/health-check",
             post(handlers::integration_center_handler::check_provider_health),

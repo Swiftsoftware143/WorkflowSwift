@@ -76,6 +76,14 @@ async fn main() {
     tracing::info!("Running database migrations...");
     db::run_migrations(&pool).await;
 
+    // Kanban t_7863696b: every account that exists today holds a key it can view. One-time (a
+    // `fleet_data_backfills` marker gates it) so an account whose keys were deliberately revoked is
+    // never re-minted behind its back.
+    match crate::handlers::integration_center_handler::backfill_missing_keys(&pool).await {
+        Ok(n) => tracing::info!(minted = n, "account API keys: backfill complete"),
+        Err(e) => tracing::warn!(error = ?e, "account API keys: backfill skipped"),
+    }
+
     // At-rest seal for the system-mail credential (kanban t_a794cb09). All three writers of the
     // `admin_settings.email` row seal before they store; this is what converges a row that arrives
     // plaintext from a database restored out of an older dump (or from a writer added later).

@@ -527,6 +527,18 @@ pub async fn create_account(
     // below: a mail is an outcome of a committed account, and the mail path reads the account back
     // through the pool, so it could never see an uncommitted transaction. Everything above is ONE
     // unit of work — any failure rolls the WHOLE account back, so a failed signup writes NOTHING.
+
+    // The account's PRIMARY API key, minted in the same unit of work (kanban t_7863696b): an
+    // account is not provisioned until it holds a key, and a rolled-back signup leaves no key row.
+    crate::handlers::integration_center_handler::mint_user_key_on(
+        &mut tx,
+        user_id,
+        account_id,
+        "primary",
+        Some("auto-provisioned"),
+    )
+    .await?;
+
     tx.commit().await?;
 
     // Welcome / credentials mail — the app's existing `welcome` template.
