@@ -433,7 +433,16 @@ const planLabel = (u) => {
 };
 // A picture URL, with a cache-buster ONLY when one is passed (the endpoint itself is no-store, so
 // a plain <img> re-fetches; the buster is for the Profile preview's explicit repaint after upload).
-const avatarSrc = (u, stamp) => u && u.avatar_url ? (u.avatar_url + (stamp ? '?t=' + stamp : '')) : null;
+// The server already stamps its own version into the URL it hands back (`?v=<epoch of the avatar
+// row's updated_at>`), so the buster must JOIN that query instead of starting a second one: appending
+// `?t=` produced `/api/v1/auth/avatar/<id>?v=1794424215?t=1794424215238`, and a browser reads
+// everything after the FIRST `?` as one query — the buster became part of `v`'s value and did nothing
+// (the server stamp is second-granular, so two uploads inside a second could paint the old picture).
+const avatarSrc = (u, stamp) => {
+  if (!u || !u.avatar_url) return null;
+  if (!stamp) return u.avatar_url;
+  return u.avatar_url + (u.avatar_url.indexOf('?') === -1 ? '?' : '&') + 't=' + stamp;
+};
 const initials = (u) => { const s = (u && (u.name || u.email)) || '?'; return s.trim().slice(0, 1).toUpperCase() || '?'; };
 // A round avatar: the stored picture when there is one, otherwise the account's initial.
 const Avatar = ({ u, size, stamp, id }) => {
