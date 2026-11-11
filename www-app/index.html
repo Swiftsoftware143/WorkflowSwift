@@ -2109,6 +2109,15 @@ const regenUserKey = async (id) => {
   catch(e) { toast('Could not regenerate the key: ' + e.message, 'err'); }
 };
 const revokeUserKey = async (id) => { if(!confirm('Revoke this integration key? Anything using it stops working immediately.'))return; try { await API.revokeUserKey(id); toast('Integration key revoked'); S.userKeys=null; loadApiKeys(); } catch(e){ toast(e.message,'err'); } };
+
+// The extension build the API is currently serving. Read from the site's own metadata file
+// (/extension-latest.json, rewritten by /opt/swift/scripts/ws-publish-extension.sh on release)
+// so this screen can never name a build older than the one /api/v1/extension.zip hands the user.
+const loadExtBuild = async () => {
+  try { const d = await (await fetch('/extension-latest.json?t=' + Date.now())).json(); S.extBuild = (d && d.version) ? ('v' + d.version) : '—'; }
+  catch(e){ S.extBuild = '—'; }
+  renderApp();
+};
 const copyApiKey = async () => { const t = S.newApiKey || ''; try { await navigator.clipboard.writeText(t); toast('Copied to clipboard'); } catch(e){ const el=document.getElementById('fresh-api-key'); if(el){ const r=document.createRange(); r.selectNodeContents(el); const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(r); try{ document.execCommand('copy'); toast('Copied to clipboard'); }catch(_){ toast('Select the key manually to copy','err'); } } else { toast('Select the key manually to copy','err'); } } };
 
 // ===== Team (/users -> {users:[...]}) =====
