@@ -1847,6 +1847,14 @@ pub async fn send_support_request_operator_alert(
         // Nothing configured is a normal state, not a failure: no mailbox is invented.
         return false;
     };
+    // A FLEET PROBE MUST NEVER RING THE OPERATOR (kanban t_f17b5802). Requester, not route.
+    if let Some(reason) = crate::security::probe_addr::synthetic_requester(reply_to, who) {
+        tracing::info!(
+            reason = %reason,
+            "support operator alert WITHHELD — the filer is a synthetic identity"
+        );
+        return false;
+    }
     let vars = json!({
         "who": if who.trim().is_empty() { "A customer" } else { who.trim() },
         "reply_to": reply_to,
@@ -1915,6 +1923,16 @@ pub async fn send_plan_request_operator_alert(
         .ok()
         .flatten()
         .unwrap_or_else(|| "A workspace".to_string());
+    // A FLEET PROBE MUST NEVER RING THE OPERATOR (kanban t_f17b5802). Requester, not route.
+    if let Some(reason) =
+        crate::security::probe_addr::synthetic_requester(requester_email, &workspace)
+    {
+        tracing::info!(
+            reason = %reason,
+            "plan-request operator alert WITHHELD — the requester is a synthetic identity"
+        );
+        return false;
+    }
     let vars = json!({
         "workspace": workspace,
         "plan": subject,
