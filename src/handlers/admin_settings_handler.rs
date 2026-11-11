@@ -638,6 +638,82 @@ pub async fn admin_list_plans(
     Ok(Json(json!({"plans": result})))
 }
 
+/// THE DEAD LINK REFUSED AT SAVE TIME (2026-11-11).
+///
+/// [`require_hosted_payment_url`] above proves the SHAPE of a payment link; it cannot tell a live page
+/// from a slug that was retired, mistyped, or pasted from a different product. Measured live on this
+/// app: `PUT /api/v1/admin/plans/{id}` stored `https://buy.stripe.com/probe-dead-9c1a7b2e` and
+/// answered 200 with the value on the row — so the tier stayed on sale-by-link and a buyer pressing
+/// Upgrade was handed a 404. Same defect class that made every CoreSwift plan page dead; the fix
+/// belongs at the moment the operator pastes the link, not in the buyer's face.
+///
+/// The verdict is deliberately CONSERVATIVE — it refuses only what is definitively dead:
+/// * a transport failure that proves there is no such host (`is_connect`: DNS failure, refused
+///   connection);
+/// * a `404 Not Found` / `410 Gone` from the host that answered.
+///
+/// `Ok(None)` means VERIFIED (a real page answered, or no link at all). `Ok(Some(note))` means the
+/// save is allowed but we could not judge the page — measured 2026-11-11: `buy.stripe.com` answers
+/// `403 AccessDenied` (S3-style) to this box for EVERY slug, live or dead, so status alone can never
+/// clear a Stripe Payment Link. The save then carries the note and the console shows it, which is
+/// honest where a silent green tick would not be. A timeout is not a verdict either.
+async fn require_hosted_payment_url_resolves(raw: &str) -> ApiResult<Option<String>> {
+    let url = raw.trim().to_string();
+    if url.is_empty() {
+        return Ok(None);
+    }
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(6))
+        .redirect(reqwest::redirect::Policy::limited(6))
+        .user_agent(
+            "Mozilla/5.0 (compatible; WorkflowSwift-link-check/1.0; +https://workflowswift.com)",
+        )
+        .build()
+    {
+        Ok(c) => c,
+        // A client we cannot build is OUR problem, not the operator's: never block the save on it.
+        Err(_) => return Ok(Some(unverified_link_note())),
+    };
+    match client.get(&url).send().await {
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            if status == 404 || status == 410 {
+                return Err(AppError::BadRequest(format!(
+                    "That payment link did not work, so it was NOT saved: the payment page answered \
+                     {status} (it does not exist any more). A buyer pressing Upgrade on this tier \
+                     would have landed on that broken page. Open the link in your own browser first, \
+                     copy the address a buyer should see, and paste that — or leave the box empty if \
+                     this tier is not sold by link."
+                )));
+            }
+            // A page a browser can load (2xx/3xx) is confirmed; a robot refusal is not a verdict.
+            if (200..400).contains(&status) {
+                Ok(None)
+            } else {
+                Ok(Some(unverified_link_note()))
+            }
+        }
+        Err(e) if e.is_connect() => Err(AppError::BadRequest(
+            "That payment link did not work, so it was NOT saved: the address could not be reached \
+             at all (no such site, or the connection was refused). A buyer pressing Upgrade on this \
+             tier would have landed on that broken page. Open the link in your own browser first, \
+             copy the address a buyer should see, and paste that — or leave the box empty if this \
+             tier is not sold by link."
+                .to_string(),
+        )),
+        // Timeout or a mid-flight failure: we could not verify it, so we do not refuse it.
+        Err(_) => Ok(Some(unverified_link_note())),
+    }
+}
+
+/// What the console says when a link was saved but could not be judged. Worded for the operator.
+fn unverified_link_note() -> String {
+    "Saved, but we could not confirm that payment page works: it refused our check (a payment \
+     provider often blocks automated visits). Open the link once in your own browser to be sure a \
+     buyer lands somewhere live."
+        .to_string()
+}
+
 /// POST /api/v1/admin/plans — create a new plan
 /// A tier's `checkout_url` is a hosted payment page an OPERATOR pastes in, so refuse a typo at
 /// SAVE time instead of at the till.
@@ -780,8 +856,12 @@ pub async fn admin_create_plan(
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty());
+    let mut link_warning: Option<String> = None;
     if let Some(url) = checkout_url {
         require_hosted_payment_url(url)?;
+        // A link that is well-formed but DEAD is refused here, before a buyer can be handed it; one
+        // we could not judge is saved with the note the console shows the operator.
+        link_warning = require_hosted_payment_url_resolves(url).await?;
     }
 
     let plan = sqlx::query(
@@ -821,6 +901,7 @@ pub async fn admin_create_plan(
         StatusCode::CREATED,
         Json(json!({
             "message": "Plan created",
+            "link_warning": link_warning,
             "plan": { "id": plan_id.to_string(), "name": plan_name, "slug": slug }
         })),
     ))
@@ -887,8 +968,12 @@ pub async fn admin_update_plan_full(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string());
+    let mut link_warning: Option<String> = None;
     if let Some(url) = checkout_url_value.as_deref() {
         require_hosted_payment_url(url)?;
+        // Same save-time verdict as `admin_create_plan`: a dead page is refused, not stored; one we
+        // could not judge is saved with the note the console shows the operator.
+        link_warning = require_hosted_payment_url_resolves(url).await?;
     }
 
     let name_use = if name.is_empty() {
@@ -1002,7 +1087,7 @@ pub async fn admin_update_plan_full(
     }
 
     Ok(Json(
-        json!({"message": "Plan updated", "plan_id": id.to_string()}),
+        json!({"message": "Plan updated", "plan_id": id.to_string(), "link_warning": link_warning}),
     ))
 }
 
