@@ -84,6 +84,18 @@ async fn main() {
         Err(e) => tracing::warn!(error = ?e, "account API keys: backfill skipped"),
     }
 
+    // Kanban t_6c39f2b6: every account also holds a PROGRAMMATIC key it can view — the
+    // `workflowswift_…` row in `api_keys` that `auth::api_key_auth::authenticate` actually verifies.
+    // One-time (its own `fleet_data_backfills` marker) so a deliberately revoked key is never
+    // re-minted behind the account's back.
+    match crate::handlers::api_key_handler::backfill_programmatic_keys(&pool).await {
+        Ok(n) => tracing::info!(
+            minted = n,
+            "account programmatic API keys: backfill complete"
+        ),
+        Err(e) => tracing::warn!(error = ?e, "account programmatic API keys: backfill skipped"),
+    }
+
     // At-rest seal for the system-mail credential (kanban t_a794cb09). All three writers of the
     // `admin_settings.email` row seal before they store; this is what converges a row that arrives
     // plaintext from a database restored out of an older dump (or from a writer added later).

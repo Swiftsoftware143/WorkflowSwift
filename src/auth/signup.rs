@@ -539,6 +539,19 @@ pub async fn create_account(
     )
     .await?;
 
+    // …and its PROGRAMMATIC key (kanban t_6c39f2b6). `user_api_keys` authenticates nothing; the
+    // credential a `Authorization: Bearer` call and the Chrome extension actually present is a
+    // `workflowswift_…` row in `api_keys`, so an account is not provisioned until it holds one of
+    // those too. Minted in the SAME unit of work, so a rolled-back signup leaves no key row at all.
+    crate::handlers::api_key_handler::mint_api_key_on(
+        &mut tx,
+        user_id,
+        account_id,
+        "auto-provisioned",
+        "",
+    )
+    .await?;
+
     tx.commit().await?;
 
     // Welcome / credentials mail — the app's existing `welcome` template.

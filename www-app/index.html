@@ -258,14 +258,21 @@ const API = (() => {
     // was defined here and never called, and the per-widget data the dashboard needs already arrives
     // in getDashboardWidgets (each widget carries its own `data`).
     pushDashboardData: (industry_slug, metric_key, value) => send(base + '/dashboard/push-widget-data', { method:'POST', headers: headers(), body: JSON.stringify({ industry_slug, metric_key, value }) }).then(handle),
-    // The account's keys live in `user_api_keys` (the table signup mints into and the one that
-    // actually holds rows); this screen read `/api-keys` (the never-used `api_keys` table), so it
-    // showed "No API keys yet" while keys existed. Kanban t_7863696b.
-    listApiKeys: () => send(base + '/user-keys', { headers: headers() }).then(handle),
-    createApiKey: (name) => send(base + '/user-keys/generate', { method:'POST', headers: headers(), body: JSON.stringify({ key_type:'primary', label: name }) }).then(handle),
-    revokeApiKey: (id) => send(base + '/user-keys/' + encodeURIComponent(id), { method:'DELETE', headers: headers() }).then(handle),
-    revealApiKey: (id, password) => send(base + '/user-keys/' + encodeURIComponent(id) + '/reveal', { method:'POST', headers: headers(), body: JSON.stringify({ password }) }).then(handle),
-    regenerateApiKey: (id) => send(base + '/user-keys/' + encodeURIComponent(id) + '/regenerate', { method:'POST', headers: headers(), body: JSON.stringify({}) }).then(handle),
+    // TWO credential kinds, and they are NOT interchangeable (kanban t_6c39f2b6):
+    //  * PROGRAMMATIC keys (`api_keys`, `workflowswift_…`) are the credential a `Authorization:
+    //    Bearer` call and the Chrome extension actually authenticate with — /api-keys.
+    //  * INTEGRATION keys (`user_api_keys`: webhook secrets, surface tokens) are records this app
+    //    stores and audits; no verifier reads them for authentication — /user-keys.
+    listApiKeys: () => send(base + '/api-keys', { headers: headers() }).then(handle),
+    createApiKey: (name) => send(base + '/api-keys', { method:'POST', headers: headers(), body: JSON.stringify({ name }) }).then(handle),
+    revokeApiKey: (id) => send(base + '/api-keys/' + encodeURIComponent(id), { method:'DELETE', headers: headers() }).then(handle),
+    revealApiKey: (id, password) => send(base + '/api-keys/' + encodeURIComponent(id) + '/reveal', { method:'POST', headers: headers(), body: JSON.stringify({ password }) }).then(handle),
+    regenerateApiKey: (id) => send(base + '/api-keys/' + encodeURIComponent(id) + '/regenerate', { method:'POST', headers: headers(), body: JSON.stringify({}) }).then(handle),
+    listUserKeys: () => send(base + '/user-keys', { headers: headers() }).then(handle),
+    createUserKey: (key_type, label) => send(base + '/user-keys/generate', { method:'POST', headers: headers(), body: JSON.stringify({ key_type, label }) }).then(handle),
+    revokeUserKey: (id) => send(base + '/user-keys/' + encodeURIComponent(id), { method:'DELETE', headers: headers() }).then(handle),
+    revealUserKey: (id, password) => send(base + '/user-keys/' + encodeURIComponent(id) + '/reveal', { method:'POST', headers: headers(), body: JSON.stringify({ password }) }).then(handle),
+    regenerateUserKey: (id) => send(base + '/user-keys/' + encodeURIComponent(id) + '/regenerate', { method:'POST', headers: headers(), body: JSON.stringify({}) }).then(handle),
     // --- Provider keys (the platform's third-party credentials, per account). The API
     // masks on read (`api_key` comes back as `sk-...xyz`) and encrypts at rest; the value
     // is only ever sent on write. NOTE: the routes are `/provider-keys` and
@@ -357,7 +364,7 @@ const API = (() => {
   };
 })();
 
-const S = { view:'login', sessionEnded:false, loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, accLoadFailed:false, accPromise:null, dataVer:0, apiKeys:null, extBuild:null, hexKey:null, hexKeyInput:'', enrich:null, enriching:null, newApiKey:null, builder:null, steps:null, stepsWf:null, stepValidation:null, stepDraft:null, widgetCat:null, notifyChannels:null, notifyRecipients:null, rendSummary:null, renditions:null, rendWf:'', rendStatus:'active', rendSel:null, stitchName:'', modalErr:null, plans:null, plansTried:false, checkoutStatus:null, checkoutStatusTried:false, checkoutMsg:null, checkoutBusy:false, requestForPlan:null, requestPlanBusy:false, requestPlanMsg:null, planReqs:null, planReqsTried:false, planReqWithdrawBusy:false, planReqMsg:null };
+const S = { view:'login', sessionEnded:false, loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, accLoadFailed:false, accPromise:null, dataVer:0, apiKeys:null, userKeys:null, extBuild:null, hexKey:null, hexKeyInput:'', enrich:null, enriching:null, newApiKey:null, builder:null, steps:null, stepsWf:null, stepValidation:null, stepDraft:null, widgetCat:null, notifyChannels:null, notifyRecipients:null, rendSummary:null, renditions:null, rendWf:'', rendStatus:'active', rendSel:null, stitchName:'', modalErr:null, plans:null, plansTried:false, checkoutStatus:null, checkoutStatusTried:false, checkoutMsg:null, checkoutBusy:false, requestForPlan:null, requestPlanBusy:false, requestPlanMsg:null, planReqs:null, planReqsTried:false, planReqWithdrawBusy:false, planReqMsg:null };
 
 // Views call their loaders from inside render (the house pattern: `if(!S.x) loadX();`), and
 // every loader calls renderApp() again — a *re-entrant* preact render. The inner render
@@ -2000,12 +2007,21 @@ const removeProviderKey = async (provider) => {
   catch(e){ toast(e.message,'err'); }
 };
 
-// ===== API Keys (/api-keys -> {api_keys:[...]}, fields: name/prefix/is_active/created_at/last_used_at) =====
+// ===== API Keys =====
+// TWO credential kinds, shown as two labelled tables (kanban t_6c39f2b6). They are NOT the same
+// thing and the labels say so:
+//  * PROGRAMMATIC keys — `workflowswift_…` rows in `api_keys`. This is the credential a
+//    `Authorization: Bearer` request and the Chrome extension authenticate with.
+//  * INTEGRATION keys — `user_api_keys` (webhook secrets, surface tokens). Stored and auditable
+//    here; no verifier reads them for authentication.
+const maskProgrammatic = () => 'workflowswift_' + '\u2022'.repeat(16);
 const maskKey = (k) => (k.prefix || 'workflowswift') + '_' + '\u2022'.repeat(12);
+const USER_KEY_KINDS = { primary: 'Workspace key', webhook_secret: 'Webhook secret', surface_token: 'Surface token' };
 const ApiKeysView = () => {
   if (!S.apiKeys && !S.loading) loadApiKeys();
   if (S.extBuild === null) loadExtBuild();
   const list = S.apiKeys || [];
+  const ulist = S.userKeys || [];
   const fresh = S.newApiKey;
   return html`
     <div>
@@ -2031,8 +2047,8 @@ const ApiKeysView = () => {
         </div>
       </div>
       ${fresh ? html`<div class="card" style="border:2px solid #16a34a">
-        <h3 class="font-semibold text-gray-800 mb-2">Your new API key</h3>
-        <p class="text-sm text-gray-500 mb-3">Copy it into the extension now. You can come back and <b>View</b> or copy it again at any time — the key is stored sealed for exactly that.</p>
+        <h3 class="font-semibold text-gray-800 mb-2">Your new key</h3>
+        <p class="text-sm text-gray-500 mb-3">Copy it into the extension now. You can come back and press <b>View</b> (or copy it again) at any time — the key is stored sealed for exactly that.</p>
         <div class="flex gap-2 flex-wrap items-center">
           <code id="fresh-api-key" style="flex:1;min-width:260px;word-break:break-all;background:#0f172a;color:#7dd3fc;padding:12px 14px;border-radius:10px;font-size:13px">${fresh}</code>
           <button class="btn text-sm" onClick=${copyApiKey}>Copy</button>
@@ -2040,37 +2056,59 @@ const ApiKeysView = () => {
         </div>
         <p class="text-xs text-gray-500 mt-3">Paste this into the extension's <b>Options</b> page (Token / API key field) and press <b>Test Connection</b>.</p>
       </div>` : ''}
-      ${list.length === 0 ? html`<div class="empty">No API keys yet. Create one to connect the Chrome extension or call the API.</div>` : html`
-      <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Key</th><th>Status</th><th>Created</th><th>Last used</th><th></th></tr></thead><tbody>
-        ${list.map(k => html`<tr key=${k.id}><td class="font-semibold">${k.label || k.name || k.key_type || '—'}</td><td style="font-family:ui-monospace,monospace;font-size:12px;color:#64748b">${maskKey(k)}</td><td>${statusBadge(k.is_active?'active':'paused')}</td><td>${fmtDate(k.created_at)}</td><td>${k.last_used_at ? fmtDate(k.last_used_at) : 'never'}</td><td class="text-right"><button class="btn-outline text-xs" onClick=${()=>viewApiKey(k.id)}>View</button> <button class="btn-outline text-xs" onClick=${()=>regenApiKey(k.id)}>Regenerate</button> <button class="btn-red text-xs" onClick=${()=>revokeApiKey(k.id)}>Revoke</button></td></tr>`)}
-      </tbody></table></div>`}
-      <p class="text-xs text-gray-500 mt-2">The key itself stays retrievable: press <b>View</b>, re-enter your password, and copy it again at any time. Only a hash is used to authenticate; a sealed copy exists so you can read it back.</p>
+      <div class="card" style="margin-bottom:18px">
+        <h3 class="font-semibold text-gray-800 mb-1">API keys — what the extension and your API calls use</h3>
+        <p class="text-sm text-gray-500 mb-3">This is the credential a <code>Authorization: Bearer</code> request is checked against. <b>View</b> shows the same key again (you re-enter your password and the view is recorded); <b>Regenerate</b> replaces it — the old key stops working the moment you do.</p>
+        ${list.length === 0 ? html`<div class="empty">No API key yet. Press “+ New API Key” to make one.</div>` : html`
+        <div style="overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Key</th><th>Fingerprint</th><th>Status</th><th>Created</th><th>Last used</th><th></th></tr></thead><tbody>
+          ${list.map(k => html`<tr key=${k.id}><td class="font-semibold">${k.name || '—'}</td><td style="font-family:ui-monospace,monospace;font-size:12px;color:#64748b">${maskProgrammatic()}</td><td style="font-family:ui-monospace,monospace;font-size:12px;color:#94a3b8">${k.prefix || '—'}</td><td>${statusBadge(k.is_active?'active':'paused')}</td><td>${fmtDate(k.created_at)}</td><td>${k.last_used_at ? fmtDate(k.last_used_at) : 'never'}</td><td class="text-right">${k.revealable ? html`<button class="btn-outline text-xs" onClick=${()=>viewApiKey(k.id)}>View</button> ` : ''}<button class="btn-outline text-xs" onClick=${()=>regenApiKey(k.id)}>Regenerate</button> <button class="btn-red text-xs" onClick=${()=>revokeApiKey(k.id)}>Revoke</button></td></tr>`)}
+        </tbody></table></div>`}
+        <p class="text-xs text-gray-500 mt-2">Only a hash is used to authenticate. A key minted before the sealed copy existed carries no <b>View</b> button — <b>Regenerate</b> replaces it with one you can read back.</p>
+      </div>
+      <div class="card">
+        <h3 class="font-semibold text-gray-800 mb-1">Integration keys — webhook secrets and embeds</h3>
+        <p class="text-sm text-gray-500 mb-3">The secrets this workspace hands to webhooks and embedded widgets. They are records: nothing accepts them as a sign-in to the API — the keys above are what a call authenticates with.</p>
+        ${ulist.length === 0 ? html`<div class="empty">No integration keys yet.</div>` : html`
+        <div style="overflow:auto"><table class="table"><thead><tr><th>Kind</th><th>Label</th><th>Prefix</th><th>Status</th><th>Created</th><th>Last used</th><th></th></tr></thead><tbody>
+          ${ulist.map(k => html`<tr key=${k.id}><td class="font-semibold">${USER_KEY_KINDS[k.key_type] || k.key_type || '—'}</td><td>${k.label || '—'}</td><td style="font-family:ui-monospace,monospace;font-size:12px;color:#64748b">${maskKey(k)}</td><td>${statusBadge(k.is_active?'active':'paused')}</td><td>${fmtDate(k.created_at)}</td><td>${k.last_used_at ? fmtDate(k.last_used_at) : 'never'}</td><td class="text-right"><button class="btn-outline text-xs" onClick=${()=>viewUserKey(k.id)}>View</button> <button class="btn-outline text-xs" onClick=${()=>regenUserKey(k.id)}>Regenerate</button> <button class="btn-red text-xs" onClick=${()=>revokeUserKey(k.id)}>Revoke</button></td></tr>`)}
+        </tbody></table></div>`}
+        <p class="text-xs text-gray-500 mt-2">A sealed copy exists so <b>View</b> can read a key back; every view is recorded.</p>
+      </div>
     </div>`;
 };
-const loadApiKeys = async () => { if(S.loading)return; S.loading=true; renderApp(); try { const r = await API.listApiKeys(); S.apiKeys = (r && (r.keys || r.api_keys)) || []; } catch(e){ toast(e.message,'err'); S.apiKeys=[]; } S.loading=false; renderApp(); };
+const loadApiKeys = async () => { if(S.loading)return; S.loading=true; renderApp();
+  try { const r = await API.listApiKeys(); S.apiKeys = (r && (r.api_keys || r.keys)) || []; } catch(e){ toast(e.message,'err'); S.apiKeys=[]; }
+  try { const u = await API.listUserKeys(); S.userKeys = (u && (u.keys || u.api_keys)) || []; } catch(e){ S.userKeys=[]; }
+  S.loading=false; renderApp(); };
 
 // View = re-authenticate, then show the SAME stored key again (repeatable, audited).
 const viewApiKey = async (id) => {
-  const pw = prompt('Enter YOUR account password to show this key. Every view is recorded.');
+  const pw = prompt('Enter YOUR account password to show this API key. Every view is recorded.');
   if (!pw) return;
   try { const r = await API.revealApiKey(id, pw); S.newApiKey = r.key; renderApp(); }
   catch(e) { toast('Could not show the key: ' + e.message, 'err'); }
 };
 // Regenerate = revoke the old key and issue a new one in ONE atomic action.
 const regenApiKey = async (id) => {
-  if (!confirm('Regenerate this key? The current key stops working immediately, so anything already wired up with it stops until you paste the new one in.')) return;
-  try { const r = await API.regenerateApiKey(id); S.newApiKey = r.key; S.apiKeys = null; renderApp(); }
+  if (!confirm('Regenerate this API key? The current key stops working immediately, so the extension and any API call already using it stop until you paste the new one in.')) return;
+  try { const r = await API.regenerateApiKey(id); S.newApiKey = r.key; S.apiKeys = null; S.userKeys = null; renderApp(); loadApiKeys(); }
   catch(e) { toast('Could not regenerate the key: ' + e.message, 'err'); }
 };
-// The extension build the API is currently serving. Read from the site's own metadata file
-// (/extension-latest.json, rewritten by /opt/swift/scripts/ws-publish-extension.sh on release)
-// so this screen can never name a build older than the one /api/v1/extension.zip hands the user.
-const loadExtBuild = async () => {
-  try { const d = await (await fetch('/extension-latest.json?t=' + Date.now())).json(); S.extBuild = (d && d.version) ? ('v' + d.version) : '—'; }
-  catch(e){ S.extBuild = '—'; }
-  renderApp();
-};
 const revokeApiKey = async (id) => { if(!confirm('Revoke this API key? Anything using it stops working immediately.'))return; try { await API.revokeApiKey(id); toast('API key revoked'); S.apiKeys=null; loadApiKeys(); } catch(e){ toast(e.message,'err'); } };
+
+// The integration-key actions keep their own endpoints: same shape, different table.
+const viewUserKey = async (id) => {
+  const pw = prompt('Enter YOUR account password to show this key. Every view is recorded.');
+  if (!pw) return;
+  try { const r = await API.revealUserKey(id, pw); S.newApiKey = r.key; renderApp(); }
+  catch(e) { toast('Could not show the key: ' + e.message, 'err'); }
+};
+const regenUserKey = async (id) => {
+  if (!confirm('Regenerate this integration key? The current one stops working immediately.')) return;
+  try { const r = await API.regenerateUserKey(id); S.newApiKey = r.key; S.userKeys = null; renderApp(); loadApiKeys(); }
+  catch(e) { toast('Could not regenerate the key: ' + e.message, 'err'); }
+};
+const revokeUserKey = async (id) => { if(!confirm('Revoke this integration key? Anything using it stops working immediately.'))return; try { await API.revokeUserKey(id); toast('Integration key revoked'); S.userKeys=null; loadApiKeys(); } catch(e){ toast(e.message,'err'); } };
 const copyApiKey = async () => { const t = S.newApiKey || ''; try { await navigator.clipboard.writeText(t); toast('Copied to clipboard'); } catch(e){ const el=document.getElementById('fresh-api-key'); if(el){ const r=document.createRange(); r.selectNodeContents(el); const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(r); try{ document.execCommand('copy'); toast('Copied to clipboard'); }catch(_){ toast('Select the key manually to copy','err'); } } else { toast('Select the key manually to copy','err'); } } };
 
 // ===== Team (/users -> {users:[...]}) =====
@@ -2605,7 +2643,7 @@ const ApiKeyModal = () => {
     S.loading=false; renderApp(); };
   return html`<${ModalShell} title="New API Key" onClose=${closeModal}>
     <div class="mb-4"><label class="label">Name</label><input class="input" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="e.g. Chrome extension" /></div>
-    <p class="text-xs text-gray-500 mb-4">A name is just for your reference — use it to say which tool uses this key. The key itself is generated for you and shown once.</p>
+    <p class="text-xs text-gray-500 mb-4">A name is just for your reference — use it to say which tool uses this key. The key is generated for you and stays retrievable: press View on this screen, enter your password, and copy it again whenever you need it.</p>
     ${S.modalErr && html`<div style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:12px;border-radius:10px;font-size:13px;margin-bottom:16px">${S.modalErr}</div>`}
     <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Create API Key'}</button>
   <//>`; };

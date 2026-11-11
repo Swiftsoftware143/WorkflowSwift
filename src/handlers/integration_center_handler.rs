@@ -715,16 +715,6 @@ pub async fn mint_user_key_on(
     })
 }
 
-fn verify_account_password(stored_hash: &str, given: &str) -> bool {
-    use argon2::{Argon2, PasswordHash, PasswordVerifier};
-    match PasswordHash::new(stored_hash) {
-        Ok(parsed) => Argon2::default()
-            .verify_password(given.as_bytes(), &parsed)
-            .is_ok(),
-        Err(_) => false,
-    }
-}
-
 /// POST /api/v1/user-keys/{id}/reveal — show the key again (repeatable).
 pub async fn reveal_user_key(
     State(state): State<AppState>,
@@ -762,7 +752,19 @@ pub async fn reveal_user_key(
             .fetch_optional(&state.db)
             .await?;
     let stored = stored.ok_or(AppError::Unauthorized)?;
-    if stored.is_empty() || !verify_account_password(&stored, &password) {
+    // An unusable stored value is not a credential — answer 401, never a 500 about hashing — and the
+    // verification itself runs through the shared off-reactor Argon2 helper (kanban t_6c39f2b6):
+    // this path used to construct the hasher inline in an async handler, which both parks a tokio
+    // worker for the whole hash and violates the crate's "Argon2 only in auth::api_key_auth" test.
+    if !crate::auth::api_key_auth::is_usable_hash(&stored) {
+        return Err(AppError::Unauthorized);
+    }
+    let matched = crate::auth::api_key_auth::argon2_verify_result(
+        stored,
+        std::sync::Arc::from(password.as_str()),
+    )
+    .await?;
+    if !matched {
         return Err(AppError::Unauthorized);
     }
 

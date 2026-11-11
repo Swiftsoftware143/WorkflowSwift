@@ -394,6 +394,17 @@ pub fn create_router(state: AppState) -> Router {
             "/{id}",
             put(handlers::api_key_handler::update_api_key)
                 .delete(handlers::api_key_handler::delete_api_key),
+        )
+        // The PROGRAMMATIC credential (`api_keys`, the row a Bearer call authenticates with) became
+        // retrievable and rotatable (kanban t_6c39f2b6): view it again behind the account password
+        // (audited) or rotate it atomically.
+        .route(
+            "/{id}/reveal",
+            post(handlers::api_key_handler::reveal_api_key),
+        )
+        .route(
+            "/{id}/regenerate",
+            post(handlers::api_key_handler::regenerate_api_key),
         );
 
     let portfolio_routes = Router::new()

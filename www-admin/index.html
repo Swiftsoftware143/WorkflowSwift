@@ -1802,13 +1802,10 @@ const PSLOTS=[['stripe','Stripe'],['paypal','PayPal'],['square','Square'],['padd
 
 // --- API Keys (tenant-scoped: POST /api-keys -> {key, prefix, message}) ---
 // Stripped out of the generic renderCRUD for exactly the reason an API key is not a CRUD
-// row: the value exists in the clear exactly once. POST /api-keys answers
-// {key, prefix, message:"Save this key — it will not be shown again"} and GET /api-keys
-// only ever returns `prefix`. The panel was declared with a `key_prefix` column, which is
-// not a property of the response at all (so that column rendered blank), and its form only
-// posted `name` — a key created from this console was therefore never displayed and could
-// never be used by anything. This panel shows the value once, with the API's own warning,
-// and keeps the prefix in the list as the only identifier that survives.
+// row: the value is minted by the server, not typed by the operator. POST /api-keys answers
+// {key, prefix, message} and GET /api-keys only ever returns `prefix` — the account reads the
+// value back from API Keys in the app (View, behind its password; kanban t_6c39f2b6), so this
+// console hands it over once and keeps the prefix as the identifier that survives.
 function renderApiKeys(c){
   c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-2">API Keys</h2>'
     +'<p class="text-xs text-gray-400 mb-4">Bearer credentials for the WorkflowSwift API and the Swift Market Intel Chrome extension. '
@@ -1823,7 +1820,7 @@ function renderApiKeys(c){
 
   const showOnce=function(k){
     c.querySelector('#aknew').innerHTML='<div class="p-3 mb-4 rounded-lg bg-amber-50 border border-amber-300">'
-      +'<p class="text-sm font-semibold text-amber-800 mb-1">Copy this key now — it will not be shown again.</p>'
+      +'<p class="text-sm font-semibold text-amber-800 mb-1">Copy this key now — the account can read it again from API Keys in the app.</p>'
       +'<div class="flex items-center gap-2"><code class="text-xs break-all bg-white border rounded px-2 py-1 flex-1">'+escHtml(k.key)+'</code>'
       +'<button class="btn btn-sm" id="ak_copy">Copy</button></div></div>';
     const b=c.querySelector('#ak_copy');
@@ -1838,7 +1835,7 @@ function renderApiKeys(c){
     const d=await api('/api-keys');
     if(d===null){list.innerHTML='<p class="text-red-400 text-sm">'+escHtml(LAST_ERR||'Could not load API keys')+'</p>';return}
     const items=unwrapList(d);
-    if(!items.length){list.innerHTML='<p class="text-gray-400 text-sm">No API keys yet. Name one above and press Create — the value is shown once, right after it is minted.</p>';return}
+    if(!items.length){list.innerHTML='<p class="text-gray-400 text-sm">No API keys yet. Name one above and press Create — the value is handed to you right after it is minted, and the account can view it again later.</p>';return}
     list.innerHTML='<table class="table"><thead><tr><th>Name</th><th>Key prefix</th><th>Created</th><th>Last used</th><th>Active</th><th style="width:100px"></th></tr></thead><tbody>'
       +items.map(k=>'<tr><td><strong>'+escHtml(k.name||'-')+'</strong></td>'
         +'<td class="text-xs text-gray-500">'+escHtml(k.prefix||'-')+'…</td>'
@@ -3451,7 +3448,7 @@ window.appGuidePages = {
   "integrations:integration-targets": { title: "Integration Targets", desc: "Where this account's data is delivered: the destinations an integration pushes to.", actions: ["Add a target", "Edit a destination"] },
   "integrations:destination-values": { title: "Destination Values", desc: "The specific values (lists, boards, campaigns) sent to each destination.", actions: ["Map a destination value", "Change a mapping"] },
   "integrations:provider-keys": { title: "Provider Keys", desc: "Your own API keys for the third-party services this app uses. Keys are stored encrypted and are never shown again in full.", actions: ["Save a provider key", "See which providers are connected", "Replace or remove a key"] },
-  "integrations:api-keys": { title: "API Keys", desc: "The keys this app issues so other systems can call it on this account's behalf.", actions: ["Create a key", "Copy a key once at creation", "Revoke a key"] },
+  "integrations:api-keys": { title: "API Keys", desc: "The keys this app issues so other systems can call it on this account's behalf.", actions: ["Create a key", "Copy a key at creation, view it again later", "Revoke a key"] },
   "integrations:n8n-proxy": { title: "n8n Proxy", desc: "The link to the automation engine: what it can call here and how it authenticates.", actions: ["Review the configuration"] },
   "integrations:bridge": { title: "AI Bridge", desc: "The server-side queue of inbound AI task files this install has been handed, and the results written back for them. It is a platform-level queue, not a per-workspace setting, so the platform operator is the only one who can read it.", actions: ["Review the queued inbound tasks"] },
   "support:tickets": { title: "Tickets", desc: "Every support request on this install, newest first: the ones a workspace files from its own Tickets screen, the plan requests filed from a customer's Plan & Billing screen, and the messages a visitor with no account sends from the public contact page. An answer you write here is stored on the request and emailed to whoever asked &mdash; a message from the contact page reaches the address they typed. Closing a plan request applies the plan it named. The number on the Support tab is how many requests are still waiting for an answer.", actions: ["Read every request with the workspace or address it came from", "Write the answer and mark it resolved or closed", "Apply the plan a plan request named", "The number on the Support tab is the waiting count"] },
