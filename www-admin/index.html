@@ -220,9 +220,25 @@ function h(tag,props={},...children){
 }
 
 function showMsg(msg,type='info'){
-  const el=h('div',{className:'fixed top-4 right-4 px-4 py-3 rounded-lg text-white text-sm font-semibold z-50 '+(type==='error'?'bg-red-600':'bg-green-600')},msg);
-  document.body.appendChild(el);
-  setTimeout(()=>el.remove(),3000);
+  // THE TOAST HOST LIVES ON <html>, NOT ON <body> (measured 2026-11-12, real Chromium click):
+  // every screen render starts with `document.body.innerHTML=''` (renderApp/renderLogin), so a
+  // message appended to the body was wiped in the SAME tick as the save that produced it. Measured
+  // on Email Branding: the save answered 200 and the operator saw nothing — no "saved", no warning,
+  // no error. Four surfaces re-render immediately after saying their piece (Profile saved, Email
+  // branding saved, Logo uploaded, Logo removed), and any future panel that re-renders would have
+  // the same hole. A host on <html> survives every render; it is created once and reused, and it
+  // takes itself away when the last message expires so nothing is left on the page.
+  let host=document.getElementById('toast-host');
+  if(!host){
+    host=document.createElement('div');
+    host.id='toast-host';
+    host.className='fixed top-4 right-4 z-50 flex flex-col items-end gap-2';
+    document.documentElement.appendChild(host);
+  }
+  const el=h('div',{className:'px-4 py-3 rounded-lg text-white text-sm font-semibold shadow '+(type==='error'?'bg-red-600':'bg-green-600')},msg);
+  el.setAttribute('role','status');
+  host.appendChild(el);
+  setTimeout(()=>{el.remove();if(host&&!host.children.length)host.remove();},3000);
 }
 
 function renderLogin(){
@@ -853,8 +869,17 @@ async function showForm(key,label,fields,ep,id,cb,row){
     // is worse than no button). Edit saves with the same POST the Add form uses.
     const upsert=!!EP.upsert;
     const r=await api((id&&!upsert)?(EP.list+'/'+id):EP.create,{method:(id&&!upsert)?'PUT':'POST',body:JSON.stringify(body)});
-    if(r)showMsg('Saved!');else showMsg('Error saving: '+LAST_ERR,'error');
-    if(r){modal.remove();if(cb)cb();}
+    // MEASURED 2026-11-11 in Chromium: this toast was appended BEFORE the panel re-rendered, and
+    // the re-render clears the document body — so the message was removed in the same tick and the
+    // operator never saw "Saved!" or any warning. Say it AFTER the re-render, or it is never read.
+    if(!r){showMsg('Error saving: '+LAST_ERR,'error');}
+    else {
+      modal.remove(); if(cb)cb();
+      // A payment link the server could not VERIFY still saves (a Stripe/PayPal page refuses an
+      // automated check, so refusing it would block a working link) and comes back as
+      // `link_warning`: the operator is told to open it once himself instead of a bare "Saved!".
+      if(r.link_warning)showMsg(r.link_warning); else showMsg('Saved!');
+    }
   };
   modal.appendChild(box);document.body.appendChild(modal);
 }
