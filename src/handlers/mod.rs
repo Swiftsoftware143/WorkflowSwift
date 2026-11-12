@@ -46,4 +46,3 @@ pub mod tag_groups_handler;
 pub mod tickets_handler;
 pub mod user_integration_handler;
 pub mod webhooks_handler;
-pub mod workspace_handler;

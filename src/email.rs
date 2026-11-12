@@ -23,6 +23,16 @@ use crate::branding::{self, Branding};
 /// pages use. `alt` carries the name, so a client that blocks images still says whose mail this is.
 const APP_LOGO_PATH: &str = "/logo.png";
 
+/// The public origin the private-inbox module (ported from CoreSwift, kanban t_473a6895) prints in
+/// the records a customer pastes at their DNS provider, and in the webhook URL it hands the mail
+/// provider. One value, so a second copy of the address can never appear in a mail.
+pub const APP_URL: &str = crate::branding::APP_URL;
+
+/// The mail client's own front door (the private-inbox host, ported with the module). Every
+/// message a customer sends about an inbox, and every link a notification points at, resolves to
+/// this ONE host.
+pub const APP_URL_MAIL: &str = "https://inbox.workflowswift.com";
+
 /// The identity every message falls back to when its account has configured none: this app's own
 /// name and wordmark, in the fleet's default accent (kanban t_081edaac).
 ///

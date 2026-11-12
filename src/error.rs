@@ -19,6 +19,19 @@ pub enum AppError {
     #[error("{0}")]
     UnauthorizedWith(String),
 
+    /// A 401 that carries the server's own sentence (ported with the private-email module,
+    /// kanban t_473a6895). Same status as [`AppError::UnauthorizedWith`]; kept as a distinct
+    /// variant because the ported handlers use this name and the fleet contract is one sentence
+    /// per refusal.
+    #[error("{0}")]
+    UnauthorizedReason(String),
+
+    /// 503 carrying an operator-facing sentence ("this deployment is not set up yet"). Ported
+    /// with the private-email module: a missing mail provider credential is not the customer's
+    /// fault and must not read as a 500.
+    #[error("{0}")]
+    ServiceUnavailable(String),
+
     #[error("Invalid credentials")]
     InvalidCredentials,
 
@@ -109,6 +122,11 @@ impl IntoResponse for AppError {
                 "Authentication required".to_string(),
             ),
             AppError::UnauthorizedWith(msg) => (StatusCode::UNAUTHORIZED, msg.clone()),
+            AppError::UnauthorizedReason(msg) => (StatusCode::UNAUTHORIZED, msg.clone()),
+            AppError::ServiceUnavailable(msg) => {
+                tracing::warn!("Service unavailable: {}", msg);
+                (StatusCode::SERVICE_UNAVAILABLE, msg.clone())
+            }
             AppError::InvalidCredentials => {
                 (StatusCode::UNAUTHORIZED, "Invalid credentials".to_string())
             }

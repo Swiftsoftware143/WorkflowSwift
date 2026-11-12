@@ -279,20 +279,18 @@ pub fn create_router(state: AppState) -> Router {
         .route("/{id}/role", put(handlers::user_handler::set_user_role));
 
     // ── Workspace routes ──
-    let workspace_routes = Router::new()
-        .route("/", get(handlers::workspace_handler::list_user_workspaces))
-        .route(
-            "/",
-            post(handlers::workspace_handler::create_user_workspace),
-        )
-        .route(
-            "/{id}",
-            delete(handlers::workspace_handler::delete_user_workspace),
-        )
-        .route(
-            "/{id}/stats",
-            get(handlers::workspace_handler::get_workspace_stats),
-        );
+    // The FLEET workspace model (kanban t_473a6895, ported from CoreSwift/ADASwift): a real
+    // `workspaces` table with exactly one default per account, five routes (list, create, rename,
+    // set default, delete), plan ceiling when a plan states one, and "keep at least one" refused
+    // with its own sentence. It REPLACES the legacy three handlers that read `portfolio_companies`
+    // as if it were a workspace list — this app's actual workspaces now live in their own table,
+    // and Portfolio Companies keeps its own admin panel and its own routes.
+    let workspace_routes = crate::workspaces::router(state.clone());
+
+    // The private inbox (multi-address mail on the customer's own domain): domains, mailboxes,
+    // messages, folders, labels, signature and send, plus the mail client's own host. Each
+    // sub-router carries the app's auth middleware itself, exactly as the ported code expects.
+    let private_email_routes = crate::private_email::router(state.clone());
     // NOTE (kanban t_f42d6527): five `/{id}/…` registrations used to sit here — GET `/{id}/agents`,
     // GET `/{id}/tickets`, PATCH `/{id}/tickets/{ticket_id}/status`, GET+POST `/{id}/provider-keys`
     // and DELETE `/{id}/provider-keys/{provider}`. They are DELETED, per route:
@@ -920,6 +918,7 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/plans", plan_routes)
         .nest("/credits", credit_routes)
         .nest("/workspaces", workspace_routes)
+        .nest("/private-email", private_email_routes)
         .nest("/agents", agent_routes)
         .nest("/automations", automation_routes)
         .nest("/dashboard", dashboard_routes)
@@ -1266,6 +1265,30 @@ pub fn create_router(state: AppState) -> Router {
     // Combine: public + protected merged
     let api_v1 = Router::new().merge(public_routes).merge(protected_routes);
 
+    // ── Mailgun inbound delivery (kanban t_473a6895, ported from CoreSwift) ────────────────────
+    // ANONYMOUS BY NECESSITY: the provider posts here with no session; the credential is the
+    // per-domain signing key the handler verifies against `timestamp` + `token`. Mounted on the
+    // FINISHED router, outside the `/api/v1` nest's own body envelope, because a message with an
+    // attachment is posted as multipart carrying the file's bytes and the 5 MB envelope that guards
+    // every other route would refuse it before the handler ran. The wider limit is scoped to THIS
+    // one path; the body-read deadline still applies, so a stalled upload cannot park the receiver.
+    let mailgun_router = Router::new()
+        // Nested (rather than a flat full-path `.route`) so the mounted literal stays relative to
+        // its prefix, exactly like every other route in this file — `route_policy`'s census test
+        // proves each allowlist entry names a literal this router really mounts.
+        .nest(
+            "/api/v1/webhooks/mailgun",
+            Router::new().route(
+                "/inbound",
+                post(crate::private_email::webhook_handler::inbound_webhook),
+            ),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            body_read_deadline,
+            crate::rate_limit::body_read_deadline_middleware,
+        ))
+        .layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024));
+
     Router::new()
         .route("/", get(health_check))
         .nest("/api/v1", api_v1)
@@ -1282,6 +1305,8 @@ pub fn create_router(state: AppState) -> Router {
         .layer(axum::middleware::from_fn(
             crate::body_rejection::body_rejection_is_app_json,
         ))
+        // ── Mailgun inbound delivery (kanban t_473a6895) — the router built above ──────────────
+        .merge(mailgun_router)
         .with_state(state)
 }
 

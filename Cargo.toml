@@ -35,6 +35,11 @@ hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 base64 = "0.22"
+# Private inbox (kanban t_473a6895): AES-256-GCM for credentials at rest, an async provider
+# trait, and form/URL parsing for the inbound webhook. sha2/hmac/url/base64/rand are already in.
+aes-gcm = "0.10"
+async-trait = "0.1"
+serde_urlencoded = "0.7"
 
 [dev-dependencies]
 # Tests only: `ServiceExt::oneshot` drives a real Router through the middleware stack. The

@@ -181,6 +181,13 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // surface: an unverified delivery is refused, never answered with tenant data.
     "/api/v1/webhooks/stripe",
     "/api/v1/webhooks/paypal",
+    // --- the mail provider's delivery receiver (kanban t_473a6895) ------------------------------
+    // Mailgun posts a delivery here with no session; the credential is the per-domain signing key
+    // the handler verifies against `timestamp` + `token` + `signature`. A domain with no key
+    // configured accepts nothing, so an unconfigured address is refused rather than trusted. Reads
+    // the raw body (urlencoded or multipart, attachments included) before it can verify anything,
+    // which is why it is mounted with its own body-read deadline and a 25 MB envelope.
+    "/api/v1/webhooks/mailgun/inbound",
     // --- the sign-in ADDRESS CHANGE's confirmation arm (cron 2026-10-18) -------------------------
     // Anonymous by necessity: the customer opens the link from their NEW mailbox, in a browser with
     // no session, and the single-use token in the link IS the credential. Narrow by design — it
@@ -576,11 +583,11 @@ mod tests {
     /// from the code without a test failing.
     #[test]
     fn the_census_shape_is_what_the_docs_say() {
-        // Pin RE-MEASURED 2026-11-07: the anonymous lists hold 18 + 10 = 28, not the 17 + 10 = 27
-        // this test asserted. One deliberate public mount landed without moving the pin, so the
-        // suite has been red since then; the numbers below are the measured lists in this file, not
-        // a change to any route.
-        assert_eq!(super::PUBLIC_ROUTES.len(), 18, "PUBLIC_ROUTES size");
+        // Pin RE-MEASURED 2026-11-12 (kanban t_473a6895): the mail provider's delivery receiver
+        // `/api/v1/webhooks/mailgun/inbound` joined the deliberate anonymous list with the private
+        // inbox, so the lists hold 19 + 10 = 29. The previous 18 + 10 = 28 was the measured shape
+        // before that route existed.
+        assert_eq!(super::PUBLIC_ROUTES.len(), 19, "PUBLIC_ROUTES size");
         assert_eq!(super::INTERNAL_ROUTES.len(), 10, "INTERNAL_ROUTES size");
         // The 22 deliberate anonymous placements the census found, minus the 2 moved to the
         // protected router, plus `/api/v1/auth/avatar/{user_id}` (the account-picture READ, card
@@ -591,7 +598,7 @@ mod tests {
         // session).
         assert_eq!(
             super::PUBLIC_ROUTES.len() + super::INTERNAL_ROUTES.len(),
-            28
+            29
         );
     }
 }

@@ -248,6 +248,7 @@ const API = (() => {
     get: (p) => send(base + p, { headers: headers() }).then(handle),
     post: (p, b) => send(base + p, { method:'POST', headers: headers(), body: b === undefined ? undefined : JSON.stringify(b) }).then(handle),
     put: (p, b) => send(base + p, { method:'PUT', headers: headers(), body: JSON.stringify(b) }).then(handle),
+    patch: (p, b) => send(base + p, { method:'PATCH', headers: headers(), body: JSON.stringify(b) }).then(handle),
     del: (p) => send(base + p, { method:'DELETE', headers: headers() }).then(handle),
     getIndustries: () => send(base + '/industries', { headers: headers() }).then(handle),
     getAccountIndustry: () => send(base + '/accounts/industry', { headers: headers() }).then(handle),
@@ -3156,6 +3157,259 @@ const RenditionsView = () => {
 
 
 // ===== App shell + router =====
+
+/* ── Workspaces (kanban t_473a6895) ─────────────────────────────────────────────────────────────
+   The fleet workspace model: one business account can hold several workspaces, exactly one of them
+   the default a fresh sign-in opens. Five routes — GET|POST /workspaces, PATCH|DELETE
+   /workspaces/{id}, POST /workspaces/{id}/default — and the SERVER owns every rule (a plan ceiling
+   answers 402 with its own sentence, a duplicate name 409, "keep at least one" 400). This screen
+   shows the server's sentence and never invents one. */
+const WorkspacesView = () => {
+  if (!S.wsItems && !S.loading) loadWorkspaces();
+  const items = S.wsItems || [];
+  const busy = !!S.wsBusy;
+  return html`
+    <div>
+      <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
+        <div><h1 class="text-xl font-extrabold text-gray-900">Workspaces</h1>
+          <p class="text-sm text-gray-500 mt-1">A workspace is a separate drawer inside this business account. Your plan says how many you may have, and the first one is always the default a new sign-in opens.</p></div>
+        <button class="btn-outline text-sm" onClick=${loadWorkspaces} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button>
+      </header>
+      <div class="card" style="margin-bottom:18px">
+        <h3 class="font-semibold text-gray-800 mb-2">Your workspaces</h3>
+        ${items.length === 0
+          ? html`<div class="empty">No workspaces yet — create the first one below.</div>`
+          : items.map(w => html`<div class="flex items-center justify-between gap-3" style="padding:10px 0;border-bottom:1px solid #eef2f7" key=${w.id}>
+              <div class="min-w-0"><strong>${w.name}</strong>${w.is_default ? html` <span class="badge b-blue">Default</span>` : null}</div>
+              <div class="flex gap-2 flex-shrink-0">
+                ${w.is_default ? null : html`<button class="btn-outline text-sm" onClick=${() => setDefaultWorkspace(w)} disabled=${busy}>Make default</button>`}
+                <button class="btn-outline text-sm" onClick=${() => renameWorkspace(w)} disabled=${busy}>Rename</button>
+                <button class="btn-outline text-sm" onClick=${() => deleteWorkspace(w)} disabled=${busy}>Delete</button>
+              </div></div>`)}
+        ${S.wsMsg ? html`<div class="text-sm" style="margin-top:10px;color:${S.wsMsg.ok ? '#047857' : '#b91c1c'}">${S.wsMsg.text}</div>` : null}
+      </div>
+      <div class="card">
+        <h3 class="font-semibold text-gray-800 mb-1">Add a workspace</h3>
+        <p class="text-sm text-gray-500 mb-3">Give it the name your team will recognise — a client, a location, or a brand you run from the same account.</p>
+        <div class="flex gap-3 items-end flex-wrap">
+          <div style="flex:1;min-width:200px">
+            <label class="text-sm font-semibold text-gray-700" for="wsName">Workspace name</label>
+            <input class="input" id="wsName" type="text" maxlength="120" placeholder="e.g. Miami office"/>
+          </div>
+          <button class="btn" id="wsCreate" onClick=${createWorkspace} disabled=${busy}>Create workspace</button>
+        </div>
+      </div>
+    </div>`;
+};
+
+const loadWorkspaces = async () => {
+  S.loading = true; renderApp();
+  try {
+    const d = await API.get('/workspaces');
+    S.wsItems = (d && d.workspaces) || [];
+  } catch (e) { S.wsMsg = { text: e.message, ok: false }; }
+  S.loading = false; renderApp();
+};
+
+const createWorkspace = async () => {
+  const input = document.getElementById('wsName');
+  const name = ((input && input.value) || '').trim();
+  if (!name) { S.wsMsg = { text: 'Give the workspace a name first.', ok: false }; renderApp(); return; }
+  S.wsBusy = true; renderApp();
+  try {
+    await API.post('/workspaces', { name: name });
+    if (input) input.value = '';
+    S.wsMsg = { text: 'Workspace created.', ok: true };
+    S.wsItems = null;
+    await loadWorkspaces();
+  } catch (e) { S.wsMsg = { text: e.message, ok: false }; }
+  S.wsBusy = false; renderApp();
+};
+
+const renameWorkspace = async (w) => {
+  const name = window.prompt('New name for this workspace:', w.name);
+  if (name === null) return;
+  S.wsBusy = true; renderApp();
+  try {
+    await API.patch('/workspaces/' + w.id, { name: name });
+    S.wsMsg = { text: 'Workspace renamed.', ok: true };
+    S.wsItems = null;
+    await loadWorkspaces();
+  } catch (e) { S.wsMsg = { text: e.message, ok: false }; }
+  S.wsBusy = false; renderApp();
+};
+
+const setDefaultWorkspace = async (w) => {
+  S.wsBusy = true; renderApp();
+  try {
+    await API.post('/workspaces/' + w.id + '/default');
+    S.wsMsg = { text: 'This workspace now opens on sign-in.', ok: true };
+    S.wsItems = null;
+    await loadWorkspaces();
+  } catch (e) { S.wsMsg = { text: e.message, ok: false }; }
+  S.wsBusy = false; renderApp();
+};
+
+const deleteWorkspace = async (w) => {
+  if (!window.confirm('Delete "' + w.name + '"? Your account must keep at least one workspace.')) return;
+  S.wsBusy = true; renderApp();
+  try {
+    await API.del('/workspaces/' + w.id);
+    S.wsMsg = { text: 'Workspace deleted.', ok: true };
+    S.wsItems = null;
+    await loadWorkspaces();
+  } catch (e) { S.wsMsg = { text: e.message, ok: false }; }
+  S.wsBusy = false; renderApp();
+};
+
+/* ── Inbox (kanban t_473a6895) ───────────────────────────────────────────────────────────────────
+   The multi-address private inbox: the customer's OWN domain, their own mail provider credential,
+   and every address they create. Reading and answering happens on the mail client
+   (inbox.workflowswift.com), which is this same account and this same data. */
+const InboxView = () => {
+  if (!S.inboxDomains && !S.loading) loadInbox();
+  const domains = S.inboxDomains || [];
+  const boxes = S.inboxBoxes || [];
+  const recent = S.inboxRecent || [];
+  const busy = !!S.inboxBusy;
+  return html`
+    <div>
+      <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
+        <div><h1 class="text-xl font-extrabold text-gray-900">Inbox</h1>
+          <p class="text-sm text-gray-500 mt-1">Your own addresses on your own domain. Open the mail client to read and answer — it is the same account, so there is nothing to sign in to twice.</p></div>
+        <div class="flex gap-2">
+          <a class="btn text-sm" id="inboxOpen" href="https://inbox.workflowswift.com" target="_blank" rel="noopener" style="text-decoration:none">Open the mail client</a>
+          <button class="btn-outline text-sm" onClick=${loadInbox} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button>
+        </div>
+      </header>
+      ${S.inboxMsg ? html`<div class="card" style="margin-bottom:16px;color:${S.inboxMsg.ok ? '#047857' : '#b91c1c'}">${S.inboxMsg.text}</div>` : null}
+
+      <div class="card" style="margin-bottom:18px">
+        <h3 class="font-semibold text-gray-800 mb-1">Your domains</h3>
+        <p class="text-sm text-gray-500 mb-3">Add the domain you already own. We print the exact records to paste at your DNS provider, and until they verify the addresses below cannot receive mail.</p>
+        ${domains.length === 0
+          ? html`<div class="empty">No domain yet. Add the one you own below, then paste the records we print.</div>`
+          : domains.map(d => html`<div class="flex items-center justify-between gap-3" style="padding:10px 0;border-bottom:1px solid #eef2f7" key=${d.id}>
+              <div class="min-w-0"><strong>${d.domain}</strong> <span class="text-sm text-gray-500">${d.verified ? 'Receiving' : 'Waiting for your records'}</span></div>
+              <div class="flex gap-2 flex-shrink-0">
+                <button class="btn-outline text-sm" onClick=${() => showInboxRecords(d)} disabled=${busy}>Show records</button>
+                <button class="btn-outline text-sm" onClick=${() => verifyInboxDomain(d)} disabled=${busy}>Check again</button>
+              </div></div>`)}
+        <div class="flex gap-3 items-end flex-wrap" style="margin-top:16px">
+          <div style="flex:1;min-width:200px">
+            <label class="text-sm font-semibold text-gray-700" for="domName">Your domain</label>
+            <input class="input" id="domName" type="text" maxlength="255" placeholder="yourbusiness.com"/>
+          </div>
+          <div style="flex:1;min-width:220px">
+            <label class="text-sm font-semibold text-gray-700" for="domKey">Mailgun API key</label>
+            <input class="input" id="domKey" type="password" maxlength="200" placeholder="key-… (stored encrypted)"/>
+          </div>
+          <button class="btn" id="domAdd" onClick=${addInboxDomain} disabled=${busy}>Add domain</button>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:18px">
+        <h3 class="font-semibold text-gray-800 mb-1">Your addresses</h3>
+        <p class="text-sm text-gray-500 mb-3">Every address the inbox receives on. A plan limit is enforced by the server, and its refusal is the sentence shown here — never a dead button.</p>
+        ${boxes.length === 0
+          ? html`<div class="empty">No address yet — create the first one below.</div>`
+          : boxes.map(b => html`<div class="flex items-center justify-between gap-3" style="padding:10px 0;border-bottom:1px solid #eef2f7" key=${b.id}>
+              <div class="min-w-0"><strong>${b.email_address}</strong> <span class="text-sm text-gray-500">${b.status || ''}</span></div>
+              <div class="text-sm text-gray-500">${b.creates_ticket ? 'Also opens a ticket' : ''}</div></div>`)}
+        <div class="flex gap-3 items-end flex-wrap" style="margin-top:16px">
+          <div style="flex:1;min-width:180px">
+            <label class="text-sm font-semibold text-gray-700" for="boxDomain">On domain</label>
+            <select class="input" id="boxDomain">
+              ${(domains.filter(d => d.verified).length ? domains.filter(d => d.verified) : domains).map(d => html`<option value=${d.id} key=${d.id}>${d.domain}</option>`)}
+            </select>
+          </div>
+          <div style="flex:1;min-width:140px">
+            <label class="text-sm font-semibold text-gray-700" for="boxLocal">Address</label>
+            <input class="input" id="boxLocal" type="text" maxlength="64" placeholder="info"/>
+          </div>
+          <button class="btn" id="boxAdd" onClick=${addInboxBox} disabled=${busy}>Create address</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="font-semibold text-gray-800 mb-1">Recent mail</h3>
+        <p class="text-sm text-gray-500 mb-3">The newest messages that arrived at any of your addresses, whichever address they came to. Reading the whole thread happens in the mail client.</p>
+        ${recent.length === 0
+          ? html`<div class="empty">Nothing has arrived yet. Mail to any address above appears here.</div>`
+          : recent.map(m => html`<div style="padding:10px 0;border-bottom:1px solid #eef2f7" key=${m.id}>
+              <div class="flex items-center justify-between gap-3"><strong>${m.subject || '(no subject)'}</strong><span class="text-sm text-gray-500">${m.received_at ? fmtDate(m.received_at) : ''}</span></div>
+              <div class="text-sm text-gray-500">${m.from_address || ''} → ${m.address || ''}</div>
+              <div class="text-sm text-gray-500">${m.snippet || ''}</div></div>`)}
+      </div>
+    </div>`;
+};
+
+const loadInbox = async () => {
+  S.loading = true; renderApp();
+  try {
+    const [dom, box, msg] = await Promise.allSettled([
+      API.get('/private-email/domains'),
+      API.get('/private-email/boxes'),
+      API.get('/private-email/messages?limit=20'),
+    ]);
+    S.inboxDomains = dom.status === 'fulfilled' ? (dom.value.domains || []) : [];
+    S.inboxBoxes = box.status === 'fulfilled' ? (box.value.boxes || []) : [];
+    S.inboxRecent = msg.status === 'fulfilled' ? (msg.value.messages || []) : [];
+    const failed = [dom, box, msg].find(r => r.status === 'rejected');
+    if (failed) S.inboxMsg = { text: failed.reason.message, ok: false };
+  } finally { S.loading = false; renderApp(); }
+};
+
+const addInboxDomain = async () => {
+  const name = ((document.getElementById('domName') || {}).value || '').trim();
+  const key = ((document.getElementById('domKey') || {}).value || '').trim();
+  if (!name) { S.inboxMsg = { text: 'Type the domain you own first.', ok: false }; renderApp(); return; }
+  S.inboxBusy = true; renderApp();
+  try {
+    await API.post('/private-email/domains', { domain: name, mailgun_api_key: key });
+    S.inboxMsg = { text: 'Domain added. Paste the records it prints, then press Check again.', ok: true };
+    S.inboxDomains = null;
+    await loadInbox();
+  } catch (e) { S.inboxMsg = { text: e.message, ok: false }; }
+  S.inboxBusy = false; renderApp();
+};
+
+const addInboxBox = async () => {
+  const domainId = ((document.getElementById('boxDomain') || {}).value || '');
+  const local = ((document.getElementById('boxLocal') || {}).value || '').trim();
+  if (!domainId) { S.inboxMsg = { text: 'Add a domain first.', ok: false }; renderApp(); return; }
+  if (!local) { S.inboxMsg = { text: 'Type the address you want, e.g. info.', ok: false }; renderApp(); return; }
+  S.inboxBusy = true; renderApp();
+  try {
+    await API.post('/private-email/boxes', { domain_id: domainId, local_part: local });
+    S.inboxMsg = { text: 'Address created. Mail to it now lands in the inbox.', ok: true };
+    S.inboxBoxes = null;
+    await loadInbox();
+  } catch (e) { S.inboxMsg = { text: e.message, ok: false }; }
+  S.inboxBusy = false; renderApp();
+};
+
+const verifyInboxDomain = async (d) => {
+  S.inboxBusy = true; renderApp();
+  try {
+    const r = await API.post('/private-email/domains/' + d.id + '/verify');
+    const ok = !!(r && r.verified);
+    S.inboxMsg = { text: ok ? 'Your records are live — this domain receives mail now.' : 'Not verified yet: the records are not visible in DNS.', ok: ok };
+    S.inboxDomains = null;
+    await loadInbox();
+  } catch (e) { S.inboxMsg = { text: e.message, ok: false }; }
+  S.inboxBusy = false; renderApp();
+};
+
+const showInboxRecords = async (d) => {
+  try {
+    const r = await API.get('/private-email/domains/' + d.id + '/records');
+    const rows = (r && r.records) || [];
+    const lines = rows.map(x => [x.type, x.name, x.value].filter(Boolean).join('  '));
+    window.alert(rows.length ? ('Paste these at your DNS provider:\n\n' + lines.join('\n')) : 'No records to show yet.');
+  } catch (e) { S.inboxMsg = { text: e.message, ok: false }; renderApp(); }
+};
+
 const NAV = [
   { id:'dashboard', label:'Dashboard', icon:'📊' },
   { id:'workflows', label:'Workflows', icon:'⚙️' },
@@ -3173,6 +3427,8 @@ const NAV = [
   { id:'api-keys', label:'API Keys', icon:'🔑' },
   { id:'provider-keys', label:'Provider Keys', icon:'🔌' },
   { id:'team', label:'Team', icon:'🧑🤝🧑' },
+  { id:'inbox', label:'Inbox', icon:'📬' },
+  { id:'workspaces', label:'Workspaces', icon:'🗂️' },
   { id:'tickets', label:'Tickets', icon:'🎫' },
   { id:'profile', label:'Profile', icon:'👤' },
 ];
@@ -3187,6 +3443,8 @@ const VIEW_MAP = {
   'api-keys': ApiKeysView,
   'provider-keys': ProviderKeysView,
   team: TeamView,
+  inbox: InboxView,
+  workspaces: WorkspacesView,
   pick: IndustryPickerView,
 };
 

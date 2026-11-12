@@ -26,15 +26,20 @@ mod n8n_converter;
 mod n8n_provision;
 mod notify;
 mod path_rejection;
+// Private inbox + workspaces, ported from CoreSwift/ADASwift (kanban t_473a6895).
+mod module_registry;
+mod private_email;
 // Attribution for a workspace a test harness mints through the public signup
 // (`X-Swift-Harness`, kanban t_4a744754) — see `probe_harness`.
 mod probe_harness;
 mod probe_sweep;
 mod rate_limit;
 mod routes;
+mod secret_box;
 mod security;
 mod sms;
 mod state;
+mod workspaces;
 
 use std::time::Duration;
 use tokio::signal;
