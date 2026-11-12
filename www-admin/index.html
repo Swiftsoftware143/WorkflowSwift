@@ -2257,6 +2257,46 @@ async function renderBranding(c){
   const bpBlank=h('div',{id:'bp-blank',className:'text-xs text-gray-400 mt-2'});
   prevWrap.appendChild(bpBlank);
   host.appendChild(prevWrap);
+
+  // ── THE WORKSPACE SIGNATURE (2026-11-12) ────────────────────────────────────────────────────
+  // The mail client tells a customer to set the workspace signature "in Email Branding in the CRM",
+  // and until now this screen had no such control — a dead-end instruction, and
+  // `PUT /api/v1/private-email/signature/workspace` (the ONLY writer of `tenant_email_signatures`)
+  // had no UI at all. One row per account, five plain fields, read back from the same route.
+  const sigCard=h('div',{className:'mt-5 pt-4',style:'border-top:1px solid #e2e8f0'});
+  sigCard.appendChild(h('div',{className:'font-semibold mb-1',id:'wsig-title'},'Workspace signature'));
+  sigCard.appendChild(h('p',{className:'text-xs text-gray-500 mb-3'},'The default signature every address in this workspace uses under the logo: name, title, company, phone and one short line. An address can override it, or turn it off, in the mail client. A field left blank here stays blank in the message — it is never invented.'));
+  const sigFields=[['full_name','Name','e.g. Dana Whitfield',60],['job_title','Title','e.g. Managing Director',60],['company','Company','e.g. Acme Corp',60],['phone','Phone','e.g. +1 305 555 0123',40],['line','One line under it','e.g. Acme Corp — fixed prices, written quotes',160]];
+  const sigInputs={};
+  const sigGrid=h('div',{className:'grid grid-cols-2 gap-4'});
+  sigFields.forEach(([key,label,ph,max])=>{
+    const cell=h('div',{className:key==='line'?'col-span-2':''});
+    cell.appendChild(h('label',{className:'text-xs text-gray-500'},label));
+    const inp=h('input',{className:'input',placeholder:ph,maxlength:String(max),id:'wsig-'+key});
+    sigInputs[key]=inp; cell.appendChild(inp); sigGrid.appendChild(cell);
+  });
+  sigCard.appendChild(sigGrid);
+  const sigMsg=h('p',{className:'text-xs mt-2',id:'wsig-msg'});
+  sigCard.appendChild(sigMsg);
+  const sigSave=h('button',{className:'btn btn-primary mt-3',id:'wsig-save'},'Save signature');
+  sigSave.onclick=async()=>{
+    const body={};Object.keys(sigInputs).forEach(k=>body[k]=sigInputs[k].value.trim());
+    sigSave.disabled=true;sigSave.textContent='Saving...';
+    const r=await api('/private-email/signature/workspace',{method:'PUT',body:JSON.stringify(body)});
+    sigSave.disabled=false;sigSave.textContent='Save signature';
+    if(r){sigMsg.textContent=r.detail||'Saved.';sigMsg.style.color='#065f46';showMsg('Workspace signature saved','success');}
+    else {sigMsg.textContent='Save failed: '+LAST_ERR;sigMsg.style.color='#b91c1c';}
+  };
+  sigCard.appendChild(sigSave);
+  host.appendChild(sigCard);
+  (async()=>{
+    const r=await api('/private-email/signature/workspace');
+    if(!r){sigMsg.textContent='Could not load the workspace signature: '+LAST_ERR;sigMsg.style.color='#b91c1c';return}
+    Object.keys(sigInputs).forEach(k=>{sigInputs[k].value=((r.signature||{})[k]||'');});
+    sigMsg.textContent=r.has_signature?'This signature is added to every message unless an address changes it.':'No workspace signature yet — a field left blank stays blank in every message.';
+    sigMsg.style.color='#64748b';
+  })();
+
   const paint=()=>{
     const nm=(nameIn.value||'').trim();
     const logo=(doc.logo_url||'').trim();
@@ -3495,7 +3535,7 @@ window.appGuidePages = {
   "profile:my-profile": { title: "My Profile", desc: "Your own profile: name, username, company, the address you sign in with, password and picture. What you set here is what appears across the console.", actions: ["Set your name, username, company and picture", "Change your sign-in email (we email a confirmation link)", "Change your password"] },
   "profile:team": { title: "Team", desc: "The people who can sign in to this account, and the role each one holds.", actions: ["Invite a team member", "Change a member's role"] },
   "profile:plans-credits": { title: "Plans & Credits", desc: "The plan this account is on, the limits that plan carries and the credits it has. A plan is a bundle of limits and features.", actions: ["See your current plan", "Compare the plans on offer", "Check your credit balance"] },
-  "profile:email-branding": { title: "Email Branding", desc: "Put your own name, colour and logo on the transactional email this app sends for your account, instead of the default WorkflowSwift header. A new logo replaces the one already saved. Send me a preview email mails a sample of your own branded mail to the address you sign in with, so you see exactly what a customer receives; a reserved test address cannot receive it, so no preview is sent and the card tells you why.", actions: ["Upload your logo", "Set your brand name and colour", "Press Send me a preview email to see the real header in your own inbox"] },
+  "profile:email-branding": { title: "Email Branding", desc: "Put your own name, colour and logo on the transactional email this app sends for your account, instead of the default WorkflowSwift header. The workspace signature (name, title, company, phone, one line) is set below the branding and is the default every address uses in the mail client. A new logo replaces the one already saved. Send me a preview email mails a sample of your own branded mail to the address you sign in with, so you see exactly what a customer receives; a reserved test address cannot receive it, so no preview is sent and the card tells you why.", actions: ["Upload your logo", "Set your brand name and colour", "Set the workspace signature every address starts with", "Press Send me a preview email to see the real header in your own inbox"] },
   "profile:invoices": { title: "Invoices", desc: "The invoices raised on this account.", actions: ["Open an invoice"] },
   "profile:payments": { title: "Payment Providers", desc: "The payment accounts this install can take money through at checkout, and whether each is in test or live mode. A platform administrator manages them here.", actions: ["Add a payment provider", "Switch a provider between test and live", "Remove a provider from checkout"] },
   "profile:checkout-sessions": { title: "Checkout Sessions", desc: "Every payment session this account has started. A read-only history of what was attempted.", actions: ["Match a session to a plan change"] },
