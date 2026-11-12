@@ -43,7 +43,13 @@ pub struct Account {
     pub footer_year: Option<String>,
     #[serde(default)]
     pub footer_company: Option<String>,
-    #[serde(default)]
+    /// Ciphertext at rest (`enc:v1:` + base64, sealed by `crate::security::provider_key_crypto`).
+    ///
+    /// `skip_serializing` is load-bearing (kanban t_08ac18ca): this struct IS the payload of
+    /// `GET /api/v1/accounts` (`SELECT * FROM accounts`), so without it the route shipped the
+    /// stored bytes to the console — the raw credential before the seal, the ciphertext after it.
+    /// Neither belongs in an account payload; the masked view is `GET /accounts/hexomatic-key`.
+    #[serde(default, skip_serializing)]
     pub hexomatic_key: Option<String>,
     #[serde(default)]
     pub industry_slug: Option<String>,

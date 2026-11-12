@@ -414,6 +414,11 @@
         tenant level; it is never a global paste by an admin and never env-var-only.</li>
       <li>Provider keys are returned <strong>masked</strong> (<code>sk-…161</code>) by every read endpoint — the raw value is
         never sent back.</li>
+      <li><strong>Every stored credential is encrypted at rest</strong>, the Hexomatic enrichment key included
+        (<code>GET/PUT /accounts/hexomatic-key</code>). It is sealed with the app's master key
+        (<code>enc:v1:</code>, AES-256) before it reaches the database, opened only to build the mask the
+        screen shows, and is never part of the account record a read endpoint returns. Clearing the
+        field deletes it; an empty field means no key.</li>
       <li><strong>API keys authenticate.</strong> Send the raw key (<code>workflowswift_&#8230;</code>) as the
         <code>Authorization: Bearer</code> header value (the same header the login JWT uses). Press
         <strong>View</strong> on the API Keys screen, re-enter your password, and copy the same key again at any
@@ -654,6 +659,10 @@
       <li><strong>It needs your own Google Places key.</strong> Connect it once under
         <strong>Provider Keys</strong> and pick <em>Google Places API</em>. The key is stored encrypted, is only
         ever shown back masked, and is used on this account alone.</li>
+      <li><strong>The Hexomatic enrichment key is stored encrypted too.</strong> Paste it on the Prospecting
+        screen once; the server keeps it sealed at rest, shows it back masked
+        (<code>abc…xyz</code>), and uses it for this account only. A key saved before this change is
+        still readable — re-saving it moves it onto the encrypted path.</li>
       <li><strong>Without a key the screen tells you so.</strong> Searching shows a notice that names the
         missing key rather than returning companies — before this change the screen returned twenty
         invented businesses with made-up websites, and a made-up contact email and phone under Enrich.

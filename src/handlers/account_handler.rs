@@ -8,7 +8,9 @@ use uuid::Uuid;
 
 use crate::auth::models::Claims;
 use crate::error::{ApiResult, AppError};
+use crate::handlers::provider_keys_handler::mask_key;
 use crate::models::account::Account;
+use crate::security::provider_key_crypto as key_crypto;
 use crate::AppState;
 
 pub async fn get_account(
@@ -53,13 +55,19 @@ pub async fn update_account(
     // names below); `account_slug` is NOT settable through this route — renaming the identifier a
     // bridge and the admin console list resolve is not a tenant-settings action.
 
+    // A SECOND write door into `accounts.hexomatic_key` (kanban t_08ac18ca): `PUT /api/v1/accounts`
+    // accepted the raw value while `PUT /accounts/hexomatic-key` sealed it. Both doors now store the
+    // same envelope — a key saved through either one is ciphertext at rest, and a writer that forgot
+    // this would be refused by the `accounts_hexomatic_key_sealed` CHECK (migration 109).
     if let Some(hex_key) = req.get("hexomatic_key").and_then(|v| v.as_str()) {
+        let hex_key = hex_key.trim();
+        let sealed = if hex_key.is_empty() {
+            None
+        } else {
+            Some(key_crypto::encrypt_for_storage(&state.db, hex_key).await?)
+        };
         sqlx::query("UPDATE accounts SET hexomatic_key = $1 WHERE id = $2")
-            .bind(if hex_key.is_empty() {
-                None
-            } else {
-                Some(hex_key)
-            })
+            .bind(sealed)
             .bind(aid)
             .execute(&state.db)
             .await?;
@@ -84,24 +92,45 @@ pub async fn update_account(
     Ok(Json(json!({"message": "Account updated"})))
 }
 
+/// GET /api/v1/accounts/hexomatic-key — the stored Hexomatic BYOK key, MASKED.
+///
+/// The column is ciphertext at rest (`enc:v1:` + base64, the same envelope `provider_keys` uses —
+/// see `crate::security::provider_key_crypto`). It is opened here only to build the `abc...xyz`
+/// mask; the ciphertext is never returned to a client and neither is the full key. A value this
+/// deployment cannot open (a row sealed under a different `PROVIDER_KEY_ENC_SECRET`) reports
+/// `usable=false` and no mask, so the panel asks for the key again instead of showing the
+/// ciphertext's first and last three bytes as if they were the credential.
 pub async fn get_hexomatic_key(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
-    let row: (Option<String>,) = sqlx::query_as("SELECT hexomatic_key FROM accounts WHERE id = $1")
-        .bind(aid)
-        .fetch_one(&state.db)
-        .await?;
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT hexomatic_key FROM accounts WHERE id = $1")
+            .bind(aid)
+            .fetch_one(&state.db)
+            .await?;
+    let stored = stored.unwrap_or_default();
 
-    let masked = match row.0 {
-        Some(ref k) if k.len() > 6 => format!("{}...{}", &k[..3], &k[k.len() - 3..]),
-        Some(k) => k,
-        None => String::new(),
+    let set = !stored.is_empty();
+    let (masked, usable) = if set {
+        match key_crypto::decrypt_from_storage(&state.db, &stored).await {
+            Ok(plain) if !plain.trim().is_empty() => (mask_key(&plain), true),
+            Ok(_) => (String::new(), false),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "hexomatic key is stored but this deployment cannot open it"
+                );
+                (String::new(), false)
+            }
+        }
+    } else {
+        (String::new(), false)
     };
 
-    Ok(Json(json!({"key": masked})))
+    Ok(Json(json!({"key": masked, "set": set, "usable": usable})))
 }
 
 pub async fn set_account_industry(
@@ -126,16 +155,29 @@ pub async fn set_account_industry(
     ))
 }
 
+/// PUT /api/v1/accounts/hexomatic-key — store the tenant's Hexomatic BYOK key.
+///
+/// Sealed with the app's ONE credential envelope (`crate::security::provider_key_crypto`:
+/// `enc:v1:` + `pgp_sym_encrypt` under `PROVIDER_KEY_ENC_SECRET`), exactly like
+/// `provider_keys.api_key`. Fail closed: without the master key this answers 500 and stores
+/// nothing — a plaintext credential is never written as a fallback. An empty / whitespace-only
+/// `key` clears the slot (SQL NULL), which is what the panel's "no key" state means.
 pub async fn set_hexomatic_key(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let key = req.get("key").and_then(|v| v.as_str()).unwrap_or("");
+    let key = req.get("key").and_then(|v| v.as_str()).unwrap_or("").trim();
+
+    let sealed: Option<String> = if key.is_empty() {
+        None
+    } else {
+        Some(key_crypto::encrypt_for_storage(&state.db, key).await?)
+    };
 
     sqlx::query("UPDATE accounts SET hexomatic_key = $1 WHERE id = $2")
-        .bind(if key.is_empty() { None } else { Some(key) })
+        .bind(sealed)
         .bind(aid)
         .execute(&state.db)
         .await?;

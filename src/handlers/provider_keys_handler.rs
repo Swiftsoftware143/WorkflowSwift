@@ -18,11 +18,19 @@ use chrono::{DateTime, Utc};
 /// `pub(crate)` since kanban t_48e4dd2a: the operator's payment-key check
 /// (`checkout_handler::test_payment_provider`) reports the mask of the key it tested and must show
 /// the SAME mask this surface already shows rather than a second implementation of it.
+///
+/// Char-based, not byte-based (kanban t_08ac18ca): the previous `&key[..3]` / `&key[len-3..]`
+/// panicked on a multi-byte character, so a customer who pasted an accented character into a key
+/// field turned the masked read into a 500. Output for ASCII keys is byte-identical.
 pub(crate) fn mask_key(key: &str) -> String {
-    if key.len() > 6 {
-        format!("{}...{}", &key[..3], &key[key.len() - 3..])
-    } else if key.len() > 3 {
-        format!("{}...", &key[..3])
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() > 6 {
+        let head: String = chars[..3].iter().collect();
+        let tail: String = chars[chars.len() - 3..].iter().collect();
+        format!("{head}...{tail}")
+    } else if chars.len() > 3 {
+        let head: String = chars[..3].iter().collect();
+        format!("{head}...")
     } else {
         "***".to_string()
     }
@@ -371,5 +379,27 @@ pub async fn get_provider_key(
             );
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod mask_tests {
+    use super::mask_key;
+
+    #[test]
+    fn ascii_mask_is_head_ellipsis_tail() {
+        assert_eq!(mask_key("sk-probe-123456-TAIL789"), "sk-...789");
+        assert_eq!(mask_key("abcd"), "abc...");
+        assert_eq!(mask_key("ab"), "***");
+        assert_eq!(mask_key(""), "***");
+    }
+
+    #[test]
+    fn multi_byte_values_do_not_panic() {
+        // Four two-byte chars: the old byte slicing fell off a char boundary and panicked.
+        assert_eq!(mask_key("éàüñ"), "éàü...");
+        let long = mask_key("sk-ébéric-ééé");
+        assert!(long.starts_with("sk-"), "{long}");
+        assert!(long.ends_with("ééé"), "{long}");
     }
 }
