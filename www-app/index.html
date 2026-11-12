@@ -129,6 +129,7 @@ window.appGuidePages = {
   "api-keys":    { title: "API Keys", desc: "Keys that let other tools call WorkflowSwift for you. Treat them like passwords.", actions: ["Create a key", "Revoke one you no longer use"] },
   "provider-keys": { title: "Provider Keys", desc: "The credentials for the outside services your workflows use. Stored here so a step can reach them.", actions: ["Add a provider key", "Update one that expired"] },
   team:          { title: "Team", desc: "The people who share this workspace and what each of them is allowed to do.", actions: ["Invite someone", "Change a role"] },
+  workspaces:    { title: "Workspaces", desc: "Separate drawers inside this one account \u2014 a client, a location or a brand. The 🗂️ button at the top of the console switches between them; the owner and admins can also rename, delete or change the default.", actions: ["Switch workspace", "Add a workspace"] },
   tickets:       { title: "Tickets", desc: "Support requests \u2014 yours to us, and any raised inside the workspace.", actions: ["Open a ticket", "Check a reply"] },
   profile:       { title: "Profile", desc: "Your account details and sign-in for this workspace.", actions: ["Update your name and password", "Sign out a device you no longer use"] }
 };
@@ -3448,11 +3449,103 @@ const VIEW_MAP = {
   pick: IndustryPickerView,
 };
 
+// ── Workspaces: top-bar switcher (kanban t_7f817fa5, ported from FunnelSwift) ─────────────────
+// Switch / add / rename / make-default / delete from the console header. A member sees Switch +
+// Add; the owner / company_admin / platform admins (admin/super_admin/agency_admin) also see
+// Rename / Delete / Make default — the SERVER enforces the same rule
+// (workspaces::handlers::may_manage), so this client gate is cosmetic. Every refusal prints the
+// server's own sentence via e.message.
+const WS = { items: [], current: null, busy: false, open: false, tried: false, loading: false };
+const wsCanManage = () => {
+  const r = (API.user || {}).role;
+  return !r || ['user','company_admin','admin','super_admin','agency_admin'].indexOf(r) !== -1;
+};
+const wsCurrentName = () => (WS.current && WS.current.name) || 'Workspace';
+const wsToggleMenu = () => { WS.open = !WS.open; renderApp(); };
+async function loadWsSwitcher() {
+  if (WS.loading) return;
+  WS.loading = true;
+  try { const d = await API.get('/workspaces'); WS.items = (d && d.workspaces) || []; }
+  catch (e) { WS.items = []; }
+  // Current workspace = the one matching the persisted id, else the default, else the first.
+  let cur = null;
+  try { cur = JSON.parse(localStorage.getItem('wf_workspace') || 'null'); } catch (e) {}
+  let match = null;
+  if (cur && cur.id) match = WS.items.find(w => String(w.id) === String(cur.id));
+  if (!match) match = WS.items.find(w => w.is_default) || WS.items[0] || null;
+  WS.current = match;
+  if (match) { try { localStorage.setItem('wf_workspace', JSON.stringify(match)); } catch (e) {} }
+  WS.tried = true;
+  WS.loading = false;
+  renderApp();
+}
+async function wsSwitch(id) {
+  const w = WS.items.find(x => String(x.id) === String(id));
+  if (!w || WS.busy) return;
+  WS.busy = true; renderApp();
+  try {
+    const d = await API.post('/workspaces/' + w.id + '/switch');
+    const tok = d && d.token;
+    if (!tok) throw new Error('The server did not return a session token.');
+    // Adopt the re-minted session: sessionStorage wf_token via setAuth, plus the legacy
+    // localStorage ws_fs_token alias the boot IIFE and /login both read.
+    API.setAuth(tok, API.user);
+    try { localStorage.setItem('ws_fs_token', tok); } catch (e) {}
+    try { localStorage.setItem('wf_workspace', JSON.stringify(d.workspace || w)); } catch (e) {}
+    window.location.reload();
+  } catch (e) {
+    alert((e && e.message) ? e.message : 'Could not switch workspace');
+    WS.busy = false; renderApp();
+  }
+}
+async function wsAdd() {
+  if (WS.busy) return;
+  const name = (window.prompt('Name for the new workspace') || '').trim();
+  if (!name) return;
+  WS.busy = true; renderApp();
+  try { await API.post('/workspaces', { name: name }); await loadWsSwitcher(); }
+  catch (e) { alert((e && e.message) ? e.message : 'Could not add workspace'); }
+  finally { WS.busy = false; renderApp(); }
+}
+async function wsRename(id) {
+  const w = WS.items.find(x => String(x.id) === String(id));
+  if (!w || WS.busy) return;
+  const name = (window.prompt('New name for this workspace:', w.name) || '').trim();
+  if (!name || name === w.name) return;
+  WS.busy = true; renderApp();
+  try { await API.patch('/workspaces/' + w.id, { name: name }); await loadWsSwitcher(); }
+  catch (e) { alert((e && e.message) ? e.message : 'Could not rename workspace'); }
+  finally { WS.busy = false; renderApp(); }
+}
+async function wsMakeDefault(id) {
+  if (WS.busy) return;
+  WS.busy = true; renderApp();
+  try { await API.post('/workspaces/' + id + '/default'); await loadWsSwitcher(); }
+  catch (e) { alert((e && e.message) ? e.message : 'Could not change the default workspace'); }
+  finally { WS.busy = false; renderApp(); }
+}
+async function wsDelete(id) {
+  const w = WS.items.find(x => String(x.id) === String(id));
+  if (!w || WS.busy) return;
+  if (!window.confirm('Delete "' + w.name + '"? Your account must keep at least one workspace.')) return;
+  WS.busy = true; renderApp();
+  try { await API.del('/workspaces/' + w.id); await loadWsSwitcher(); }
+  catch (e) { alert((e && e.message) ? e.message : 'Could not delete workspace'); }
+  finally { WS.busy = false; renderApp(); }
+}
+// Close the dropdown on a click anywhere outside the switcher (the menu is a floating panel).
+document.addEventListener('click', (e) => {
+  if (!WS.open) return;
+  const host = document.getElementById('ws-switcher');
+  if (host && !host.contains(e.target)) { WS.open = false; renderApp(); }
+});
+
 const App = () => {
   if (S.view === 'login') return S.showRegister ? html`<${RegisterView} />` : html`<${LoginView} />`;
   if (S.view === 'pick') return html`<${IndustryPickerView} />`;
 
   if (!S.accIndustry && !S.loading) loadAccountIndustry();
+  if (API.isLoggedIn && !WS.tried) loadWsSwitcher();
   const Current = VIEW_MAP[S.current] || DashboardView;
   const user = API.user || {};
   const indName = (S.accIndustry && currentIndustryName()) || 'Set industry';
@@ -3465,6 +3558,33 @@ const App = () => {
             <span class="text-2xl">⚡</span><span class="font-extrabold text-gray-900">WorkflowSwift</span>
           </div>
           <button class="ind-switch w-full mt-3 justify-center" onClick=${openIndustryPicker}><span class="ind-ico">🏷</span><span class="ind-name">${indName} ▾</span></button>
+          <div id="ws-switcher" style="position:relative;margin-top:8px">
+            <button class="ind-switch w-full justify-center" onClick=${wsToggleMenu} title="Workspaces" aria-haspopup="true"><span class="ind-ico">🗂️</span><span class="ind-name">${wsCurrentName()} ▾</span></button>
+            ${WS.open ? html`<div style="position:absolute;left:0;top:calc(100% + 6px);min-width:280px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.18);z-index:1000;padding:6px 0;text-align:left">
+              <div style="padding:8px 14px 4px;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">Workspaces</div>
+              ${WS.items.length === 0
+                ? html`<div style="padding:6px 14px;font-size:13px;color:#64748b">No workspaces yet.</div>`
+                : WS.items.map(w => {
+                    const cur = WS.current && String(WS.current.id) === String(w.id);
+                    const admin = wsCanManage();
+                    return html`<div key=${w.id}>
+                      <div style="display:flex;align-items:center;gap:6px;padding:6px 14px 2px">
+                        <span style="flex:1;font-weight:${cur ? '600' : '400'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#0f172a">${w.name}</span>
+                        ${w.is_default ? html`<span style="font-size:10px;color:#64748b">default</span>` : ''}
+                        ${cur ? html`<span style="font-size:12px">✓</span>` : ''}
+                      </div>
+                      <div style="display:flex;gap:4px;padding:2px 14px 8px;border-bottom:1px solid #eef2f7">
+                        ${cur ? '' : html`<button onClick=${() => wsSwitch(w.id)} style="background:#fff;color:#2563eb;border:1px solid #bfdbfe;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:600;cursor:pointer">Switch</button>`}
+                        ${admin ? html`<button onClick=${() => wsRename(w.id)} style="background:#fff;color:#1e1b4b;border:1px solid #e2e8f0;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:600;cursor:pointer">Rename</button>` : ''}
+                        ${admin && !w.is_default ? html`<button onClick=${() => wsMakeDefault(w.id)} style="background:#fff;color:#1e1b4b;border:1px solid #e2e8f0;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:600;cursor:pointer">Make default</button>` : ''}
+                        ${admin && !cur ? html`<button onClick=${() => wsDelete(w.id)} style="background:#fff;color:#b91c1c;border:1px solid #fecaca;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:600;cursor:pointer">Delete</button>` : ''}
+                      </div>
+                    </div>`;
+                  })}
+              <div style="border-top:1px solid #eef2f7;margin:4px 0 0"></div>
+              <button onClick=${wsAdd} style="width:100%;text-align:left;background:none;border:none;padding:8px 14px;font-size:13px;font-weight:600;color:#2563eb;cursor:pointer">➕ Add workspace</button>
+            </div>` : ''}
+          </div>
         </div>
         <nav class="flex-1 overflow-y-auto p-3 space-y-1">
           ${NAV.map(n => html`<button class="nav-item ${S.current===n.id?'active':''}" onClick=${()=>setView(n.id)}><span>${n.icon}</span> ${n.label}</button>`)}

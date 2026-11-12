@@ -166,6 +166,7 @@
       <div class="section-title">Contents</div>
       <a href="#getting-started" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Getting started</a>
       <a href="#tenancy-users-and-roles" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Tenancy, users and roles</a>
+      <a href="#workspaces" class="nav-item" onclick="closeMobile()"><span class="nav-icon">🗂️</span> Workspaces</a>
       <a href="#workflows" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Workflows</a>
       <a href="#templates" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Templates</a>
       <a href="#surfaces" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Surfaces</a>
@@ -215,6 +216,18 @@
       <li><code>GET /users</code> returns only your tenant's users; <code>GET /users/team</code> lists team members.</li>
       <li>The <strong>Admin area is only reachable by a super admin.</strong> Everyone else gets <code>403</code> from
         <code>/api/v1/admin/*</code>, enforced at the API (not just hidden in the UI).</li>
+      </ul>
+      <h2 id="workspaces">Workspaces</h2>
+      <p>One business account can hold several <strong>workspaces</strong> — separate drawers for separate
+      clients, locations or brands you run from the same account. Exactly one is the default a fresh
+      sign-in opens. The <strong>🗂️ button at the top of the console</strong> opens the switcher:</p>
+      <ul>
+      <li><strong>Switch</strong> — move this session into another workspace. The console reloads into it.</li>
+      <li><strong>Add workspace</strong> — create another drawer (your plan may cap how many).</li>
+      <li><strong>Rename / Make default / Delete</strong> — shown to the owner and admins. Members can switch
+        and add, but not rename, delete or re-point the default.</li>
+      <li><strong>At least one workspace is always kept</strong>, and you cannot delete the workspace you are
+        signed into — switch away first. Portfolio businesses are never removed.</li>
       </ul>
       <h2 id="workflows">Workflows</h2>
       <ul>

@@ -756,6 +756,15 @@ when it is set.</p>
       a name and a slug, <code>POST</code> takes an optional <code>industry_slug</code> that seeds that workspace's dashboard, and
       <code>GET /api/v1/agents?workspace_id={id}</code> scopes the agent list to one workspace. <strong>Provider keys are
       per tenant, never per workspace</strong> — see BYOK below.</p>
+      <p><strong>The console's 🗂️ switcher</strong> (under the industry picker, top of the sidebar) is the customer-facing
+      door onto these routes: <strong>Switch</strong> re-mints the session token into another workspace
+      (<code>POST /api/v1/workspaces/{id}/switch</code>), and <strong>Add / Rename / Make default / Delete</strong> call the
+      create/rename/default/delete routes below. <strong>Who can manage:</strong> the account owner (<code>user</code>), a
+      tenant <code>company_admin</code> and the platform operators (<code>admin</code> / <code>super_admin</code> /
+      <code>agency_admin</code>) see Rename / Make default / Delete; a plain <code>team_member</code> sees only Switch and
+      Add. The server enforces the same rule (<code>workspaces::handlers::may_manage</code>), so the client gate is
+      cosmetic. Delete refuses the workspace the session is signed into, always keeps at least one, and never
+      removes a portfolio business.</p>
       <table>
       <thead>
       <tr>
@@ -772,8 +781,18 @@ when it is set.</p>
       </tr>
       <tr>
       <td><code>/api/v1/workspaces/{id}</code></td>
-      <td>DELETE</td>
-      <td>Delete a workspace</td>
+      <td>PATCH/DELETE</td>
+      <td>Rename / delete a workspace</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/workspaces/{id}/default</code></td>
+      <td>POST</td>
+      <td>Make a workspace the default a sign-in opens</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/workspaces/{id}/switch</code></td>
+      <td>POST</td>
+      <td>Re-mint the session token into another workspace</td>
       </tr>
       <tr>
       <td><code>/api/v1/agents?workspace_id={id}</code></td>
