@@ -318,6 +318,7 @@ mod tests {
             iat: 0,
             perm_is_super_admin: super_admin,
             pwd_minted: false,
+            wsid: None,
         }
     }
 

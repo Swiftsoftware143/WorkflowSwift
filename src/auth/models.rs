@@ -19,6 +19,10 @@ pub struct Claims {
     /// existed decodable — they were all delivered-password sessions.
     #[serde(default)]
     pub pwd_minted: bool,
+    /// The workspace this session is working in (`workspaces.id`). `None` on a token minted before
+    /// the switcher shipped, or on an impersonation/API-key token. Switching re-mints with this set.
+    #[serde(default)]
+    pub wsid: Option<String>,
 }
 
 /// Body of `POST /api/v1/auth/initial-password` — the password a customer whose credentials mail

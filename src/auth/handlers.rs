@@ -244,6 +244,7 @@ pub async fn register(
         exp: now_ts + state.config.jwt_access_expiry as usize,
         iat: now_ts,
         perm_is_super_admin: Some(false),
+        wsid: None,
     };
     let token = create_token(&claims, &state.config.jwt_secret)?;
 
@@ -257,6 +258,7 @@ pub async fn register(
         exp: now_ts + state.config.jwt_refresh_expiry as usize,
         iat: now_ts,
         perm_is_super_admin: Some(false),
+        wsid: None,
     };
     let refresh_token = create_token(&refresh_claims, &state.config.jwt_secret)?;
 
@@ -439,6 +441,7 @@ pub async fn login(
         exp: now_ts + state.config.jwt_access_expiry as usize,
         iat: now_ts,
         perm_is_super_admin: Some(user.perm_is_super_admin),
+        wsid: None,
     };
     let token = create_token(&claims, &state.config.jwt_secret)?;
 
@@ -451,6 +454,7 @@ pub async fn login(
         exp: now_ts + state.config.jwt_refresh_expiry as usize,
         iat: now_ts,
         perm_is_super_admin: Some(user.perm_is_super_admin),
+        wsid: None,
     };
     let refresh_token = create_token(&refresh_claims, &state.config.jwt_secret)?;
 
@@ -703,6 +707,7 @@ pub async fn change_password(
         exp: now_ts + state.config.jwt_access_expiry as usize,
         iat: now_ts,
         perm_is_super_admin: Some(user.perm_is_super_admin),
+        wsid: None,
     };
     let token = create_token(&fresh, &state.config.jwt_secret)?;
 
@@ -767,6 +772,7 @@ pub async fn logout_all(
         exp: now_ts + state.config.jwt_access_expiry as usize,
         iat: now_ts,
         perm_is_super_admin: Some(user.perm_is_super_admin),
+        wsid: None,
     };
     let token = create_token(&claims, &state.config.jwt_secret)?;
 

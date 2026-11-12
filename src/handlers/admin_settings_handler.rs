@@ -2676,6 +2676,7 @@ pub async fn admin_impersonate(
         exp: now + 900,
         iat: now,
         perm_is_super_admin: Some(false),
+        wsid: None,
     };
 
     let token = jsonwebtoken::encode(

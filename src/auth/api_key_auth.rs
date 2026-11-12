@@ -327,6 +327,7 @@ pub async fn authenticate(
         exp: now + 3600,
         iat: now,
         perm_is_super_admin: Some(false),
+        wsid: None,
     })
 }
 
