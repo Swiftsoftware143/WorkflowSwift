@@ -287,6 +287,11 @@ pub fn create_router(state: AppState) -> Router {
     // and Portfolio Companies keeps its own admin panel and its own routes.
     let workspace_routes = crate::workspaces::router(state.clone());
 
+    // Customer feedback (kanban B209, t_2b4e36f9): POST captures idea/bug/complaint from any
+    // signed-in user, GET is the platform-operator-only queue. Nested beside workspaces so the
+    // path is /api/v1/feedback.
+    let feedback_routes = crate::feedback::router(state.clone());
+
     // The private inbox (multi-address mail on the customer's own domain): domains, mailboxes,
     // messages, folders, labels, signature and send, plus the mail client's own host. Each
     // sub-router carries the app's auth middleware itself, exactly as the ported code expects.
@@ -918,6 +923,7 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/plans", plan_routes)
         .nest("/credits", credit_routes)
         .nest("/workspaces", workspace_routes)
+        .nest("/feedback", feedback_routes)
         .nest("/private-email", private_email_routes)
         .nest("/agents", agent_routes)
         .nest("/automations", automation_routes)

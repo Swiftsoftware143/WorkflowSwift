@@ -18,6 +18,7 @@ mod error;
 mod execution;
 mod execution_worker;
 mod features;
+mod feedback;
 mod handlers;
 mod image_store;
 mod login_throttle;

@@ -303,6 +303,7 @@ function renderApp(){
   if(IMPERSONATION)main.insertBefore(impersonationBanner(),main.firstChild);
   document.body.appendChild(main);
   if(window.inlineGuidePage)window.inlineGuidePage(app.tab+':'+app.sub);
+  mountFeedbackFab();
 }
 
 function impersonationBanner(){
@@ -379,7 +380,7 @@ const tabs=[
   {id:'support',label:'🎫 Support',subs:['Tickets']},
   {id:'profile',label:'👤 Profile & Account',subs:['My Profile','Team','Plans & Credits','Email Branding','Invoices','Payments','Checkout Sessions']},
   {id:'comms',label:'📧 Communications',subs:['Webhooks']},
-  {id:'admin',label:'🛠️ Admin',subs:['Usage','Settings','Users','Accounts','Portfolio Companies','Plans','Plan Requests','Surfaces','Email Templates','Industry Sources','Site Config']},
+  {id:'admin',label:'🛠️ Admin',subs:['Usage','Settings','Users','Accounts','Portfolio Companies','Plans','Plan Requests','Surfaces','Email Templates','Industry Sources','Site Config','Feedback']},
 ];
 
 function sidebar(){
@@ -446,6 +447,10 @@ function sidebar(){
   // h('a',{href:…})) on purpose: the served shell must CARRY `href="/admin-guide.html"` as bytes, so
   // a grep for the entry point finds it.
   nav.insertAdjacentHTML('beforeend','<div class="px-4 mt-4"><a id="admin-guide-link" class="btn btn-ghost w-full" href="/admin-guide.html" style="text-decoration:none">📘 Admin Guide</a></div>');
+  // Public Updates + Roadmap (kanban B209, t_2b4e36f9): one canonical URL fleet-wide. Literal
+  // markup on purpose, so the served shell CARRIES the two hrefs as bytes for a grep to find.
+  nav.insertAdjacentHTML('beforeend','<div class="px-4 mt-2"><a class="btn btn-ghost w-full" href="https://swiftsoftware.net/updates" target="_blank" rel="noopener" style="text-decoration:none">📣 Updates</a></div>');
+  nav.insertAdjacentHTML('beforeend','<div class="px-4 mt-2"><a class="btn btn-ghost w-full" href="https://swiftsoftware.net/roadmap" target="_blank" rel="noopener" style="text-decoration:none">🗺️ Roadmap</a></div>');
   nav.appendChild(h('div',{className:'px-4 mt-6'},h('button',{className:'btn btn-ghost text-red-500 w-full',onclick:logout},'Log Out')));
   return nav;
 }
@@ -560,6 +565,7 @@ function content(){
       ['name','template_type','subject','body','html_body','is_default']);
     else if(s==='industry-sources')renderIndustrySources(c);
     else if(s==='site-config')renderSiteConfig(c);
+    else if(s==='feedback')renderFeedback(c);
   }
   return c;
 }
@@ -3505,6 +3511,97 @@ function boot(){
   });
 }
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
+
+// ── Submit Feedback (kanban B209, t_2b4e36f9) ─────────────────────────────────────────────
+// A "Submit Feedback" button on every signed-in screen. It captures WHO (the signed-in session),
+// WHICH ACCOUNT (the session's aid), WHICH APP (WorkflowSwift, recorded server-side) and WHICH
+// SCREEN (app.tab:app.sub) — so nothing arrives anonymous or untraceable. The team reads it on
+// the platform-only Admin -> Feedback panel. Updates + Roadmap open the one canonical URL
+// fleet-wide.
+function mountFeedbackFab(){
+  if(!TOKEN)return;
+  if(document.getElementById('feedbackFab'))return;
+  const btn=h('button',{type:'button',id:'feedbackFab','aria-label':'Submit feedback',
+    style:'position:fixed;right:20px;bottom:20px;z-index:9000;display:flex;align-items:center;gap:8px;background:#4f46e5;color:#fff;border:none;border-radius:28px;padding:12px 18px;font-size:.9rem;font-weight:600;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.25);font-family:inherit'},'💬 Feedback');
+  btn.onclick=openFeedbackModal;
+  document.body.appendChild(btn);
+}
+function openFeedbackModal(){
+  if(!TOKEN){showMsg('Sign in to send feedback','error');return}
+  const screen=String((app.tab||'')+':'+(app.sub||''));
+  const modal=h('div',{className:'modal-overlay',onclick:function(e){if(e.target===modal)modal.remove()}});
+  const box=h('div',{className:'modal-box'});
+  box.appendChild(h('h2',{className:'text-lg font-bold mb-3'},'Submit Feedback'));
+  box.appendChild(h('p',{className:'text-sm text-gray-500 mb-3'},
+    'Tell us what is on your mind — an idea, a bug, or a complaint. It is sent with your account and the screen you are on, so we can follow up.'));
+  const kindRow=h('div',{className:'flex gap-2 mb-3 flex-wrap'});
+  [['idea','💡 Idea'],['bug','🐞 Bug'],['complaint','⚠️ Complaint']].forEach(function(kv){
+    const b=h('button',{type:'button',className:'btn btn-sm btn-ghost',onclick:function(){selectFeedbackKind(kv[0],b)}},kv[1]);
+    b.setAttribute('data-kind',kv[0]);
+    kindRow.appendChild(b);
+  });
+  box.appendChild(kindRow);
+  box.appendChild(h('div',{className:'text-xs text-gray-400 mb-1'},'Screen: '+screen));
+  box.appendChild(h('textarea',{id:'feedbackMsg',rows:5,className:'input mb-3',style:'width:100%;box-sizing:border-box;font-family:inherit',placeholder:'What happened, or what should we build?'}));
+  const foot=h('div',{className:'flex justify-end gap-2'});
+  foot.appendChild(h('button',{className:'btn btn-ghost',onclick:function(){modal.remove()}},'Cancel'));
+  foot.appendChild(h('button',{className:'btn btn-primary',id:'feedbackSendBtn',onclick:submitFeedback},'Send feedback'));
+  box.appendChild(foot);
+  modal.appendChild(box);document.body.appendChild(modal);
+  window.__feedbackKind='idea';
+  selectFeedbackKind('idea',kindRow.querySelector('[data-kind="idea"]'));
+}
+function selectFeedbackKind(kind,el){
+  window.__feedbackKind=kind;
+  document.querySelectorAll('[data-kind]').forEach(function(b){
+    const active=(b===el);
+    b.style.background=active?'#4f46e5':'';
+    b.style.color=active?'#fff':'';
+    b.style.borderColor=active?'#4f46e5':'';
+  });
+}
+async function submitFeedback(){
+  const msg=document.getElementById('feedbackMsg');
+  const btn=document.getElementById('feedbackSendBtn');
+  if(!msg||!msg.value.trim()){showMsg('Please write a message','error');return}
+  const kind=window.__feedbackKind||'idea';
+  const screen=String((app.tab||'')+':'+(app.sub||''));
+  if(btn)btn.disabled=true;
+  const r=await api('/feedback',{method:'POST',body:JSON.stringify({kind:kind,screen:screen,message:msg.value.trim()})});
+  if(!r){if(btn)btn.disabled=false;showMsg('Could not send: '+(LAST_ERR||'please try again'),'error');return}
+  const m=document.querySelector('.modal-overlay');if(m)m.remove();
+  showMsg('Thanks — your feedback was sent');
+}
+
+// Admin -> Feedback: the operator's queue (kanban B209, t_2b4e36f9). GET /feedback is
+// platform-operator only (require_admin), so this panel sits under the Admin tab, which is
+// itself gated by showAdminTab() — a tenant never reaches it.
+async function renderFeedback(c){
+  const card=h('div',{className:'card'});
+  card.appendChild(h('h2',{className:'text-xl font-bold mb-2'},'Feedback'));
+  card.appendChild(h('p',{className:'text-sm text-gray-500 mb-4'},
+    'What customers told us — idea, bug or complaint, with the account, person, app and screen it came from.'));
+  const list=h('div',{id:'feedbackList'});
+  list.appendChild(h('p',{className:'text-gray-400 text-sm'},'Loading...'));
+  card.appendChild(list);
+  c.appendChild(card);
+  const data=await api('/feedback');
+  if(!data){list.innerHTML='<p class="text-sm text-red-500">Failed to load feedback: '+escHtml(LAST_ERR||'request failed')+'</p>';return}
+  const items=(data&&data.feedback)||[];
+  if(!items.length){list.innerHTML='<p class="text-gray-400 text-sm">No feedback yet.</p>';return}
+  list.innerHTML='';
+  items.forEach(function(f){
+    const who=[f.name,f.email].filter(Boolean).join(' · ')||'unknown';
+    const row=h('div',{className:'mb-3',style:'border:1px solid #e2e8f0;border-radius:8px;padding:12px'});
+    const top=h('div',{className:'flex items-center justify-between gap-2 flex-wrap mb-1'});
+    top.appendChild(h('strong',{},f.kind));
+    top.appendChild(h('span',{className:'text-xs text-gray-400'},f.app+' · '+f.screen+' · '+f.created_at));
+    row.appendChild(top);
+    row.appendChild(h('p',{className:'text-sm mb-1',style:'white-space:pre-wrap'},f.message));
+    row.appendChild(h('div',{className:'text-xs text-gray-500'},who));
+    list.appendChild(row);
+  });
+}
 </script>
 <link rel="stylesheet" href="/tw.css">
 </head><body><script>
