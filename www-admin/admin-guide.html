@@ -212,8 +212,18 @@ any plan carries a usable payment link, each paid plan shows <strong>Buy this pl
 opens the payment page and files the same plan request in your queue at the same moment, so a sale
 that does not complete is still in front of you. On an installation with neither, the button reads
 <strong>Request this plan</strong>, takes no money, and the message says so.</p>
-      <p>This is the part of the platform that controls revenue, so it is worth stating exactly how it
-      works.</p>
+      <p><strong>Moving a workspace onto a plan tells the customer.</strong> On an installation with no
+      payment provider — every install today — this console's plan picker <em>is</em> the till: press it and
+      the workspace is moved. That used to be silent, so the customer's only clue was a screen whose
+      allowances had changed. Moving a workspace now emails its own owner through the app's transactional
+      mail: which plan they are on, that nothing was charged, and where to see what it includes. The message
+      beside the row says in plain English whether that email went out (or that no customer address was
+      found, or that the mail could not be sent — the plan is set either way). Moving a workspace onto the
+      plan it already holds emails nobody, so a double-click cannot send the same news twice, and a request
+      resolved from <em>Plan Requests</em> keeps its own answer mail (which names the plan) instead of
+      getting a second one.</p>
+            <p>This is the part of the platform that controls revenue, so it is worth stating exactly how
+            it works.</p>
       <p><strong>One source of truth.</strong> A plan's limits live in <code>plan_tiers</code>, in the <code>features</code> JSONB under the
       <strong>canonical key names</strong>, mirrored into the legacy dedicated columns (<code>max_workflows</code>,
       <code>max_users</code>, <code>retention_days</code>, <code>can_deploy_n8n</code>, <code>has_api_access</code>) so both views of
