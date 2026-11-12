@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WorkflowSwift Mail — User Guide</title>
+<style>
+  :root{
+    --primary:#4f46e5; --primary-dark:#3730a3; --primary-bg:#eef2ff;
+    --g50:#f9fafb; --g100:#f3f4f6; --g200:#e5e7eb; --g300:#d1d5db; --g400:#9ca3af;
+    --g500:#6b7280; --g600:#4b5563; --g700:#374151; --g800:#1f2937; --g900:#111827;
+    --green:#059669; --green-bg:#ecfdf5; --amber:#b45309; --amber-bg:#fffbeb;
+    --red:#dc2626; --red-bg:#fef2f2;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+       background:var(--g50);color:var(--g800);line-height:1.6}
+  .header{background:linear-gradient(135deg,var(--primary) 0%,var(--primary-dark) 100%);color:#fff;
+          position:sticky;top:0;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+  .header-inner{max-width:1000px;margin:0 auto;padding:18px 24px;display:flex;align-items:center;gap:14px}
+  .header-logo{width:42px;height:42px;background:#fff;border-radius:10px;display:flex;align-items:center;
+               justify-content:center;font-size:20px;font-weight:800;color:var(--primary);flex:0 0 auto}
+  .header h1{font-size:20px;font-weight:700}
+  .header p{font-size:12.5px;opacity:.85}
+  .wrap{max-width:1000px;margin:0 auto;padding:28px 24px 80px}
+  .toc{background:#fff;border:1px solid var(--g200);border-radius:12px;padding:16px 20px;margin-bottom:26px}
+  .toc h2{font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:var(--g500);margin-bottom:10px}
+  .toc ol{padding-left:20px;font-size:14px}
+  .toc a{color:var(--primary);text-decoration:none}
+  .toc a:hover{text-decoration:underline}
+  section{background:#fff;border:1px solid var(--g200);border-radius:12px;padding:22px 24px;margin-bottom:20px}
+  section h2{font-size:19px;color:var(--g900);margin-bottom:4px}
+  section h3{font-size:15px;color:var(--g800);margin:18px 0 6px}
+  section p{font-size:14.5px;color:var(--g700);margin:8px 0}
+  section ul,section ol{padding-left:22px;font-size:14.5px;color:var(--g700)}
+  section li{margin:5px 0}
+  .lead{color:var(--g600);font-size:14px;margin-bottom:6px}
+  code{background:var(--g100);border:1px solid var(--g200);border-radius:5px;padding:1px 5px;
+       font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
+  .note{background:var(--primary-bg);border-left:4px solid var(--primary);border-radius:8px;
+        padding:12px 14px;font-size:14px;margin:14px 0;color:var(--g800)}
+  .warn{background:var(--amber-bg);border-left:4px solid var(--amber);border-radius:8px;
+        padding:12px 14px;font-size:14px;margin:14px 0;color:var(--g800)}
+  .ok{background:var(--green-bg);border-left:4px solid var(--green);border-radius:8px;
+      padding:12px 14px;font-size:14px;margin:14px 0;color:var(--g800)}
+  table{width:100%;border-collapse:collapse;font-size:14px;margin:12px 0}
+  th,td{border:1px solid var(--g200);padding:9px 11px;text-align:left;vertical-align:top}
+  th{background:var(--g100);font-weight:600;color:var(--g700)}
+  .back{font-size:13px;color:var(--g500);margin-top:6px}
+  .back a{color:var(--primary);text-decoration:none}
+  footer{max-width:1000px;margin:0 auto;padding:0 24px 40px;font-size:12.5px;color:var(--g500)}
+</style>
+</head>
+<body>
+<div class="header">
+  <div class="header-inner">
+    <div class="header-logo">W</div>
+    <div>
+      <h1>WorkflowSwift Mail — User Guide</h1>
+      <p>Your business mail: read, answered and organised here, with the same login as WorkflowSwift.</p>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <div class="toc">
+    <h2>On this page</h2>
+    <ol>
+      <li><a href="#what">What this is</a></li>
+      <li><a href="#signin">Signing in</a></li>
+      <li><a href="#setup">Setting up an inbox</a></li>
+      <li><a href="#choose">Choosing a mailbox</a></li>
+      <li><a href="#mail">The mail screen</a></li>
+      <li><a href="#message">Working with a message</a></li>
+      <li><a href="#folders">Folder menu</a></li>
+      <li><a href="#labels">Labels</a></li>
+      <li><a href="#storage">Storage and reminders</a></li>
+      <li><a href="#signature">Signature</a></li>
+      <li><a href="#trouble">When something is not working</a></li>
+    </ol>
+  </div>
+
+  <section id="what">
+    <h2>1. What this is</h2>
+    <p class="lead">This is the mail client for the inbox that comes with your WorkflowSwift account.</p>
+    <p>It is where you read and answer the mail that arrives on your own addresses on your own domain. It
+       is not a separate product with a separate password: it is the same account you already use in
+       WorkflowSwift, so the addresses, the storage and the mailbox list are the same ones your account owns.</p>
+    <p>You open it from the Inbox screen of WorkflowSwift ("Open the mail client"), or straight at this
+       address. Both show the same mail.</p>
+  </section>
+
+  <section id="signin">
+    <h2>2. Signing in</h2>
+    <p>Press <strong>Log In</strong> and use the email address and password of your WorkflowSwift account.
+       There is no second password to remember and nothing extra to enable.</p>
+    <ul>
+      <li>The same login covers every mailbox on the account — you choose which one to read after signing in.</li>
+      <li>If you have forgotten the password, reset it from the WorkflowSwift sign-in screen; the mail client
+          uses the same password.</li>
+    </ul>
+  </section>
+
+  <section id="setup">
+    <h2>3. Setting up an inbox</h2>
+    <p class="lead">Six short steps take you from a domain you already own to a mailbox that receives.
+       Nothing here needs a technician.</p>
+    <ol>
+      <li><strong>Add your domain.</strong> The domain you want to receive mail on. It stays yours — the
+          records below are added wherever the domain already lives, and nothing is transferred to us.</li>
+      <li><strong>Choose how you send and how you receive.</strong> These are two separate answers: your own
+          Mailgun account or any SMTP service to send, and Mailgun, SendGrid (or nowhere at all) to receive.</li>
+      <li><strong>Add the records your provider gives you.</strong> Every value comes with a Copy button, and
+          the list is exactly what your provider issued — not a document someone typed by hand.</li>
+      <li><strong>Wait for the domain to say Active.</strong> Press the check again after the records have
+          spread; the create-mailbox button stays disabled until the domain is Active.</li>
+      <li><strong>Create the addresses.</strong> Each one is a real mailbox with its own counts and its own
+          signature.</li>
+      <li><strong>Turn on catch-all if you want one inbox to catch everything.</strong> Mail to any address at
+          your domain you have not created still arrives, and it is shown under
+          <em>Everything else</em> in the address filter.</li>
+    </ol>
+    <div class="note"><strong>The free month starts at your first mailbox, not at signup.</strong>
+      Time spent waiting for DNS to spread costs you nothing.</div>
+    <div class="note"><strong>Grey cloud and orange cloud.</strong> Every mail record stays DNS only
+      (grey cloud) at Cloudflare, except the inbox record, which is set to Proxied (orange cloud). If a
+      record is proxied when it should not be, the domain will not verify.</div>
+  </section>
+
+  <section id="choose">
+    <h2>4. Choosing a mailbox</h2>
+    <p>After signing in you get one card per address on the account, each showing the address and how many
+       messages it holds. Nothing opens behind your back — you pick the address you want to read.</p>
+    <ul>
+      <li>The count on each card is that address's own mail, not the whole account's.</li>
+      <li>To switch to another address later, press <strong>Mailboxes</strong> in the left rail.</li>
+      <li>An account with no mailboxes yet lands on the setup page instead.</li>
+    </ul>
+  </section>
+
+  <section id="mail">
+    <h2>5. The mail screen</h2>
+    <p class="lead">Three parts: the rail on the left, the message list in the middle, the reader on the right.</p>
+    <h3>The rail</h3>
+    <ul>
+      <li><strong>Compose</strong> — start a new message. Drafts are kept under <strong>Drafts</strong> and can
+          be continued or discarded.</li>
+      <li><strong>Signature</strong> — set this address's own signature, or turn it off.</li>
+      <li><strong>Folders</strong> — Inbox, Unread, Favorites, Drafts, Sent, Archive, Spam and Trash, each with
+          its live count.</li>
+      <li><strong>Folders you made</strong> — your own folders and subfolders, created from a folder's menu.</li>
+      <li><strong>Labels</strong> — your labels, each with its colour. Press a label to filter the list to it.</li>
+      <li><strong>Storage meter</strong> — how much of the allowance this account has used (see section 9).</li>
+    </ul>
+    <h3>The address filter</h3>
+    <p>Above the list you can narrow it to one address on the account. When catch-all has caught something,
+       an <em>Everything else</em> entry appears, so mail to an address you never created is still visible
+       instead of disappearing.</p>
+    <h3>Keeping the list current</h3>
+    <p>Press <strong>Refresh</strong> when new mail is due. Folders and counts refresh with it.</p>
+  </section>
+
+  <section id="message">
+    <h2>6. Working with a message</h2>
+    <p>Open a message and the reader offers:</p>
+    <table>
+      <tr><th>Action</th><th>What it does</th></tr>
+      <tr><td>Reply / Reply all</td><td>Answers the sender, or everyone on the message. Your signature is added for you.</td></tr>
+      <tr><td>Forward</td><td>Sends the message on to someone else.</td></tr>
+      <tr><td>☆ Star</td><td>Marks the message; starred mail is reachable from <em>Favorites</em>.</td></tr>
+      <tr><td>Archive</td><td>Files it out of the Inbox into Archive.</td></tr>
+      <tr><td>Move to…</td><td>Moves the message into any folder or subfolder you made.</td></tr>
+      <tr><td>Delete</td><td>Moves it to Trash — in Spam and Trash the same button says <em>Delete forever</em>.</td></tr>
+      <tr><td>Label</td><td>Attaches one of your labels to this message, or removes it again.</td></tr>
+      <tr><td>Assign</td><td>Hands the message to a member of the account, so someone owns the answer.</td></tr>
+      <tr><td>Summarise</td><td>Offered when an AI summary is available for the message.</td></tr>
+      <tr><td>Turn into a ticket</td><td>Turns the message into a support ticket in WorkflowSwift, so it is tracked like any other ticket.</td></tr>
+    </table>
+  </section>
+
+  <section id="folders">
+    <h2>7. Folder menu</h2>
+    <p>The three-dot menu beside a folder in the rail acts on the whole folder:</p>
+    <ul>
+      <li><strong>Create subfolder</strong> — nests a folder inside this one. Names are stored lower-case.</li>
+      <li><strong>Mark all as read</strong> / <strong>Mark all as unread</strong>.</li>
+      <li><strong>Archive only:</strong> <em>Move all to Inbox</em>, or <em>Delete all messages</em>.</li>
+      <li><strong>Spam and Trash only:</strong> <em>Empty folder</em> — it names the count first and cannot be undone.</li>
+      <li><strong>Sort alphabetically</strong> — orders the folders.</li>
+    </ul>
+  </section>
+
+  <section id="labels">
+    <h2>8. Labels</h2>
+    <p>Labels are your own coloured tags, attached to individual messages — a message can carry more than
+       one, and a label never moves a message out of its folder.</p>
+    <ul>
+      <li>Press <strong>+</strong> beside <em>Labels</em> in the rail to create one: a name and a colour.</li>
+      <li>Each label's three-dot menu offers <strong>Edit</strong> and <strong>Delete</strong>. Deleting a label
+          does not touch a single message.</li>
+      <li>Press a label in the rail to filter the list to the messages carrying it.</li>
+      <li>Inside a message, the label control attaches a label to that message or removes it.</li>
+    </ul>
+  </section>
+
+  <section id="storage">
+    <h2>9. Storage and reminders</h2>
+    <p>The meter in the rail shows how much of the allowance the account has used.</p>
+    <ul>
+      <li>Incoming mail is never refused, and nothing is deleted to make room for new mail.</li>
+      <li>When the account reaches <strong>50%</strong>, <strong>75%</strong> and <strong>99%</strong>, a banner
+          appears in the client and one reminder email is sent to the owner of the account — one per rung,
+          not one per day.</li>
+      <li>At <strong>100%</strong>, new attachments and files pause until space is freed. Mail still
+          arrives and is still readable.</li>
+    </ul>
+    <div class="ok">Free space at any time by emptying Spam or Trash from their folder menu, or by deleting
+      the messages you no longer need.</div>
+  </section>
+
+  <section id="signature">
+    <h2>10. Signature</h2>
+    <p>Each address has its own signature: name, title, company, phone and a short line. Press
+       <strong>Signature</strong> in the rail to set it for the address you are reading, or to turn it off for
+       that address.</p>
+    <p>Compose and Reply add the signature for you. The account-wide default is set by the operator on the
+       Email Branding screen, so a new address starts with something sensible instead of nothing.</p>
+  </section>
+
+  <section id="trouble">
+    <h2>11. When something is not working</h2>
+    <h3>The domain never says Active</h3>
+    <p>Almost always a record. Compare what your DNS provider holds against the values the app gave you
+       (they have Copy buttons), and check that the mail records are grey cloud while only the inbox record
+       is proxied. Press the check again once the change has spread.</p>
+    <h3>Mail to an address is missing</h3>
+    <p>If the address was never created, the message is only caught when catch-all is on — look under
+       <em>Everything else</em> in the address filter. If catch-all is off, mail to an unknown address is
+       refused by design.</p>
+    <h3>I cannot create a mailbox</h3>
+    <p>The create button stays disabled until the domain is Active. That is deliberate: a mailbox on a domain
+       that cannot receive yet would silently lose mail.</p>
+    <h3>I cannot send</h3>
+    <p>Sending needs a sending provider on the setup page — your own Mailgun account or any SMTP service.
+       Receiving can be set up without sending; mail still arrives and is readable.</p>
+    <h3>I deleted something by mistake</h3>
+    <p>Anything deleted from the Inbox goes to Trash first, where it can be recovered. <em>Delete forever</em>
+       and <em>Empty folder</em> are the only actions that cannot be undone — both name what they will
+       destroy before they do it.</p>
+  </section>
+
+  <p class="back">← <a href="/">Back to the mail client</a></p>
+</div>
+<footer>WorkflowSwift Mail · this guide describes the mail client you are using, not a different product.</footer>
+</body>
+</html>
