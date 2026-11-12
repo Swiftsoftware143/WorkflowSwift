@@ -781,13 +781,16 @@ async function showForm(key,label,fields,ep,id,cb,row){
       return `<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">${lab}</label><select class="input" name="${f}">${opts}</select></div>`;
     }
     // kanban t_ws-mailtpl — a template_type is a SELECT of the types this app's senders actually
-    // ask for (measured in src: welcome, password_reset, team_invite, workflow_notify,
-    // purchase_confirmed, email_test). A free-text box is how the dead 'custom' row got minted: the
+    // ask for (measured in src). A free-text box is how the dead 'custom' row got minted: the
     // handler defaults an absent template_type to 'custom', and the sender resolver
     // (`WHERE template_type = $1 AND (is_default = true OR is_default IS NULL)`) selects 'custom'
     // for nobody, so a template created without this field could never be sent and the panel gave
     // an operator no way to see why.
-    const TEMPLATE_TYPES=['welcome','password_reset','team_invite','workflow_notify','purchase_confirmed','email_test'];
+    // The list had drifted: every inline arm added later (storage_warning, plan_changed,
+    // plan_request_receipt, email_change, ticket_update, the operator alerts) was missing, so the
+    // one message whose wording an operator most wants to soften — the 50/75/99 storage reminder
+    // (kanban t_fb46239b) — could not be given a stored row from this panel at all.
+    const TEMPLATE_TYPES=['welcome','team_invite','purchase_confirmed','password_reset','email_change','workflow_notify','workflow_failed','ticket_update','plan_changed','plan_request_receipt','plan_request_operator_alert','support_request_operator_alert','signup_operator_alert','storage_warning','email_test','branding_preview'];
     if(f==='template_type'){
       const cur=String(item.template_type==null||item.template_type===''?'welcome':item.template_type);
       const opts=TEMPLATE_TYPES.map(v=>`<option value="${v}"${v===cur?' selected':''}>${v}</option>`).join('');

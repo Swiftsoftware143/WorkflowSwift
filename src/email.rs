@@ -1625,6 +1625,71 @@ async fn send_email_fallback(
             let (subject, text_body, html_body) = branding_preview_inline(vars);
             send_branded(cfg, to, &subject, &text_body, &html_body, branding).await
         }
+        // THE STORAGE RUNG REMINDER (kanban t_fb46239b; parity with CoreSwift's B206 arm). This app
+        // carries NO `storage_warning` row in `email_templates`, so without this branch the 50/75/99
+        // mail that `evaluate_and_notify` claims each month reached the customer as the generic
+        // "You have a new notification" — for the one message whose entire value is its numbers.
+        // Plain sentences on purpose: the subject names the real percentage because a customer reads
+        // that first, and the body NEVER says mail will be deleted to make room, because keeping
+        // that promise is what the whole storage rule exists for.
+        "storage_warning" => {
+            let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
+            let used = vars.get("used").and_then(|v| v.as_str()).unwrap_or("some");
+            let quota = vars
+                .get("quota")
+                .and_then(|v| v.as_str())
+                .unwrap_or("your plan allowance");
+            let percent = vars.get("percent").and_then(|v| v.as_i64()).unwrap_or(0);
+            let threshold = vars.get("threshold").and_then(|v| v.as_i64()).unwrap_or(50);
+            let inbox_url = vars
+                .get("inbox_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or(APP_URL_MAIL);
+            let plans_url = vars
+                .get("plans_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or(app_url);
+            let retention = vars.get("retention").and_then(|v| v.as_str()).unwrap_or("");
+            let subject = format!("Your mailbox is {percent}% full — {used} of {quota} used");
+            let action = if percent >= 100 {
+                "Your mailbox is full. Mail is still arriving and nothing has been deleted, but new \
+                 attachments and files are paused until you clear space or upgrade."
+            } else if threshold >= 99 {
+                "Your mailbox is almost full. Plain mail still arrives and nothing is deleted, but \
+                 once the allowance is reached new attachments and files are paused."
+            } else {
+                "You have room for now. Clearing out mail you no longer need (Trash and Spam count \
+                 too) keeps the meter down, and a bigger plan raises the allowance."
+            };
+            let text_body = format!(
+                "Hi {name},\n\nThis is a storage update for your mailbox: you are using {used} of \
+                 {quota} ({percent}%).\n\n{action}\n\nTwo things that are ALWAYS true here: mail sent \
+                 to you keeps arriving, and nothing is deleted to make room for new mail. The only \
+                 thing a full mailbox pauses is adding new attachments or files.\n\nOpen your mail and \
+                 clear some space:\n    {inbox_url}\n\nSee the plans with more storage:\n    \
+                 {plans_url}\n\n{retention}\n\nYou will get at most one of these messages per storage \
+                 level per month.\n\n- The WorkflowSwift Team"
+            );
+            let esc = |s: &str| {
+                s.replace('&', "&amp;")
+                    .replace('<', "&lt;")
+                    .replace('>', "&gt;")
+            };
+            let safe_name = esc(name);
+            let safe_action = esc(action);
+            let safe_retention = esc(retention);
+            let html_body = format!(
+                "<html><body style=\"font-family:Arial,sans-serif;line-height:1.6;color:#333\">\
+                 <p>Hi {safe_name},</p>\
+                 <p>This is a storage update for your mailbox: you are using <strong>{used} of {quota} ({percent}%)</strong>.</p>\
+                 <p>{safe_action}</p>\
+                 <p>Two things that are <strong>always</strong> true here: mail sent to you keeps arriving, and <strong>nothing is deleted</strong> to make room for new mail. The only thing a full mailbox pauses is adding new attachments or files.</p>\
+                 <p><a href=\"{inbox_url}\" style=\"color:#4f46e5\">Open your mail and clear some space</a></p>\
+                 <p><a href=\"{plans_url}\" style=\"color:#4f46e5\">See the plans with more storage</a></p>\
+                 <p style=\"font-size:13px;color:#9ca3af\">{safe_retention}<br>You will get at most one of these messages per storage level per month.<br>- The WorkflowSwift Team</p></body></html>"
+            );
+            send_branded(cfg, to, &subject, &text_body, &html_body, branding).await
+        }
         _ => {
             // An unknown template_type must never mail the serialised variables: `vars` holds
             // whatever the caller passed — passwords, reset tokens, ticket bodies — and the old arm

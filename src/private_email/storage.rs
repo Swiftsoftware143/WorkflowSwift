@@ -399,7 +399,7 @@ pub async fn evaluate_and_notify(state: &AppState, tenant_id: Uuid) -> Vec<i32> 
             break;
         }
         // Claim BEFORE queueing. `sent_at` is the claim time; the mail is queued immediately after.
-        let claimed: Option<Uuid> = sqlx::query_scalar(
+        let claimed: Result<Option<Uuid>, sqlx::Error> = sqlx::query_scalar::<_, Uuid>(
             r#"
             INSERT INTO private_email_storage_notices
                 (tenant_id, threshold_pct, period, usage_bytes, quota_bytes)
@@ -414,10 +414,25 @@ pub async fn evaluate_and_notify(state: &AppState, tenant_id: Uuid) -> Vec<i32> 
         .bind(u.used_bytes)
         .bind(u.quota_bytes)
         .fetch_optional(db)
-        .await
-        .unwrap_or(None);
+        .await;
 
-        let Some(claim_id) = claimed else { continue };
+        // A claim that cannot be WRITTEN is not "already sent for this month": migration 105
+        // ported this table without the UNIQUE guard the ON CONFLICT clause needs, so every claim
+        // raised 42P10 and the old `unwrap_or(None)` read it as "rung already claimed" — no storage
+        // reminder was ever mailed on this app (kanban t_fb46239b). Never swallow this again.
+        let claim_id = match claimed {
+            Ok(Some(id)) => id,
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::error!(
+                    tenant = %tenant_id,
+                    threshold,
+                    error = %e,
+                    "storage reminder claim failed — no mail can be sent for this rung"
+                );
+                continue;
+            }
+        };
 
         let Some((email, name)) = owner_recipient(db, tenant_id).await else {
             // Nobody to tell: release the claim rather than burn the rung for a month.
