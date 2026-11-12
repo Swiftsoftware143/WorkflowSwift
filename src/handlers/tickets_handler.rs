@@ -788,6 +788,12 @@ pub async fn admin_update_status(
                         .execute(&mut *tx)
                         .await?;
                     tx.commit().await?;
+                    // THE CUSTOMER IS TOLD BY THIS RESOLVE'S OWN NOTICE (kanban t_e12d2e73), so
+                    // this path is deliberately NOT wired to `plan_handler::notify_plan_change`:
+                    // `notify_customer` below sends the `ticket_update` mail, and
+                    // `email::ticket_update_wording` states "your workspace is now on the <plan>
+                    // plan … this change charged you nothing" whenever a plan was applied. A second
+                    // "plan changed" mail here would announce the same click twice.
                     plan_applied = true;
                     applied_plan_name = plan_name;
                     tracing::info!(

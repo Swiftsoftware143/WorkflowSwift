@@ -366,6 +366,14 @@ async fn send_email_inner(
                     // The operator's diagnostic is not a notification: the subject has to say it
                     // was a test, or the mail is indistinguishable from real traffic in an inbox.
                     "email_test" => "WorkflowSwift test email".into(),
+                    // A hand-move (kanban t_e12d2e73). No install carries this template row, so the
+                    // INLINE arm below is what a customer actually reads; this default keeps a
+                    // stored row's blank subject from falling back to a generic notification.
+                    "plan_changed" => plan_changed_subject(
+                        vars.get("plan_name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("your new plan"),
+                    ),
                     _ => "WorkflowSwift Notification".into(),
                 }),
                 vars,
@@ -392,6 +400,30 @@ async fn send_email_inner(
             // Fallback to hardcoded template
             send_email_fallback(&cfg, to, template_type, vars, Some(&branding)).await
         }
+    }
+}
+
+/// THE SUBJECT THE CUSTOMER READS when their workspace is moved onto a plan (kanban t_e12d2e73).
+///
+/// One definition, used twice: by the inline `plan_changed` arm (which IS the mail a real customer
+/// receives — no install carries that template row) and by the DELIVERY HISTORY. The funnel records
+/// a reserved/harness recipient as `withheld` BEFORE anything is rendered, so without this the
+/// operator's history could only name the template key, never which sentence was suppressed.
+pub(crate) fn plan_changed_subject(plan_name: &str) -> String {
+    format!("Your WorkflowSwift plan is now {plan_name}")
+}
+
+/// The subject the inline arms send, for the types where the funnel must name the mail before it
+/// renders (the withheld arm). `None` for every type whose history row is already unambiguous from
+/// its template key — this must never grow into a second copy of the arms' wording.
+pub(crate) fn inline_subject(template_type: &str, vars: &serde_json::Value) -> Option<String> {
+    match template_type {
+        "plan_changed" => Some(plan_changed_subject(
+            vars.get("plan_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("your new plan"),
+        )),
+        _ => None,
     }
 }
 
@@ -429,7 +461,11 @@ pub async fn send_email(
         // was attempted — but recording NOTHING left an older `last_send_ok: true` standing in
         // `admin_settings.email`, so the admin panel read "Last email send succeeded" for a message
         // that never left the box (the class fixed on FunnelSwift/ADASwift/MissedCall the same day).
-        record_withheld_send(state, to, template_type, domain).await;
+        // Name the mail when the subject is knowable BEFORE rendering (a plan move, 2026-11-12):
+        // otherwise the history can only show the template key, and the operator cannot tell WHICH
+        // message a reserved address swallowed.
+        let subject_hint = inline_subject(template_type, vars);
+        record_withheld_send(state, to, template_type, domain, subject_hint.as_deref()).await;
         return Ok(());
     }
     let result = send_email_inner(state, aid, to, template_type, vars).await;
@@ -552,19 +588,21 @@ pub(crate) async fn record_withheld_send(
     to: &str,
     template_type: &str,
     domain: &str,
+    subject: Option<&str>,
 ) {
     // Its own status, not a failure: a reserved/harness recipient is a NON-SEND — nothing was
-    // attempted, no provider request was made — so it must not read as a refusal.
-    append_send_log(
-        state,
-        to,
-        template_type,
-        "withheld",
-        &format!(
+    // attempted, no provider request was made — so it must not read as a refusal. The SUBJECT is
+    // appended when the funnel knows it (2026-11-12): a history that says only "some mail" cannot
+    // answer the operator's one question about a suppression — WHICH message was it.
+    let detail = match subject {
+        Some(s) => format!(
+            "withheld: '{domain}' is a fleet-harness / reserved address, so nothing was sent (no provider request) | subject: {s}"
+        ),
+        None => format!(
             "withheld: '{domain}' is a fleet-harness / reserved address, so nothing was sent (no provider request)"
         ),
-    )
-    .await;
+    };
+    append_send_log(state, to, template_type, "withheld", &detail).await;
     let row = sqlx::query_scalar::<_, serde_json::Value>(
         "SELECT value FROM admin_settings WHERE key = 'email'",
     )
@@ -580,12 +618,7 @@ pub(crate) async fn record_withheld_send(
 
     obj.insert("last_send_ok".to_string(), json!(false));
     obj.insert("last_send_withheld".to_string(), json!(true));
-    obj.insert(
-        "last_send_error".to_string(),
-        json!(format!(
-            "withheld: '{domain}' is a fleet-harness / reserved address, so nothing was sent (no provider request)"
-        )),
-    );
+    obj.insert("last_send_error".to_string(), json!(detail));
     obj.insert(
         "last_send_at".to_string(),
         json!(chrono::Utc::now().to_rfc3339()),
@@ -1329,6 +1362,31 @@ async fn send_email_fallback(
                 branding,
             )
             .await
+        }
+        // A PERSON MOVED THE CUSTOMER ONTO A PLAN (kanban t_e12d2e73). Self-serve checkout needs a
+        // payment provider and no install in this fleet has one yet, so nearly every paid seat is
+        // given BY HAND from the operator console. That switch used to be silent: the tier changed
+        // and the customer's only clue was a screen whose allowances had moved. Nothing is charged,
+        // so the body says so, and it points at the plan screen rather than the marketing site.
+        "plan_changed" => {
+            let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
+            let plan_name = vars
+                .get("plan_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("your new plan");
+            let subject = plan_changed_subject(plan_name);
+            let text_body = format!(
+                "Hi {name},\n\nYour workspace has been moved onto the {plan_name} plan. Our team made this change for you, and nothing was charged to your card for it.\n\nOpen {app_url}/dashboard and choose Plan & Billing to see exactly what the plan includes.\n\nIf you expected a different plan, reply to this message and we will put it right.\n\n- WorkflowSwift"
+            );
+            let html_body = format!(
+                "<html><body style=\"font-family:Arial,sans-serif;line-height:1.6;color:#333\">\
+                 <p>Hi {name},</p>\
+                 <p>Your workspace has been moved onto the <strong>{plan_name}</strong> plan. Our team made this change for you, and <strong>nothing was charged to your card for it</strong>.</p>\
+                 <p>Open Plan &amp; Billing on your dashboard to see exactly what the plan includes — and when it renews.</p>\
+                 <p><a href=\"{app_url}/dashboard\" style=\"color:#4f46e5\">Open your dashboard</a></p>\
+                 <p style=\"font-size:13px;color:#9ca3af\">If you expected a different plan, reply to this message and we will put it right.<br>- WorkflowSwift</p></body></html>"
+            );
+            send_branded(cfg, to, &subject, &text_body, &html_body, branding).await
         }
         // The receipt for a filed plan request (cron 2026-10-20). `POST /api/v1/tickets` with
         // source='plan_request' is what the console's Plans section files while checkout is closed,

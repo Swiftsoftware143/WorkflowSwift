@@ -1130,7 +1130,9 @@ pub async fn request_email_change(
             domain = %domain,
             "email-change: reserved/harness address refused before any write; nothing sent, nothing stored"
         );
-        crate::email::record_withheld_send(&state, &new_email, "email_change", domain).await;
+        // No subject hint: this arm suppresses BEFORE the template is chosen, and the log's own
+        // template key names the mail.
+        crate::email::record_withheld_send(&state, &new_email, "email_change", domain, None).await;
         return Ok(Json(json!({
             "status": "pending",
             "delivered": false,

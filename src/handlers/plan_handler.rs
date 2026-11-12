@@ -320,6 +320,117 @@ fn parse_plan_price(price: &Option<String>) -> f64 {
         .unwrap_or(0.0)
 }
 
+/// The plan an account is ACTUALLY on: the newest active `account_plans` row, else the plan column
+/// on the account itself — the same two arms `features::resolve_plan_id` prefers.
+///
+/// Deliberately NOT `resolve_plan_id`: its THIRD arm is the install's cheapest active tier, which is
+/// only the level the write gates enforce for a workspace nobody placed anywhere — not a plan the
+/// customer holds. So a hand-move of a plan-less workspace IS a change (mail it), while a hand-move
+/// onto the tier a workspace already holds is not (stay silent). Callers read this BEFORE the swap,
+/// so it can never see the result of its own write and report a no-op.
+pub(crate) async fn assigned_plan_id(db: &sqlx::PgPool, aid: Uuid) -> Option<Uuid> {
+    let from_subscription: Option<Option<Uuid>> = sqlx::query_scalar(
+        "SELECT plan_id FROM account_plans WHERE aid = $1 AND status = 'active' \
+         ORDER BY started_at DESC LIMIT 1",
+    )
+    .bind(aid)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten();
+    if let Some(pid) = from_subscription.flatten() {
+        return Some(pid);
+    }
+    let from_account: Option<Option<Uuid>> =
+        sqlx::query_scalar("SELECT plan_id FROM accounts WHERE id = $1")
+            .bind(aid)
+            .fetch_optional(db)
+            .await
+            .ok()
+            .flatten();
+    from_account.flatten()
+}
+
+/// Tell the customer their workspace now sits on a different plan (kanban t_e12d2e73).
+///
+/// WHY THIS EXISTS. Self-serve checkout needs a payment provider and this installation holds none,
+/// so nearly every paid seat is given BY HAND from the operator console (`PUT
+/// /api/v1/admin/accounts/{id}/plan`, and the Tenants/Usage plan pickers that call it). That switch
+/// was silent: the tier changed and the customer's only clue was a screen whose allowances had
+/// moved. A customer deserves the same confirmation a card payment sends — which plan they are on,
+/// that nothing was charged, and where to see what it includes.
+///
+/// The mail goes through `email::send_email`, the app's one transactional funnel, so it inherits the
+/// workspace's own branding and the fleet's reserved-address gate (a probe/harness recipient is
+/// recorded `withheld` and never handed to a relay — no extra check needed here). Best effort by
+/// design: the plan is already written, so a mail failure is logged and never fails the assignment.
+///
+/// Returns `(emailed, reason)` with reason `emailed` | `unchanged` | `no_recipient` | `mail_failed`,
+/// so the operator's screen can say what happened instead of guessing.
+pub(crate) async fn notify_plan_change(
+    state: &AppState,
+    aid: Uuid,
+    plan_id: Uuid,
+    previous_plan_id: Option<Uuid>,
+) -> (bool, &'static str) {
+    // A second save of the same plan must not mail the customer again.
+    if previous_plan_id == Some(plan_id) {
+        return (false, "unchanged");
+    }
+    let plan: Option<(String, String)> =
+        sqlx::query_as("SELECT slug, name FROM plan_tiers WHERE id = $1")
+            .bind(plan_id)
+            .fetch_optional(&state.db)
+            .await
+            .unwrap_or(None);
+    let Some((_slug, plan_name)) = plan else {
+        // The caller already validated the tier; an unreadable name is not a mail we can send.
+        return (false, "unchanged");
+    };
+    // The workspace's OWN owner is the person to tell: the tier change is about their allowances.
+    // Same recipient rule the plan-request receipt uses (owner/company_admin first, then the oldest
+    // active user), so one workspace never has two contradictory "who we email" answers.
+    let who: Option<(String, String)> = sqlx::query_as(
+        "SELECT email, COALESCE(NULLIF(name, ''), 'there') FROM users \
+          WHERE aid = $1 AND email <> '' AND is_active \
+          ORDER BY (role IN ('owner','company_admin')) DESC, sort_order NULLS LAST, \
+                   created_at ASC LIMIT 1",
+    )
+    .bind(aid)
+    .fetch_optional(&state.db)
+    .await
+    .unwrap_or(None);
+    let Some((email, name)) = who else {
+        return (false, "no_recipient");
+    };
+    let to = email.trim();
+    if to.is_empty() {
+        return (false, "no_recipient");
+    }
+    let vars = json!({
+        "name": name,
+        "plan_name": plan_name,
+        "email": to,
+        "app_url": "https://app.workflowswift.com",
+    });
+    match crate::email::send_email(state, Some(aid), to, "plan_changed", &vars).await {
+        Ok(()) => {
+            tracing::info!(
+                account = %aid, plan = %plan_name,
+                "plan change: the customer was told"
+            );
+            (true, "emailed")
+        }
+        Err(e) => {
+            tracing::warn!(
+                account = %aid, plan = %plan_name, error = %e,
+                "plan change: the customer could not be told"
+            );
+            (false, "mail_failed")
+        }
+    }
+}
+
 /// Fire-and-forget notification to FunnelSwift that a user upgraded to a paid plan,
 /// so the referring affiliate is credited (permanent, no expiry).
 pub(crate) async fn notify_funnelswift_upgrade(

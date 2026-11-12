@@ -2484,6 +2484,18 @@ function renderList(c,key,label,ep){
 // ACC_SHOW_PROBES on the Accounts pane): a flag inside renderAdminUsage would be
 // reset to false by its own change handler.
 let USAGE_SHOW_PROBES=false;
+// What to tell the operator about the mail the app sends when a workspace is moved onto a plan BY
+// HAND (2026-11-12). This install has no payment provider, so the operator's click IS the purchase —
+// "did the customer hear about it?" is part of the action, not an afterthought. One helper so both
+// plan pickers (Platform Usage and Tenants) answer it in the same words.
+function planToldNote(r){
+  if(!r) return '';
+  if(r.notified===true) return ' The customer has been emailed about the change.';
+  if(r.notify_reason==='unchanged') return ' The workspace was already on that plan, so no email was sent.';
+  if(r.notify_reason==='no_recipient') return ' No customer email address was found, so nobody was told.';
+  if(r.notify_reason==='mail_failed') return ' The customer could NOT be emailed — the plan is set, so tell them yourself.';
+  return '';
+}
 function renderAdminUsage(c){
   c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-1"><h2 class="text-xl font-bold">Platform Usage</h2>'
    +'<div class="flex items-center gap-2"><label class="flex items-center gap-1 text-xs text-gray-600" title="Probe workspaces (harness-minted, or owned by an address on a reserved test domain) are not customers. Hidden by default, exactly as on the Accounts screen; tick this to include them in the table and the totals."><input type="checkbox" id="usageShowProbes" data-usage="show-probes"'+ (USAGE_SHOW_PROBES?' checked':'') +'> show probe workspaces</label>'
@@ -2543,7 +2555,7 @@ function renderAdminUsage(c){
         if(!aid||!slug)return;
         if(!confirm('Move this workspace to the "'+slug+'" plan?')){renderAdminUsage(c);return;}
         const r=await api('/admin/accounts/'+encodeURIComponent(aid)+'/plan',{method:'PUT',body:JSON.stringify({plan_slug:slug})});
-        if(r)showMsg('Workspace moved to the '+slug+' plan');
+        if(r)showMsg('Workspace moved to the '+slug+' plan.'+planToldNote(r));
         else showMsg('Plan change failed: '+LAST_ERR,'error');
         renderAdminUsage(c);
       };
@@ -2919,7 +2931,7 @@ function renderAdminUsers(c){
       const label=(sel.options[sel.selectedIndex]||{}).text||slug;
       if(!confirm('Move this account to the "'+label+'" plan?'))return;
       const r=await api('/admin/accounts/'+id+'/plan',{method:'PUT',body:JSON.stringify({plan_slug:slug})});
-      if(r){showMsg('Account moved to the '+slug+' plan');setTimeout(()=>renderPage(),400);}
+      if(r){showMsg('Account moved to the '+slug+' plan.'+planToldNote(r));setTimeout(()=>renderPage(),400);}
       else showMsg('Plan change failed: '+LAST_ERR,'error');
     });
     // Credits (2026-11-09). POST /admin/accounts/{id}/credits is the ONE credit movement the app

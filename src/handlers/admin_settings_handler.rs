@@ -1833,6 +1833,10 @@ pub async fn admin_assign_plan(
     let (plan_id, plan_slug, plan_name) =
         plan.ok_or_else(|| AppError::Validation(format!("No active plan with slug '{slug}'")))?;
 
+    // WHAT THE WORKSPACE IS LEAVING — read BEFORE the swap, so the customer is only told about a
+    // plan that actually moved (kanban t_e12d2e73).
+    let previous_plan_id = crate::handlers::plan_handler::assigned_plan_id(&state.db, id).await;
+
     let mut tx = state.db.begin().await?;
 
     // Supersede whatever the account is on now, so the resolver (newest active row first) can
@@ -1870,10 +1874,20 @@ pub async fn admin_assign_plan(
 
     tracing::info!(account = %id, plan = %plan_slug, "Platform admin moved an account onto a plan");
 
+    // TELL THE CUSTOMER THEY WERE MOVED (kanban t_e12d2e73). This install sells nothing through a
+    // payment provider, so the operator's click IS the purchase — and it used to be silent. Best
+    // effort by design: the plan is already committed, so a mail failure never fails the assignment;
+    // the answer carries what happened so the console can say it in plain English.
+    let (notified, notify_reason) =
+        crate::handlers::plan_handler::notify_plan_change(&state, id, plan_id, previous_plan_id)
+            .await;
+
     Ok(Json(json!({
         "message": "Plan updated",
         "account_id": id.to_string(),
         "plan": { "slug": plan_slug, "name": plan_name },
+        "notified": notified,
+        "notify_reason": notify_reason,
     })))
 }
 

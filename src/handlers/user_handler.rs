@@ -233,7 +233,7 @@ pub async fn invite_user(
     let email_sent = if let Some(domain) = withheld_domain {
         // Record the non-send here instead of calling send_email, so the delivery history keeps
         // ONE row for this message rather than two.
-        email::record_withheld_send(&state, &email, "team_invite", domain).await;
+        email::record_withheld_send(&state, &email, "team_invite", domain, None).await;
         false
     } else {
         match email::send_email(
