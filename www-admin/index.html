@@ -450,7 +450,8 @@ function sidebar(){
   // Public Updates + Roadmap (kanban B209, t_2b4e36f9): one canonical URL fleet-wide. Literal
   // markup on purpose, so the served shell CARRIES the two hrefs as bytes for a grep to find.
   nav.insertAdjacentHTML('beforeend','<div class="px-4 mt-2"><a class="btn btn-ghost w-full" href="https://swiftsoftware.net/updates" target="_blank" rel="noopener" style="text-decoration:none">📣 Updates</a></div>');
-  nav.insertAdjacentHTML('beforeend','<div class="px-4 mt-2"><a class="btn btn-ghost w-full" href="https://swiftsoftware.net/roadmap" target="_blank" rel="noopener" style="text-decoration:none">🗺️ Roadmap</a></div>');
+  nav.insertAdjacentHTML('beforeend','<div class="px-4 mt-2"><a class="btn btn-ghost w-full" href="https://swiftsoftware.net/workflowswift-roadmap" target="_blank" rel="noopener" style="text-decoration:none">🗺️ Roadmap</a></div>');
+  nav.insertAdjacentHTML('beforeend','<div class="px-4 mt-2"><a class="btn btn-ghost w-full" href="https://swiftsoftware.net/workflowswift-feedback" target="_blank" rel="noopener" style="text-decoration:none">💬 Feedback</a></div>');
   nav.appendChild(h('div',{className:'px-4 mt-6'},h('button',{className:'btn btn-ghost text-red-500 w-full',onclick:logout},'Log Out')));
   return nav;
 }
