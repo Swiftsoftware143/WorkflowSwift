@@ -32,7 +32,12 @@
     me: null,
     boxes: [], domains: [], folders: { system: [], custom: [] }, counts: {},
     labels: [], messages: [], addresses: [], misc: 0, members: [],
-    folder: 'inbox', address: 'all', label: '', sel: null, view: 'mail', err: '', busy: false,
+    folder: 'inbox', address: 'all', label: '', q: '', sel: null, view: 'mail', err: '', busy: false,
+    // Free-text search for the list header. The server has always accepted `q` (subject, sender
+    // and opening text, case-insensitive); until now no client ever sent it, so a customer
+    // with a full inbox had no way to find a message. Kept in S so the box survives the
+    // re-render every action triggers, and cleared whenever the view changes.
+    focusSearch: false,
     // Which mailbox the user picked on the chooser. Signing in never drops someone into one inbox:
     // the account's mailboxes are listed and the user picks (David 2026-11-11, B205). A LOG IN press
     // on the CRM's Inbox tab arrives as ?address=, which IS the choice, so that skips the list.
@@ -151,7 +156,7 @@
   async function loadMessages() {
     try {
       var q = '/private-email/messages?folder=' + encodeURIComponent(S.folder) + '&address=' + encodeURIComponent(S.address)
-        + '&label=' + encodeURIComponent(S.label || '') + '&limit=100';
+        + '&label=' + encodeURIComponent(S.label || '') + '&q=' + encodeURIComponent(S.q || '') + '&limit=100';
       var r = await api('GET', q);
       S.messages = (r && r.messages) || [];
     } catch (e) {
@@ -546,9 +551,18 @@
     var msgs = S.messages || [];
     var head = '<div class="list-head">'
       + '<select id="mAddress" style="width:auto;flex:1">' + addressOptions() + '</select>'
-      + '<button class="btn btn-ghost" id="mRefresh" title="Refresh">Refresh</button></div>';
+      + '<button class="btn btn-ghost" id="mRefresh" title="Refresh">Refresh</button>'
+      + '<input id="mSearch" type="search" value="' + esc(S.q) + '" placeholder="Search subject, sender or text"'
+      + ' aria-label="Search mail" autocomplete="off" style="flex:1 1 100%;box-sizing:border-box;padding:7px 10px;'
+      + 'border:1px solid var(--line);border-radius:8px;font:inherit;background:#fff">'
+      + (S.q ? '<button class="btn btn-ghost" id="mSearchClear" title="Clear the search">Clear search</button>' : '')
+      + '</div>';
     if (!msgs.length) {
-      return head + '<div class="empty">No mail in this folder.<br><span style="font-size:12px">Every message that arrives appears here, including mail to addresses that do not open tickets.</span></div>';
+      // A search that finds nothing is not an empty folder, and saying so is the difference
+      // between "your mail is gone" and "try another word".
+      return head + (S.q
+        ? '<div class="empty">No mail matches &ldquo;' + esc(S.q) + '&rdquo;.<br><span style="font-size:12px">The search looks at the subject, the sender and the opening text of every message in this view. <button class="btn btn-ghost" id="mSearchClear2">Clear the search</button></span></div>'
+        : '<div class="empty">No mail in this folder.<br><span style="font-size:12px">Every message that arrives appears here, including mail to addresses that do not open tickets.</span></div>');
     }
     var rows = msgs.map(function (m) {
       var chips = (m.folder === 'drafts' ? '<span class="chip draft">draft</span>' : '')
@@ -679,11 +693,45 @@
     };
     var rf = $('mRefresh');
     if (rf) rf.onclick = async function () { await boot(); };
+    // SEARCH (the server's `q`). Type and pause, or press Enter. The list re-renders on every
+    // result, so the caret is put back where the user left it: losing focus mid-word is how a
+    // search box becomes unusable.
+    var si = $('mSearch');
+    if (si) {
+      var runSearch = function (val) {
+        var next = String(val == null ? '' : val).trim();
+        if (next === S.q) return;
+        S.q = next; S.sel = null; S.focusSearch = true;
+        loadMessages().then(render);
+      };
+      var searchTimer = null;
+      si.oninput = function () {
+        var v = this.value;
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(function () { runSearch(v); }, 350);
+      };
+      si.onkeydown = function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); clearTimeout(searchTimer); runSearch(this.value); }
+      };
+      if (S.focusSearch) {
+        var caret = si.value.length;
+        try { si.focus(); si.setSelectionRange(caret, caret); } catch (err) {}
+        S.focusSearch = false;
+      }
+    }
+    // BOTH clear buttons get the handler: the header one and the one inside the no-match card.
+    // `a || b` bound only whichever existed first, leaving the in-place button dead in exactly
+    // the state that needs it (measured on ADASwift 2026-11-13: clicked, no request).
+    var clearSearch = function () { S.q = ''; S.focusSearch = true; loadMessages().then(render); };
+    var sc = $('mSearchClear');
+    if (sc) sc.onclick = clearSearch;
+    var sc2 = $('mSearchClear2');
+    if (sc2) sc2.onclick = clearSearch;
 
     Array.prototype.forEach.call(document.querySelectorAll('[data-folder]'), function (el) {
       el.onclick = function (e) {
         if (e.target.hasAttribute('data-menu')) return;
-        S.folder = el.getAttribute('data-folder'); S.label = ''; S.sel = null;
+        S.folder = el.getAttribute('data-folder'); S.label = ''; S.q = ''; S.sel = null;
         loadMessages().then(render);
       };
     });
@@ -696,7 +744,7 @@
     Array.prototype.forEach.call(document.querySelectorAll('[data-label]'), function (el) {
       el.onclick = function (e) {
         if (e.target.hasAttribute('data-labelmenu')) return;
-        S.label = el.getAttribute('data-label'); S.sel = null;
+        S.label = el.getAttribute('data-label'); S.q = ''; S.sel = null;
         loadMessages().then(render);
       };
     });
