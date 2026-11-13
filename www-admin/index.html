@@ -378,6 +378,7 @@ const tabs=[
   {id:'tags',label:'🏷️ Tags & Labels',subs:['Tags','Tag Groups']},
   {id:'integrations',label:'🔌 Integrations',subs:['Integration Targets','Destination Values','Provider Keys','API Keys','n8n Proxy','Bridge']},
   {id:'support',label:'🎫 Support',subs:['Tickets']},
+  {id:'mcp',label:'MCP',subs:['Connection']},
   {id:'profile',label:'👤 Profile & Account',subs:['My Profile','Team','Plans & Credits','Email Branding','Invoices','Payments','Checkout Sessions']},
   {id:'comms',label:'📧 Communications',subs:['Webhooks']},
   {id:'admin',label:'🛠️ Admin',subs:['Usage','Settings','Users','Accounts','Portfolio Companies','Plans','Plan Requests','Surfaces','Email Templates','Industry Sources','Site Config','Feedback']},
@@ -511,6 +512,8 @@ function content(){
       if(showAdminTab())renderSupportQueue(c);
       else renderCRUD(c,'tickets','Ticket',['subject','status','priority'],'/tickets',['subject','description','status','priority'],undefined,['subject','description','status','priority']);
     }
+  }else if(t==='mcp'){
+    renderMcp(c);
   }else if(t==='profile'){
     // Defence in depth, the same shape as the Admin tab's below: a stale app.sub or a restored
     // session must not land a tenant on an operator-only pane.
@@ -1832,6 +1835,103 @@ const PSLOTS=[['stripe','Stripe'],['paypal','PayPal'],['square','Square'],['padd
   };
 
   c.querySelector('#pp_add').onclick=()=>form(null);
+  load();
+}
+
+// --- MCP (docs/fleet-mcp-nav-convention.md): one nav slot directly above the account entry ---
+// Point any MCP client (Claude Code, Cursor, Hermes, or your own agent) at the endpoint below with
+// THIS workspace's API key as the Bearer token, and it can read this workspace's WorkflowSwift data.
+// Blocks 1-4 only: the MCP service keeps its audit in a file it owns and exposes no read API, so a
+// fifth block would show a screen this console cannot back.
+var MCP_ENDPOINT='https://hooks.swiftsoftware.net/mcp';
+// The REAL entities the fleet MCP server serves for a workflowswift key (each SPEC in its SPECS
+// table, app:"workflowswift"). Named from the specs, never invented: a panel that lists a tool the
+// server does not expose sends the operator hunting a mistake that is ours.
+var MCP_TOOLS=[
+  ['workflowswift_summary','how many leads this workspace has'],
+  ['workflowswift_search','search this workspace\'s leads by name, email or company \u2014 newest first, up to 200 rows'],
+  ['workflowswift_list_tenants','every workspace and its lead count \u2014 platform operator only']
+];
+var MCP_CONFIG_TEXT=JSON.stringify({mcpServers:{workflowswift:{url:MCP_ENDPOINT,headers:{Authorization:'Bearer YOUR_API_KEY'}}}},null,2);
+
+function mcpCopy(text){
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(function(){showMsg('Copied')},function(){showMsg('Copy blocked — select the value and copy it by hand','error')});
+  }else showMsg('Copy blocked — select the value and copy it by hand','error');
+}
+
+// MCP — the fleet slot above the account entry. Every block is backed by a route this app serves:
+//   endpoint  -> the fleet MCP service (one URL for all apps, scoped by the Bearer key)
+//   token     -> GET /api-keys (prefix only), POST /api-keys/{id}/reveal (password), POST
+//                /api-keys/{id}/regenerate (mints a replacement and retires the old key)
+//   tools     -> the tool names the mcp service builds as `{key}_summary` / `{key}_search`
+//   connect   -> the same four values, as a copy-paste client config
+function renderMcp(c){
+  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-1">MCP — connect your AI tools</h2>'
+    +'<p class="text-sm text-gray-500 mb-5">Point any MCP client (Claude Code, Cursor, Hermes, or your own agent) at the endpoint below and it can read this workspace\'s WorkflowSwift data. Read-only: no tool here can change anything.</p>'
+    +'<h3 class="font-semibold mb-2">1. Endpoint</h3>'
+    +'<div class="flex items-center gap-2 mb-5"><code style="background:#f1f5f9;padding:6px 10px;border-radius:6px;font-size:13px">'+escHtml(MCP_ENDPOINT)+'</code><button class="btn btn-sm btn-outline" id="mcp_copy_ep">Copy</button></div>'
+    +'<h3 class="font-semibold mb-2">2. Your token</h3>'
+    +'<p class="text-xs text-gray-500 mb-2">The MCP server accepts this workspace\'s API key as a Bearer token. Only the prefix is listed here: Reveal asks for your sign-in password before it shows the secret, and Regenerate mints a new key and retires the old one immediately.</p>'
+    +'<div id="mcp_keys"><p class="text-sm text-gray-400">Loading…</p></div>'
+    +'<h3 class="font-semibold mt-6 mb-2">3. Tools this workspace exposes</h3>'
+    +'<ul class="text-sm text-gray-600" style="list-style:disc;padding-left:20px">'
+    +MCP_TOOLS.map(function(e){return '<li><code>'+escHtml(e[0])+'</code> — '+escHtml(e[1])+'</li>'}).join('')
+    +'</ul>'
+    +'<p class="text-xs text-gray-500 mt-2">These are the tool names the MCP server actually advertises for a WorkflowSwift key — measured with this workspace\'s own key, not a wish list. Every tool is read-only.</p>'
+    +'<h3 class="font-semibold mt-6 mb-2">4. Connect</h3>'
+    +'<p class="text-xs text-gray-500 mb-2">Paste this into your MCP client config and replace YOUR_API_KEY with the key above.</p>'
+    +'<pre style="background:#0f172a;color:#e2e8f0;padding:12px;border-radius:8px;font-size:11px;overflow-x:auto;margin:0">'+escHtml(MCP_CONFIG_TEXT)+'</pre>'
+    +'<button class="btn btn-sm btn-outline" style="margin-top:8px" id="mcp_copy_cfg">Copy config</button>'
+    +'</div>';
+
+  c.querySelector('#mcp_copy_ep').onclick=function(){mcpCopy(MCP_ENDPOINT)};
+  c.querySelector('#mcp_copy_cfg').onclick=function(){mcpCopy(MCP_CONFIG_TEXT)};
+
+  var box=c.querySelector('#mcp_keys');
+  var showSecret=function(title,key){
+    box.querySelector('#mcp_secret').innerHTML='<div class="p-3 mt-3 rounded-lg bg-amber-50 border border-amber-300">'
+      +'<p class="text-sm font-semibold text-amber-800 mb-1">'+escHtml(title)+'</p>'
+      +'<div class="flex items-center gap-2"><code class="text-xs break-all bg-white border rounded px-2 py-1 flex-1">'+escHtml(key)+'</code>'
+      +'<button class="btn btn-sm" id="mcp_copy_key">Copy</button></div></div>';
+    box.querySelector('#mcp_copy_key').onclick=function(){mcpCopy(key)};
+  };
+  var load=async function(){
+    var d=await api('/api-keys');
+    if(d===null){box.innerHTML='<p class="text-sm text-red-500">Could not load API keys: '+escHtml(LAST_ERR||'request failed')+'</p>';return}
+    var keys=(d.api_keys||[]).filter(function(k){return k.is_active});
+    if(!keys.length){
+      box.innerHTML='<p class="text-sm text-gray-500">No active API key on this workspace yet. Create one on <strong>Integrations → API Keys</strong>, then come back here to connect an MCP client.</p>';
+      return;
+    }
+    box.innerHTML='<table class="table"><thead><tr><th>Name</th><th>Key prefix</th><th>Last used</th><th style="width:280px"></th></tr></thead><tbody>'
+      +keys.map(function(k){
+        return '<tr><td><strong>'+escHtml(k.name||'-')+'</strong></td>'
+          +'<td class="text-xs text-gray-500"><code>'+escHtml(k.prefix||'-')+'…</code></td>'
+          +'<td class="text-xs text-gray-500">'+(k.last_used_at?escHtml(String(k.last_used_at).replace('T',' ').slice(0,16)):'never')+'</td>'
+          +'<td class="text-right"><button class="btn btn-sm" data-reveal="'+escHtml(k.id)+'">Reveal</button> '
+          +'<button class="btn btn-sm btn-outline" data-regenerate="'+escHtml(k.id)+'">Regenerate</button></td></tr>';
+      }).join('')
+      +'</tbody></table><div id="mcp_secret"></div>';
+    box.querySelectorAll('button[data-reveal]').forEach(function(b){
+      b.onclick=async function(){
+        var pw=prompt('Enter your sign-in password to reveal this key');
+        if(!pw)return;
+        var r=await api('/api-keys/'+encodeURIComponent(b.getAttribute('data-reveal'))+'/reveal',{method:'POST',body:JSON.stringify({password:pw})});
+        if(!r||!r.key){showMsg('Reveal failed: '+(LAST_ERR||'request failed'),'error');return}
+        showSecret('This key — treat it like a password',r.key);
+      };
+    });
+    box.querySelectorAll('button[data-regenerate]').forEach(function(b){
+      b.onclick=async function(){
+        if(!confirm('Regenerate this key? The old key stops working immediately, so anything already wired to it — including any connected MCP client — stops until you paste the new one in.'))return;
+        var r=await api('/api-keys/'+encodeURIComponent(b.getAttribute('data-regenerate'))+'/regenerate',{method:'POST'});
+        if(!r||!r.key){showMsg('Regenerate failed: '+(LAST_ERR||'request failed'),'error');return}
+        showSecret('New key — copy it now; the previous key no longer works',r.key);
+        load();
+      };
+    });
+  };
   load();
 }
 
