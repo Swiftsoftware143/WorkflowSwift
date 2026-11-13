@@ -78,6 +78,11 @@ pub fn create_router(state: AppState) -> Router {
         // answers a fresh token for the device that pressed it. Private like its neighbours: the
         // account comes from the caller's own token, so there is no id in the path to spoof.
         .route("/logout-all", post(auth::logout_all))
+        // The customer's own exit door (2026-11-13, migration 113). Private like its neighbours:
+        // the account comes from the caller's own token, so there is no id in the path to spoof,
+        // and the handler re-checks the password and the typed word CLOSE itself. Its twin gates
+        // are in `login`, `forgot_password` and `reset_password`, which all refuse a closed account.
+        .route("/close-account", post(auth::close_account))
         .route("/profile", put(auth::update_profile))
         // Ask to move the caller's OWN sign-in address. The row it writes is `email_changes`
         // (pending), never `users.email` — the address moves only when the NEW mailbox confirms.

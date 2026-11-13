@@ -486,6 +486,19 @@ mod tests {
         assert!(!is_internal_route("/api/v1/auth/logout-all"));
     }
 
+    /// The customer's exit door (2026-11-13, migration 113): mounted, and PRIVATE in both
+    /// directions — the account comes from the caller's own token, so an anonymous caller must be
+    /// refused at the boundary, and it must never be treated as an internal door.
+    #[test]
+    fn the_close_account_route_is_mounted_and_private() {
+        assert!(
+            mounted("/api/v1/auth/close-account").is_some(),
+            "the close-account route is not mounted in src/routes.rs"
+        );
+        assert!(!is_public_route("/api/v1/auth/close-account"));
+        assert!(!is_internal_route("/api/v1/auth/close-account"));
+    }
+
     #[test]
     fn internal_routes_are_named_and_not_public() {
         for path in [
