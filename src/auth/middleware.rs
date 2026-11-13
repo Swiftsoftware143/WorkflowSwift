@@ -242,6 +242,65 @@ pub fn create_token(claims: &Claims, secret: &str) -> Result<String, AppError> {
     Ok(encode(&Header::default(), claims, &encoding_key)?)
 }
 
+/// The identity the fleet-canonical `integration_schema` module authorises on.
+///
+/// Extracted from the `Claims` [`auth_middleware`] inserts, so it is only
+/// reachable on an authenticated route. `is_admin` is true for:
+///   * an admin SESSION — a JWT carrying `perm_is_super_admin = true`, or
+///   * the admin's OWN API key — a `workflowswift_…` key whose owning `users`
+///     row still holds `perm_is_super_admin = true` (an API key's claims always
+///     mint that flag `false`, so the live row is the truth for that door).
+///
+/// A tenant session or a tenant's API key answers `is_admin = false`, and the
+/// canonical handler turns that into 403 without widening any other admin route:
+/// this extractor is consumed ONLY by `integration_schema::integration_schema`.
+pub struct AuthUser {
+    pub is_admin: bool,
+}
+
+impl axum::extract::FromRequestParts<AppState> for AuthUser {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let claims = parts
+            .extensions
+            .get::<Claims>()
+            .cloned()
+            .ok_or(AppError::Unauthorized)?;
+
+        let is_admin = if claims.perm_is_super_admin.unwrap_or(false) {
+            true
+        } else if claims.role == "api_key" {
+            api_key_owner_is_super_admin(state, &claims.sub).await
+        } else {
+            false
+        };
+
+        Ok(AuthUser { is_admin })
+    }
+}
+
+/// Is the user behind an API key still a super admin on their live `users` row?
+///
+/// `false` is also the safe answer for a `sub` that is not even a uuid, or a
+/// read that could not be made — a credential that cannot PROVE admin status is
+/// refused by the caller, never trusted.
+async fn api_key_owner_is_super_admin(state: &AppState, sub: &str) -> bool {
+    let Ok(user_id) = uuid::Uuid::parse_str(sub) else {
+        return false;
+    };
+    sqlx::query_scalar::<_, bool>("SELECT perm_is_super_admin FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{session_predates_password_change, super_admin_claim_outranks_row};

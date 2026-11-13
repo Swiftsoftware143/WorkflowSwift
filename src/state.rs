@@ -6,6 +6,10 @@ use crate::rate_limit::{AuthInFlight, ProviderKeyCache, RateLimiters};
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
+    /// The same pool under the name the fleet-canonical `integration_schema`
+    /// module addresses it by (`state.pool`). Both fields share one connection
+    /// pool; `db` is this app's historical spelling, `pool` is the shared one.
+    pub pool: PgPool,
     pub config: AppConfig,
     pub rate_limiters: RateLimiters,
     /// Same machinery, different key and purpose: layered OUTSIDE auth so a credential is

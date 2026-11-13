@@ -215,3 +215,6 @@ impl IntoResponse for AppError {
 }
 
 pub type ApiResult<T> = Result<T, AppError>;
+
+/// The fleet-canonical result alias the shared `integration_schema` module uses.
+pub type AppResult<T> = Result<T, AppError>;

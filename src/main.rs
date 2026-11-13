@@ -21,6 +21,9 @@ mod features;
 mod feedback;
 mod handlers;
 mod image_store;
+// Fleet-canonical integration schema describe endpoint (shared byte-for-byte
+// across sibling apps; the per-app config is `SCHEMA` below).
+mod integration_schema;
 mod login_throttle;
 mod models;
 mod n8n_converter;
@@ -49,6 +52,31 @@ use tracing_subscriber::EnvFilter;
 
 pub use error::AppError;
 pub use state::AppState;
+
+/// The ONE app-specific datum the fleet-canonical `integration_schema` module
+/// reads (spec §2). Everything else — discovery, type mapping, exclusion,
+/// masking, jsonb flattening — is the shared module, byte-identical fleet-wide.
+pub const SCHEMA: &integration_schema::AppSchema = &integration_schema::AppSchema {
+    app: "workflowswift",
+    version: 1,
+    entities: &[
+        integration_schema::EntityConfig {
+            key: "clients",
+            label: "Clients",
+            table: "clients",
+        },
+        integration_schema::EntityConfig {
+            key: "leads",
+            label: "Leads",
+            table: "leads",
+        },
+        integration_schema::EntityConfig {
+            key: "workflows",
+            label: "Workflows",
+            table: "workflows",
+        },
+    ],
+};
 
 #[tokio::main]
 async fn main() {
@@ -214,7 +242,8 @@ async fn main() {
     let provider_key_cache = crate::rate_limit::ProviderKeyCache::new(300); // 5 min TTL
 
     let state = AppState {
-        db: pool,
+        db: pool.clone(),
+        pool: pool.clone(),
         config: config.clone(),
         rate_limiters,
         pre_auth_limiters,

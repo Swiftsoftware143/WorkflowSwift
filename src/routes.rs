@@ -975,6 +975,15 @@ pub fn create_router(state: AppState) -> Router {
             post(handlers::branding_handler::upload_logo)
                 .delete(handlers::branding_handler::delete_logo),
         )
+        // Fleet-canonical describe endpoint for the CoreSwift field mapper
+        // (spec §2). PRIVATE: not in route_policy's public/internal lists, so an
+        // anonymous caller is refused 401 at the boundary; the canonical handler
+        // gates admin-only (admin session OR the admin's own API key -> 200,
+        // anything else authenticated -> 403).
+        .route(
+            "/integration/schema",
+            get(crate::integration_schema::integration_schema),
+        )
         // The caller's OWN in-inbox branding preview (cron 2026-10-24, parity with FunnelSwift,
         // IncentiveSwift and ADASwift). No body and no recipient: the address is read from the
         // caller's own user row, so this cannot be used as a relay. A reserved test address answers
