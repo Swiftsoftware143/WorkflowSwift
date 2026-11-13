@@ -3440,9 +3440,15 @@ const InboxView = () => {
 
       <div class="card">
         <h3 class="font-semibold text-gray-800 mb-1">Recent mail</h3>
-        <p class="text-sm text-gray-500 mb-3">The newest messages that arrived at any of your addresses, whichever address they came to. Reading the whole thread happens in the mail client.</p>
+        <p class="text-sm text-gray-500 mb-2">The newest messages that arrived at any of your addresses, whichever address they came to. Reading the whole thread happens in the mail client.</p>
+        <div class="flex gap-2 items-center flex-wrap" style="margin-bottom:10px">
+          <input class="input" id="inboxSearch" type="search" value=${S.inboxQ || ''} placeholder="Search subject, sender or text" aria-label="Search mail" autocomplete="off" style="flex:1;min-width:200px" onInput=${onInboxSearch} onKeyDown=${onInboxSearchKey} />
+          ${S.inboxQ ? html`<button class="btn-outline text-sm" id="inboxSearchClear" onClick=${clearInboxSearch}>Clear search</button>` : null}
+        </div>
         ${recent.length === 0
-          ? html`<div class="empty">Nothing has arrived yet. Mail to any address above appears here.</div>`
+          ? (S.inboxQ
+              ? html`<div class="empty">No mail matches &ldquo;${S.inboxQ}&rdquo;. The search looks at the subject, the sender and the opening text of every message in this view. <button class="btn-outline text-sm" id="inboxSearchClear2" onClick=${clearInboxSearch}>Clear the search</button></div>`
+              : html`<div class="empty">Nothing has arrived yet. Mail to any address above appears here.</div>`)
           : recent.map(m => html`<div style="padding:10px 0;border-bottom:1px solid #eef2f7" key=${m.id}>
               <div class="flex items-center justify-between gap-3"><strong>${m.subject || '(no subject)'}</strong><span class="text-sm text-gray-500">${m.received_at ? fmtDate(m.received_at) : ''}</span></div>
               <div class="text-sm text-gray-500">${m.from_address || ''} → ${m.address || ''}</div>
@@ -3457,7 +3463,7 @@ const loadInbox = async () => {
     const [dom, box, msg] = await Promise.allSettled([
       API.get('/private-email/domains'),
       API.get('/private-email/boxes'),
-      API.get('/private-email/messages?limit=20'),
+      API.get(inboxMessagesUrl()),
     ]);
     S.inboxDomains = dom.status === 'fulfilled' ? (dom.value.domains || []) : [];
     S.inboxBoxes = box.status === 'fulfilled' ? (box.value.boxes || []) : [];
@@ -3465,6 +3471,42 @@ const loadInbox = async () => {
     const failed = [dom, box, msg].find(r => r.status === 'rejected');
     if (failed) S.inboxMsg = { text: failed.reason.message, ok: false };
   } finally { S.loading = false; renderApp(); }
+};
+
+/* SEARCH (kanban t_843293af). The server's list route has always accepted `q` (subject, sender and
+   the opening text, case-insensitive) and this list never sent it. Type-and-pause re-queries 350 ms
+   after typing stops, or at once on Enter; the clear button lives in BOTH places (header and the
+   "no mail matches" card) and each carries this same handler. */
+const inboxMessagesUrl = () => '/private-email/messages?limit=20'
+  + (String(S.inboxQ || '').trim() ? '&q=' + encodeURIComponent(String(S.inboxQ).trim()) : '');
+
+let inboxSearchTimer = null;
+
+const searchInbox = async () => {
+  try {
+    const r = await API.get(inboxMessagesUrl());
+    S.inboxRecent = (r && r.messages) || [];
+  } catch (e) { S.inboxMsg = { text: 'Could not search your mail: ' + e.message, ok: false }; }
+  renderApp();
+};
+
+const onInboxSearch = (e) => {
+  S.inboxQ = e.target.value;
+  clearTimeout(inboxSearchTimer);
+  inboxSearchTimer = setTimeout(searchInbox, 350);
+};
+
+const onInboxSearchKey = (e) => {
+  if (e.key !== 'Enter') return;
+  e.preventDefault();
+  clearTimeout(inboxSearchTimer);
+  searchInbox();
+};
+
+const clearInboxSearch = () => {
+  S.inboxQ = '';
+  clearTimeout(inboxSearchTimer);
+  searchInbox();
 };
 
 const addInboxDomain = async () => {
