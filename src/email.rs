@@ -2108,6 +2108,20 @@ pub async fn send_signup_operator_alert(
     plan_slug: &str,
     source: &str,
 ) -> bool {
+    // A FLEET PROBE MUST NEVER RING THE OPERATOR (kanban t_f17b5802, extended 2026-11-13).
+    // The caller gates on the probe header and `harness_domain` — the MAIL-suppression class.
+    // The fleet's disposable inbox (`maxxspace.com`) is deliberately NOT in that class (the
+    // credential-delivery proof reads its password back out of it), so an audit signup through it
+    // still pages a human. Measured live 2026-11-13: audit walks delivered operator alerts to the
+    // owner's real mailbox. Requester, not route: the same door serves real customers.
+    if let Some(reason) = crate::security::probe_addr::synthetic_requester(owner_email, owner_name)
+    {
+        tracing::info!(
+            reason = %reason,
+            "signup operator alert WITHHELD — the new workspace is a synthetic identity"
+        );
+        return false;
+    }
     let billing: Option<serde_json::Value> =
         match sqlx::query_scalar("SELECT value FROM admin_settings WHERE key = 'billing'")
             .fetch_optional(&state.db)
