@@ -132,7 +132,7 @@ window.appGuidePages = {
   team:          { title: "Team", desc: "The people who share this workspace and what each of them is allowed to do.", actions: ["Invite someone", "Change a role"] },
   workspaces:    { title: "Workspaces", desc: "Separate drawers inside this one account \u2014 a client, a location or a brand. The 🗂️ button at the top of the console switches between them; the owner and admins can also rename, delete or change the default.", actions: ["Switch workspace", "Add a workspace"] },
   tickets:       { title: "Tickets", desc: "Support requests \u2014 yours to us, and any raised inside the workspace.", actions: ["Open a ticket", "Check a reply"] },
-  profile:       { title: "Profile", desc: "Your account details and sign-in for this workspace.", actions: ["Update your name and password", "Sign out a device you no longer use"] }
+  profile:       { title: "Profile", desc: "Your account details and sign-in for this workspace: your picture, the name and company your console header shows, the address you sign in with, your password, and the email branding your workspace sends. The screen ends with Close My Account, for the day you decide to leave: it asks for your password and the word CLOSE, ends your sign-in and every API key, and keeps your workflows, runs and history on record rather than deleting them.", actions: ["Update your name and password", "Sign out a device you no longer use", "Upload or remove your profile picture", "Close your account if you decide to leave"] }
 };
 </script>
 <script src="/inline-guide-widget.js?v=20261106a"></script>
@@ -2593,6 +2593,42 @@ const ProfileView = () => {
     dv.busy = false; renderApp();
   };
 
+  // Close my account (2026-11-13, migration 113) — the customer's own exit door. The first button
+  // only REVEALS the form; the second posts the bearer, the password and the typed word CLOSE.
+  // Every rule is the SERVER's (the word, the password, an operator account cannot close itself),
+  // and each refusal is printed inside the card rather than softened. Posted with fetch, not
+  // API.send, for the same reason the other exit controls are: the shared error handler treats a
+  // 401/403 as an expired session and clears the token, so a refusal would look like a logout.
+  const ca = viewState('profile_close', { armed:false, busy:false, msg:'', ok:false, pw:'', word:'' });
+  const closeAccount = async () => {
+    if (!ca.pw) { ca.ok = false; ca.msg = 'Enter your password.'; renderApp(); return; }
+    if (String(ca.word || '').trim().toUpperCase() !== 'CLOSE') { ca.ok = false; ca.msg = 'Type CLOSE in the box to confirm.'; renderApp(); return; }
+    if (!window.confirm('Close this account? You will be signed out and will not be able to sign in again.')) return;
+    ca.busy = true; ca.msg = ''; ca.ok = false; renderApp();
+    try {
+      const r = await fetch('/api/v1/auth/close-account', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + API.token },
+        body: JSON.stringify({ password: ca.pw, confirm: String(ca.word || '').trim() })
+      });
+      const t = await r.text(); let d = null; try { d = JSON.parse(t); } catch (_) {}
+      if (!r.ok) throw new Error((d && (d.message || d.error)) || ('Request failed (' + r.status + ')'));
+      ca.busy = false; ca.ok = true;
+      ca.msg = (d && d.message) || 'Your account is closed.';
+      ca.pw = ''; ca.word = ''; ca.armed = false;
+      renderApp();
+      // The server has already moved the session line, so this tab's bearer is dead: drop it here
+      // rather than let the next call bounce the customer with an "expired" message.
+      API.logout();
+      setTimeout(() => { window.location.reload(); }, 1600);
+      return;
+    } catch (err) {
+      ca.ok = false;
+      ca.msg = err.message || 'Could not close the account.';
+    }
+    ca.busy = false; renderApp();
+  };
+
   // Ask for a NEW sign-in address (cron 2026-10-18). Nothing on `users` moves here: the server
   // writes a pending `email_changes` row and mails the confirmation link to the NEW mailbox, so the
   // sentence this paints is the honest one — "check that inbox", never "your email is now X".
@@ -2733,6 +2769,22 @@ const ProfileView = () => {
         <p class="text-sm text-gray-500 mb-4">If you are still signed in somewhere you no longer control — an old phone, a shared laptop — this ends every other session on your account. This browser stays signed in, so you do not have to find your password again.</p>
         <button class="btn text-sm" id="profile-signout-others" onClick=${signOutOthers} disabled=${dv.busy || S.loading}>${dv.busy ? 'Signing the other devices out…' : 'Sign out of every other device'}</button>
         ${dv.msg ? html`<div id="profile-devices-msg" role="status" style=${'margin-top:10px;padding:10px 12px;border-radius:10px;font-size:13px;' + (dv.ok ? 'background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46' : 'background:#fef2f2;border:1px solid #fecaca;color:#b91c1c')}>${dv.msg}</div>` : ''}
+      </div>
+
+
+      <div class="card" id="profile-close-card">
+        <h2 class="text-base font-bold text-gray-900 mb-1">🚪 Close My Account</h2>
+        <p class="text-sm text-gray-500 mb-4">This ends your sign-in and every API key on the account, and you will not be able to sign in again. Your workflows, runs and history are kept on record and are not deleted, so support can help you if you close it by mistake.</p>
+        ${!ca.armed ? html`<button class="btn-outline text-sm" id="profile-close-arm" style="color:#b91c1c;border-color:#fca5a5" onClick=${()=>{ ca.armed = true; ca.msg=''; ca.ok=false; renderApp(); }} disabled=${ca.busy || S.loading}>Close my account</button>` : html`
+        <div class="space-y-3">
+          <div><label class="label" for="profile-close-password">Your password (proves it is you)</label><input type="password" class="input" id="profile-close-password" autocomplete="current-password" value=${ca.pw} onInput=${e=>{ca.pw=e.target.value; if (ca.msg) { ca.msg=''; ca.ok=false; }}} /></div>
+          <div><label class="label" for="profile-close-word">Type CLOSE to confirm</label><input type="text" class="input" id="profile-close-word" autocomplete="off" placeholder="CLOSE" value=${ca.word} onInput=${e=>{ca.word=e.target.value; if (ca.msg) { ca.msg=''; ca.ok=false; }}} /></div>
+          <div class="flex gap-2 flex-wrap">
+            <button class="btn text-sm" id="profile-close-do" style="background:#b91c1c;color:#fff" onClick=${closeAccount} disabled=${ca.busy || S.loading}>${ca.busy ? 'Closing your account…' : 'Close my account permanently'}</button>
+            <button class="btn-outline text-sm" id="profile-close-cancel" onClick=${()=>{ ca.armed=false; ca.pw=''; ca.word=''; ca.msg=''; ca.ok=false; renderApp(); }} disabled=${ca.busy}>Never mind</button>
+          </div>
+        </div>`}
+        ${ca.msg ? html`<div id="profile-close-msg" role="status" aria-live="polite" style=${'margin-top:10px;padding:10px 12px;border-radius:10px;font-size:13px;' + (ca.ok ? 'background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46' : 'background:#fef2f2;border:1px solid #fecaca;color:#b91c1c')}>${ca.msg}</div>` : ''}
       </div>
 
       <div class="card flex gap-2">
