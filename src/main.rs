@@ -102,6 +102,18 @@ async fn main() {
         Err(e) => tracing::warn!(error = ?e, "account programmatic API keys: backfill skipped"),
     }
 
+    // CoreSwift hash contract (key_hash = sha256_hex) — converge every sealed legacy row in place,
+    // once. Runs AFTER migrations (the partial unique index) and after the mint backfills; it only
+    // rewrites key_hash, so it cannot interact with the index. The unsealed live key is left on
+    // argon2 and still works through the dual-read resolver.
+    match crate::handlers::api_key_handler::migrate_sha256_key_hashes(&pool).await {
+        Ok(n) => tracing::info!(
+            migrated = n,
+            "api_keys sha256 hash contract: sealed rows migrated"
+        ),
+        Err(e) => tracing::warn!(error = ?e, "api_keys sha256 hash contract: migration skipped"),
+    }
+
     // At-rest seal for the system-mail credential (kanban t_a794cb09). All three writers of the
     // `admin_settings.email` row seal before they store; this is what converges a row that arrives
     // plaintext from a database restored out of an older dump (or from a writer added later).

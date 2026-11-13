@@ -53,6 +53,12 @@ pub enum AppError {
     #[error("Resource already exists: {0}")]
     Duplicate(String),
 
+    /// 409 carrying the operator's own sentence WITHOUT the "already exists" boilerplate.
+    /// The "you already have a key — use Regenerate" refusal is the customer's next step,
+    /// not a generic duplicate warning, so it must not be prefixed.
+    #[error("{0}")]
+    Conflict(String),
+
     #[error("Validation error: {0}")]
     Validation(String),
 
@@ -137,6 +143,7 @@ impl IntoResponse for AppError {
             AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg.clone()),
             AppError::Duplicate(msg) => (StatusCode::CONFLICT, msg.clone()),
+            AppError::Conflict(msg) => (StatusCode::CONFLICT, msg.clone()),
             AppError::Validation(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg.clone()),
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::PayloadTooLarge(msg) => (StatusCode::PAYLOAD_TOO_LARGE, msg.clone()),

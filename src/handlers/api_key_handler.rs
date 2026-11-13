@@ -19,6 +19,19 @@ pub async fn create_api_key(
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    // ONE active key per account, also enforced by the DB partial unique index (aid WHERE
+    // is_active). This is the friendly pre-check so the customer gets an instruction
+    // ("use Regenerate") instead of a generic 402 upgrade prompt or a 500 from the index.
+    let existing: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM api_keys WHERE aid = $1 AND is_active = true LIMIT 1")
+            .bind(aid)
+            .fetch_optional(&state.db)
+            .await?;
+    if existing.is_some() {
+        return Err(AppError::Conflict(
+            "you already have a key — use Regenerate".to_string(),
+        ));
+    }
     features::enforce_feature_limit(&state.db, aid, "max_api_keys", "Api Keys").await?;
     features::enforce_plan_flag(&state.db, aid, "api_access", "API access").await?;
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
@@ -94,16 +107,19 @@ pub async fn delete_api_key(
     let key_id =
         Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid key ID".to_string()))?;
 
-    let result = sqlx::query("DELETE FROM api_keys WHERE id = $1 AND aid = $2")
-        .bind(key_id)
-        .bind(aid)
-        .execute(&state.db)
-        .await?;
+    let result = sqlx::query(
+        "UPDATE api_keys SET is_active = false, updated_at = NOW() \
+         WHERE id = $1 AND aid = $2 AND is_active = true",
+    )
+    .bind(key_id)
+    .bind(aid)
+    .execute(&state.db)
+    .await?;
 
     if result.rows_affected() == 0 {
         return Err(AppError::NotFound("API key not found".to_string()));
     }
-    Ok(Json(json!({"status": "deleted"})))
+    Ok(Json(json!({ "status": "revoked" })))
 }
 
 pub async fn update_api_key(
@@ -162,7 +178,8 @@ pub struct MintedProgrammaticKey {
 /// the one-time backfill all call it).
 ///
 /// The row is written exactly as `auth::api_key_auth::authenticate` expects to find it:
-/// * `key_hash` — argon2 PHC string, the only value the authenticator reads;
+/// * `key_hash` — lowercase sha256 hex of the raw key (the CoreSwift hash contract, no salt),
+///   the value the authenticator compares and the fleet MCP server looks the key up by;
 /// * `prefix` — `discriminator(raw)` (8 hex digits of sha256), the indexed lookup hint, so
 ///   verification is an equality lookup and never a scan over every tenant's keys;
 /// * `key_encrypted` — the plaintext sealed with the fleet provider-key envelope, used ONLY so the
@@ -181,9 +198,10 @@ pub async fn mint_api_key_on(
     let raw_key = format!("{}{}", crate::auth::api_key_auth::KEY_PREFIX, random_part);
     let prefix = crate::auth::api_key_auth::discriminator(&raw_key);
 
-    // Off the reactor, under the process-wide Argon2 semaphore (auth::api_key_auth::argon2_hash):
-    // hashing must never park a tokio worker thread.
-    let key_hash = crate::auth::api_key_auth::argon2_hash(raw_key.clone()).await?;
+    // CoreSwift hash contract: `key_hash` = lowercase sha256_hex(raw key), no salt. This is the
+    // value the app's authenticator compares AND the value the fleet MCP server looks up by, so
+    // both doors accept the same key.
+    let key_hash = crate::auth::api_key_auth::sha256_hex(&raw_key);
 
     let sealed = crate::security::provider_key_crypto::seal_in(&mut *conn, &raw_key)
         .await
@@ -311,11 +329,13 @@ pub async fn reveal_api_key(
     Ok(Json(json!({ "id": id, "prefix": prefix, "key": raw_key })))
 }
 
-/// POST /api/v1/api-keys/{id}/regenerate — one atomic revoke-and-issue.
+/// POST /api/v1/api-keys/{id}/regenerate — one atomic retire-and-issue.
 ///
-/// Insert the replacement and delete the old row in ONE transaction: a failure at either step
-/// leaves the customer holding the key they already had, and once it commits the old key's hash is
-/// gone so the very next `Authorization: Bearer` attempt with it is a 401.
+/// RETIRE the old row first (`is_active = false`), THEN mint the replacement, in ONE transaction.
+/// Retiring first is required by the DB partial unique index (`aid` WHERE `is_active`):
+/// insert-then-retire would collide with the old row's still-active entry. A failure at either step
+/// leaves the customer holding the key they already had, and once it commits the old key no longer
+/// authenticates — its record stays (revoked), never deleted.
 pub async fn regenerate_api_key(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -339,13 +359,18 @@ pub async fn regenerate_api_key(
     let target_url = target_url.unwrap_or_default();
 
     let mut tx = state.db.begin().await?;
+    // 1) Retire first, so the replacement never collides with the one-active-key index.
+    sqlx::query(
+        "UPDATE api_keys SET is_active = false, updated_at = NOW() \
+         WHERE id = $1 AND user_id = $2 AND aid = $3 AND is_active = true",
+    )
+    .bind(id)
+    .bind(user_id)
+    .bind(aid)
+    .execute(&mut *tx)
+    .await?;
+    // 2) Then mint the replacement on the same connection, in the same transaction.
     let minted = mint_api_key_on(&mut tx, user_id, aid, &name, &target_url).await?;
-    sqlx::query("DELETE FROM api_keys WHERE id = $1 AND user_id = $2 AND aid = $3")
-        .bind(id)
-        .bind(user_id)
-        .bind(aid)
-        .execute(&mut *tx)
-        .await?;
     tx.commit().await?;
 
     tracing::info!(
@@ -438,4 +463,74 @@ pub async fn backfill_programmatic_keys(db: &sqlx::PgPool) -> Result<usize, AppE
 
     tx.commit().await?;
     Ok(minted)
+}
+
+/// One-time migration onto the CoreSwift hash contract: every `api_keys` row that still carries an
+/// argon2 `key_hash` but DOES hold a sealed copy (`key_encrypted` = `enc:v1:…`) gets `key_hash`
+/// overwritten with `sha256_hex(decrypted plaintext)`, using THIS app's `PROVIDER_KEY_ENC_SECRET`
+/// exactly as `open_in` does.
+///
+/// Gated on the `fleet_data_backfills` marker `api_keys_sha256_v1` so it runs ONCE. A row without a
+/// sealed copy (e.g. the live `CoreSwift CRM integration` key minted before sealing existed) is
+/// deliberately LEFT on argon2 — the dual-read resolver still accepts it, and the owner must
+/// Regenerate before the fleet MCP server (which only matches `key_hash = sha256_hex(bearer)`) will
+/// accept it. Never fatal: a credential row that cannot be opened must not stop the app booting.
+pub async fn migrate_sha256_key_hashes(db: &sqlx::PgPool) -> Result<usize, AppError> {
+    const MARKER: &str = "api_keys_sha256_v1";
+    let done: Option<String> =
+        sqlx::query_scalar("SELECT name FROM fleet_data_backfills WHERE name = $1")
+            .bind(MARKER)
+            .fetch_optional(db)
+            .await?;
+    if done.is_some() {
+        return Ok(0);
+    }
+
+    // Only sealed rows whose key_hash is NOT already a 64-char lowercase sha256 hex are candidates.
+    // Idempotent: a re-run after the marker is set returns early, and a partial run (a row migrated
+    // before an abort) is skipped again because its key_hash now matches the sha256 shape.
+    let rows = sqlx::query(
+        "SELECT id, key_encrypted FROM api_keys \
+         WHERE key_encrypted LIKE 'enc:v1:%' \
+           AND key_hash !~ '^[0-9a-f]{64}$'",
+    )
+    .fetch_all(db)
+    .await?;
+
+    let mut migrated = 0usize;
+    let mut skipped = 0usize;
+    for row in rows {
+        let id: Uuid = row.try_get("id")?;
+        let sealed: String = row.try_get("key_encrypted")?;
+        let plaintext = crate::security::provider_key_crypto::open_in(db, &sealed)
+            .await
+            .map_err(|e| {
+                tracing::error!(error = %e, key = %id, "sha256 migration: sealed key could not be opened");
+                e
+            })?;
+        if plaintext.is_empty() {
+            skipped += 1;
+            continue;
+        }
+        let sha = crate::auth::api_key_auth::sha256_hex(&plaintext);
+        sqlx::query("UPDATE api_keys SET key_hash = $2, updated_at = NOW() WHERE id = $1")
+            .bind(id)
+            .bind(&sha)
+            .execute(db)
+            .await?;
+        migrated += 1;
+    }
+
+    sqlx::query(
+        "INSERT INTO fleet_data_backfills (name, detail) VALUES ($1, $2) \
+         ON CONFLICT (name) DO NOTHING",
+    )
+    .bind(MARKER)
+    .bind(format!(
+        "migrated {migrated} sealed api_keys row(s) from argon2 to sha256 key_hash; {skipped} skipped (unopenable)"
+    ))
+    .execute(db)
+    .await?;
+
+    Ok(migrated)
 }

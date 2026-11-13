@@ -1,15 +1,18 @@
 //! API-key authentication.
 //!
 //! Keys minted by `handlers::api_key_handler::create_api_key` look like
-//! `workflowswift_<16 hex>` and are stored **argon2-hashed** with a random salt, so the
-//! key itself is not recoverable from the row and cannot be looked up by value.
-//! `api_keys.prefix` (varchar(8), shown to the key's owner by `GET /api-keys`) is
-//! therefore used as a real lookup hint: it holds `discriminator()` — the first 8 hex
-//! digits of sha256(raw key) — so verification is an indexed equality lookup on that
-//! hint followed by **one** argon2 check, never a scan over every tenant's key rows.
-//! Keys minted before the hint existed still carry the constant `LEGACY_PREFIX` and
-//! are found by scanning that (shrinking) subset, and the first successful use of such
-//! a key backfills its hint. See `authenticate()`.
+//! `workflowswift_<16 hex>`. NEW keys store `key_hash` = lowercase `sha256_hex(raw key)`,
+//! no salt — the CoreSwift reference hash contract, and exactly the value the fleet MCP
+//! server (`/opt/swift/mcp`) looks the key up by. Rows minted before that contract still
+//! carry an argon2id PHC string, so verification is DUAL-READ: sha256 equality first,
+//! argon2 verify as the fallback for the rows that have not been migrated yet.
+//!
+//! `api_keys.prefix` (varchar(8), shown to the key's owner by `GET /api-keys`) is the
+//! lookup hint: it holds `discriminator()` — the first 8 hex digits of sha256(raw key) —
+//! so verification is an indexed equality lookup on that hint, never a scan over every
+//! tenant's key rows. Keys minted before the hint existed still carry the constant
+//! `LEGACY_PREFIX` and are found by scanning that (shrinking) subset, and the first
+//! successful use of such a key backfills its hint. See `authenticate()`.
 //!
 //! The raw key is never logged, never stored and never returned on a read path.
 
@@ -35,6 +38,14 @@ pub const KEY_PREFIX: &str = "workflowswift_";
 /// be found by scanning that subset.
 pub const LEGACY_PREFIX: &str = "workflo";
 
+/// Lowercase sha256 hex of a raw credential — the CoreSwift reference hash contract.
+///
+/// NEW keys store this in `api_keys.key_hash` (no salt), and the fleet MCP server
+/// (`/opt/swift/mcp`) looks a key up by exactly this value, so the two must agree.
+pub fn sha256_hex(raw: &str) -> String {
+    hex::encode(Sha256::digest(raw.as_bytes()))
+}
+
 /// The 8-character lookup hint stored in `api_keys.prefix`: the first 8 hex digits of
 /// `sha256(raw key)`.
 ///
@@ -43,8 +54,7 @@ pub const LEGACY_PREFIX: &str = "workflo";
 /// whole key satisfies that: it exposes no slice of the key and cannot be inverted back
 /// into it.
 pub fn discriminator(raw_key: &str) -> String {
-    let digest = hex::encode(Sha256::digest(raw_key.as_bytes()));
-    digest[..8].to_string()
+    sha256_hex(raw_key)[..8].to_string()
 }
 
 /// Longest credential we will even attempt to hash-verify, so a huge header
@@ -331,9 +341,11 @@ pub async fn authenticate(
     })
 }
 
-/// Argon2-verify `token` against the rows carrying one `prefix`, returning the first
-/// match. Every candidate costs one full Argon2 verification, which is exactly why the
-/// discriminator exists: the hint normally narrows the table to a single row.
+/// DUAL-READ verification of `token` against the rows carrying one `prefix`: the new
+/// sha256 contract first (equality on the full digest), then the legacy argon2 fallback
+/// for rows not yet migrated. Every argon2 candidate still costs one full verification,
+/// which is exactly why the discriminator exists: the hint normally narrows the table to
+/// a single row, and a sha256 row that does not match never reaches the argon2 path.
 async fn verify_candidates(
     state: &AppState,
     prefix: &str,
@@ -348,12 +360,21 @@ async fn verify_candidates(
     .await?;
 
     let token: Arc<str> = Arc::from(token);
+    let sha256_hex = sha256_hex(&token);
     for row in rows {
         let hash: String = row.try_get("key_hash").unwrap_or_default();
         if hash.is_empty() {
             continue;
         }
-        if argon2_verify(hash, Arc::clone(&token)).await {
+        // 1) CoreSwift hash contract: `key_hash` is the lowercase sha256 hex of the raw
+        //    key, so a full-digest equality is the whole lookup (fast path, no hashing).
+        if hash.len() == 64 && hash.eq_ignore_ascii_case(&sha256_hex) {
+            return Ok(Some(row));
+        }
+        // 2) Legacy argon2 fallback for rows not yet migrated. Only a PHC-shaped value
+        //    reaches the verifier, so a sha256 row that did not match above never pays
+        //    an argon2 job (and an unusable stored value reads as "does not match").
+        if is_usable_hash(&hash) && argon2_verify(hash, Arc::clone(&token)).await {
             return Ok(Some(row));
         }
     }
