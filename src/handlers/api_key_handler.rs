@@ -45,9 +45,13 @@ pub async fn create_api_key(
     // ONE mint writer (kanban t_6c39f2b6). It generates the key, hashes it for authentication and
     // seals the plaintext copy the owner can read back with POST /api-keys/{id}/reveal. A key this
     // route mints is therefore the SAME kind of row the signup transaction and the backfill write.
-    let mut conn = state.db.acquire().await?;
-    let minted = mint_api_key_on(&mut conn, user_id, aid, name, target_url).await?;
-    drop(conn);
+    //
+    // Fail closed: the mint and its 'created' audit row are ONE transaction, so an audit write
+    // failure rolls the key row back too (a credential event that cannot be recorded is not
+    // performed).
+    let mut tx = state.db.begin().await?;
+    let minted = mint_api_key_on(&mut tx, user_id, aid, name, target_url).await?;
+    tx.commit().await?;
 
     Ok((
         StatusCode::CREATED,
@@ -104,21 +108,43 @@ pub async fn delete_api_key(
     Path(id): Path<String>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let actor = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
     let key_id =
         Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid key ID".to_string()))?;
 
-    let result = sqlx::query(
+    // Fail closed: the revoke and its 'revoked' audit row are ONE transaction, so an audit write
+    // failure rolls the revocation back (a revoke that cannot be recorded is not performed).
+    let mut tx = state.db.begin().await?;
+    let prefix: Option<String> = sqlx::query_scalar(
+        "SELECT prefix FROM api_keys WHERE id = $1 AND aid = $2 AND is_active = true",
+    )
+    .bind(key_id)
+    .bind(aid)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let prefix = prefix.ok_or_else(|| AppError::NotFound("API key not found".to_string()))?;
+
+    sqlx::query(
         "UPDATE api_keys SET is_active = false, updated_at = NOW() \
          WHERE id = $1 AND aid = $2 AND is_active = true",
     )
     .bind(key_id)
     .bind(aid)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await?;
 
-    if result.rows_affected() == 0 {
-        return Err(AppError::NotFound("API key not found".to_string()));
-    }
+    record_api_key_event(
+        &mut tx,
+        Some(key_id),
+        Some(aid),
+        "revoked",
+        Some(prefix.as_str()),
+        Some(actor),
+        json!({}),
+    )
+    .await?;
+    tx.commit().await?;
+
     Ok(Json(json!({ "status": "revoked" })))
 }
 
@@ -223,12 +249,56 @@ pub async fn mint_api_key_on(
     .execute(&mut *conn)
     .await?;
 
+    // Lifecycle audit — action='created', on the SAME connection so it is atomic with the key row
+    // (a transaction caller rolls both back together). Prefix only, never key_hash / key_encrypted /
+    // plaintext. Fail closed: an audit write failure aborts the mint.
+    record_api_key_event(
+        &mut *conn,
+        Some(id),
+        Some(aid),
+        "created",
+        Some(prefix.as_str()),
+        Some(user_id),
+        json!({ "name": name }),
+    )
+    .await?;
+
     Ok(MintedProgrammaticKey {
         id,
         raw_key,
         prefix,
         name: name.to_string(),
     })
+}
+
+/// Write ONE lifecycle event to `api_key_events`, on the caller's connection.
+///
+/// FAIL CLOSED: the INSERT runs on `conn` (the caller's transaction when there is one) and any
+/// error is returned, so the operation that caused the event aborts instead of proceeding
+/// unrecorded. The row carries the key PREFIX only — never `key_hash`, never `key_encrypted`,
+/// never the plaintext — plus the acting user id when known.
+async fn record_api_key_event(
+    conn: &mut sqlx::PgConnection,
+    key_id: Option<Uuid>,
+    owner_id: Option<Uuid>,
+    action: &str,
+    key_prefix: Option<&str>,
+    actor_user_id: Option<Uuid>,
+    metadata: serde_json::Value,
+) -> Result<(), AppError> {
+    sqlx::query(
+        r#"INSERT INTO api_key_events (key_id, owner_id, action, key_prefix, actor_user_id, metadata)
+           VALUES ($1, $2, $3, $4, $5, $6)"#,
+    )
+    .bind(key_id)
+    .bind(owner_id)
+    .bind(action)
+    .bind(key_prefix)
+    .bind(actor_user_id)
+    .bind(metadata)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
 }
 
 /// POST /api/v1/api-keys/{id}/reveal — show the key again (repeatable, audited, password-gated).
@@ -345,7 +415,7 @@ pub async fn regenerate_api_key(
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
 
     let row = sqlx::query(
-        "SELECT name, target_url FROM api_keys
+        "SELECT name, target_url, prefix FROM api_keys
          WHERE id = $1 AND user_id = $2 AND aid = $3 AND is_active = true",
     )
     .bind(id)
@@ -355,6 +425,7 @@ pub async fn regenerate_api_key(
     .await?
     .ok_or_else(|| AppError::NotFound("API key not found".into()))?;
     let name: String = row.get("name");
+    let old_prefix: String = row.get("prefix");
     let target_url: Option<String> = row.try_get("target_url").ok().flatten();
     let target_url = target_url.unwrap_or_default();
 
@@ -371,6 +442,18 @@ pub async fn regenerate_api_key(
     .await?;
     // 2) Then mint the replacement on the same connection, in the same transaction.
     let minted = mint_api_key_on(&mut tx, user_id, aid, &name, &target_url).await?;
+    // 3) Lifecycle audit — the retired key's 'regenerated' event, on the same transaction (fail
+    //    closed, like the mint). Prefix only; never key_hash / key_encrypted / plaintext.
+    record_api_key_event(
+        &mut tx,
+        Some(id),
+        Some(aid),
+        "regenerated",
+        Some(old_prefix.as_str()),
+        Some(user_id),
+        json!({ "new_key_id": minted.id.to_string() }),
+    )
+    .await?;
     tx.commit().await?;
 
     tracing::info!(
