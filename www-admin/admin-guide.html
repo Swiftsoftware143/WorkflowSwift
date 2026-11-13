@@ -1022,6 +1022,30 @@ when it is set.</p>
       working payment page — the card does not appear at all. <code>GET /payment-providers</code> answers the provider
       list and <code>GET /checkout/status</code> answers whether a purchase can complete; the card is the agreement of the
       two.</p>
+      <h2 id="mcp-connect-your-ai-tools">MCP &mdash; connect your AI tools</h2>
+      <p>Every workspace can hand its own data to an AI client (Claude Code, Cursor, Hermes or your own agent) over the
+      Model Context Protocol. The <strong>MCP</strong> entry sits directly above <strong>Profile</strong> in the workspace
+      navigation, and that screen carries four things: the endpoint, this workspace's key, the tools that key can reach,
+      and a copy-paste client config.</p>
+      <table>
+        <tr><th>Block</th><th>What it does</th></tr>
+        <tr><td>Endpoint</td><td><code>https://hooks.swiftsoftware.net/mcp</code> &mdash; one address for the whole
+        fleet; the key you present decides which workspace you are reading.</td></tr>
+        <tr><td>Your token</td><td>This workspace's own API key. Only the prefix is listed: <strong>Reveal</strong> asks
+        for your sign-in password before it shows the key (and records that it did), and <strong>Regenerate</strong>
+        retires the old key and mints a replacement in one step, so anything already wired to it stops immediately.</td></tr>
+        <tr><td>Tools</td><td>Read-only. Each entity answers a <code>&lt;key&gt;_summary</code> (how many exist) and a
+        <code>&lt;key&gt;_search</code> (text filter, newest first, at most 200 rows): leads, clients, workflows,
+        instances, templates, dashboards, instance steps, widgets, renditions, credit transactions, industries,
+        portfolio companies and account plans. <code>&lt;key&gt;_list_tenants</code> exists as well and is refused for a
+        workspace key &mdash; only the platform operator can call it.</td></tr>
+        <tr><td>Connect</td><td>A JSON snippet for your client's config, with <code>YOUR_API_KEY</code> standing in for
+        the key above.</td></tr>
+      </table>
+      <p>Nothing in this set of tools changes data, and nothing reaches outside the workspace whose key was presented.
+      A client that lists tools receives them in pages, so an agent that shows only the first page is showing itself part
+      of the catalogue. There is deliberately no audit block on that screen: the MCP service keeps its own audit log and
+      exposes no route to read it, and a screen must never show a block it cannot back.</p>
       <h2 id="industries-and-dashboards">Industries and dashboards</h2>
       <p>The platform ships <strong>6 industries</strong>: site-flipping, e-commerce, saas, government-contracting,
       real-estate, marketing-agency. Each account gets a dashboard tab per selected industry, seeded
