@@ -993,6 +993,48 @@ pub async fn execute_steps(
     ctx: &StepContext,
 ) -> Result<ExecutionOutcome, AppError> {
     let steps = load_steps(&state.db, workflow_id).await?;
+
+    // A workflow with NO steps must never read as a silent success. The old walk ran the loop
+    // zero times, counted zero failures and zero pending steps, and stamped the instance
+    // `completed` with an empty `steps[]` and an empty `context` — a run that reported success
+    // having executed nothing (measured live: 'Incoming: … from missedcallrespondr' instances
+    // completed with steps=0 and no result). The instance stays `completed` (the capture DID
+    // happen and the run is over), but the row now says plainly that nothing was configured.
+    if steps.is_empty() {
+        let note = "no steps configured — nothing executed";
+        sqlx::query(
+            r#"UPDATE workflow_instances
+               SET status = 'completed', completed_at = NOW(), updated_at = NOW(),
+                   result = $1, error_text = $2
+               WHERE id = $3"#,
+        )
+        .bind(json!({
+            "runner": "in_process",
+            "status": "completed",
+            "steps_total": 0,
+            "no_steps": true,
+            "note": note,
+        }))
+        .bind(note)
+        .bind(instance_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| AppError::Internal(format!("DB error: {e}")))?;
+
+        tracing::info!(
+            instance_id = %instance_id,
+            workflow_id = %workflow_id,
+            "workflow has no steps — recorded an explicit no-steps outcome instead of a silent success"
+        );
+
+        return Ok(ExecutionOutcome {
+            steps: vec![],
+            status: "completed".to_string(),
+            pending_steps: 0,
+            failed_steps: 0,
+        });
+    }
+
     walk(
         state,
         aid,

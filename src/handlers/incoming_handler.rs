@@ -173,8 +173,8 @@ pub async fn receive_incoming(
     let instance_id = Uuid::new_v4();
 
     sqlx::query(
-        r#"INSERT INTO workflow_instances (id, workflow_id, client_id, aid, name, status, current_step_order)
-           VALUES ($1, $2, $3, $4, $5, 'active', 0)"#,
+        r#"INSERT INTO workflow_instances (id, workflow_id, client_id, aid, name, status, current_step_order, context)
+           VALUES ($1, $2, $3, $4, $5, 'active', 0, $6)"#,
     )
     .bind(instance_id)
     .bind(workflow.id)
@@ -182,6 +182,7 @@ pub async fn receive_incoming(
     .bind(aid)
     .bind(format!("Incoming: {} from {}", 
         payload.contact.email.as_deref().unwrap_or("lead"), source))
+    .bind(&context)
     .execute(&state.db)
     .await
     .map_err(|e| AppError::Internal(format!("Failed to create workflow instance: {}", e)))?;
