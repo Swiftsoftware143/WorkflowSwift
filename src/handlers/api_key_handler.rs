@@ -155,6 +155,7 @@ pub async fn update_api_key(
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let actor = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
     let key_id =
         Uuid::parse_str(&id).map_err(|_| AppError::BadRequest("Invalid key ID".to_string()))?;
 
@@ -166,8 +167,53 @@ pub async fn update_api_key(
         return Err(AppError::BadRequest("No fields to update".to_string()));
     }
 
+    // Fail closed: the field change and its lifecycle audit row are ONE transaction, so an audit
+    // write failure rolls the update back (a credential transition that cannot be recorded is not
+    // performed). This was the ONE remaining un-audited credential door — mint/revoke/regenerate
+    // all write api_key_events, and PUT /api-keys/{id} can flip is_active, so it records the flip
+    // too: 'revoked' on a disable, 'activated' on a re-enable.
+    let mut tx = state.db.begin().await?;
+
+    // Lock and read the current state scoped by account, so the transition decision and the audit
+    // prefix are correct even under a concurrent write to the same row.
+    let (was_active, prefix): (bool, String) = sqlx::query_as(
+        "SELECT is_active, prefix FROM api_keys WHERE id = $1 AND aid = $2 FOR UPDATE",
+    )
+    .bind(key_id)
+    .bind(aid)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::NotFound("API key not found".to_string()))?;
+
+    // true→false is a revoke, false→true is a re-activation; an unchanged flag is not a transition
+    // and writes no event.
+    let transition: Option<&'static str> = match is_active {
+        Some(false) if was_active => Some("revoked"),
+        Some(true) if !was_active => Some("activated"),
+        _ => None,
+    };
+
+    // Re-activation must honour the ONE-active-key rule (partial unique index
+    // api_keys_one_active_per_aid): refuse with the customer's next step instead of letting the
+    // index raise 23505 → 500. The index stays as the backstop; the UPDATE maps 23505 the same way.
+    if transition == Some("activated") {
+        let other_active: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM api_keys WHERE aid = $1 AND is_active = true AND id <> $2)",
+        )
+        .bind(aid)
+        .bind(key_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if other_active {
+            return Err(AppError::Conflict(
+                "you already have an active key — use Regenerate".to_string(),
+            ));
+        }
+    }
+
     sqlx::query(
-        r#"UPDATE api_keys SET name = COALESCE($1, name), target_url = COALESCE($2, target_url), is_active = COALESCE($3, is_active), updated_at = NOW()
+        r#"UPDATE api_keys SET name = COALESCE($1, name), target_url = COALESCE($2, target_url),
+              is_active = COALESCE($3, is_active), updated_at = NOW()
            WHERE id = $4 AND aid = $5"#,
     )
     .bind(name)
@@ -175,8 +221,31 @@ pub async fn update_api_key(
     .bind(is_active)
     .bind(key_id)
     .bind(aid)
-    .execute(&state.db)
-    .await?;
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| match e {
+        // Backstop for the reactivation race the pre-check cannot close (a concurrent mint can
+        // insert an active key for the same account after the check but before this UPDATE).
+        sqlx::Error::Database(db) if db.code().as_deref() == Some("23505") => {
+            AppError::Conflict("you already have an active key — use Regenerate".to_string())
+        }
+        other => other.into(),
+    })?;
+
+    if let Some(action) = transition {
+        record_api_key_event(
+            &mut tx,
+            Some(key_id),
+            Some(aid),
+            action,
+            Some(prefix.as_str()),
+            Some(actor),
+            json!({}),
+        )
+        .await?;
+    }
+
+    tx.commit().await?;
 
     Ok(Json(json!({"status": "updated"})))
 }
