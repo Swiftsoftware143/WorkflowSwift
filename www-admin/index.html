@@ -289,6 +289,57 @@ function renderLogin(){
   document.body.appendChild(div);
 }
 
+// ── WORKSPACES (kanban B203) ───────────────────────────────────────────────────────────────────
+// `src/workspaces/` serves list / create / rename / set-default / remove / switch. The console
+// listed and created them and nothing else, so four doors had no caller — the fleet's own rule is
+// that a backend route with no UI is a defect. The session token carries `wsid`, so the ACTIVE
+// workspace is read from the token, never guessed.
+let WS_CACHE = null;      // [{id,name,is_default}] — refreshed after every mutation
+let WS_CUR = '';          // wsid from the current token
+function wsCurId(){
+  try{
+    const part=String(TOKEN||'').split('.')[1]; if(!part) return '';
+    const claims=JSON.parse(atob(part.replace(/-/g,'+').replace(/_/g,'/')));
+    return claims&&claims.wsid?String(claims.wsid):'';
+  }catch(e){return ''}
+}
+function wsSanity(){ WS_CUR = wsCurId(); return WS_CUR; }
+async function wsLoad(){
+  const d=await api('/workspaces');
+  WS_CACHE = d&&Array.isArray(d.workspaces)?d.workspaces:[];
+  wsSanity();
+  return WS_CACHE;
+}
+async function wsSwitchTo(id){
+  const r=await api('/workspaces/'+encodeURIComponent(id)+'/switch',{method:'POST'});
+  if(!r||!r.token){ showMsg('Could not switch workspace: '+(LAST_ERR||'no token returned'),'error'); return; }
+  TOKEN=r.token;
+  localStorage.setItem('ws_token',TOKEN);
+  // the account's own read and every list belong to the workspace we just left
+  WS_CACHE=null;
+  try{ await loadMe(); }catch(e){}
+  await wsLoad();
+  showMsg('Switched workspace','success');
+  renderApp();
+}
+// The two-level switcher: the account is the session, the workspace is what every screen shows.
+async function wsPaintSwitcher(){
+  const box=document.getElementById('ws-switch-box');
+  if(!box) return;
+  if(!WS_CACHE){ try{ await wsLoad(); }catch(e){ WS_CACHE=[]; } }
+  box.innerHTML='';
+  if(!WS_CACHE||!WS_CACHE.length) return;
+  const cur=wsSanity()||((WS_CACHE.find(w=>w.is_default)||{}).id||'');
+  const sel=h('select',{className:'input',id:'ws-switcher-select',style:'padding:6px 8px;font-size:13px',
+    title:'Switch the console to another workspace',
+    onchange:(e)=>{ const v=e.target.value; if(v&&v!==wsCurId()) wsSwitchTo(v); }},
+    ...WS_CACHE.map(w=>h('option',{value:w.id,selected:(String(w.id)===String(cur))?'':'selected'},w.name+(w.is_default?' (default)':''))));
+  box.appendChild(h('div',{style:'font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:#94a3b8;margin-bottom:4px'},'Workspace'));
+  box.appendChild(sel);
+  box.appendChild(h('button',{className:'btn btn-sm btn-ghost',type:'button',style:'margin-top:6px;width:100%','data-ws-manage':'1',
+    onclick:()=>{ app.tab='automation'; app.sub='workspaces'; renderApp(); }},'Manage workspaces'));
+}
+
 function renderApp(){
   document.body.innerHTML='';
   // kanban t_b92fbd43 — below 820px the sidebar is an off-canvas drawer (CSS .sidebar/.main).
@@ -304,6 +355,7 @@ function renderApp(){
   document.body.appendChild(main);
   if(window.inlineGuidePage)window.inlineGuidePage(app.tab+':'+app.sub);
   mountFeedbackFab();
+  if(TOKEN&&!IMPERSONATION) wsPaintSwitcher();
 }
 
 function impersonationBanner(){
@@ -416,6 +468,9 @@ function sidebar(){
         h('div',{id:'me-name',title:meName,style:'font-size:13px;font-weight:600;color:#1e293b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'},meName),
         h('div',{id:'me-plan',style:'margin-top:3px;font-size:11px;color:#475569'},sub))));
   })();
+  // The workspace switcher sits under the account block: the account is who you are, the workspace
+  // is what every screen shows. Filled asynchronously by wsPaintSwitcher().
+  if(!IMPERSONATION) nav.appendChild(h('div',{id:'ws-switch-box',className:'mx-3 mb-3','data-workspace-switcher':'1'}));
   // The Admin tab is the operator surface: every sub under it calls /admin/* (or the admin-level
   // CRUDs), all of which answer 403 "Admin access required" to a tenant user. Same rule the
   // ADASwift / FunnelSwift / CoreSwift consoles adopted: an operator-only screen is not offered to
@@ -481,7 +536,7 @@ function content(){
   }else if(t==='automation'){
     if(s==='automations')renderCRUD(c,'automations','Automation',['name','trigger_type','enabled'],'/automations');
     else if(s==='agents')renderCRUD(c,'agents','Agent',['name','provider','is_active'],'/agents',false);
-    else if(s==='workspaces')renderCRUD(c,'workspaces','Workspace',['name','created_at'],'/workspaces',false);
+    else if(s==='workspaces')renderWorkspaces(c);
   }else if(t==='crm'){
     if(s==='leads')renderCRUD(c,'leads','Lead',['name','status','source'],'/leads');
   }else if(t==='tags'){
@@ -618,6 +673,92 @@ function unwrapOne(d){
 // `addFields` (optional) = the fields the ADD form exposes when they differ from the COLUMN set —
 // a resource whose table is deliberately narrow (Plans) still needs its whole settable surface in
 // the Add form. Omitted -> the columns are also the Add form, exactly as before.
+// The Workspaces screen (kanban B203). Every action calls the backend door it names and re-reads the
+// list afterwards, so the table can never show a state the server does not hold.
+async function renderWorkspaces(c){
+  c.innerHTML='';
+  const list = await wsLoad();
+  const cur = wsSanity();
+  const canManage = (()=>{ const r=String((ME&&ME.role)||''); return ['user','company_admin','admin','super_admin','agency_admin'].indexOf(r)>=0; })();
+  c.appendChild(h('h2',{style:'font-size:20px;font-weight:700;margin-bottom:4px'},'Workspaces'));
+  c.appendChild(h('p',{style:'font-size:13px;color:#64748b;margin-bottom:14px'},
+    'Each workspace keeps its own workflows, leads and dashboards. Switch between them from the sidebar.'));
+  const card=h('div',{className:'card'});
+  card.appendChild(h('h3',{style:'font-size:15px;font-weight:600;margin-bottom:10px'},'Your workspaces'));
+  const table=h('table',{className:'table',style:'width:100%','data-workspaces-table':'1'});
+  const thead=h('thead'); const htr=h('tr');
+  ['Name','Default','Active','Actions'].forEach(t=>htr.appendChild(h('th',{},t)));
+  thead.appendChild(htr); table.appendChild(thead);
+  const tbody=h('tbody');
+  if(!list.length){
+    const tr=h('tr'); const td=h('td',{colspan:'4',style:'text-align:center;color:#94a3b8;padding:18px'},'No workspaces yet.');
+    tr.appendChild(td); tbody.appendChild(tr);
+  }
+  list.forEach(w=>{
+    const tr=h('tr',{'data-workspace-row':w.id});
+    tr.appendChild(h('td',{'data-ws-name':w.id},h('strong',{},w.name)));
+    tr.appendChild(h('td',{},w.is_default?h('span',{className:'badge',style:'background:#dbeafe;color:#1e40af'},'Default'):h('span',{style:'color:#94a3b8'},'\u2014')));
+    tr.appendChild(h('td',{},String(w.id)===String(cur)?h('span',{className:'badge',style:'background:#d1fae5;color:#065f46'},'Active'):h('span',{style:'color:#94a3b8'},'\u2014')));
+    const act=h('td',{style:'text-align:right;white-space:nowrap'});
+    if(String(w.id)!==String(cur)) act.appendChild(h('button',{className:'btn btn-sm',type:'button',onclick:()=>wsSwitchTo(w.id)},'Switch to'));
+    if(canManage) act.appendChild(h('button',{className:'btn btn-sm btn-ghost',type:'button',style:'margin-left:6px',
+      onclick:()=>{
+        const cell=tr.querySelector('[data-ws-name="'+w.id+'"]'); if(!cell) return;
+        cell.innerHTML='';
+        const inp=h('input',{className:'input',id:'ws-rename-input',style:'max-width:240px',value:w.name});
+        inp.addEventListener('keydown',e=>{ if(e.key==='Enter') doRename(w.id); });
+        cell.appendChild(inp);
+        cell.appendChild(h('button',{className:'btn btn-sm',type:'button',style:'margin-left:6px',onclick:()=>doRename(w.id)},'Save'));
+        cell.appendChild(h('button',{className:'btn btn-sm btn-ghost',type:'button',style:'margin-left:4px',onclick:()=>renderApp()},'Cancel'));
+        inp.focus();
+      }},'Rename'));
+    if(canManage&&!w.is_default) act.appendChild(h('button',{className:'btn btn-sm btn-ghost',type:'button',style:'margin-left:6px',
+      onclick:async()=>{
+        const r=await api('/workspaces/'+encodeURIComponent(w.id)+'/default',{method:'POST'});
+        if(!r){ showMsg('Could not change the default: '+(LAST_ERR||'failed'),'error'); return; }
+        WS_CACHE=null; showMsg('Default workspace changed','success'); renderApp();
+      }},'Make default'));
+    if(canManage&&list.length>1) act.appendChild(h('button',{className:'btn btn-sm btn-danger',type:'button',style:'margin-left:6px',
+      onclick:async()=>{
+        if(!confirm('Remove the workspace "'+w.name+'"? This cannot be undone.')) return;
+        const r=await api('/workspaces/'+encodeURIComponent(w.id),{method:'DELETE'});
+        if(!r){ showMsg(LAST_ERR||'Could not remove this workspace','error'); return; }
+        WS_CACHE=null; showMsg('Workspace removed','success'); renderApp();
+      }},'Remove'));
+    tr.appendChild(act); tbody.appendChild(tr);
+  });
+  table.appendChild(tbody); card.appendChild(table);
+  card.appendChild(h('p',{style:'font-size:12px;color:#64748b;margin-top:10px'},
+    'An account always keeps at least one workspace, and the workspace you are signed into cannot be removed \u2014 switch away first. Portfolio businesses always keep their workspaces.'));
+  c.appendChild(card);
+
+  const addCard=h('div',{className:'card'});
+  addCard.appendChild(h('h3',{style:'font-size:15px;font-weight:600;margin-bottom:10px'},'Add a workspace'));
+  const nameIn=h('input',{className:'input',id:'ws-new-name',placeholder:'e.g. Second team',style:'max-width:320px'});
+  const addBtn=h('button',{className:'btn btn-sm',type:'button',style:'margin-left:8px',
+    onclick:async()=>{
+      const name=String(nameIn.value||'').trim();
+      if(!name){ showMsg('Give the workspace a name','error'); return; }
+      const r=await api('/workspaces',{method:'POST',body:JSON.stringify({name})});
+      if(!r){ showMsg(LAST_ERR||'Could not add the workspace','error'); return; }
+      WS_CACHE=null; showMsg('Workspace added','success'); renderApp();
+    }},'Add workspace');
+  nameIn.addEventListener('keydown',e=>{ if(e.key==='Enter') addBtn.click(); });
+  const row=h('div',{style:'display:flex;align-items:flex-end;gap:8px;flex-wrap:wrap'},nameIn,addBtn);
+  addCard.appendChild(row);
+  addCard.appendChild(h('p',{style:'font-size:12px;color:#64748b;margin-top:8px'},
+    'If your plan includes a set number of workspaces, adding past it tells you to upgrade \u2014 the ceiling comes from your plan, not this screen.'));
+  c.appendChild(addCard);
+}
+async function doRename(id){
+  const inp=document.getElementById('ws-rename-input');
+  const name=inp?String(inp.value||'').trim():'';
+  if(!name){ showMsg('Give the workspace a name','error'); return; }
+  const r=await api('/workspaces/'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify({name})});
+  if(!r){ showMsg(LAST_ERR||'Could not rename the workspace','error'); return; }
+  WS_CACHE=null; showMsg('Workspace renamed','success'); renderApp();
+}
+
 async function renderCRUD(container,key,label,fields,ep,editFields,extraAction,addFields,exportEp){
   // `ep` is normally the resource path. It may also be {list,create,del} when a resource's list and
   // its create live at different paths (Team: GET /users, POST /users/invite).
