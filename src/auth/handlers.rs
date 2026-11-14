@@ -182,7 +182,7 @@ pub async fn register(
     {
         Some(picked) => {
             match crate::handlers::tickets_handler::file_signup_plan_request(
-                &state.db,
+                &state,
                 ids.account_id,
                 picked,
             )

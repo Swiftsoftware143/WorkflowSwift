@@ -131,10 +131,14 @@ pub async fn list(
 /// signup itself must never fail because of a preference. Called AFTER the account exists, so the
 /// ticket always has an owner.
 pub async fn file_signup_plan_request(
-    db: &sqlx::PgPool,
+    state: &AppState,
     aid: Uuid,
     picked: &str,
 ) -> Result<Option<(String, String)>, AppError> {
+    // The pool is all this function's queries need; the STATE is what the buyer's acknowledgement
+    // needs (its mail goes out through the app's own sender). Bound once so the SQL below is
+    // unchanged.
+    let db = &state.db;
     let slug = picked.trim().to_ascii_lowercase();
     if slug.is_empty() || slug == "free" {
         return Ok(None);
@@ -188,6 +192,17 @@ pub async fn file_signup_plan_request(
     .bind(&slug)
     .execute(db)
     .await?;
+    // ACKNOWLEDGE THE BUYER (2026-11-14). The Support screen's own request already mails the
+    // customer a receipt; this door — the one the pricing cards lead to — filed the ticket and left
+    // them with only the welcome mail. The operator is NOT mailed from here: it already gets the
+    // "a customer arrived" alert for this same signup, and a second one for the plan ask is noise.
+    // Best effort, so a mail failure never turns a recorded request into a failed signup.
+    let _receipt = notify_plan_request_receipt_to_customer(
+        state,
+        aid,
+        &format!("Upgrade request: {name} plan"),
+    )
+    .await;
     Ok(Some((slug, name)))
 }
 
@@ -441,7 +456,7 @@ pub(crate) async fn notify_plan_request_receipt(
     .await
     .ok()
     .flatten();
-    let Some((name, email)) = owner else {
+    let Some((_name, email)) = owner else {
         tracing::warn!(%aid, "plan request: the workspace has no active user to acknowledge");
         return false;
     };
@@ -451,6 +466,34 @@ pub(crate) async fn notify_plan_request_receipt(
     // effort, and silent when no operator address is configured.
     let _operator_alerted =
         crate::email::send_plan_request_operator_alert(state, aid, subject, &email).await;
+    notify_plan_request_receipt_to_customer(state, aid, subject).await
+}
+
+/// The CUSTOMER half alone (2026-11-14). The signup door already mails the operator a "a customer
+/// arrived" alert, so re-using the whole `notify_plan_request_receipt` there would mail the operator
+/// twice for one signup — the exact noise the operator alert discipline exists to prevent. This is
+/// the acknowledgement the buyer needs and nothing else: "we have your request for <plan>".
+///
+/// Measured live before this: a signup asking for `professional` filed the `plan_request` ticket and
+/// left the buyer with only the welcome mail, while the Support screen's own request mailed them a
+/// receipt. Same ask, two doors, one acknowledgement.
+pub(crate) async fn notify_plan_request_receipt_to_customer(
+    state: &AppState,
+    aid: Uuid,
+    subject: &str,
+) -> bool {
+    let owner: Option<(String, String)> = sqlx::query_as(
+        "SELECT name, email FROM users WHERE aid = $1 AND is_active ORDER BY (role IN ('owner','company_admin')) DESC, sort_order NULLS LAST, created_at ASC LIMIT 1",
+    )
+    .bind(aid)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+    let Some((name, email)) = owner else {
+        tracing::warn!(%aid, "plan request: the workspace has no active user to acknowledge");
+        return false;
+    };
     let vars = json!({
         "name": name,
         "ticket_subject": subject,
