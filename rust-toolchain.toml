@@ -1,0 +1,6 @@
+[toolchain]
+# Pinned so CI and the local gate compile with the same toolchain and, therefore,
+# the same clippy/rustfmt lint set. Bumping this must be a deliberate change.
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

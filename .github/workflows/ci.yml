@@ -17,9 +17,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
+        # Pin the toolchain (mirrors rust-toolchain.toml) so the CI lint set is
+        # deterministic and matches the local gate, which builds with the same
+        # pinned version. `@stable` drifts and can fail here while passing locally.
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          toolchain: 1.97.1
+          components: clippy, rustfmt
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
