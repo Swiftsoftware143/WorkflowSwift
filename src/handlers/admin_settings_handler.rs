@@ -2951,6 +2951,129 @@ pub async fn admin_send_reset(
     }
 }
 
+// ── Plan payment pages: re-open them NOW (2026-11-13) ─────────────────────────────────────────
+//
+// WHY THIS EXISTS. A tier's hosted payment page (`plan_tiers.checkout_url`) is proven ONCE, when
+// the operator saves it (`require_hosted_payment_url_resolves` refuses a 404/410 at save time).
+// Nothing ever looked again — and a provider can retire the page, or delete the checkout slug.
+// That is exactly how this fleet's CRM lost every paid plan's checkout: the plans still read
+// sellable while a buyer pressing Upgrade landed on a 404. This endpoint asks the question again
+// on demand and answers per plan, so the console can put the verdict on the plan it belongs to.
+// It is a READ of remote pages (one GET each) and writes nothing.
+
+/// What ONE stored payment page answered, as the operator needs to see it.
+///
+/// `needs_browser` is deliberately its own verdict: a payment provider that answers 403 to a
+/// script has NOT told us the page is dead, and calling that dead would train the operator to
+/// ignore the check.
+async fn probe_payment_page(client: &reqwest::Client, url: &str) -> (&'static str, Option<u16>) {
+    match client.get(url).send().await {
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            if status == 404 || status == 410 {
+                ("dead", Some(status))
+            } else if (200..400).contains(&status) {
+                ("ok", Some(status))
+            } else {
+                ("needs_browser", Some(status))
+            }
+        }
+        Err(e) => {
+            tracing::info!("payment-page check: {url} did not answer: {e}");
+            ("unreachable", None)
+        }
+    }
+}
+
+/// POST /api/v1/admin/plans/payment-pages/check — re-open every plan's stored payment page NOW.
+///
+/// Every plan carrying a link is probed, active or not: a retired plan is often the one an
+/// operator is about to re-enable. Platform-admin only, writes nothing.
+pub async fn check_plan_payment_pages(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
+    require_admin(&claims)?;
+
+    let rows = sqlx::query(
+        "SELECT id, name, slug, checkout_url, is_active FROM plan_tiers \
+         WHERE checkout_url IS NOT NULL AND btrim(checkout_url) <> '' \
+         ORDER BY sort_order ASC NULLS LAST, name ASC",
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    // A BROWSER-shaped user agent on purpose: several payment providers answer 403 to a bot UA,
+    // and the operator would then see "could not check" on a page that opens fine for them.
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(8))
+        .redirect(reqwest::redirect::Policy::limited(6))
+        .user_agent(
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) \
+             Chrome/131.0.0.0 Safari/537.36",
+        )
+        .build()
+        .map_err(|e| {
+            tracing::error!("payment-page check: could not build the HTTP client: {e:?}");
+            AppError::Internal("Could not run the payment-page check just now".into())
+        })?;
+
+    let mut out: Vec<serde_json::Value> = Vec::with_capacity(rows.len());
+    let mut dead = 0usize;
+    let mut ok = 0usize;
+    for row in rows.iter() {
+        let id: Uuid = row.try_get("id")?;
+        let name: String = row.try_get("name").unwrap_or_default();
+        let slug: String = row.try_get("slug").unwrap_or_default();
+        let url: String = row.try_get("checkout_url").unwrap_or_default();
+        let is_active: bool = row.try_get("is_active").unwrap_or(true);
+        let (reason, status) = if !crate::handlers::checkout_handler::is_hosted_payment_url(&url) {
+            ("not_https", None)
+        } else {
+            probe_payment_page(&client, url.trim()).await
+        };
+        match reason {
+            "dead" => dead += 1,
+            "ok" => ok += 1,
+            _ => {}
+        }
+        out.push(json!({
+            "id": id.to_string(),
+            "name": name,
+            "slug": slug,
+            "active": is_active,
+            "url": url,
+            "reason": reason,
+            "status": status,
+        }));
+    }
+
+    let checked = out.len();
+    let message = if checked == 0 {
+        "No plan carries a payment page, so there is nothing to check.".to_string()
+    } else if dead == 0 && ok == checked {
+        format!("Every one of the {checked} plan payment page(s) opened.")
+    } else if dead > 0 {
+        format!(
+            "{dead} of {checked} plan payment page(s) answered a dead link. Those plans are \
+             on sale and a buyer pressing Upgrade would land on a page that does not exist."
+        )
+    } else {
+        format!(
+            "{ok} of {checked} page(s) opened; the rest could not be judged from here. Open \
+             those in your own browser before relying on them."
+        )
+    };
+
+    Ok(Json(json!({
+        "plans": out,
+        "checked": checked,
+        "opened": ok,
+        "dead": dead,
+        "message": message,
+    })))
+}
+
 /// Tenant-admin gate. The canonical 403 for this app (`{"code":403,"error":true,
 /// "message":"Admin access required"}`) — reused by surfaces_handler so there is exactly
 /// one place that decides who may write tenant-wide definitions.

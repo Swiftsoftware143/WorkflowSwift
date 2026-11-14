@@ -831,6 +831,13 @@ pub fn create_router(state: AppState) -> Router {
             put(handlers::admin_settings_handler::admin_update_plan_full)
                 .delete(handlers::admin_settings_handler::admin_delete_plan),
         )
+        // Re-open every plan's stored payment page NOW (2026-11-13). A link is proven once, at
+        // save time, and never looked at again — a retired provider slug leaves a plan reading
+        // sellable while its Upgrade press lands on a 404. Reports only, writes nothing.
+        .route(
+            "/plans/payment-pages/check",
+            post(handlers::admin_settings_handler::check_plan_payment_pages),
+        )
         // Account management
         .route(
             "/accounts",

@@ -3219,7 +3219,15 @@ function renderAdminPortfolio(c){
 function renderAdminPlans(c){
   c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">Plans Management</h2>'+
     '<p class="text-xs text-gray-400 mb-4">A tier IS its entitlements: the limits and flags below are what the plan gate enforces (<code>plan_limits</code>), so this is where a plan\'s price and what it grants are set. They were reachable in the API (POST/PUT /admin/plans) but absent from this panel, so a tier could be created and then never configured — price and limits frozen at their creation values. A BLANK box is left as it is on save; type a new value to change one. The one exception is <b>Payment link</b>: it is the tier\'s own hosted payment page, and an EMPTY box there CLEARS a stored link (that is how a tier comes off sale-by-link). Flags take true/false.</p>'+
-    '<div id="apldata"></div></div>';
+    '<div id="apldata"></div>'+
+    // ── CHECK THE PAYMENT PAGES (2026-11-13) ──────────────────────────────────────────────
+    // A tier's hosted payment page is proven ONCE, when it is saved. Nothing looked again, and a
+    // provider can retire the page: the plan still reads sellable while a buyer pressing Upgrade
+    // lands on a 404. This button re-opens every stored page NOW and puts the verdict on the plan
+    // it belongs to, instead of a buyer finding out at the till.
+    '<div class="flex items-center gap-3 mt-6 mb-3"><button class="btn btn-primary btn-sm" id="ppcheck">Check payment pages</button>'+
+    '<span class="text-xs text-gray-500">Re-opens every plan\'s saved payment page and says what a buyer would land on.</span></div>'+
+    '<div id="ppresult" class="mb-4"></div></div>';
   // The COLUMN set stays narrow (a readable table); the full settable surface goes to BOTH forms.
   // `checkout_url` is the tier's OWN hosted payment page (2026-10-24): it is the one field that can
   // make a tier sellable on an install with no payment provider key, so it is settable in BOTH forms
@@ -3233,6 +3241,28 @@ function renderAdminPlans(c){
   // GET /admin/plans, so the box prefills what is stored and saving it is what the grant reads.
   const WF_PLAN_FIELDS=['name','slug','price_monthly','price_yearly','is_active','sort_order','description','max_workflows','max_users','industries_allowed','retention_days','max_notify_per_hour','credits_monthly','can_deploy_n8n','has_api_access','payment_provider','checkout_url'];
   renderCRUD(c.querySelector('#apldata'),'plans','Plan',['name','slug','price_monthly','price_yearly','is_active','checkout_url'],'/admin/plans',WF_PLAN_FIELDS,undefined,WF_PLAN_FIELDS);
+  // The verdict for each plan's saved payment page, read from the app (it opens the pages
+  // server-side, so no payment provider's CORS policy can make a live page look dead).
+  const ppb=c.querySelector('#ppcheck');
+  if(ppb) ppb.onclick=async()=>{
+    const box=c.querySelector('#ppresult');
+    ppb.disabled=true; const was=ppb.textContent; ppb.textContent='Checking…';
+    box.innerHTML='<div class="text-sm text-gray-500">Opening each plan\'s payment page…</div>';
+    const badge=(r)=>r==='ok'?'<span class="badge badge-green">opens</span>'
+      :r==='dead'?'<span class="badge badge-red">dead page — a buyer lands on nothing</span>'
+      :r==='not_https'?'<span class="badge badge-yellow">not an https address</span>'
+      :r==='needs_browser'?'<span class="badge badge-yellow">refuses a script — open it yourself</span>'
+      :'<span class="badge badge-yellow">could not be reached from here</span>';
+    try{
+      const r=await api('/admin/plans/payment-pages/check',{method:'POST',body:JSON.stringify({})});
+      const rows=(r&&r.plans)||[];
+      box.innerHTML='<div class="text-sm mb-2">'+escHtml((r&&r.message)||'')+'</div>'
+        +(rows.length?'<table class="w-full text-sm"><tbody>'+rows.map(p=>'<tr><td class="py-1 pr-3">'+escHtml(String(p.name||''))
+          +(p.active?'':' <span class="text-xs text-gray-400">(not on sale)</span>')+'</td><td class="py-1">'+badge(p.reason)
+          +(p.status?' <span class="text-xs text-gray-400">HTTP '+escHtml(String(p.status))+'</span>':'')+'</td></tr>').join('')+'</tbody></table>':'');
+    }catch(e){ box.innerHTML='<div class="text-sm text-red-700">'+escHtml((e&&e.message)||'The check could not run just now.')+'</div>'; }
+    ppb.disabled=false; ppb.textContent=was||'Check payment pages';
+  };
 }
 
 function renderIndustrySources(c){
