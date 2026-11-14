@@ -2866,6 +2866,84 @@ async fn mark_session_expired(
 }
 
 // ──────────────────────────────────────────────
+// GET /api/v1/checkout/session/:id  (PUBLIC)
+// What the thank-you page is allowed to say
+// ──────────────────────────────────────────────
+
+/// `GET /api/v1/checkout/session/:id` — public, id-scoped lookup used by `thank-you.html` after a
+/// payment provider sends the buyer back.
+///
+/// `create_checkout_session` hands the provider the relative `/thank-you.html`, and the provider
+/// returns the buyer there. Until now the app shipped no such page at all (measured 2026-11-14:
+/// `app.workflowswift.com/thank-you.html` answered 404), so a paying customer landed on a dead end
+/// with no way to see what had happened. This route is what lets that page state facts instead of
+/// guessing — and it states ONLY facts: the checkout's own id, its type, plan name, amount,
+/// currency, status and when it was created. No account id, no user id, no provider session id and
+/// no metadata ever leaves this handler, and the id is an unguessable uuid, so the route can only
+/// ever return the one checkout whose link the buyer is holding.
+///
+/// Anonymous by design (listed in `auth::route_policy::PUBLIC_ROUTES`): the page is opened from a
+/// provider redirect in a browser that may carry no session, and a payment status is not a secret.
+/// A missing id answers 404 with a body that tells the customer what to do next rather than a bare
+/// error page, because "we could not find that checkout" must never read as "your money is gone".
+pub async fn get_checkout_session_public(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+) -> ApiResult<impl IntoResponse> {
+    let id = Uuid::parse_str(&session_id)
+        .map_err(|_| AppError::NotFound("Checkout session not found".into()))?;
+
+    let row = sqlx::query(
+        r#"SELECT cs.id,
+                  cs.purchasable_type,
+                  cs.amount::text AS amount,
+                  cs.currency,
+                  cs.status,
+                  cs.created_at,
+                  t.name AS plan_name
+             FROM checkout_sessions cs
+             LEFT JOIN plan_tiers t
+                    ON cs.purchasable_type = 'plan' AND t.id = cs.purchasable_id
+            WHERE cs.id = $1"#,
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let Some(row) = row else {
+        tracing::info!("checkout session lookup miss (thank-you page): {}", id);
+        return Ok((
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "found": false,
+                "error": "checkout_session_not_found",
+                "note": "No checkout session with that id. If you just paid, your provider's receipt is authoritative — contact support if your plan is not active."
+            })),
+        )
+            .into_response());
+    };
+
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "found": true,
+            "id": row.try_get::<Uuid, _>("id").map(|u| u.to_string()).unwrap_or_default(),
+            "status": row.try_get::<String, _>("status").unwrap_or_default(),
+            "plan_name": row.try_get::<Option<String>, _>("plan_name").unwrap_or(None),
+            "purchasable_type": row.try_get::<String, _>("purchasable_type").unwrap_or_default(),
+            "amount": row.try_get::<Option<String>, _>("amount").unwrap_or(None),
+            "currency": row.try_get::<String, _>("currency").unwrap_or_else(|_| "USD".into()),
+            "login_url": "/login",
+            "created_at": row
+                .try_get::<chrono::DateTime<chrono::Utc>, _>("created_at")
+                .map(|t| t.to_rfc3339())
+                .unwrap_or_default(),
+        })),
+    )
+        .into_response())
+}
+
+// ──────────────────────────────────────────────
 // GET /api/v1/checkout/sessions
 // List checkout sessions for the authenticated account
 // ──────────────────────────────────────────────

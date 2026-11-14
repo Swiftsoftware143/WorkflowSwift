@@ -1029,6 +1029,15 @@ pub fn create_router(state: AppState) -> Router {
             "/checkout/status",
             get(handlers::checkout_handler::checkout_status),
         )
+        // The thank-you page's OWN lookup (2026-11-14). `create_checkout_session` hands the provider
+        // the relative `/thank-you.html`, so the buyer returns to the APP host after paying; that page
+        // reads this route to state the checkout's real status instead of guessing. Listed in
+        // `route_policy::PUBLIC_ROUTES` because the redirect arrives in a browser that may carry no
+        // session — it exposes presentation-safe fields of ONE unguessable-uuid checkout and nothing else.
+        .route(
+            "/checkout/session/:id",
+            get(handlers::checkout_handler::get_checkout_session_public),
+        )
         // The two bridge LISTINGS (kanban t_061a4e26, then t_9aee74f9). They were anonymous: the
         // handlers took only `State` and read /opt/ai-bridge/{inbound,outbound}/*.json off the host
         // filesystem, so an anonymous caller listed those files' parsed contents. Every caller

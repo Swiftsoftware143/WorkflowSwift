@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Payment status — WorkflowSwift</title>
+<meta name="robots" content="noindex">
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:#0b1120;color:#e2e8f0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.6;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px}
+.card{background:#111c33;border:1px solid #1e293b;border-radius:16px;padding:40px 32px;max-width:560px;width:100%}
+.brand{font-weight:800;font-size:1.05rem;color:#fff;text-decoration:none;display:inline-block;margin-bottom:22px}
+h1{font-size:1.6rem;margin:0 0 10px;color:#fff;letter-spacing:-.01em}
+p.lead{color:#94a3b8;font-size:.98rem;margin:0 0 20px}
+.statusb{background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:12px 16px;font-size:.93rem;color:#cbd5e1;margin-bottom:20px}
+.statusb.ok{background:#052e21;border-color:#115e46;color:#a7f3d0}
+.statusb.warn{background:#2a1e05;border-color:#7c4a03;color:#fde68a}
+.statusb.err{background:#2b0f14;border-color:#7f1d1d;color:#fecaca}
+dl{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;margin:0 0 22px;background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:16px}
+dt{color:#64748b;font-size:.75rem;text-transform:uppercase;letter-spacing:.06em;align-self:center}
+dd{margin:0;color:#e2e8f0;font-weight:600;font-size:.95rem;word-break:break-all}
+.actions{display:flex;flex-wrap:wrap;gap:10px}
+.btn{display:inline-block;padding:11px 20px;border-radius:9px;font-size:.92rem;font-weight:700;text-decoration:none}
+.btn-primary{background:#38bdf8;color:#04121f}
+.btn-outline{border:1px solid #334155;color:#cbd5e1}
+.small{color:#64748b;font-size:.82rem;margin:18px 0 0}
+</style>
+</head>
+<body>
+<div class="card">
+  <a class="brand" href="/">WorkflowSwift</a>
+  <h1 id="headline">Checking your checkout…</h1>
+  <p class="lead" id="lead">One moment while we look this up.</p>
+  <div class="statusb" id="status">Reading your checkout…</div>
+  <dl id="details" style="display:none">
+    <dt>Checkout</dt><dd id="d-id">—</dd>
+    <dt>Plan</dt><dd id="d-plan">—</dd>
+    <dt>Amount</dt><dd id="d-amount">—</dd>
+    <dt>Status</dt><dd id="d-status">—</dd>
+  </dl>
+  <div class="actions">
+    <a class="btn btn-primary" href="/login">Go to your dashboard</a>
+    <a class="btn btn-outline" href="/contact.html">Contact support</a>
+  </div>
+  <p class="small">This page only states what the server told it. Your payment provider's receipt is the authoritative record of any charge.</p>
+</div>
+<script>
+// A provider sends the buyer back to the relative `/thank-you.html` that `checkout/create` hands it
+// (measured 2026-11-14: this app shipped NO such page, so a paying customer landed on a 404). The
+// provider appends its OWN token, not this app's checkout uuid, so only a uuid is looked up; every
+// other arrival is an honest "you are back from checkout" state. Nothing here ever announces a
+// payment it did not read from the server.
+(function () {
+  var PAID = ['completed', 'paid', 'succeeded'];
+  var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  var q = new URLSearchParams(window.location.search);
+  var sid = q.get('session_id') || q.get('id') || '';
+  var el = document.getElementById('status');
+  var head = document.getElementById('headline');
+  var lead = document.getElementById('lead');
+  var det = document.getElementById('details');
+
+  function say(headline, leadText, message, cls) {
+    head.textContent = headline;
+    lead.textContent = leadText;
+    el.className = 'statusb ' + (cls || '');
+    el.textContent = message;
+  }
+  function back_from_checkout() {
+    say('Thanks — you are back from checkout',
+        'Your payment page sent you back to us.',
+        'What happens next: our team switches the plan on your workspace and emails you the moment it is on. Nothing further is needed from you.',
+        'ok');
+  }
+  function show(data) {
+    document.getElementById('d-id').textContent = data.id || sid;
+    document.getElementById('d-plan').textContent = data.plan_name || data.purchasable_type || 'Subscription';
+    document.getElementById('d-amount').textContent = data.amount ? (data.amount + ' ' + (data.currency || 'USD')) : '—';
+    document.getElementById('d-status').textContent = data.status || '—';
+    det.style.display = 'grid';
+  }
+
+  if (!sid || !UUID_RE.test(sid)) { back_from_checkout(); return; }
+
+  fetch('/api/v1/checkout/session/' + encodeURIComponent(sid), { headers: { 'Accept': 'application/json' } })
+    .then(function (r) {
+      if (r.status === 404) {
+        say("We couldn't find that checkout",
+            'No checkout matches this link, so there is nothing here to confirm.',
+            "If you were charged, contact support and quote the checkout id above — your provider's receipt is what we go on.",
+            'err');
+        return null;
+      }
+      if (!r.ok) {
+        say("We couldn't check that payment",
+            'The lookup did not answer, so nothing here is confirmed.',
+            'Refresh this page in a moment. If you were charged, contact support — your provider receipt is authoritative.',
+            'warn');
+        return null;
+      }
+      return r.json();
+    })
+    .then(function (d) {
+      if (!d || d.found !== true) return;
+      show(d);
+      var st = String(d.status || '').toLowerCase();
+      if (PAID.indexOf(st) !== -1) {
+        say('Payment confirmed', 'Thank you — your payment went through.',
+            'Confirmed by our payment provider. Your plan is switched on your workspace.', 'ok');
+      } else if (st === 'expired' || st === 'cancelled' || st === 'canceled') {
+        say('This checkout expired', 'Nothing was charged for this checkout.',
+            'Start again from the plans screen. If your card was charged, contact support.', 'err');
+      } else if (st === 'failed') {
+        say('That payment did not go through',
+            'Your provider did not complete this payment, so nothing was charged by us.',
+            'Try again from the plans screen, or contact support if your card shows a charge.', 'err');
+      } else {
+        say('Payment not confirmed yet',
+            'We have your checkout, but our payment provider has not confirmed the payment yet.',
+            'This can take a minute — refresh this page. If you were charged and this still says pending, contact support and quote the checkout id above.', 'warn');
+      }
+    })
+    .catch(function () {
+      say("We couldn't reach our server", 'Nothing has been confirmed here.',
+          'Refresh this page in a moment. If you were charged, contact support — your provider receipt is authoritative.', 'warn');
+    });
+})();
+</script>
+</body>
+</html>

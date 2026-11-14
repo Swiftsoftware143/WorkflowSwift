@@ -188,6 +188,12 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // the raw body (urlencoded or multipart, attachments included) before it can verify anything,
     // which is why it is mounted with its own body-read deadline and a 25 MB envelope.
     "/api/v1/webhooks/mailgun/inbound",
+    // --- the thank-you page's checkout lookup (2026-11-14) -----------------------------------------
+    // A provider sends the buyer back to `/thank-you.html` with no session, and that page asks this
+    // route what happened. Anonymous by construction, narrow by design: it answers presentation-safe
+    // fields of ONE checkout whose id is an unguessable uuid (type, plan name, amount, currency,
+    // status, created_at) and never an account id, user id, provider session id or metadata.
+    "/api/v1/checkout/session/{id}",
     // --- the sign-in ADDRESS CHANGE's confirmation arm (cron 2026-10-18) -------------------------
     // Anonymous by necessity: the customer opens the link from their NEW mailbox, in a browser with
     // no session, and the single-use token in the link IS the credential. Narrow by design — it
@@ -469,6 +475,28 @@ mod tests {
         // entry carries it.)
         assert!(mounted("/api/v1/auth/avatar").is_some());
         assert!(mounted("/api/v1/auth/avatar/{user_id}").is_some());
+    }
+
+    /// The thank-you page's checkout lookup (2026-11-14): mounted, and anonymous in ONE direction
+    /// only — the single-checkout READ is public because the provider redirect carries no session,
+    /// while the LISTING stays on the caller's own credential and the template is segment-exact so
+    /// a deeper path cannot slip in either way.
+    #[test]
+    fn the_thank_you_session_lookup_is_public_and_the_listing_is_not() {
+        assert!(is_public_route(
+            "/api/v1/checkout/session/0b0b0b0b-1111-2222-3333-444444444444"
+        ));
+        assert!(
+            !is_public_route("/api/v1/checkout/sessions"),
+            "the listing stays on the caller's own session"
+        );
+        assert!(
+            !is_public_route("/api/v1/checkout/session/x/extra"),
+            "the template must not swallow a deeper path"
+        );
+        assert!(!is_public_route("/api/v1/checkout/session"));
+        // ...and the route is really mounted, so the public assertion is not vacuous.
+        assert!(mounted("/api/v1/checkout/session/{id}").is_some());
     }
 
     /// The fleet profile surface registers the fleet spelling of the password change beside this
