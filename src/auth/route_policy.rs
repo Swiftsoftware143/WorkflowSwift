@@ -188,6 +188,11 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // the raw body (urlencoded or multipart, attachments included) before it can verify anything,
     // which is why it is mounted with its own body-read deadline and a 25 MB envelope.
     "/api/v1/webhooks/mailgun/inbound",
+    // The OTHER receiver a domain can choose (measured live 2026-11-14: the console hands a
+    // SendGrid-hosted customer this URL, and the router existed but was never mounted, so it
+    // answered 404). SendGrid signs nothing — the unguessable per-domain `inbound_token` in the
+    // path IS the credential, and a token that names no domain writes nothing.
+    "/api/v1/webhooks/sendgrid/inbound/:token",
     // --- the thank-you page's checkout lookup (2026-11-14) -----------------------------------------
     // A provider sends the buyer back to `/thank-you.html` with no session, and that page asks this
     // route what happened. Anonymous by construction, narrow by design: it answers presentation-safe

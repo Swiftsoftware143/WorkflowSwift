@@ -1331,6 +1331,17 @@ pub fn create_router(state: AppState) -> Router {
         ))
         .layer(axum::extract::DefaultBodyLimit::max(25 * 1024 * 1024));
 
+    // SendGrid Inbound Parse — the OTHER receiver a domain can pick (measured 2026-11-14: the
+    // handler and its named router existed, the console handed a SendGrid-hosted customer a
+    // `…/api/v1/webhooks/sendgrid/inbound/<token>` URL, and nothing mounted the router, so that URL
+    // answered a router 404 and the inbox could receive nothing). SendGrid signs nothing — the
+    // unguessable per-domain token IN THE PATH is the credential, so the path is in
+    // `auth::route_policy::PUBLIC_ROUTES` beside the Mailgun one.
+    let sendgrid_router = Router::new().nest(
+        "/api/v1/webhooks/sendgrid",
+        crate::private_email::webhook_handler::sendgrid_router(body_read_deadline),
+    );
+
     Router::new()
         .route("/", get(health_check))
         .nest("/api/v1", api_v1)
@@ -1349,6 +1360,7 @@ pub fn create_router(state: AppState) -> Router {
         ))
         // ── Mailgun inbound delivery (kanban t_473a6895) — the router built above ──────────────
         .merge(mailgun_router)
+        .merge(sendgrid_router)
         .with_state(state)
 }
 
