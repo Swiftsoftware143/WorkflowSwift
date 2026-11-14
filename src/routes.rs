@@ -866,6 +866,16 @@ pub fn create_router(state: AppState) -> Router {
             "/accounts/{id}/resend-credentials",
             post(handlers::admin_settings_handler::admin_resend_credentials),
         )
+        // The repair door for a workspace that has NO login at all (2026-11-14). `resend-credentials`
+        // above needs an owner row to act on, and the Users screen needs a row to show, so a
+        // workspace that was never given a `users` row had no repair anywhere in the console — the
+        // operator's only move was a psql session. This mints that first owner (role `user`, the
+        // same shape every signup door mints), its keys in the same transaction, and mails the
+        // credentials. POST for the same reason as the route above: the call mints a NEW credential.
+        .route(
+            "/accounts/{id}/owner",
+            post(handlers::admin_settings_handler::admin_create_account_owner),
+        )
         .route(
             "/accounts/{id}/retention",
             put(handlers::admin_settings_handler::admin_set_account_retention),

@@ -481,6 +481,23 @@ when it is set.</p>
       hand it over directly &mdash; it is never written to the log. Super-admin only.</td>
       </tr>
       <tr>
+      <td><code>/api/v1/admin/accounts/{id}/owner</code></td>
+      <td>POST</td>
+      <td><strong>A workspace nobody can sign in to at all.</strong> A workspace can exist with a name, a
+      slug and a plan and not one login: the Accounts table then shows a red <b>no login yet</b> badge and
+      every other action on the screen needs a person to act on, so there was no repair here at all. Press
+      <b>Create login</b> on that row, give the address of the person who should own the workspace, and the
+      first owner account is created &mdash; role <em>user</em>, the same shape every sign-up door mints &mdash;
+      together with the workspace&rsquo;s API keys, in one transaction, and the details are emailed through the
+      <em>welcome</em> template. The answer is <code>{tenant_id, owner_user_id, owner_email,
+      credentials_emailed, withheld, handover_password}</code>: a reserved test address is withheld at the
+      source, and whenever no mail left, the password returns in <code>handover_password</code> so the console
+      prints it on the row for you to hand over. It refuses a workspace that already has somebody in it
+      (<code>409</code> &mdash; giving a second person access is what a teammate invite is for), an address that
+      already has an account (<code>409</code>), and a missing or malformed address (<code>422</code>).
+      Super-admin only.</td>
+      </tr>
+      <tr>
       <td><code>/api/v1/admin/accounts/{id}/retention</code></td>
       <td>PUT</td>
       <td>Per-account retention override</td>

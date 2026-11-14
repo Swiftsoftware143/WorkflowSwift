@@ -1222,6 +1222,7 @@ pub async fn admin_list_accounts(
                                  THEN 0 ELSE 1 END,
                             u.created_at ASC
                    LIMIT 1), false) AS owner_credentials_undelivered,
+                  (SELECT COUNT(*) FROM users lc WHERE lc.aid = r.id) AS user_count,
                   (SELECT MAX(lu.last_login_at) FROM users lu WHERE lu.aid = r.id) AS last_sign_in
            FROM resolved r
            LEFT JOIN plan_tiers p ON p.id = r.plan_id
@@ -1317,6 +1318,12 @@ pub async fn admin_list_accounts(
             "reserved_owner": reserved_owner,
             "retention_days": retention_days,
             "retention_purge_at": retention_purge_at.map(|t| t.to_rfc3339()),
+            // How many logins this workspace holds (2026-11-14). ZERO means nobody can sign in to
+            // it at all: the row exists, its plan and its keys may exist, and every console action
+            // here is keyed on a user id — so the repair used to be a psql session. Measured live
+            // the same day: three accounts answered NULL email for exactly this reason. The
+            // Accounts screen badges that row and offers `Create login`.
+            "user_count": row.try_get::<i64, _>("user_count").unwrap_or(0),
             "last_sign_in": last_sign_in.map(|t| t.to_rfc3339()),
             "created_at": created_at.to_rfc3339(),
             // `plan` is the tier this workspace RESOLVES to (the gates' answer, fallback included);
@@ -1429,6 +1436,206 @@ pub async fn admin_resend_credentials(
         "withheld": withheld,
         "handover_password": if emailed { serde_json::Value::Null } else { json!(password) },
     })))
+}
+
+/// POST /api/v1/admin/accounts/:id/owner — give a workspace that has NO login its first owner.
+///
+/// Measured on live 2026-11-14: three accounts ("David Giraudy's Workspace", "David Admin's
+/// Workspace" and this app's own workspace) carried a name, a slug and a plan but not ONE `users`
+/// row, so the person named on them could never sign in. Every console action is keyed on a user id
+/// — "Send login" needs an owner row, the Users screen needs a row to act on — so the operator's only
+/// repair was SQL, and `admin_list_accounts` could only render the row with a NULL owner.
+///
+/// Refusals are sentences a screen can print: a workspace that already has a login is a 409 (giving
+/// someone else access is what adding a teammate does), an address that already belongs to an account
+/// is a 409, and a missing or malformed address is a 422. The owner row and its API keys are ONE
+/// transaction, committed before any mail is attempted — the same unit of work every signup door
+/// uses, so a rolled-back attempt writes nothing. A reserved/harness address is WITHHELD at the
+/// sender exactly as the signup and resend doors withhold it, so the password comes back in
+/// `handover_password` and `users.password_undelivered` stays TRUE until a human has it.
+pub async fn admin_create_account_owner(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(id): Path<Uuid>,
+    body: Option<Json<serde_json::Value>>,
+) -> ApiResult<impl IntoResponse> {
+    require_admin(&claims)?;
+
+    let account_name: String = sqlx::query_scalar("SELECT name FROM accounts WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Workspace not found".to_string()))?;
+
+    // A workspace that already has a person in it is NOT this route's job: minting a second owner
+    // behind the operator's back would make "who owns this" ambiguous.
+    let existing: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE aid = $1")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
+    if existing > 0 {
+        return Err(AppError::Conflict(format!(
+            "This workspace already has {existing} login(s) — give the owner a password instead."
+        )));
+    }
+
+    let req = body.map(|Json(v)| v).unwrap_or(serde_json::Value::Null);
+    let email = req
+        .get("email")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_lowercase())
+        .ok_or_else(|| {
+            AppError::Validation(
+                "Give this workspace an email address for its owner: nobody can sign in without one."
+                    .to_string(),
+            )
+        })?;
+    let parts: Vec<&str> = email.split('@').collect();
+    let shaped = parts.len() == 2
+        && !parts[0].is_empty()
+        && parts[1].contains('.')
+        && !parts[1].starts_with('.')
+        && !email.chars().any(char::is_whitespace);
+    if !shaped {
+        return Err(AppError::Validation(
+            "email: that value is not a valid email address.".to_string(),
+        ));
+    }
+    if crate::auth::signup::email_taken(&state.db, &email).await? {
+        return Err(AppError::Conflict(
+            "That address already has a login in this app — sign in with it, or give the owner a \
+             different address."
+                .to_string(),
+        ));
+    }
+
+    let owner_name = req
+        .get("name")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| account_name.clone());
+
+    let password = crate::auth::signup::generate_temp_password();
+    let hash = crate::auth::api_key_auth::argon2_hash(password.clone()).await?;
+    let user_id = Uuid::new_v4();
+
+    // ONE unit of work: the owner row can never exist without the keys an account is provisioned
+    // with (the same pairing `create_account` mints), so a failure leaves the workspace exactly as
+    // it was rather than half-repaired.
+    let mut tx = state.db.begin().await?;
+    sqlx::query(
+        r#"INSERT INTO users (id, aid, email, password_hash, name, role, is_active, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, 'user', true, NOW(), NOW())"#,
+    )
+    .bind(user_id)
+    .bind(id)
+    .bind(&email)
+    .bind(&hash)
+    .bind(&owner_name)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| {
+        if let sqlx::Error::Database(ref db_err) = e {
+            if db_err.constraint() == Some("users_aid_email_key") {
+                return AppError::Duplicate("A user with this email already exists".to_string());
+            }
+        }
+        AppError::from(e)
+    })?;
+    crate::handlers::integration_center_handler::mint_user_key_on(
+        &mut tx,
+        user_id,
+        id,
+        "primary",
+        Some("operator-created login"),
+    )
+    .await?;
+    crate::handlers::api_key_handler::mint_api_key_on(
+        &mut tx,
+        user_id,
+        id,
+        "operator-created login",
+        "",
+    )
+    .await?;
+    tx.commit().await?;
+
+    // A reserved/harness address is WITHHELD at the sender (it answers Ok without queueing
+    // anything), so it counts as NOT delivered — the same predicate every signup door applies.
+    let withheld = crate::security::probe_addr::harness_domain(&email).is_some();
+    let mut emailed = false;
+    if !withheld {
+        let app_url = "https://app.workflowswift.com";
+        match crate::email::send_email(
+            &state,
+            Some(id),
+            &email,
+            "welcome",
+            &json!({
+                "name": owner_name,
+                "email": email,
+                "password": password,
+                "app_url": app_url,
+                "url": app_url,
+            }),
+        )
+        .await
+        {
+            Ok(()) => emailed = true,
+            Err(e) => tracing::error!(
+                account = %id,
+                user = %user_id,
+                "operator minted a first owner login but the welcome mail failed: {e}"
+            ),
+        }
+    }
+    // Mark the credential undelivered unless a mail actually left, so the console keeps the badge
+    // until a human has the password in hand.
+    let mark = if emailed {
+        Ok(())
+    } else {
+        sqlx::query("UPDATE users SET password_undelivered = true WHERE id = $1")
+            .bind(user_id)
+            .execute(&state.db)
+            .await
+            .map(|_| ())
+            .map_err(AppError::from)
+    };
+    if let Err(e) = mark {
+        tracing::warn!(user = %user_id, "could not mark the undelivered credential: {e}");
+    }
+
+    tracing::info!(
+        account = %id,
+        user = %user_id,
+        emailed,
+        withheld,
+        "operator minted a workspace's first owner login"
+    );
+
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "tenant_id": id.to_string(),
+            "owner_user_id": user_id.to_string(),
+            "owner_email": email,
+            "credentials_emailed": emailed,
+            "withheld": withheld,
+            "handover_password": if emailed { serde_json::Value::Null } else { json!(password) },
+            "message": if withheld {
+                "Login created — that address is a reserved test address, so no mail was sent; the \
+                 password is in this response."
+            } else if emailed {
+                "Login created and the details emailed to the owner."
+            } else {
+                "Login created, but no email left the system; the password is in this response."
+            },
+        })),
+    ))
 }
 
 /// DELETE /api/v1/admin/accounts/:id — permanently delete account + all data

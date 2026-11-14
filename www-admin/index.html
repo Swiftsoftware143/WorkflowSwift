@@ -2909,10 +2909,18 @@ function probeBadgeHtml(harness){
     : 'a reserved or fleet-probe address &mdash; a probe, not a customer';
   return ' <span class="badge" style="background:#fef3c7;color:#92400e" title="' + title + '">probe</span>';
 }
+// A workspace that has NO login at all (2026-11-14). `users` holds not one row for it, so nobody can
+// sign in: `owner_email` is NULL and every action on this screen is keyed on a user id, which left the
+// operator with a psql session as the only repair. `user_count` (published by GET /admin/accounts) is
+// the state; the `Create login` button on the row is the repair.
+function noLoginBadgeHtml(a){
+  if(!(a && (a.user_count||0)===0)) return '';
+  return '<div style="margin-top:4px"><span class="badge" style="background:#fee2e2;color:#991b1b" title="This workspace exists but nobody can sign in to it: it has no login at all. Press Create login to mint the owner account and email its details.">no login yet</span></div>';
+}
 function ownerCellHtml(a){
   const oe=String((a&&(a.owner_email||a.email))||'').trim();
   const harness=probeHarnessOf(a);
-  if(!oe) return '<span class="text-gray-400">\u2014</span>'+(harness ? probeBadgeHtml(harness) : '');
+  if(!oe) return '<span class="text-gray-400">\u2014</span>'+noLoginBadgeHtml(a)+(harness ? probeBadgeHtml(harness) : '');
   const probe=!!harness || isProbeAddress(oe);
   return escHtml(oe)+(probe ? probeBadgeHtml(harness) : '');
 }
@@ -3093,7 +3101,7 @@ function renderAdminAccounts(c){
         '<td><span class="badge '+(i.is_active?'bg-green-100 text-green-700':'bg-red-100 text-red-700')+'">'+(i.is_active?'Active':'Inactive')+'</span></td>'+
         '<td class="text-xs">'+lastSignInHtml(i)+'</td>'+
         '<td class="text-xs text-gray-400">'+((i.created_at||'').slice(0,10))+'</td>'+
-        '<td class="text-right">'+(i.owner_credentials_undelivered && aid ? '<button class="btn btn-sm btn-primary acc-resend" data-acc="'+aid+'" data-email="'+escHtml(String(i.owner_email||i.email||''))+'" title="Mint a brand-new password for this workspace\'s owner and email it">Send login</button> ' : '')+'<button class="btn btn-sm btn-ghost" onclick="event.preventDefault();startImpersonation(\''+aid+'\')">Impersonate</button></td>'+
+        '<td class="text-right">'+(i.user_count===0 && aid ? '<button class="btn btn-sm btn-primary acc-owner" data-acc="'+aid+'" data-name="'+escHtml(String(i.name||''))+'" title="Create the first login for this workspace and email the details to its owner">Create login</button> ' : '')+(i.owner_credentials_undelivered && aid ? '<button class="btn btn-sm btn-primary acc-resend" data-acc="'+aid+'" data-email="'+escHtml(String(i.owner_email||i.email||''))+'" title="Mint a brand-new password for this workspace\'s owner and email it">Send login</button> ' : '')+'<button class="btn btn-sm btn-ghost" onclick="event.preventDefault();startImpersonation(\''+aid+'\')">Impersonate</button></td>'+
       '</tr>'}).join('')+'</tbody></table>';
     const a=el.querySelector('#accAll');
     if(a)a.addEventListener('change',()=>{box().forEach(b=>{b.checked=a.checked});sync()});
@@ -3146,6 +3154,44 @@ function renderAdminAccounts(c){
         else if(r.withheld){ note.style.color='#b45309'; withPassword('Nothing was emailed ('+mail+' is a reserved test address). Hand them this password: '); }
         else { note.style.color='#b45309'; withPassword('No email left the system. Hand them this password: '); }
         b.remove();
+      }
+      if(cell)cell.appendChild(note);
+    }));
+    // THE OPERATOR'S REMEDY for a workspace with NO login (2026-11-14). POST
+    // /admin/accounts/{id}/owner mints that workspace's first owner with the app's own password
+    // generator, its keys in the same transaction, and mails the credentials through the welcome
+    // template. A reserved test address is withheld at the source, so the password comes back in
+    // `handover_password` and stays INLINE on the row — the operator has to hand it over, and a
+    // 3-second toast is not a place to keep a credential.
+    el.querySelectorAll('button.acc-owner').forEach(b=>b.addEventListener('click', async ()=>{
+      const aid=b.getAttribute('data-acc'); if(!aid) return;
+      const label=b.textContent;
+      const wsName=b.getAttribute('data-name')||'this workspace';
+      const mail=String(prompt('The email address of the person who should own '+wsName+':','')||'').trim();
+      if(!mail) return;
+      if(!confirm('Create the first login for '+wsName+' and email the details to '+mail+'?')) return;
+      b.disabled=true; b.textContent='creating...';
+      const r=await api('/admin/accounts/'+encodeURIComponent(aid)+'/owner',{method:'POST',body:JSON.stringify({email:mail})});
+      b.disabled=false; b.textContent=label;
+      const row=b.closest('tr'), cell=row&&row.querySelector('td.acc-owner');
+      const old=row&&row.querySelector('.acc-owner-msg'); if(old)old.remove();
+      const note=document.createElement('div');
+      note.className='acc-owner-msg text-xs';
+      note.style.marginTop='6px';
+      if(!r){ note.style.color='#b91c1c'; note.textContent='Could not create the login: '+(LAST_ERR||'the request failed'); }
+      else {
+        const pw=(r&&r.handover_password)||'';
+        if(r.credentials_emailed){ note.style.color='#15803d'; note.textContent='Login created and the details were emailed to '+mail+'.'; }
+        else if(r.withheld){ note.style.color='#b45309'; note.textContent='Login created. Nothing was emailed ('+mail+' is a reserved test address). Hand them this password: '; }
+        else { note.style.color='#b45309'; note.textContent='Login created, but no email left the system. Hand them this password: '; }
+        if(pw){ const code=document.createElement('code'); code.style.cssText='background:#f1f5f9;padding:2px 6px;border-radius:4px'; code.textContent=pw; note.appendChild(code); }
+        // The row now HAS a login: drop the action and the badge it described, and show the address
+        // it was given — without re-rendering, which would take the password off the screen.
+        b.remove();
+        const badge=row&&row.querySelector('.badge[title*="no login at all"]');
+        if(badge&&badge.parentElement)badge.parentElement.remove();
+        const grey=cell&&cell.querySelector('span.text-gray-400');
+        if(grey)grey.textContent=mail;
       }
       if(cell)cell.appendChild(note);
     }));
