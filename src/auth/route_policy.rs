@@ -483,9 +483,7 @@ mod tests {
     /// a deeper path cannot slip in either way.
     #[test]
     fn the_thank_you_session_lookup_is_public_and_the_listing_is_not() {
-        assert!(is_public_route(
-            "/api/v1/checkout/session/0b0b0b0b-1111-2222-3333-444444444444"
-        ));
+        assert!(is_public_route("/api/v1/checkout/session/session-one"));
         assert!(
             !is_public_route("/api/v1/checkout/sessions"),
             "the listing stays on the caller's own session"
