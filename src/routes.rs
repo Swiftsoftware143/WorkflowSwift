@@ -1035,7 +1035,7 @@ pub fn create_router(state: AppState) -> Router {
         // `route_policy::PUBLIC_ROUTES` because the redirect arrives in a browser that may carry no
         // session — it exposes presentation-safe fields of ONE unguessable-uuid checkout and nothing else.
         .route(
-            "/checkout/session/:id",
+            "/checkout/session/{id}",
             get(handlers::checkout_handler::get_checkout_session_public),
         )
         // The two bridge LISTINGS (kanban t_061a4e26, then t_9aee74f9). They were anonymous: the
