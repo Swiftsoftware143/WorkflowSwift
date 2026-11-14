@@ -2156,6 +2156,20 @@ pub async fn send_signup_operator_alert(
     .flatten()
     .flatten()
     .unwrap_or_else(|| owner_email.to_string());
+    // THE WORKSPACE NAME IS PART OF THE IDENTITY (2026-11-14). The gate above judges the OWNER;
+    // a harness mints a clean-looking owner on a workspace whose own name still says
+    // "Probe Co 1794597085". Measured on the two sibling apps that already carry this arm:
+    // that exact shape delivered "New workspace: <probe name>" to the operator's real inbox while
+    // an owner-only gate passed. Judged here, after the name is read and BEFORE any send, so no
+    // `email_send_log` row is written either. Over-protection is the safe direction the residue
+    // policy names: a customer who calls their workspace "Probe …" simply does not page us.
+    if let Some(reason) = crate::security::probe_addr::synthetic_requester("", &workspace) {
+        tracing::info!(
+            reason = %reason,
+            "signup operator alert WITHHELD — the workspace name is a synthetic identity"
+        );
+        return false;
+    }
     // The tier's display name, not its slug: "Free", not "free". A catalogue that no longer holds
     // the slug still gets a readable answer rather than an empty line.
     let plan_name: String = sqlx::query_scalar::<_, Option<String>>(
