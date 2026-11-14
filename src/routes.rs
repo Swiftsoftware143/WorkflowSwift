@@ -1029,15 +1029,11 @@ pub fn create_router(state: AppState) -> Router {
             "/checkout/status",
             get(handlers::checkout_handler::checkout_status),
         )
-        // The thank-you page's OWN lookup (2026-11-14). `create_checkout_session` hands the provider
-        // the relative `/thank-you.html`, so the buyer returns to the APP host after paying; that page
-        // reads this route to state the checkout's real status instead of guessing. Listed in
-        // `route_policy::PUBLIC_ROUTES` because the redirect arrives in a browser that may carry no
-        // session — it exposes presentation-safe fields of ONE unguessable-uuid checkout and nothing else.
-        .route(
-            "/checkout/session/{id}",
-            get(handlers::checkout_handler::get_checkout_session_public),
-        )
+        // The thank-you page's OWN lookup (2026-11-14) lives on `public_routes` below, NOT here:
+        // `auth_middleware` is unconditional on this router, so a route registered here answers 401
+        // to an anonymous caller no matter what `route_policy` says (measured 2026-11-14 on the
+        // first attempt: `/api/v1/checkout/session/<uuid>` answered 401 with the policy entry in the
+        // binary). The provider redirect that opens that page carries no session.
         // The two bridge LISTINGS (kanban t_061a4e26, then t_9aee74f9). They were anonymous: the
         // handlers took only `State` and read /opt/ai-bridge/{inbound,outbound}/*.json off the host
         // filesystem, so an anonymous caller listed those files' parsed contents. Every caller
@@ -1295,6 +1291,16 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/public/plans",
             get(handlers::plan_handler::public_list_plans),
+        )
+        // The thank-you page's own lookup (2026-11-14). `checkout/create` hands the payment provider
+        // the relative `/thank-you.html`, so the buyer comes back to the APP host with no session and
+        // that page asks this route what happened. Public by construction (the redirect carries no
+        // credential) and narrow by design: presentation-safe fields of ONE checkout whose id is an
+        // unguessable uuid — never an account id, user id, provider session id or metadata. The
+        // listing (`/checkout/sessions`) stays on `protected_routes`.
+        .route(
+            "/checkout/session/{id}",
+            get(handlers::checkout_handler::get_checkout_session_public),
         )
         .merge(public_body_routes);
 
