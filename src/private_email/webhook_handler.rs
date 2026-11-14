@@ -286,7 +286,7 @@ pub async fn inbound_webhook(
 pub fn sendgrid_router(deadline: crate::rate_limit::BodyReadDeadline) -> axum::Router<AppState> {
     axum::Router::new()
         .route(
-            "/inbound/:token",
+            "/inbound/{token}",
             axum::routing::post(sendgrid_inbound).layer(axum::middleware::from_fn_with_state(
                 deadline,
                 crate::rate_limit::body_read_deadline_middleware,
