@@ -862,6 +862,49 @@ when it is set.</p>
       <p><strong>Every workspace has it.</strong> The export is not gated by plan or feature flag: no
       <code>csv_export</code> entitlement exists any more (see <a href="#plan-limits-settable-and-enforced">Plan
       limits</a>), so a Free workspace downloads exactly the same file a paid one does.</p>
+      <h2 id="renditions-manage">Renditions — edit, expire and purge</h2>
+      <p>The <strong>Workflows</strong> tab's <strong>Renditions</strong> panel lists the account's generated media
+      versions of workflow output — the finished files a Render step (or the n8n mirror's log node) posts into
+      <code>account_renditions</code>. The catalogue has always been visible to the customer, but nothing could
+      <em>change</em> one: this panel is where an operator edits a single rendition's status and URLs, expires one, or
+      purges every rendition whose retention window has already passed.</p>
+      <p>The screen is tenant-scoped, so it acts on the account the console is signed in as — or, when you are
+      <em>Impersonating</em> a workspace, on that workspace. Each row shows the step, provider, type, status, a link to
+      the preview (when one is stored) and when it was created, with <strong>Edit</strong> and <strong>Del</strong> on
+      the right.</p>
+      <ul>
+        <li><strong>Edit</strong> opens a form: <em>Status</em> (a select of the three values the API writes —
+        <code>active</code>, <code>expired</code>, <code>purged</code>), <em>Preview URL</em>, <em>Thumbnail URL</em>,
+        <em>Sort order</em> (a whole number) and <em>Retention expires at</em> (RFC&nbsp;3339, e.g.
+        <code>2026-12-01T00:00:00Z</code>). Every box left empty keeps the stored value — the write COALESCEs each
+        field, so you change only what you type.</li>
+        <li><strong>Del</strong> <em>soft-deletes</em> the rendition: it sets its status to <code>expired</code>, it
+        does not remove the row, so the change is recoverable.</li>
+        <li><strong>Purge expired</strong> (in the panel header) marks every rendition whose status is still
+        <code>active</code> and whose <code>retention_expires_at</code> is in the past as <code>purged</code> in one
+        batch, and reports how many it moved.</li>
+      </ul>
+      <table>
+      <thead>
+      <tr>
+      <th>Endpoint</th>
+      <th>Method</th>
+      <th>Description</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+      <td><code>/api/v1/renditions/{id}</code></td>
+      <td>GET / PUT / DELETE</td>
+      <td>Read, update (status, preview/thumbnail URL, sort order, retention expiry) or soft-delete one rendition</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/renditions/purge-expired</code></td>
+      <td>POST</td>
+      <td>Batch-mark every active rendition past its retention window as <code>purged</code></td>
+      </tr>
+      </tbody>
+      </table>
       <h2 id="byok-provider-keys">BYOK — provider keys</h2>
       <p>Keys the <strong>customer</strong> brings (OpenAI, Resend/SendGrid, social, CoreSwift, …) are stored in
       <code>provider_keys</code> <strong>per tenant</strong> (<code>aid</code>), one row per (tenant, provider), entered in the app UI.</p>
@@ -966,7 +1009,7 @@ when it is set.</p>
       <tr>
       <td><code>/api/v1/user-keys</code></td>
       <td>GET/POST</td>
-      <td>Per-user integration keys (+ <code>/{id}</code> DELETE, <code>/health-check</code>)</td>
+      <td>Per-user integration keys (+ <code>/{id}</code> DELETE, <code>/{id}/reveal</code>, <code>/{id}/regenerate</code>)</td>
       </tr>
       </tbody>
       </table>

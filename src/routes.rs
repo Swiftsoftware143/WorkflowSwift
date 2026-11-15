@@ -58,7 +58,6 @@ pub fn create_router(state: AppState) -> Router {
     let auth_protected = Router::new()
         .route("/me", get(auth::me))
         .route("/me/usage", get(auth::get_usage))
-        .route("/change-password", post(auth::change_password))
         // THE DOOR FOR A CUSTOMER WHOSE FIRST PASSWORD NEVER ARRIVED (kanban class 2026-10-27):
         // `register` mints the first password and mails it, and when that send fails the account is
         // otherwise unreachable — a reset code would fail through the same mailer. Authenticated by
@@ -67,8 +66,8 @@ pub fn create_router(state: AppState) -> Router {
         // It is NOT in route_policy::PUBLIC_ROUTES, so an anonymous caller is refused 401 at the
         // boundary before the handler is reached.
         .route("/initial-password", post(auth::set_initial_password))
-        // The fleet contract's spelling of the same handler (card t_39cea779). Kept alongside
-        // this app's original POST path so no existing caller breaks.
+        // The fleet contract's spelling (card t_39cea779). The original POST /change-password
+        // was retired: no served surface called it — the console uses this PUT.
         .route("/password", put(auth::change_password))
         // "Sign out of every other device" (cron 2026-11-01). The machinery behind it already
         // existed — a password change bumps `users.sessions_valid_from` and the boundary refuses
@@ -138,10 +137,6 @@ pub fn create_router(state: AppState) -> Router {
                 .delete(handlers::workflow_handler::delete_workflow),
         )
         .route(
-            "/{id}/start",
-            post(handlers::workflow_handler::start_workflow),
-        )
-        .route(
             "/{id}/steps",
             get(handlers::workflow_handler::get_workflow_steps)
                 .post(handlers::workflow_handler::create_workflow_step),
@@ -154,10 +149,6 @@ pub fn create_router(state: AppState) -> Router {
             "/{id}/steps/{step_id}",
             put(handlers::workflow_handler::update_workflow_step)
                 .delete(handlers::workflow_handler::delete_workflow_step),
-        )
-        .route(
-            "/{id}/deploy",
-            post(handlers::workflow_handler::deploy_workflow_to_n8n),
         )
         .route("/{id}/run", post(handlers::workflow_handler::run_workflow))
         .route(
@@ -229,10 +220,6 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/packages",
             get(handlers::credit_handler::list_credit_packages),
-        )
-        .route(
-            "/package",
-            post(handlers::credit_handler::create_credit_package),
         )
         .route(
             "/rollover",
@@ -386,10 +373,6 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/prospecting/{id}/results",
             get(handlers::dashboard_tabs_handler::get_prospecting_results),
-        )
-        .route(
-            "/connect-workflow",
-            post(handlers::dashboard_tabs_handler::connect_to_workflow),
         );
 
     let api_key_routes = Router::new()
@@ -731,10 +714,6 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/{id}/regenerate",
             post(handlers::integration_center_handler::regenerate_user_key),
-        )
-        .route(
-            "/health-check",
-            post(handlers::integration_center_handler::check_provider_health),
         );
 
     // ── Notify (kanban t_d3ff37ef) ──

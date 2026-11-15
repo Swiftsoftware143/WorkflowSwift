@@ -10,7 +10,6 @@ use uuid::Uuid;
 
 use crate::auth::models::Claims;
 use crate::error::{ApiResult, AppError};
-use crate::features;
 use crate::AppState;
 
 /// Tiered pricing — profit margin optimized
@@ -262,99 +261,6 @@ pub async fn rollover_credits(
         "message": format!("{} credits rolled over — never expires", non_rollover),
         "rolled": non_rollover,
         "total_balance": total
-    })))
-}
-
-pub async fn create_credit_package(
-    State(state): State<AppState>,
-    Extension(claims): Extension<Claims>,
-    Json(req): Json<serde_json::Value>,
-) -> ApiResult<impl IntoResponse> {
-    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    features::enforce_feature_limit(&state.db, aid, "max_credit_packages", "Credit Packages")
-        .await?;
-
-    if !claims.perm_is_super_admin.unwrap_or(false) {
-        return Err(AppError::Forbidden(
-            "Only the super admin can purchase credits".to_string(),
-        ));
-    }
-
-    let package_id_str = req
-        .get("package_id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| AppError::Validation("package_id is required".to_string()))?;
-    let package_id = Uuid::parse_str(package_id_str)
-        .map_err(|_| AppError::Validation("Invalid package_id".to_string()))?;
-
-    let row = sqlx::query(
-        "SELECT id::text, name, credits, price::text FROM credit_packages WHERE id = $1 AND is_active = true",
-    )
-    .bind(package_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::NotFound("Package not found".to_string()))?;
-
-    let credits: i32 = row.try_get("credits").unwrap_or(0);
-    let price: String = row.try_get("price").unwrap_or_default();
-
-    let tx_id = Uuid::new_v4();
-    sqlx::query(
-        r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
-           VALUES ($1, $2, $3, 'purchase', $4)"#,
-    )
-    .bind(tx_id)
-    .bind(aid)
-    .bind(credits)
-    .bind(format!(
-        "Purchased {} credit package for ${}",
-        credits, price
-    ))
-    .execute(&state.db)
-    .await?;
-
-    // Check if this is their first rollover-eligible period
-    let purchase_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM credit_transactions WHERE aid = $1 AND transaction_type = 'purchase'",
-    )
-    .bind(aid)
-    .fetch_one(&state.db)
-    .await
-    .unwrap_or(0);
-
-    // Auto-rollover if they have existing unused credits
-    if purchase_count > 1 {
-        let current_sum: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1 AND transaction_type != 'rollover'",
-        )
-        .bind(aid)
-        .fetch_one(&state.db)
-        .await
-        .unwrap_or(0);
-
-        if current_sum > credits as i64 {
-            // They have more from previous purchases — roll the surplus
-            let surplus = current_sum - credits as i64;
-            if surplus > 0 {
-                // Note: rollover is recorded separately in the billing cycle, not on purchase
-                // For now, just indicate rollover is available
-            }
-        }
-    }
-
-    let new_balance: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
-    )
-    .bind(aid)
-    .fetch_one(&state.db)
-    .await
-    .unwrap_or(0);
-
-    Ok(Json(json!({
-        "message": "Credits purchased",
-        "credits_added": credits,
-        "new_balance": new_balance,
-        "rollover_eligible": true
     })))
 }
 

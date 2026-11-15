@@ -908,46 +908,6 @@ pub async fn retire_account_n8n_mirrors(state: &AppState, aid: Uuid) -> Result<u
     retire_mirrors_with(&client, &base, &api_key, &ids).await
 }
 
-/// POST /api/v1/workflows/{id}/start — start a workflow now (optional body).
-pub async fn start_workflow(
-    State(state): State<AppState>,
-    Extension(claims): Extension<Claims>,
-    Path(id): Path<Uuid>,
-    body: Option<Json<serde_json::Value>>,
-) -> ApiResult<impl IntoResponse> {
-    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    features::enforce_feature_limit(&state.db, aid, "max_instances", "Instances").await?;
-
-    let req = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
-
-    let workflow = sqlx::query_as::<_, Workflow>(
-        "SELECT * FROM workflows WHERE id = $1 AND aid = $2 AND is_active = true",
-    )
-    .bind(id)
-    .bind(aid)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
-
-    let client_id = resolve_client_id(&state, aid, &req).await?;
-    let run = run_in_process(&state, aid, &workflow, client_id, &req, &claims.sub).await?;
-
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({
-            "instance_id": run.instance_id.to_string(),
-            "status": run.status,
-            "execution": "in_process",
-            "steps_total": run.steps.len(),
-            "steps": run.steps,
-            "n8n": run.n8n,
-            "warnings": run.warnings,
-            "remaining_balance": run.remaining_balance,
-            "message": format!("Workflow '{}' started: instance created and steps executed.", workflow.name)
-        })),
-    ))
-}
-
 pub async fn get_workflow_steps(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
@@ -1430,58 +1390,6 @@ pub async fn reorder_workflow_steps(
     .await?;
 
     Ok(Json(json!({"steps": steps})))
-}
-
-// ─── New: Deploy Workflow to n8n via REST API ───
-
-/// POST /api/v1/workflows/:id/deploy — convert WorkflowSwift steps to n8n and import
-/// Generates an n8n-compatible workflow JSON from the stored steps,
-/// and imports it via the n8n REST API using `POST /rest/workflows`.
-/// POST /api/v1/workflows/{id}/deploy — mirror a workflow into n8n.
-/// Plan-gated on `n8n_deploy`; a failure here is reported plainly instead of
-/// surfacing as an opaque 500. Deploying never runs the workflow.
-pub async fn deploy_workflow_to_n8n(
-    State(state): State<AppState>,
-    Extension(claims): Extension<Claims>,
-    Path(id): Path<Uuid>,
-) -> ApiResult<impl IntoResponse> {
-    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    crate::features::enforce_plan_flag(&state.db, aid, "n8n_deploy", "n8n deployment").await?;
-
-    let workflow = sqlx::query_as::<_, Workflow>(
-        "SELECT * FROM workflows WHERE id = $1 AND aid = $2 AND is_active = true",
-    )
-    .bind(id)
-    .bind(aid)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
-
-    let steps = crate::execution::load_steps(&state.db, workflow.id).await?;
-    if steps.is_empty() {
-        return Err(AppError::BadRequest(
-            "Workflow has no steps. Add at least one step before deploying.".to_string(),
-        ));
-    }
-
-    match mirror_to_n8n(&state, aid, &workflow).await {
-        Ok(v) => Ok(Json(json!({
-            "deployed": true,
-            "webhook_path": v.get("webhook_path").cloned().unwrap_or(serde_json::Value::Null),
-            "webhook_method": crate::n8n_converter::MIRROR_TRIGGER_METHOD,
-            "name": v.get("name").cloned().unwrap_or(serde_json::Value::Null),
-            "node_count": v.get("node_count").cloned().unwrap_or(serde_json::Value::Null),
-            // Idempotence is visible here too: the id is stable, and a later
-            // mirror reports "updated" instead of importing another copy.
-            "n8n_workflow_id": v.get("n8n_workflow_id").cloned().unwrap_or(serde_json::Value::Null),
-            "action": v.get("action").cloned().unwrap_or(serde_json::Value::Null),
-            "message": "Workflow deployed to n8n via its REST API."
-        }))),
-        Err(e) => Err(AppError::BadRequest(format!(
-            "n8n deployment failed: {}",
-            e
-        ))),
-    }
 }
 
 /// POST /api/v1/workflows/:id/run — deploy (if needed) and execute the workflow

@@ -424,7 +424,7 @@ const OPERATOR_ONLY_SUBS=new Set(['Payments','Bridge']);
 function subLabel(t,s){const tab=tabs.find(x=>x.id===t);if(!tab)return '';const hit=tab.subs.find(x=>subSlug(x)===s);return hit||''}
 const tabs=[
   {id:'dashboard',label:'📊 Dashboard',subs:['Overview','Brand Monitor','Competitor Watch','Prospecting']},
-  {id:'workflows',label:'⚙️ Workflows',subs:['All Workflows','Instances','Templates']},
+  {id:'workflows',label:'⚙️ Workflows',subs:['All Workflows','Instances','Templates','Renditions']},
   {id:'automation',label:'🤖 Automation',subs:['Automations','Agents','Workspaces']},
   {id:'crm',label:'👥 CRM',subs:['Leads']},
   {id:'tags',label:'🏷️ Tags & Labels',subs:['Tags','Tag Groups']},
@@ -533,6 +533,7 @@ function content(){
     // `steps: Vec<TemplateStep>`, and a flat text form cannot express a step list — which is why
     // `+ Add` was withdrawn. The panel now authors the steps WITH the template: renderTemplates.
     else if(s==='templates')renderTemplates(c);
+    else if(s==='renditions')renderRenditions(c);
   }else if(t==='automation'){
     if(s==='automations')renderCRUD(c,'automations','Automation',['name','trigger_type','enabled'],'/automations');
     else if(s==='agents')renderCRUD(c,'agents','Agent',['name','provider','is_active'],'/agents',false);
@@ -892,6 +893,97 @@ async function renderCRUD(container,key,label,fields,ep,editFields,extraAction,a
 function renderPage(){renderApp()}
 window.editIt=function(key,label,ep,id,ef,row){showForm(key,label,ef?ef.split(','):['name'],ep,id,renderPage,row)}
 window.delIt=async function(key,label,ep,id){if(!confirm('Delete?'))return;const r=await api(ep+'/'+id,{method:'DELETE'});showMsg(r?'Deleted':('Delete failed: '+LAST_ERR),r?undefined:'error');renderPage()}
+
+// --- Renditions (kanban: wire the finished-but-unreachable rendition feature) --------------------
+// The catalogue (GET /renditions) is already served and the tenant console reads it. Nothing ever
+// EDITED or DELETED a single rendition, and nothing purged expired ones — the three routes below
+// answered with no caller in any shipped surface. This panel gives the operator all three, with
+// real fetch calls. Every route is tenant-scoped, so it acts on the account this console is signed
+// in as (or is impersonating) — the same scoping as the rest of the Workflows tab.
+async function renderRenditions(c){
+  c.innerHTML='';
+  c.appendChild(h('h2',{style:'font-size:20px;font-weight:700;margin-bottom:4px'},'Renditions'));
+  c.appendChild(h('p',{style:'font-size:13px;color:#64748b;margin-bottom:14px'},
+    'Generated media versions of workflow output. Edit the status, preview and thumbnail of one rendition, expire (delete) one, or purge every rendition whose retention window has passed.'));
+  const card=h('div',{className:'card'});
+  const bar=h('div',{style:'display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px'});
+  bar.appendChild(h('h3',{style:'font-size:15px;font-weight:600'},'All renditions'));
+  const purgeBtn=h('button',{className:'btn btn-sm',type:'button'},'Purge expired');
+  purgeBtn.onclick=async()=>{
+    if(!confirm('Purge every expired rendition (sets their status to "purged")? This cannot be undone.'))return;
+    const was=purgeBtn.textContent; purgeBtn.disabled=true; purgeBtn.textContent='Purging\u2026';
+    const r=await api('/renditions/purge-expired',{method:'POST',body:'{}'});
+    purgeBtn.disabled=false; purgeBtn.textContent=was;
+    if(!r){showMsg('Purge failed: '+(LAST_ERR||'request failed'),'error');return;}
+    showMsg(r.message||('Purged '+(r.purged_count||0)+' expired renditions'),'success');
+    renderRenditions(c);
+  };
+  bar.appendChild(purgeBtn);
+  card.appendChild(bar);
+  const list=h('div',{}); card.appendChild(list);
+  c.appendChild(card);
+  list.appendChild(h('p',{className:'text-sm text-gray-400'},'Loading\u2026'));
+  let data=null;
+  try{ data=await api('/renditions?limit=200'); }catch(e){ data=null; }
+  const items=unwrapList(data);
+  if(!items.length){ list.innerHTML='<p class="text-gray-400 text-sm">No renditions yet. A Render step (Builder) or the n8n mirror\u2019s log node posts one here per generated asset.</p>'; return; }
+  const cols=['step_name','provider','asset_type','status','preview_url','created_at'];
+  const HEAD={step_name:'Step',provider:'Provider',asset_type:'Type',status:'Status',preview_url:'Preview',created_at:'Created'};
+  const fmtWhen=(v)=>{ if(v===undefined||v===null||v==='') return '<span class="text-gray-400">never</span>';
+    const d=new Date(v); return escHtml(isNaN(d)?String(v):d.toLocaleString()); };
+  const cell=(f,it)=>{ const v=it[f];
+    if(f==='status') return escHtml(String(v===undefined||v===null?'':v));
+    if(f==='preview_url') return v?('<a href="'+escHtml(String(v))+'" target="_blank" rel="noopener">open</a>'):'<span class="text-gray-400">\u2014</span>';
+    if(f==='created_at') return fmtWhen(v);
+    return escHtml(String(v===undefined||v===null?'':v)); };
+  const tbody=items.map(it=>'<tr>'+cols.map(f=>'<td>'+cell(f,it)+'</td>').join('')
+    +'<td class="text-right" style="white-space:nowrap">'
+    +'<button class="btn btn-sm btn-ghost" data-rend-edit="'+escHtml(it.id)+'">Edit</button> '
+    +'<button class="btn btn-sm btn-danger" data-rend-del="'+escHtml(it.id)+'">Del</button></td></tr>').join('');
+  list.innerHTML='<table class="table"><thead><tr>'+cols.map(f=>'<th>'+escHtml(HEAD[f]||f.replace(/_/g,' ').replace(/\b\w/g,l=>l.toUpperCase()))+'</th>').join('')+'<th style="width:130px"></th></tr></thead><tbody>'+tbody+'</tbody></table>';
+  list.querySelectorAll('button[data-rend-edit]').forEach(b=>b.onclick=(ev)=>{ev.preventDefault();
+    const id=b.getAttribute('data-rend-edit'); const it=items.find(x=>String(x.id)===String(id));
+    openRenditionEdit(id,it,()=>renderRenditions(c));});
+  list.querySelectorAll('button[data-rend-del]').forEach(b=>b.onclick=(ev)=>{ev.preventDefault();
+    const id=b.getAttribute('data-rend-del'); delRendition(id,()=>renderRenditions(c));});
+}
+
+// Edit one rendition: PUT /renditions/{id}. The handler COALESCEs every omitted field against the
+// stored row, so a blank box leaves the stored value alone. `status` is a select of the three values
+// the API writes (active / expired / purged). `sort_order` is sent as a real number, not a string.
+async function openRenditionEdit(id,it,cb){
+  const modal=h('div',{className:'modal-overlay',onclick:function(e){if(e.target===modal)modal.remove()}});
+  const box=h('div',{className:'modal-box'});
+  const statuses=['active','expired','purged'];
+  const curStatus=String((it&&it.status)||'active');
+  box.innerHTML='<h2 class="text-lg font-bold mb-4">Edit Rendition</h2><form id="rendf">'
+    +'<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">Status</label><select class="input" name="status">'
+    +statuses.map(s=>'<option value="'+s+'"'+(s===curStatus?' selected':'')+'>'+s+'</option>').join('')+'</select></div>'
+    +'<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">Preview URL</label><input class="input" name="preview_url" value="'+escHtml(String((it&&it.preview_url)||''))+'" placeholder="Leave empty to keep the stored URL"></div>'
+    +'<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">Thumbnail URL</label><input class="input" name="thumbnail_url" value="'+escHtml(String((it&&it.thumbnail_url)||''))+'" placeholder="Leave empty to keep the stored URL"></div>'
+    +'<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">Sort order</label><input class="input" name="sort_order" type="number" step="1" value="'+escHtml(String((it&&it.sort_order!=null)?it.sort_order:''))+'" placeholder="Leave empty to keep the current order"></div>'
+    +'<div class="mb-3"><label class="block text-xs font-medium text-gray-500 mb-1">Retention expires at (UTC)</label><input class="input" name="retention_expires_at" value="'+escHtml(String((it&&it.retention_expires_at)||''))+'" placeholder="RFC3339, e.g. 2026-12-01T00:00:00Z"></div>'
+    +'</form><div class="flex justify-end gap-2 mt-4"><button class="btn btn-ghost" id="rendCancel">Cancel</button><button class="btn btn-primary" id="rendSave">Save</button></div>';
+  modal.appendChild(box); document.body.appendChild(modal);
+  box.querySelector('#rendCancel').onclick=()=>modal.remove();
+  box.querySelector('#rendSave').onclick=async()=>{
+    const body={};
+    box.querySelectorAll('#rendf input,#rendf select').forEach(inp=>{
+      if(inp.name==='sort_order'){ const t=String(inp.value).trim(); if(t!==''){const n=Number(t); if(Number.isFinite(n))body.sort_order=n;} }
+      else if(String(inp.value).trim()!==''){ body[inp.name]=String(inp.value).trim(); }
+    });
+    const r=await api('/renditions/'+encodeURIComponent(id),{method:'PUT',body:JSON.stringify(body)});
+    if(!r){showMsg('Error saving: '+(LAST_ERR||'request failed'),'error');return;}
+    modal.remove(); showMsg('Saved!','success'); if(cb)cb();
+  };
+}
+
+async function delRendition(id,cb){
+  if(!confirm('Expire this rendition? It is soft-deleted (its status becomes "expired"), not removed.'))return;
+  const r=await api('/renditions/'+encodeURIComponent(id),{method:'DELETE'});
+  showMsg(r?('Expired'):('Delete failed: '+(LAST_ERR||'request failed')),r?undefined:'error');
+  if(cb)cb();
+}
 
 async function showForm(key,label,fields,ep,id,cb,row){
   const EP=(typeof ep==='string')?{list:ep,create:ep}:ep;

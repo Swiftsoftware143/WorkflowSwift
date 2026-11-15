@@ -247,7 +247,7 @@ keys) is argon2-hashed; `integration_targets.api_key` uses the same envelope (mi
 | `/api/v1/integrations/coreswift/status` | GET | Is a CoreSwift key connected, and its base URL |
 | `/api/v1/integrations/coreswift/lists` | GET | Proxy the CoreSwift lists catalogue |
 | `/api/v1/integrations/coreswift/push` | POST | Manual push of captured leads |
-| `/api/v1/user-keys` | GET/POST | Per-user integration keys (+ `/{id}` DELETE, `/health-check`) |
+| `/api/v1/user-keys` | GET/POST | Per-user integration keys (+ `/{id}` DELETE, `/{id}/reveal`, `/{id}/regenerate`) |
 
 The per-user `user_integrations` family (`GET`/`POST /api/v1/integrations`, `/native`,
 `/native/{provider}`, `DELETE /{provider}`, `/health-check`) and the console's "My Integrations"
