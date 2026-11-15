@@ -6,8 +6,234 @@ use crate::{
     AppState,
 };
 use axum::{extract::State, http::HeaderMap, response::IntoResponse, Json};
+use hmac::{Hmac, Mac};
 use serde_json::{json, Value};
+use sha2::Sha256;
 use uuid::Uuid;
+
+type HmacSha256 = Hmac<Sha256>;
+
+/// RFC 4648 Base32, UPPERCASE, padding stripped — the exact encoding the fleet's derived-password
+/// rule specifies. `base64` is Base64 only, so this is the one codec that must be written by hand.
+fn base32_encode_upper_no_pad(data: &[u8]) -> String {
+    const ALPHABET: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+    let mut out = String::with_capacity((data.len() * 8).div_ceil(5));
+    let mut buffer: u32 = 0;
+    let mut bits: usize = 0;
+    for &byte in data {
+        buffer = (buffer << 8) | u32::from(byte);
+        bits += 8;
+        while bits >= 5 {
+            bits -= 5;
+            let idx = ((buffer >> bits) & 0x1F) as usize;
+            out.push(ALPHABET[idx] as char);
+        }
+    }
+    if bits > 0 {
+        let idx = ((buffer << (5 - bits)) & 0x1F) as usize;
+        out.push(ALPHABET[idx] as char);
+    }
+    out
+}
+
+/// The fleet's derived portfolio password — deterministic, never transmitted except in the one
+/// welcome mail, never logged, and identical across every app that holds the same
+/// `INTERNAL_SYNC_KEY`.
+///
+/// ```text
+/// raw      = HMAC-SHA256(key = INTERNAL_SYNC_KEY, message = "portfolio:" + portfolio_uuid_string)
+/// password = Base32(raw), RFC 4648, UPPERCASE, padding stripped, FIRST 20 CHARACTERS
+/// ```
+///
+/// Because it is a pure function of the sync key and the portfolio id, a re-sync reproduces the
+/// same value — so it can never invalidate a credential the user has since changed (the derivation
+/// is only applied when the account has no usable password at all, and an existing hash is never
+/// touched).
+fn derive_password(sync_key: &str, portfolio_id: Uuid) -> String {
+    let message = format!("portfolio:{portfolio_id}");
+    let mut mac =
+        HmacSha256::new_from_slice(sync_key.as_bytes()).expect("HMAC accepts a key of any length");
+    mac.update(message.as_bytes());
+    let raw = mac.finalize().into_bytes();
+    let b32 = base32_encode_upper_no_pad(&raw);
+    b32.chars().take(20).collect()
+}
+
+/// What the provisioning step did, so each arm can answer in the same words (the fleet standard,
+/// same shape as IncentiveSwift's `ProvisionOutcome`).
+struct ProvisionOutcome {
+    /// A login was CREATED (or completed) by this call — the only case the welcome mail goes out.
+    user_created: bool,
+    /// The derived password, present only when `user_created` (moved into the mail, never returned).
+    password: String,
+    key_prefix: Option<String>,
+    key_minted: bool,
+}
+
+impl ProvisionOutcome {
+    fn none() -> Self {
+        Self {
+            user_created: false,
+            password: String::new(),
+            key_prefix: None,
+            key_minted: false,
+        }
+    }
+}
+
+/// Ensure the mirrored account holds its owner login and exactly one live API key — the fleet
+/// portfolio provisioning standard (2026-11-15) — inside the caller's transaction, idempotently.
+///
+/// This app's workspace is an `accounts` row and the OWNER LOGIN is a `users` row (`aid` →
+/// `accounts.id`), so "owner missing" is read as "no usable password on this address".
+///
+/// * no user for the address → INSERT the owner with the DERIVED password, role `user` (the same
+///   role a public signup gets), `user_created = true`;
+/// * user with an empty/unusable hash (the `AfterTheSend` marker) → set the derived password;
+/// * user with a working hash → untouched, `user_created = false` (no re-mail, no reset);
+/// * one live key per account (`api_keys_one_active_per_aid`): minted only when there is none.
+async fn provision_owner(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    sync_key: &str,
+    account_id: Uuid,
+    portfolio_id: Uuid,
+    name: &str,
+    email: &str,
+) -> Result<ProvisionOutcome, AppError> {
+    let existing: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, password_hash FROM users WHERE aid = $1 AND lower(email) = lower($2) LIMIT 1",
+    )
+    .bind(account_id)
+    .bind(email)
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    let (user_id, user_created, password) = match existing {
+        Some((uid, hash)) if crate::auth::api_key_auth::is_usable_hash(&hash) => {
+            (uid, false, String::new())
+        }
+        Some((uid, _)) => {
+            let derived = derive_password(sync_key, portfolio_id);
+            let hash = crate::auth::api_key_auth::argon2_hash(derived.clone()).await?;
+            sqlx::query(
+                "UPDATE users SET password_hash = $1, password_undelivered = false, \
+                 updated_at = NOW() WHERE id = $2",
+            )
+            .bind(&hash)
+            .bind(uid)
+            .execute(&mut **tx)
+            .await?;
+            (uid, true, derived)
+        }
+        None => {
+            let uid = Uuid::new_v4();
+            let derived = derive_password(sync_key, portfolio_id);
+            let hash = crate::auth::api_key_auth::argon2_hash(derived.clone()).await?;
+            sqlx::query(
+                r#"INSERT INTO users (id, aid, email, password_hash, name, role, is_active, created_at, updated_at)
+                   VALUES ($1, $2, $3, $4, $5, 'user', true, NOW(), NOW())"#,
+            )
+            .bind(uid)
+            .bind(account_id)
+            .bind(email)
+            .bind(&hash)
+            .bind(name)
+            .execute(&mut **tx)
+            .await?;
+            (uid, true, derived)
+        }
+    };
+
+    let live_prefix: Option<String> = sqlx::query_scalar(
+        "SELECT prefix FROM api_keys WHERE aid = $1 AND is_active = true LIMIT 1",
+    )
+    .bind(account_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    let (key_prefix, key_minted) = match live_prefix {
+        Some(prefix) => (Some(prefix), false),
+        None => {
+            // `mint_api_key_on` is the ONE writer for a programmatic key — hash + sealed copy +
+            // prefix + ledger row, all on this connection so they commit or roll back together.
+            let minted = crate::handlers::api_key_handler::mint_api_key_on(
+                tx,
+                user_id,
+                account_id,
+                "auto-provisioned",
+                "",
+            )
+            .await?;
+            (Some(minted.prefix), true)
+        }
+    };
+
+    Ok(ProvisionOutcome {
+        user_created,
+        password,
+        key_prefix,
+        key_minted,
+    })
+}
+
+/// Provision for a company row this arm has just written, or report "nothing to do" when the
+/// caller sent no address (a sync without an email stays a legal mirror, exactly as before).
+async fn provision_for_company(
+    state: &AppState,
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    account_id: Uuid,
+    portfolio_id: Uuid,
+    name: &str,
+    email: &str,
+) -> Result<ProvisionOutcome, AppError> {
+    if email.trim().is_empty() {
+        return Ok(ProvisionOutcome::none());
+    }
+    provision_owner(
+        tx,
+        &state.config.internal_sync_key,
+        account_id,
+        portfolio_id,
+        name,
+        email,
+    )
+    .await
+}
+
+/// Send the welcome/credentials mail for a login this sync just created — best effort, AFTER the
+/// commit, and only to the portfolio's own address (never to the operator). A mail failure must
+/// never fail the sync: the account exists and the derived password is reproducible on a re-sync.
+async fn send_welcome(
+    state: &AppState,
+    account_id: Uuid,
+    name: &str,
+    email: &str,
+    password: &str,
+) -> bool {
+    const APP_URL: &str = "https://app.workflowswift.com";
+    let vars = json!({
+        "name": name,
+        "email": email,
+        "app_url": APP_URL,
+        "url": APP_URL,
+        "password": password,
+    });
+    match crate::email::send_email(state, Some(account_id), email, "welcome", &vars).await {
+        Ok(()) => {
+            tracing::info!(email = %email, account = %account_id, "portfolio sync: welcome email sent");
+            true
+        }
+        Err(e) => {
+            tracing::error!(
+                email = %email,
+                account = %account_id,
+                error = %e,
+                "portfolio sync: account provisioned but the WELCOME EMAIL FAILED"
+            );
+            false
+        }
+    }
+}
 
 /// The `account_slug` a mirrored `accounts` row must carry: the caller's own slug (the hub's
 /// contract is that `body.slug` is what lands in both rows), or this app's derived unique slug
@@ -279,10 +505,25 @@ async fn adopt_existing_company(
         (None, None) => {}
     }
 
+    // 3. Provision — owner login if missing, one live key if missing, welcome mail only when the
+    //    login was actually created (the fleet standard, same as the create arm).
+    let prov = match payload_pid {
+        Some(pid) => {
+            provision_for_company(state, &mut tx, found.account_id, pid, name, email).await?
+        }
+        None => ProvisionOutcome::none(),
+    };
+
     tx.commit().await?;
 
+    let welcome_sent = if prov.user_created {
+        send_welcome(state, found.account_id, name, email, &prov.password).await
+    } else {
+        false
+    };
+
     Ok(Json(json!({
-        "status": "synced",
+        "status": if prov.user_created || prov.key_minted { "synced" } else { "already_provisioned" },
         "adopted": true,
         "account_id": found.account_id.to_string(),
         "portfolio_id": found
@@ -290,6 +531,10 @@ async fn adopt_existing_company(
             .map(|c| c.to_string())
             .or_else(|| payload_pid.map(|p| p.to_string()))
             .unwrap_or_default(),
+        "user_created": prov.user_created,
+        "key_minted": prov.key_minted,
+        "welcome_sent": welcome_sent,
+        "key_prefix": prov.key_prefix,
     })))
 }
 
@@ -349,18 +594,49 @@ pub async fn portfolio_sync_internal(
         }
     }
 
+    // What provisioning did, reported at the end for the arms that do not return early (update,
+    // delete). The create and adopt arms answer from inside themselves.
+    let mut prov = ProvisionOutcome::none();
+    let mut welcome_account: Option<Uuid> = None;
+
     match action {
         "create" => {
             if let (Some(pid), Some(tid)) = (portfolio_id, tenant_id) {
                 // WorkflowSwift uses accounts not tenants.
                 // NOT marked with `probe_harness` on purpose (kanban t_4a744754): this
                 // mirror runs inside the x-internal-key portfolio-sync door.
+                //
+                // The account, its company row and its OWNER LOGIN are ONE unit of work (2026-11-15):
+                // the mirror used to write the two rows and stop, so the owner the hub sent got a
+                // company with no way to sign in. A failure in any part rolls the whole create back.
+                let mut tx = state.db.begin().await?;
                 sqlx::query("INSERT INTO accounts (id, name, account_slug) VALUES ($1, $2, CONCAT($3, '-', LEFT(CAST($1 AS TEXT), 8))) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name")
                     .bind(tid).bind(&name).bind(&slug)
-                    .execute(&state.db).await.ok();
+                    .execute(&mut *tx).await.map_err(|e| match e {
+                        sqlx::Error::Database(db) if db.code().as_deref() == Some("23505") => AppError::Duplicate(
+                            format!("workspace slug '{slug}' is already in use by another account"),
+                        ),
+                        other => other.into(),
+                    })?;
                 sqlx::query("INSERT INTO portfolio_companies (id, aid, name, slug, email) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, slug = EXCLUDED.slug, email = EXCLUDED.email, updated_at = NOW()")
                     .bind(pid).bind(tid).bind(&name).bind(&slug).bind(&email)
-                    .execute(&state.db).await?;
+                    .execute(&mut *tx).await?;
+                let prov = provision_for_company(&state, &mut tx, tid, pid, &name, &email).await?;
+                tx.commit().await?;
+                let welcome_sent = if prov.user_created {
+                    send_welcome(&state, tid, &name, &email, &prov.password).await
+                } else {
+                    false
+                };
+                return Ok(Json(json!({
+                    "status": if prov.user_created || prov.key_minted { "synced" } else { "already_provisioned" },
+                    "account_id": tid.to_string(),
+                    "portfolio_id": pid.to_string(),
+                    "user_created": prov.user_created,
+                    "key_minted": prov.key_minted,
+                    "welcome_sent": welcome_sent,
+                    "key_prefix": prov.key_prefix,
+                })));
             }
         }
         "update" => {
@@ -394,7 +670,27 @@ pub async fn portfolio_sync_internal(
                     sqlx::query("INSERT INTO portfolio_companies (id, aid, name, slug, email) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, slug = EXCLUDED.slug, email = EXCLUDED.email, updated_at = NOW()")
                         .bind(pid).bind(tid).bind(&name).bind(&account_slug).bind(&email)
                         .execute(&mut *tx).await?;
+                    // The catch-up mirror is a portfolio company too: its owner gets a login, in
+                    // the same unit of work (2026-11-15).
+                    prov = provision_for_company(&state, &mut tx, tid, pid, &name, &email).await?;
+                    welcome_account = Some(tid);
                     tx.commit().await?;
+                } else {
+                    // The company row exists. Its OWNER LOGIN may still be missing — the pre-fix
+                    // mirror never created one — so provisioning runs on the account the row is
+                    // scoped to. This is the arm that repairs a company that already synced.
+                    let aid: Option<Uuid> =
+                        sqlx::query_scalar("SELECT aid FROM portfolio_companies WHERE id = $1")
+                            .bind(pid)
+                            .fetch_optional(&state.db)
+                            .await?;
+                    if let Some(aid) = aid {
+                        let mut tx = state.db.begin().await?;
+                        prov =
+                            provision_for_company(&state, &mut tx, aid, pid, &name, &email).await?;
+                        welcome_account = Some(aid);
+                        tx.commit().await?;
+                    }
                 }
             }
         }
@@ -409,5 +705,24 @@ pub async fn portfolio_sync_internal(
         _ => return Err(AppError::BadRequest("Invalid action".into())),
     }
 
-    Ok(Json(json!({"status": "synced"})))
+    let welcome_sent = match welcome_account {
+        Some(aid) if prov.user_created => {
+            send_welcome(&state, aid, &name, &email, &prov.password).await
+        }
+        _ => false,
+    };
+
+    Ok(Json(json!({
+        "status": if prov.user_created || prov.key_minted {
+            "synced"
+        } else if action == "update" {
+            "already_provisioned"
+        } else {
+            "synced"
+        },
+        "user_created": prov.user_created,
+        "key_minted": prov.key_minted,
+        "welcome_sent": welcome_sent,
+        "key_prefix": prov.key_prefix,
+    })))
 }
