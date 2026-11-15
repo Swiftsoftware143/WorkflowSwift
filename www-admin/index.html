@@ -2060,7 +2060,9 @@ function renderN8N(c){
 }
 
 function renderBridge(c){
-  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">AI Bridge</h2><div id="bridata"></div></div>';
+  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-4">AI Bridge</h2>'
+    +'<h3 class="font-semibold text-gray-700 mt-1 mb-2">Inbound tasks</h3><div id="bridata"></div>'
+    +'<h3 class="font-semibold text-gray-700 mt-4 mb-2">Outbound results</h3><div id="bridata-out"></div></div>';
   api('/bridge-tasks').then(d=>{
     const el=c.querySelector('#bridata');
     // A REFUSED read is not an empty queue (kanban t_9aee74f9). The listing is the platform
@@ -2069,6 +2071,16 @@ function renderBridge(c){
     if(!d){el.innerHTML='<p class="text-sm" style="color:#991b1b">'+escHtml(LAST_ERR||'The queue could not be read.')+'</p>';return}
     if(!d.tasks||!d.tasks.length){el.innerHTML='<p class="text-gray-400 text-sm">No inbound AI task files are queued.</p>';return}
     el.innerHTML=d.tasks.map(t=>`<div class="p-3 border-b"><strong>${escHtml(t.name||t.id)}</strong><span class="text-xs text-gray-500 ml-2">${escHtml(t.status)}</span></div>`).join('');
+  });
+  // The outbound half of the queue: GET /bridge-results answered 200 for a super-admin but no
+  // panel read it, so a completed AI task's result file existed on the server's own filesystem and
+  // the operator could never see it. Same super-admin gate and same "a refusal is not an empty
+  // list" contract as its inbound twin above.
+  api('/bridge-results').then(d=>{
+    const el=c.querySelector('#bridata-out');
+    if(!d){el.innerHTML='<p class="text-sm" style="color:#991b1b">'+escHtml(LAST_ERR||'The results could not be read.')+'</p>';return}
+    if(!d.results||!d.results.length){el.innerHTML='<p class="text-gray-400 text-sm">No outbound AI results yet.</p>';return}
+    el.innerHTML=d.results.map(r=>`<div class="p-3 border-b"><strong>${escHtml(r.name||r.id||r.task_id||r.result||'result')}</strong><span class="text-xs text-gray-500 ml-2">${escHtml(r.status||'done')}</span></div>`).join('');
   });
 }
 
