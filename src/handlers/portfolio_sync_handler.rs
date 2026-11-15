@@ -68,6 +68,8 @@ struct ProvisionOutcome {
     password: String,
     key_prefix: Option<String>,
     key_minted: bool,
+    /// The plan slug this sync SEATED on the account, or None when it already had an active plan.
+    plan_seated: Option<String>,
 }
 
 impl ProvisionOutcome {
@@ -77,8 +79,56 @@ impl ProvisionOutcome {
             password: String::new(),
             key_prefix: None,
             key_minted: false,
+            plan_seated: None,
         }
     }
+}
+
+/// Seat this app's HIGHEST tier on a mirrored account when it holds no active plan — David's rule
+/// for his own companies (2026-10-04), and the fleet standard MissedCall already applies in its
+/// portfolio handler (`plans_handler::seat_top_plan_on`).
+///
+/// WHY (measured 2026-11-15): the sync door created the account and the company and stopped, so a
+/// synced portfolio company carried NO `account_plans` row and the entitlement resolver fell back
+/// to the first active tier — six of this app's eight portfolio accounts held Enterprise while the
+/// two the sync had just repaired held nothing.
+///
+/// Idempotent by construction: an account that already has an ACTIVE plan row is never re-seated
+/// (`account_plans_one_active_per_aid` is a partial UNIQUE index, so a blind INSERT on a re-sync
+/// would raise 23505). Best-effort in the sense that "no active tier exists" is not an error.
+async fn seat_top_plan(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    account_id: Uuid,
+) -> Result<Option<String>, AppError> {
+    let has_active: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM account_plans WHERE aid = $1 AND status = 'active')",
+    )
+    .bind(account_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if has_active {
+        return Ok(None);
+    }
+    let top: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, slug FROM plan_tiers WHERE is_active = true \
+         ORDER BY sort_order DESC NULLS LAST, price_monthly DESC NULLS LAST LIMIT 1",
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some((plan_id, slug)) = top else {
+        tracing::warn!(account = %account_id, "portfolio sync: no active plan exists to seat");
+        return Ok(None);
+    };
+    sqlx::query(
+        "INSERT INTO account_plans (aid, plan_id, status, started_at) \
+         VALUES ($1, $2, 'active', NOW()) ON CONFLICT DO NOTHING",
+    )
+    .bind(account_id)
+    .bind(plan_id)
+    .execute(&mut **tx)
+    .await?;
+    tracing::info!(account = %account_id, plan = %slug, "portfolio sync: account seated on the top plan");
+    Ok(Some(slug))
 }
 
 /// Ensure the mirrored account holds its owner login and exactly one live API key — the fleet
@@ -173,6 +223,8 @@ async fn provision_owner(
         password,
         key_prefix,
         key_minted,
+        // `provision_for_company` fills this from `seat_top_plan` — the caller's own answer.
+        plan_seated: None,
     })
 }
 
@@ -186,10 +238,16 @@ async fn provision_for_company(
     name: &str,
     email: &str,
 ) -> Result<ProvisionOutcome, AppError> {
+    // Seat the top tier FIRST and independently of the address: a company the hub sends without an
+    // email still has no business landing on the free fallback (see `seat_top_plan`).
+    let plan_seated = seat_top_plan(tx, account_id).await?;
     if email.trim().is_empty() {
-        return Ok(ProvisionOutcome::none());
+        return Ok(ProvisionOutcome {
+            plan_seated,
+            ..ProvisionOutcome::none()
+        });
     }
-    provision_owner(
+    let mut prov = provision_owner(
         tx,
         &state.config.internal_sync_key,
         account_id,
@@ -197,7 +255,9 @@ async fn provision_for_company(
         name,
         email,
     )
-    .await
+    .await?;
+    prov.plan_seated = plan_seated;
+    Ok(prov)
 }
 
 /// Send the welcome/credentials mail for a login this sync just created — best effort, AFTER the
@@ -526,6 +586,9 @@ async fn adopt_existing_company(
         "status": if prov.user_created || prov.key_minted { "synced" } else { "already_provisioned" },
         "adopted": true,
         "account_id": found.account_id.to_string(),
+        // Fleet shape: FunnelSwift/ADASwift/MissedCall call this `tenant_id`. Emit both so a single
+        // contract can read the workspace id from every app without branching on the app name.
+        "tenant_id": found.account_id.to_string(),
         "portfolio_id": found
             .company_id
             .map(|c| c.to_string())
@@ -535,6 +598,7 @@ async fn adopt_existing_company(
         "key_minted": prov.key_minted,
         "welcome_sent": welcome_sent,
         "key_prefix": prov.key_prefix,
+        "plan_seated": prov.plan_seated,
     })))
 }
 
@@ -629,14 +693,15 @@ pub async fn portfolio_sync_internal(
                     false
                 };
                 return Ok(Json(json!({
-                    "status": if prov.user_created || prov.key_minted { "synced" } else { "already_provisioned" },
-                    "account_id": tid.to_string(),
-                    "portfolio_id": pid.to_string(),
-                    "user_created": prov.user_created,
-                    "key_minted": prov.key_minted,
-                    "welcome_sent": welcome_sent,
-                    "key_prefix": prov.key_prefix,
-                })));
+                            "status": if prov.user_created || prov.key_minted { "synced" } else { "already_provisioned" },
+                            "account_id": tid.to_string(),
+                            "portfolio_id": pid.to_string(),
+                            "user_created": prov.user_created,
+                            "key_minted": prov.key_minted,
+                            "welcome_sent": welcome_sent,
+                            "key_prefix": prov.key_prefix,
+                "plan_seated": prov.plan_seated,
+                        })));
             }
         }
         "update" => {
@@ -724,5 +789,6 @@ pub async fn portfolio_sync_internal(
         "key_minted": prov.key_minted,
         "welcome_sent": welcome_sent,
         "key_prefix": prov.key_prefix,
+        "plan_seated": prov.plan_seated,
     })))
 }
