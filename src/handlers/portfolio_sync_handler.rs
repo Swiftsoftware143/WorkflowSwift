@@ -67,6 +67,232 @@ async fn mirror_account(
     Ok(())
 }
 
+/// The account + company this app ALREADY holds for a portfolio company, found by the company's
+/// stable identity (slug → name → email) rather than by the caller's id.
+///
+/// WHY (adopt-before-create, 2026-11-15): the hub changed which id it sends — it used to carry its
+/// own ADMIN workspace id for every company, and now carries each company's OWN id
+/// (`tenant_id == portfolio_id`, CoreSwift `src/portfolio/sync.rs`). This app already held
+/// Giraudy/ZaarHub/SwiftImpact under the OLD ids, so a re-sync whose id matched nothing minted a
+/// SECOND, empty account beside the real one. Matching on the identity this app already stores
+/// finds the account that exists and adopts it instead of minting a duplicate.
+///
+/// This app has NO `tenants` table — the workspace is an `accounts` row (id == `users.aid`), which
+/// carries `account_slug` and `name` but NO email column. The company's full identity (slug, name,
+/// email) lives on `portfolio_companies` (aid → accounts.id). The account is therefore matched by
+/// account_slug → name, and the company row — used only as a FALLBACK source of an account id for a
+/// company whose account this app never mirrored — by slug → name → email.
+struct AdoptedCompany {
+    /// The existing accounts.id to reuse in place of the caller's id.
+    account_id: Uuid,
+    /// The existing portfolio_companies.id to refresh in place (None when this app holds an account
+    /// for the company but no company row yet).
+    company_id: Option<Uuid>,
+}
+
+/// Resolve the `portfolio_companies` row to refresh alongside the adopted account: the row already
+/// linked to it, else the row matching the company's identity (slug → name → email) — the pre-fix
+/// link may point at the shared/admin account while the adopted account is the company's own.
+async fn resolve_company_id(
+    db: &sqlx::PgPool,
+    account_id: Uuid,
+    name: &str,
+    slug: &str,
+    email: &str,
+) -> Result<Option<Uuid>, AppError> {
+    let by_aid: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM portfolio_companies WHERE aid = $1 LIMIT 1")
+            .bind(account_id)
+            .fetch_optional(db)
+            .await?;
+    if by_aid.is_some() {
+        return Ok(by_aid);
+    }
+    if !slug.trim().is_empty() {
+        let c: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM portfolio_companies WHERE slug = $1 LIMIT 1")
+                .bind(slug.trim())
+                .fetch_optional(db)
+                .await?;
+        if c.is_some() {
+            return Ok(c);
+        }
+    }
+    if !name.trim().is_empty() {
+        let c: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM portfolio_companies WHERE name = $1 LIMIT 1")
+                .bind(name.trim())
+                .fetch_optional(db)
+                .await?;
+        if c.is_some() {
+            return Ok(c);
+        }
+    }
+    if !email.trim().is_empty() {
+        let c: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM portfolio_companies WHERE email = $1 LIMIT 1")
+                .bind(email.trim())
+                .fetch_optional(db)
+                .await?;
+        if c.is_some() {
+            return Ok(c);
+        }
+    }
+    Ok(None)
+}
+
+/// Find the account this app already holds for a portfolio company — the `accounts` row by
+/// account_slug → name first (the workspace itself, this app's tenant), then, as a fallback, the
+/// `portfolio_companies` row's parent by slug → name → email (a company whose account this app
+/// never mirrored). Returns None only when this app holds nothing for the company, which is exactly
+/// the case the create/update arm below may mint a fresh account for.
+async fn find_existing_company(
+    db: &sqlx::PgPool,
+    name: &str,
+    slug: &str,
+    email: &str,
+) -> Result<Option<AdoptedCompany>, AppError> {
+    // 1. The account (accounts — this app's tenant/workspace). account_slug → name. `accounts` has
+    //    no email column, so the email leg of the workspace match has no home here and is covered by
+    //    the company fallback below.
+    if !slug.trim().is_empty() {
+        let a: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM accounts WHERE account_slug = $1 LIMIT 1")
+                .bind(slug.trim())
+                .fetch_optional(db)
+                .await?;
+        if let Some(a) = a {
+            return Ok(Some(AdoptedCompany {
+                account_id: a,
+                company_id: resolve_company_id(db, a, name, slug, email).await?,
+            }));
+        }
+    }
+    if !name.trim().is_empty() {
+        let a: Option<Uuid> = sqlx::query_scalar("SELECT id FROM accounts WHERE name = $1 LIMIT 1")
+            .bind(name.trim())
+            .fetch_optional(db)
+            .await?;
+        if let Some(a) = a {
+            return Ok(Some(AdoptedCompany {
+                account_id: a,
+                company_id: resolve_company_id(db, a, name, slug, email).await?,
+            }));
+        }
+    }
+
+    // 2. Fallback — a company whose account this app never mirrored: its aid is the account to
+    //    adopt. slug → name → email.
+    if !slug.trim().is_empty() {
+        let a: Option<Uuid> =
+            sqlx::query_scalar("SELECT aid FROM portfolio_companies WHERE slug = $1 LIMIT 1")
+                .bind(slug.trim())
+                .fetch_optional(db)
+                .await?;
+        if let Some(a) = a {
+            return Ok(Some(AdoptedCompany {
+                account_id: a,
+                company_id: resolve_company_id(db, a, name, slug, email).await?,
+            }));
+        }
+    }
+    if !name.trim().is_empty() {
+        let a: Option<Uuid> =
+            sqlx::query_scalar("SELECT aid FROM portfolio_companies WHERE name = $1 LIMIT 1")
+                .bind(name.trim())
+                .fetch_optional(db)
+                .await?;
+        if let Some(a) = a {
+            return Ok(Some(AdoptedCompany {
+                account_id: a,
+                company_id: resolve_company_id(db, a, name, slug, email).await?,
+            }));
+        }
+    }
+    if !email.trim().is_empty() {
+        let a: Option<Uuid> =
+            sqlx::query_scalar("SELECT aid FROM portfolio_companies WHERE email = $1 LIMIT 1")
+                .bind(email.trim())
+                .fetch_optional(db)
+                .await?;
+        if let Some(a) = a {
+            return Ok(Some(AdoptedCompany {
+                account_id: a,
+                company_id: resolve_company_id(db, a, name, slug, email).await?,
+            }));
+        }
+    }
+
+    Ok(None)
+}
+
+/// Adopt an existing account for a portfolio re-sync: refresh its name and its company row
+/// (re-pointing the company to the adopted account), returning the ORIGINAL ids. Never mints a
+/// second account, never touches `account_slug` (the tenant's stable identifier, bound at mint).
+async fn adopt_existing_company(
+    state: &AppState,
+    found: AdoptedCompany,
+    payload_pid: Option<Uuid>,
+    name: &str,
+    slug: &str,
+    email: &str,
+) -> ApiResult<Json<Value>> {
+    let mut tx = state.db.begin().await?;
+
+    // 1. Refresh the existing account's name. `account_slug` is a stable tenant identifier (read by
+    //    the admin console and bridge_handler); it is bound at mint and NEVER rewritten — the
+    //    create arm below updates name only on conflict too, and re-deriving the slug here could
+    //    23505 on a live account's slug.
+    sqlx::query("UPDATE accounts SET name = $1, updated_at = NOW() WHERE id = $2")
+        .bind(name)
+        .bind(found.account_id)
+        .execute(&mut *tx)
+        .await?;
+
+    // 2. Refresh + re-point the company row to the adopted account. The pre-fix link may point at a
+    //    shared/admin account; the company's OWN account is the correct scoping parent.
+    match (found.company_id, payload_pid) {
+        (Some(cid), _) => {
+            sqlx::query(
+                "UPDATE portfolio_companies SET aid = $1, name = $2, slug = $3, email = $4, updated_at = NOW() WHERE id = $5",
+            )
+            .bind(found.account_id)
+            .bind(name)
+            .bind(slug)
+            .bind(email)
+            .bind(cid)
+            .execute(&mut *tx)
+            .await?;
+        }
+        (None, Some(pid)) => {
+            sqlx::query(
+                "INSERT INTO portfolio_companies (id, aid, name, slug, email) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (id) DO UPDATE SET aid = EXCLUDED.aid, name = EXCLUDED.name, slug = EXCLUDED.slug, email = EXCLUDED.email, updated_at = NOW()",
+            )
+            .bind(pid)
+            .bind(found.account_id)
+            .bind(name)
+            .bind(slug)
+            .bind(email)
+            .execute(&mut *tx)
+            .await?;
+        }
+        (None, None) => {}
+    }
+
+    tx.commit().await?;
+
+    Ok(Json(json!({
+        "status": "synced",
+        "adopted": true,
+        "account_id": found.account_id.to_string(),
+        "portfolio_id": found
+            .company_id
+            .map(|c| c.to_string())
+            .or_else(|| payload_pid.map(|p| p.to_string()))
+            .unwrap_or_default(),
+    })))
+}
+
 /// POST /api/v1/internal/portfolio-sync
 pub async fn portfolio_sync_internal(
     State(state): State<AppState>,
@@ -110,6 +336,18 @@ pub async fn portfolio_sync_internal(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+
+    // ── adopt-before-create (2026-11-15) ────────────────────────────────────────────────────────
+    // A re-sync of a company this app ALREADY holds must adopt the existing account + company row,
+    // never mint a duplicate beside them. The hub changed which id it sends (each company's OWN id
+    // instead of the shared admin-workspace id), so the caller's id no longer matches the id this
+    // app stored; the match is the company's stable identity — slug → name → email. Only when
+    // NOTHING matches does the create/update arm below mint a fresh account.
+    if action == "create" || action == "update" {
+        if let Some(found) = find_existing_company(&state.db, &name, &slug, &email).await? {
+            return adopt_existing_company(&state, found, portfolio_id, &name, &slug, &email).await;
+        }
+    }
 
     match action {
         "create" => {
