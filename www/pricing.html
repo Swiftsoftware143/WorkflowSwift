@@ -49,7 +49,7 @@ footer a{margin-right:18px}
   <h1>Start free — upgrade inside the app</h1>
   <p class="sub">Start on Free. Plans and upgrades are shown inside the app once you are signed in.</p>
   <div class="grid">
-      <div class="card">
+      <div class="card" data-plan="free">
         
         <h3>Free</h3>
         
@@ -57,7 +57,7 @@ footer a{margin-right:18px}
         <ul data-role="feats"><li>Get started with basic workflow automation</li><li data-role="limit">3 workflows</li><li data-role="limit">2 users</li><li data-role="limit">10 tags</li><li>Community support</li><li data-role="limit">10 instances</li></ul>
         <a class="cta" href="https://app.workflowswift.com/register">Start free</a>
       </div>
-      <div class="card popular">
+      <div class="card popular" data-plan="starter">
         <div class="badge">Most popular</div>
         <h3>Starter</h3>
         
@@ -65,7 +65,7 @@ footer a{margin-right:18px}
         <ul data-role="feats"><li>For growing teams needing more power</li><li data-role="limit">15 workflows</li><li data-role="limit">10 users</li><li data-role="limit">25 tags</li><li>Email support</li><li data-role="limit">100 instances</li><li data-role="limit">3 API keys</li></ul>
         <a class="cta" href="https://app.workflowswift.com/register?plan=starter">Get started</a>
       </div>
-      <div class="card">
+      <div class="card" data-plan="professional">
         
         <h3>Professional</h3>
         
@@ -73,7 +73,7 @@ footer a{margin-right:18px}
         <ul data-role="feats"><li>For businesses requiring full automation</li><li data-role="limit">Unlimited workflows</li><li data-role="limit">25 users</li><li data-role="limit">100 tags</li><li>Priority support</li><li data-role="limit">1000 instances</li><li data-role="limit">10 API keys</li></ul>
         <a class="cta" href="https://app.workflowswift.com/register?plan=professional">Get started</a>
       </div>
-      <div class="card">
+      <div class="card" data-plan="enterprise">
         
         <h3>Enterprise</h3>
         
@@ -93,32 +93,24 @@ footer a{margin-right:18px}
   </footer>
 </div>
 <script>
-/* The amounts above are authored placeholders that MUST agree with the `plan_tiers` table; an
-   operator changing a price in the console would otherwise leave this page quoting a number the app
-   no longer charges, with nothing on the box able to see the drift. GET /api/v1/public/plans is the
-   anonymous, minimal price list. If that read fails the authored amounts stay and the line under
-   them says so. */
+/* The allowance rows under each plan are read LIVE from this install's own plan records
+   (GET /api/v1/public/plans — the anonymous, minimal price list). An operator raising a plan's
+   allowance in the console therefore changes this page too, instead of leaving it advertising the
+   old number. The authored bullets are the FALLBACK: if that read fails they stay exactly as
+   written. A limit the plan does not declare, or declares as zero, is never advertised as "0".
+   Prices themselves are deliberately not on this page — plans and their prices are shown inside
+   the app once you are signed in. */
 (function () {
   'use strict';
-  function money(n) {
-    var v = Number(n);
-    return isFinite(v) ? '$' + (v % 1 === 0 ? String(v) : v.toFixed(2)) : '$' + n;
-  }
   function count(v, one, many) {
     if (v === 'unlimited') return 'Unlimited ' + many;
-    if (typeof v === 'number' || typeof v === 'string') {
-      var n = Number(v);
-      if (isFinite(n)) return n + ' ' + (n === 1 ? one : many);
-    }
-    return null;
+    var n = Number(v);
+    if (v === null || v === undefined || v === '' || !isFinite(n) || n <= 0) return null;
+    return n + ' ' + (n === 1 ? one : many);
   }
-  /* Paint the included allowances from the SAME plan record the price came from, replacing the
-     hand-authored bullets. An operator raising a plan's allowance in the console therefore changes
-     this page too, instead of leaving it advertising the old number. A limit the plan does not
-     declare is left out rather than guessed. */
-  function paintLimits(priceEl, lim) {
-    var ul = priceEl.parentNode.querySelector('ul[data-role="feats"]');
-    if (!ul) return;
+  function paintLimits(card, lim) {
+    var ul = card.querySelector('ul[data-role="feats"]');
+    if (!ul || !lim) return 0;
     var rows = [
       count(lim.workflows, 'workflow', 'workflows'),
       count(lim.users, 'user', 'users'),
@@ -128,7 +120,7 @@ footer a{margin-right:18px}
       count(lim.retention_days, 'day of history', 'days of history'),
       count(lim.credits_monthly, 'workflow credit a month', 'workflow credits a month')
     ].filter(function (t) { return t; });
-    if (!rows.length) return;
+    if (!rows.length) return 0;
     var old = ul.querySelectorAll('li[data-role="limit"]');
     for (var i = 0; i < old.length; i++) old[i].parentNode.removeChild(old[i]);
     var first = ul.querySelector('li');
@@ -139,6 +131,7 @@ footer a{margin-right:18px}
       li.textContent = rows[r];
       ul.insertBefore(li, after);
     }
+    return rows.length;
   }
   var note = document.getElementById('priceSource');
   fetch('/api/v1/public/plans', { headers: { 'Accept': 'application/json' } })
@@ -148,38 +141,22 @@ footer a{margin-right:18px}
       if (!plans.length) throw new Error('no plans returned');
       var byslug = {};
       plans.forEach(function (p) { byslug[p.slug] = p; });
-      var painted = 0, books = document.querySelectorAll('.price[data-plan]');
-      for (var i = 0; i < books.length; i++) {
-        var p = byslug[books[i].getAttribute('data-plan')];
-        if (!p) continue;
-        var amt = books[i].querySelector('[data-role="amt"]');
-        if (amt) { amt.textContent = money(p.price_monthly); painted++; }
-        var yr = books[i].parentNode.querySelector('p.yr[data-role="yr"]');
-        if (yr) {
-          var y = Number(p.price_yearly) || 0;
-          yr.innerHTML = y > 0
-            ? 'Billed yearly at ' + money(y)
-              + (Math.abs(y - p.price_monthly * 10) < 0.01 ? ' (two months free)' : '')
-            : '&nbsp;';
-        }
-      }
-      var cards = document.querySelectorAll('.price[data-plan]');
+      var painted = 0, rows = 0, cards = document.querySelectorAll('[data-plan]');
       for (var c = 0; c < cards.length; c++) {
         var plan = byslug[cards[c].getAttribute('data-plan')];
-        if (plan && plan.limits) paintLimits(cards[c], plan.limits);
+        if (!plan) continue;
+        var n = paintLimits(cards[c], plan.limits);
+        if (n) { painted++; rows += n; }
       }
       if (note) {
         note.textContent = painted
-          ? 'Prices and included limits read live from this install\u2019s own plan records just now \u2014 '
-            + painted + ' plan' + (painted === 1 ? '' : 's') + ' confirmed.'
-          : 'Live prices were read, but no card on this page matched a plan this install sells.';
+          ? 'Allowances read live from this install\u2019s own plan records just now \u2014 '
+            + painted + ' plan' + (painted === 1 ? '' : 's') + ' confirmed, ' + rows + ' limits.'
+          : 'Allowances could not be read just now \u2014 the figures above are this page\u2019s own.';
       }
     })
-    .catch(function (e) {
-      if (note) {
-        note.textContent = 'The live price list could not be read just now (' + e.message
-          + '), so the amounts above are the last published ones. Reload to try again.';
-      }
+    .catch(function () {
+      if (note) note.textContent = 'Allowances could not be read just now \u2014 the figures above are this page\u2019s own.';
     });
 })();
 </script>
