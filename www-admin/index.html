@@ -2275,6 +2275,38 @@ function renderProfile(c){
       showMsg('Confirmation link sent to '+v+'. Your sign-in address stays as it is until you open it.','success');
     };
     right.appendChild(ecBtn);
+
+    // ── close the account (2026-11-14): close-account control ──
+    // POST /api/v1/auth/close-account has been mounted since 2026-11-13 — typed confirmation,
+    // password re-check judged on the SERVER, closure recorded as a STATE (closed_at +
+    // sessions_valid_from moved, API keys retired, workflows kept on record) — and this console had
+    // no control for it. The only way out of the app was asking support to DELETE the user row, and
+    // every foreign key from the account CASCADEs, so a privacy request destroyed the business's
+    // history as a side effect. A backend route with no UI is a defect.
+    // Hidden while impersonating: the session in hand there is the TENANT's, and closing a
+    // customer's account is not a support operator's click to make from their session.
+    if(!IMPERSONATION && !(me.role==='admin'||me.role==='super_admin'||me.is_super_admin)){
+      right.appendChild(h('label',{className:'text-xs text-gray-500 mt-4'},'Close this account'));
+      right.appendChild(h('p',{className:'text-xs text-gray-400 mb-2'},'Closing ends every session and retires every API key on this account. Your data is kept on record rather than deleted, but this screen cannot reopen it.'));
+      const caPw=h('input',{className:'input mb-2',id:'ca-pw',type:'password',autocomplete:'current-password',placeholder:'Your password'});
+      const caCf=h('input',{className:'input mb-2',id:'ca-cf',maxlength:'16',placeholder:'Type CLOSE to confirm'});
+      right.appendChild(caPw);right.appendChild(caCf);
+      const caBtn=h('button',{className:'btn btn-danger',id:'ca-btn'},'Close my account');
+      caBtn.onclick=async()=>{
+        const pw=caPw.value;
+        if(!pw){showMsg('Enter your password first','error');return}
+        if(caCf.value.trim().toUpperCase()!=='CLOSE'){showMsg('Type CLOSE in the confirmation box','error');return}
+        if(!window.confirm('Close this account? Every session and API key on it will be ended.'))return;
+        caBtn.disabled=true;caBtn.textContent='Closing...';
+        const r=await api('/auth/close-account',{method:'POST',body:JSON.stringify({password:pw,confirm:caCf.value.trim()})});
+        caBtn.disabled=false;caBtn.textContent='Close my account';
+        // A 200 that is not an `account_closed` acknowledgement is reported as a failure rather than
+        // painted as a closure that never happened.
+        if(r&&r.status==='account_closed'){showMsg(r.message||'Your account is closed.','success');logout();return}
+        showMsg('Could not close the account: '+(LAST_ERR||'check your password and try again'),'error');
+      };
+      right.appendChild(caBtn);
+    }
   });
 }
 
