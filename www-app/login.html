@@ -24,6 +24,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:linear-g
 .msg.i{color:#4f46e5;display:block}
 .msg.ok{background:#dcfce7;color:#166534;display:block;text-align:left;line-height:1.5}
 .note{font-size:12px;color:#94a3b8;text-align:left;margin-bottom:12px;line-height:1.5}
+.lbl{display:block;text-align:left;font-size:13px;font-weight:600;color:#374151;margin-bottom:6px}
 .lk{margin-top:16px;font-size:12px;border-top:1px solid #f1f5f9;padding-top:14px}
 .lk a{color:#4f46e5}
 .sup{margin-top:12px;font-size:12px;line-height:1.55;color:#6b7280}
@@ -51,12 +52,16 @@ body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:linear-g
 </div>
 
 <div class="pane" id="paneRegister">
-  <input id="rn" name="name" type="text" maxlength="243" placeholder="Full name" autocomplete="name" aria-label="Full name" onkeydown="if(event.key==='Enter'&&!document.getElementById('rb').disabled){event.preventDefault();R();}">
-  <input id="re" name="email" type="email" placeholder="you@company.com" autocomplete="email" aria-label="Email" onkeydown="if(event.key==='Enter'&&!document.getElementById('rb').disabled){event.preventDefault();R();}">
+  <label for="rn" class="lbl">Full name</label>
+  <input id="rn" name="name" type="text" maxlength="243" placeholder="Jane Doe" autocomplete="name" aria-label="Full name" onkeydown="if(event.key==='Enter'&&!document.getElementById('rb').disabled){event.preventDefault();R();}">
+  <label for="rw" class="lbl">Workspace name</label>
+  <input id="rw" name="account_name" type="text" placeholder="Your company name" autocomplete="organization" aria-label="Workspace name" onkeydown="if(event.key==='Enter'&&!document.getElementById('rb').disabled){event.preventDefault();R();}">
+  <label for="re" class="lbl">Work email</label>
+  <input id="re" name="email" type="email" placeholder="you@company.com" autocomplete="email" aria-label="Work email" onkeydown="if(event.key==='Enter'&&!document.getElementById('rb').disabled){event.preventDefault();R();}">
   <p class="note">No password to choose &mdash; we'll email your login details so you can confirm your address by signing in.</p>
   <!-- The tier the visitor clicked on /pricing (cron 2026-10-21). Hidden unless ?plan= names one. -->
   <div id="rplan" class="note" style="display:none;background:#eef2ff;border:1px solid #c7d2fe;color:#3730a3;border-radius:8px;padding:9px 11px;text-align:left"></div>
-  <button id="rb" onclick="R()">Create Free Account</button>
+  <button id="rb" onclick="R()">Create free account</button>
   <div id="rm" class="msg"></div>
 </div>
 
@@ -114,17 +119,19 @@ window.location.replace("/app")})
 .catch(function(err){m.className="msg e";m.textContent=err.message;b.disabled=false});
 }
 
-/* ---- Create account: NAME + EMAIL only. The server mints the password and emails it, so there
-   is NO auto-login here - the user confirms their address by signing in with the password sent. */
+/* ---- Create account: NAME + WORKSPACE NAME + EMAIL only (David's model). The server mints the
+   password and emails it, so there is NO auto-login here - the user confirms their address by
+   signing in with the password sent. */
 function R(){
-var n=document.getElementById("rn").value.trim(),e=document.getElementById("re").value.trim(),m=document.getElementById("rm"),b=document.getElementById("rb");
+var n=document.getElementById("rn").value.trim(),w=document.getElementById("rw").value.trim(),e=document.getElementById("re").value.trim(),m=document.getElementById("rm"),b=document.getElementById("rb");
 if(!n){m.className="msg e";m.textContent="Enter your full name";return}
-if(!e){m.className="msg e";m.textContent="Enter your email address";return}
+if(!w){m.className="msg e";m.textContent="Please name your workspace";return}
+if(!e){m.className="msg e";m.textContent="Enter your work email";return}
 b.disabled=true;b.textContent="Creating account...";
-fetch("/api/v1/auth/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify((function(){var w=chosenPlan();return w?{name:n,email:e,plan_slug:w.slug}:{name:n,email:e}})())})
+fetch("/api/v1/auth/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify((function(){var p=chosenPlan();var o={name:n,email:e,account_name:w};if(p)o.plan_slug=p.slug;return o})())})
 .then(function(r){return r.json().then(function(d){return{r:r,d:d}})})
 .then(function(x){
-  if(!x.r.ok){m.className="msg e";m.textContent=(x.d&&((typeof x.d.error==='string'&&x.d.error)||x.d.message))||"Registration failed. Please try again.";b.disabled=false;b.textContent="Create Free Account";return}
+  if(!x.r.ok){m.className="msg e";m.textContent=(x.d&&((typeof x.d.error==='string'&&x.d.error)||x.d.message))||"Registration failed. Please try again.";b.disabled=false;b.textContent="Create free account";return}
   // The send can FAIL server-side (SMTP outage, provider refusal) while the account is still
   // created, and this app's signup mints the password ON THE SERVER — so a failed mail leaves an
   // account nobody can sign into. The server answers `credentials_emailed`; telling a new customer
@@ -134,8 +141,7 @@ fetch("/api/v1/auth/register",{method:"POST",headers:{"Content-Type":"applicatio
   m.className="msg ok";
   m.innerHTML=(mailed
     ? "<strong>Account created!</strong><br>Check your email &mdash; we sent your login details to "+e.replace(/[<>&]/g,"")+"."
-    : "<strong>Your account is created &mdash; but the email with your login details could NOT be sent.</strong><br>Nothing reached "+e.replace(/[<>&]/g,"")+". Choose your password below and you can sign in straight away.")
-   +" You can change your password any time in your profile settings."
+    : "<strong>Account created &mdash; but we could not send your login details to "+e.replace(/[<>&]/g,"")+".</strong><br>Choose your password below and you can sign in straight away.")
    +'<div style="margin-top:12px;padding-top:10px;border-top:1px solid rgba(0,0,0,.08);font-size:13px">'
    +(mailed
       ? 'Nothing in your inbox after a minute? Check your spam folder, then '
@@ -221,7 +227,7 @@ var want=chosenPlan();
       :'To move onto the <strong>'+want.name+'</strong> plan, use the <strong>Plan &amp; Billing</strong> screen in the dashboard &mdash; one press files the same request.')+'</div>';
   });}
 })
-.catch(function(err){m.className="msg e";m.textContent="Network error. Please try again.";b.disabled=false;b.textContent="Create Free Account"});
+.catch(function(err){m.className="msg e";m.textContent="Network error. Please try again.";b.disabled=false;b.textContent="Create free account"});
 }
 </script>
 </body>
