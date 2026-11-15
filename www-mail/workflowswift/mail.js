@@ -625,6 +625,51 @@
       + '</div>';
   }
 
+  // The files a message carried. The backend stores each part and answers
+  // GET /private-email/messages/{id}/attachments/{attachment_id}, which needs the bearer token — a
+  // plain <a href> cannot open it, so the bytes are fetched and handed to the browser as a blob.
+  function attachmentsHtml(m) {
+    var files = (m && m.attachments) || [];
+    if (!files.length) return '';
+    return '<div class="attachments" style="margin:10px 0 4px">'
+      + '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">Attachments</div>'
+      + files.map(function (f) {
+        return '<button class="btn btn-ghost" data-att="' + esc(f.id) + '" data-attname="'
+          + esc(f.filename || 'attachment') + '" style="margin:0 6px 6px 0">'
+          + '\u{1F4CE} ' + esc(f.filename || 'attachment')
+          + ' <span style="color:var(--muted);font-size:11px">(' + humanSize(f.size_bytes) + ')</span>'
+          + '</button>';
+      }).join('')
+      + '</div>';
+  }
+
+  function humanSize(n) {
+    n = Number(n || 0);
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  async function downloadAttachment(messageId, attachmentId, filename) {
+    try {
+      var res = await fetch(API_BASE + '/private-email/messages/' + messageId
+        + '/attachments/' + attachmentId, {
+        headers: S.token ? { Authorization: 'Bearer ' + S.token } : {}
+      });
+      if (res.status === 401) { signOut(true); throw new Error('Your session ended. Sign in again.'); }
+      if (!res.ok) throw new Error('That file could not be opened (' + res.status + ').');
+      var blob = await res.blob();
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = filename || 'attachment';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+    } catch (e) { toast(fail(e), 'error'); }
+  }
+
   function readerHtml() {
     if (!S.sel) return '<div class="empty">No mail selected</div>';
     var m = S.sel;
@@ -663,6 +708,7 @@
       + '<div id="mSummary"></div>'
       + '<div style="margin:6px 0 10px"><div style="font-size:11px;color:var(--muted);margin-bottom:4px">Labels</div><div id="mLabelBox"></div></div>'
       + '<div class="body">' + esc(m.body_plain || '(no text)') + '</div>'
+      + attachmentsHtml(m)
       + '<div id="mReplyBox"></div>'
       + '</div>';
   }
@@ -780,6 +826,14 @@
     };
     Array.prototype.forEach.call(document.querySelectorAll('[data-act]'), function (b) {
       b.onclick = function () { messageAction(b.getAttribute('data-act')); };
+    });
+    // ONE handler per chip: the reader is re-rendered on every open, so the binding is made here
+    // beside the other per-render bindings rather than delegated from a parent that outlives it.
+    Array.prototype.forEach.call(document.querySelectorAll('[data-att]'), function (b) {
+      b.onclick = function () {
+        if (!S.sel) return;
+        downloadAttachment(S.sel.id, b.getAttribute('data-att'), b.getAttribute('data-attname'));
+      };
     });
     if (S.sel) applyLabelControl();
   }
