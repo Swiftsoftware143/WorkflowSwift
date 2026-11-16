@@ -2600,6 +2600,35 @@ const ProfileView = () => {
     dv.busy = false; renderApp();
   };
 
+  // Download my data (2026-11-15) — the customer's OWN copy of what this workspace holds,
+  // served by GET /api/v1/account/export. Fetched directly rather than through API.get()
+  // because the route answers a DOCUMENT (a JSON file) the browser should SAVE, not a value
+  // this page renders. Every refusal is printed in this card, in the server's own words.
+  const dl = viewState('profile_data_export', { busy:false, msg:'', ok:false });
+  const downloadMyData = async () => {
+    dl.busy = true; dl.msg = ''; renderApp();
+    try {
+      const t = sessionStorage.getItem('wf_token');
+      const r = await fetch('/api/v1/account/export', { headers: t ? { 'Authorization': 'Bearer ' + t } : {} });
+      if (!r.ok) {
+        let s = 'Could not build your copy (error ' + r.status + ').';
+        try { const j = await r.json(); if (j && (j.message || j.error)) s = j.message || j.error; } catch (e) { /* not JSON */ }
+        throw new Error(s);
+      }
+      const bl = await r.blob();
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(bl);
+      a.download = 'workflowswift-account-' + new Date().toISOString().slice(0, 10) + '.json';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { try { URL.revokeObjectURL(a.href); } catch (e) { /* already revoked */ } a.remove(); }, 1500);
+      dl.ok = true; dl.msg = 'Your copy has been downloaded.';
+    } catch (err) {
+      dl.ok = false; dl.msg = err.message || 'Could not build your copy.';
+    }
+    dl.busy = false; renderApp();
+  };
+
   // Close my account (2026-11-13, migration 113) — the customer's own exit door. The first button
   // only REVEALS the form; the second posts the bearer, the password and the typed word CLOSE.
   // Every rule is the SERVER's (the word, the password, an operator account cannot close itself),
@@ -2778,6 +2807,13 @@ const ProfileView = () => {
         ${dv.msg ? html`<div id="profile-devices-msg" role="status" style=${'margin-top:10px;padding:10px 12px;border-radius:10px;font-size:13px;' + (dv.ok ? 'background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46' : 'background:#fef2f2;border:1px solid #fecaca;color:#b91c1c')}>${dv.msg}</div>` : ''}
       </div>
 
+
+      <div class="card" id="profile-data-card">
+        <h2 class="text-base font-bold text-gray-900 mb-1">📦 Your data</h2>
+        <p class="text-sm text-gray-500 mb-4">Download everything this workspace holds &mdash; workflows, leads, clients, tags, automations, invoices, brand monitors, prospecting lists, teammates and API-key names &mdash; as one JSON file. Passwords, API-key secrets and provider credentials are never included.</p>
+        <button class="btn-outline text-sm" id="profile-data-download" onClick=${downloadMyData} disabled=${dl.busy || S.loading}>${dl.busy ? 'Preparing your copy…' : 'Download a copy of my data'}</button>
+        ${dl.msg ? html`<div id="profile-data-msg" role="status" aria-live="polite" style=${'margin-top:10px;padding:10px 12px;border-radius:10px;font-size:13px;' + (dl.ok ? 'background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46' : 'background:#fef2f2;border:1px solid #fecaca;color:#b91c1c')}>${dl.msg}</div>` : ''}
+      </div>
 
       <div class="card" id="profile-close-card">
         <h2 class="text-base font-bold text-gray-900 mb-1">🚪 Close My Account</h2>

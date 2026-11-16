@@ -997,6 +997,13 @@ pub fn create_router(state: AppState) -> Router {
             "/settings/branding/preview-body",
             get(handlers::branding_handler::preview_body),
         )
+        // The customer's OWN copy of what this workspace holds (cron 2026-11-15, parity with
+        // FunnelSwift `/api/v1/account/export`). The account is taken from the token, so there is
+        // no id to spoof, and the document carries no secret that could be replayed to sign in.
+        .route(
+            "/account/export",
+            get(handlers::account_export::export_account),
+        )
         .route(
             "/impersonate",
             post(crate::handlers::admin_settings_handler::admin_impersonate),
