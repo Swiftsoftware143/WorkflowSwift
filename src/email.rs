@@ -1791,7 +1791,16 @@ async fn send_email_fallback(
                 .get("admin_url")
                 .and_then(|v| v.as_str())
                 .unwrap_or("https://admin.workflowswift.com");
-            let subject = "A customer cannot sign in — no password was delivered".to_string();
+            // THE SUBJECT MUST NAME THE CUSTOMER IN PLAIN ENGLISH (kanban t_38d2eb66, 2026-11-16).
+            // It used to read only "no password was delivered", so the operator could not tell from
+            // the notification list WHO was locked out; he had to open every message to find out.
+            // `who` is the owner's name with their address (or the address alone when no name was
+            // given) — what a person recognises. Naming the customer here is safe for de-duplication:
+            // this app's once-per-account key is `template` + `to_email` + `status = 'sent'` + the
+            // account id in `email_send_log.detail` (written by
+            // `send_undelivered_credential_operator_alert`, NOT parsed out of the subject), so the
+            // watch still reports each account exactly once.
+            let subject = format!("A customer cannot sign in — {who} has no password");
             let text_body = format!(
                 "{workspace} signed up, but the email carrying the first password never reached \
                  the customer, so they cannot sign in.\n\n\

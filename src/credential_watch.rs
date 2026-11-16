@@ -216,4 +216,25 @@ mod selector_tests {
         }
         assert!(!SELECTOR.contains("$5"));
     }
+
+    /// The operator's alert names WHO is locked out (kanban t_38d2eb66). The shipped subject is the
+    /// global template row migration 117 fixes, and it must carry the `{who}` placeholder the sender
+    /// binds (owner name with their address) instead of the one-size sentence every account shared —
+    /// otherwise the notification list cannot say who needs help. The de-dupe is asserted to stay on
+    /// `detail`, because naming the customer in the subject must never become the thing that
+    /// decides who has already been reported.
+    #[test]
+    fn the_alert_subject_names_the_customer() {
+        const MIGRATION: &str = include_str!(
+            "../migrations/117_undelivered_credential_alert_subject_names_customer.sql"
+        );
+        assert!(
+            MIGRATION.contains("A customer cannot sign in — {who} has no password"),
+            "the shipped subject must name the customer"
+        );
+        assert!(
+            SELECTOR.contains("l.detail LIKE '%' || u.id::text || '%'"),
+            "the once-per-account key must stay on the account id in detail"
+        );
+    }
 }
