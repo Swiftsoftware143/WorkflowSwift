@@ -2568,9 +2568,22 @@ const ProfileView = () => {
     if (pw.next !== pw.confirm) return toast('The two new passwords do not match','err');
     S.loading = true; pw.error = ''; renderApp();
     try {
-      await API.changePassword(pw.current, pw.next);
+      const v = await API.changePassword(pw.current, pw.next);
       pw.current = ''; pw.next = ''; pw.confirm = ''; pw.error = '';
-      toast('Password updated');
+      // The server moved the account's session line, so the bearer this tab was holding is refused
+      // from the next request on — and it answers a FRESH token for this tab (measured live
+      // 2026-11-16: PUT /api/v1/auth/password -> 200 {token}, the old bearer 401, the new one 200).
+      // Ignoring that token toasted "Password updated" and then signed the customer out of every
+      // panel behind it: the exact trap the 2026-11-06 server-side re-mint was written to close, and
+      // the same adoption `signOutOthers` below already does. Adopt it, then re-read /auth/me so
+      // "this one stays signed in" is measured rather than hoped.
+      if (!v || !v.token) {
+        toast('Password updated. This tab\'s session ended — sign in again with the new password');
+      } else {
+        API.setAuth(v.token, API.user);
+        await refreshMe(() => {});
+        toast('Password updated. Other devices are signed out; this one stays signed in');
+      }
     } catch (err) {
       // A field refusal stays BESIDE the box and the page stays as it is: the session was never
       // touched, so signing the customer out over a typo is the one thing this must not do.
