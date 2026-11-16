@@ -733,13 +733,6 @@ pub fn create_router(state: AppState) -> Router {
             "/usage",
             get(handlers::admin_settings_handler::admin_usage_dashboard),
         )
-        // Mail delivery: what this app actually handed to the provider, and what the provider
-        // said back (the read half of `email_send_log`, operator-only because the table carries
-        // no account id). Recipients are masked; test machinery is tagged, not hidden.
-        .route(
-            "/email-log",
-            get(handlers::admin_settings_handler::admin_email_log),
-        )
         // Settings
         .route(
             "/settings",

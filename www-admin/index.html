@@ -2651,48 +2651,47 @@ async function renderBranding(c){
   paint();
 
   // ── RECENT PLATFORM MAIL (2026-11-16) ───────────────────────────────────────────────────────
-  // `email_send_log` records every hand-off to the mail provider, but nothing in this console read
-  // it back — "did that customer's welcome mail go out?" needed a psql session, so a silent mail
-  // failure looked exactly like a quiet week. Operator-only: the table carries no account id, so a
-  // per-tenant read is not expressible, and a tenant must never see another tenant's recipients.
-  // Addresses arrive MASKED from the server; test machinery is tagged, never hidden.
+  // `GET /api/v1/admin/email-log` has existed since the operator's "customer never got in"
+  // remedy was built, and NO console screen called it — so the one answer the operator needs
+  // ("did that customer's welcome mail go out?") still needed a psql session, and a silent mail
+  // failure looked exactly like a quiet week. That is the missing half of a shipped feature, not
+  // a new one. Operator-only: the route is `require_admin`, and the table carries no account id,
+  // so a per-tenant read is not expressible and a tenant must never see another's recipients.
   if(showAdminTab()){
     const mailCard=h('div',{className:'mt-5 pt-4',id:'mail-log-card',style:'border-top:1px solid #e2e8f0'});
     mailCard.appendChild(h('div',{className:'font-semibold mb-1'},'Recent platform mail'));
-    mailCard.appendChild(h('p',{className:'text-xs text-gray-500 mb-3'},'What this app actually handed to the mail provider, newest first. Test traffic is tagged "test" and counted separately, so it never reads as customer mail.'));
+    mailCard.appendChild(h('p',{className:'text-xs text-gray-500 mb-3'},'What this app actually handed to the mail provider, newest first. Test addresses are tagged "test" so fleet machinery never reads as customer mail. Withheld test deliveries are counted, not listed.'));
     const mailBody=h('div',{id:'mail-log-body'},h('p',{className:'text-gray-400 text-sm'},'Loading...'));
     mailCard.appendChild(mailBody);
     host.appendChild(mailCard);
     (async()=>{
-      const r=await api('/admin/email-log?limit=50');
+      const r=await api('/admin/email-log');
       if(!r){mailBody.innerHTML='<p class="text-red-400 text-sm">Could not load the mail log: '+(LAST_ERR||'unknown error')+'</p>';return}
+      const sends=r.sends||[];
+      const withheld=Number(r.withheld_7d||0);
+      const head=h('div',{className:'flex gap-2 mb-3',style:'flex-wrap:wrap'});
+      head.appendChild(h('span',{className:'badge',style:'background:#eef2ff;color:#3730a3'},sends.length+' shown'));
+      head.appendChild(h('span',{className:'badge',style:'background:#f1f5f9;color:#475569'},withheld+' test sends withheld in 7 days'));
       mailBody.innerHTML='';
-      const st=r.by_status||{};
-      const chips=h('div',{className:'flex gap-2 mb-3',style:'flex-wrap:wrap'});
-      Object.keys(st).sort().forEach(k=>{
-        const v=st[k]||{};
-        chips.appendChild(h('span',{className:'badge',style:'background:#eef2ff;color:#3730a3'},
-          k+': '+(v.last_7d||0)+' in 7 days ('+(v.all_time||0)+' all time)'));
-      });
-      mailBody.appendChild(chips);
-      const items=r.items||[];
-      if(!items.length){mailBody.appendChild(h('p',{className:'text-gray-400 text-sm'},'No mail has been sent by this app yet.'));return}
+      mailBody.appendChild(head);
+      if(!sends.length){mailBody.appendChild(h('p',{className:'text-gray-400 text-sm'},'No customer mail has been sent by this app yet.'));return}
       const tbl=h('table',{className:'tbl',style:'width:100%;font-size:12px'});
-      const th=h('tr');
-      ['When','Recipient','Template','Status','Detail'].forEach(t=>th.appendChild(h('th',{},t)));
-      tbl.appendChild(h('thead',{},th));
+      const hr=h('tr');
+      ['When','Recipient','Template','Status','Detail'].forEach(t=>hr.appendChild(h('th',{},t)));
+      tbl.appendChild(h('thead',{},hr));
       const tb=h('tbody');
-      items.forEach(it=>{
+      sends.forEach(it=>{
         const tr=h('tr');
-        const when=(it.created_at||'').replace('T',' ').slice(0,16);
-        tr.appendChild(h('td',{},when));
-        const recTd=h('td',{},it.recipient||'');
-        if(it.is_test){recTd.appendChild(h('span',{className:'badge',style:'background:#f1f5f9;color:#64748b;margin-left:6px'},'test'))}
+        tr.appendChild(h('td',{},(it.at||'').replace('T',' ').slice(0,16)));
+        const isTest=/@(example\.invalid|example\.test|example\.com|test\.com|x\.com)$/i.test(it.to||'')||/^(probe-|canary-|bounce\+|verify)/i.test(it.to||'');
+        const recTd=h('td',{},it.to||'');
+        if(isTest)recTd.appendChild(h('span',{className:'badge',style:'background:#f1f5f9;color:#64748b;margin-left:6px'},'test'));
         tr.appendChild(recTd);
-        tr.appendChild(h('td',{},it.template||'—'));
-        const colour=/^(sent|delivered|accepted)$/i.test(it.status||'')?'#065f46':(/^(failed|error|bounced)$/i.test(it.status||'')?'#b91c1c':'#92400e');
-        tr.appendChild(h('td',{},h('span',{style:'color:'+colour+';font-weight:600'},it.status||'—')));
-        tr.appendChild(h('td',{style:'color:#64748b'},(it.detail||'').slice(0,80)));
+        tr.appendChild(h('td',{},it.template||'\u2014'));
+        const ok=/^(sent|delivered|accepted)$/i.test(it.status||'');
+        const bad=/^(failed|error|bounced)$/i.test(it.status||'');
+        tr.appendChild(h('td',{},h('span',{style:'color:'+(ok?'#065f46':(bad?'#b91c1c':'#92400e'))+';font-weight:600'},it.status||'\u2014')));
+        tr.appendChild(h('td',{style:'color:#64748b'},String(it.detail||'').slice(0,80)));
         tb.appendChild(tr);
       });
       tbl.appendChild(tb);
