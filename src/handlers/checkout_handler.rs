@@ -1293,13 +1293,37 @@ pub async fn checkout_status(
         }
     };
 
+    // CONTRACT PARITY (2026-11-16): every sibling app answers `upgrade_path` + `provider` on this
+    // route, and FunnelSwift's own comment calls it a fleet contract — "Every sibling app answers an
+    // `upgrade_path` for exactly this". This app did not, so a console (or a cross-app page) written
+    // against the fleet's shape read `undefined` here and fell back to the checkout branch by
+    // default, on an install that cannot take a card at all. The three values are the same three the
+    // siblings use, against THIS app's ladder (`is_hosted_payment_url` is the till's own predicate,
+    // so the answer cannot promise a hand-off the sale would then refuse):
+    //   * `checkout`     — a provider is armed with a readable key: a press reaches the provider.
+    //   * `payment_link` — no provider, but an active tier carries a hosted payment page.
+    //   * `request`      — nothing can take money: the honest action is to request the plan.
+    // Additive only: every key this route answered before is unchanged, so a caller that ignores the
+    // new fields sees byte-identical values.
+    let can_purchase = configured || sellable_links > 0;
+    let upgrade_path = if configured {
+        "checkout"
+    } else if sellable_links > 0 {
+        "payment_link"
+    } else {
+        "request"
+    };
+
     Ok(Json(json!({
         "configured": configured,
         "reason": reason,
+        // The provider this install would charge through, named the way the siblings name it.
+        "provider": provider_type.clone(),
         "provider_type": provider_type,
+        "upgrade_path": upgrade_path,
+        // What a press on "Upgrade" would reach, in the same field the fleet already reads.
+        "can_purchase": can_purchase,
         "sellable_links": sellable_links,
-        // A sale can complete on either arm `create_checkout_session` implements.
-        "can_purchase": configured || sellable_links > 0,
         // HOW TO PAY (2026-11-16). With no provider row this install cannot take a card, so the
         // screen offers a plan REQUEST — and until this field existed nothing in the product told
         // the buyer where to send the money. The operator's own words, empty when he has written
