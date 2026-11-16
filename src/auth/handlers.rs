@@ -138,7 +138,13 @@ pub async fn register(
             account_name: req.account_name.as_deref(),
             account_slug: req.account_slug.as_deref(),
             plan_slug: plan_slug.as_str(),
-            industry_slug: req.industry_slug.as_deref().unwrap_or("site-flipping"),
+            // NO FABRICATED INDUSTRY (2026-11-16, migration 115). The public signup asks for a name
+            // and an email only, so it names no industry at all; inventing "site-flipping" here
+            // gave every new workspace a Site Flipping dashboard it never asked for AND suppressed
+            // the console's own "Pick your industry" prompt, because a slug was always present.
+            // Empty means "the customer has not picked one yet": `create_account` seeds nothing
+            // from it and stores NULL (sites that DID name an industry still get their dashboard).
+            industry_slug: req.industry_slug.as_deref().unwrap_or("").trim(),
             role: "user",
             // The account is usable without the mail: the caller owns this hash, and
             // `register` hands the session back in its response (kanban t_6d58f5be).

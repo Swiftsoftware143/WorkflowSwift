@@ -520,6 +520,16 @@ pub async fn create_account(
         .await?;
 
         dashboard_id = Some(did);
+    } else {
+        // NO REAL INDUSTRY NAMED → the column must be NULL, never a remembered default
+        // (2026-11-16, migration 115). The public signup asks for a name and an email only, so it
+        // arrives here with an EMPTY slug: writing nothing would leave whatever default the column
+        // carried, which is exactly how every new workspace ended up reading "Site Flipping".
+        // NULL is the state the console's industry picker is built for.
+        sqlx::query("UPDATE accounts SET industry_slug = NULL WHERE id = $1")
+            .bind(account_id)
+            .execute(&mut *tx)
+            .await?;
     }
 
     // ── The account is COMPLETE: ONE commit, here ─────────────────────────────────────────
