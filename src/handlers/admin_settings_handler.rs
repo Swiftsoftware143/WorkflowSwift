@@ -3290,3 +3290,90 @@ pub(crate) fn require_admin(claims: &Claims) -> Result<(), AppError> {
     }
     Ok(())
 }
+
+/// Mask a recipient so the operator can recognise a message without the log publishing an address.
+/// `someone@example.com` -> `s***@example.com`; a malformed value keeps only its first byte.
+fn mask_recipient(addr: &str) -> String {
+    match addr.rsplit_once('@') {
+        Some((local, domain)) if !local.is_empty() && !domain.is_empty() => {
+            let first = local.chars().next().unwrap_or('*');
+            format!("{first}***@{domain}")
+        }
+        _ => addr.chars().take(1).collect::<String>() + "***",
+    }
+}
+
+/// `GET /api/v1/admin/email-log` — what this app has actually mailed, and whether it landed.
+///
+/// Why the operator needs it: `email_send_log` records every hand-off to the provider with the
+/// status the app observed, but nothing in the console read it back. The only way to answer "did
+/// that customer's welcome mail go out?" was a psql session, so a silent mail failure looked exactly
+/// like a quiet week. This is the read half of the same table the senders already write.
+///
+/// Operator-only on purpose: the table carries no account id (`id, to_email, template, status,
+/// detail, created_at`), so an account-scoped read is not expressible and a tenant must never see
+/// another tenant's recipients. Recipients are masked; test machinery is tagged rather than hidden,
+/// so the operator can tell a real bounce from a probe.
+pub async fn admin_email_log(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> ApiResult<impl IntoResponse> {
+    require_admin(&claims)?;
+    let limit: i64 = params
+        .get("limit")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(50)
+        .clamp(1, 200);
+
+    let rows = sqlx::query(
+        "SELECT id, to_email, template, status, detail, created_at \
+         FROM email_send_log ORDER BY created_at DESC LIMIT $1",
+    )
+    .bind(limit)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut items = Vec::with_capacity(rows.len());
+    for row in &rows {
+        let id: Uuid = row.try_get("id")?;
+        let to_email: String = row.try_get("to_email")?;
+        let template: Option<String> = row.try_get("template").ok().flatten();
+        let status: String = row.try_get("status")?;
+        let detail: Option<String> = row.try_get("detail").ok().flatten();
+        let created_at: chrono::DateTime<chrono::Utc> = row.try_get("created_at")?;
+        items.push(json!({
+            "id": id,
+            "recipient": mask_recipient(&to_email),
+            "template": template,
+            "status": status,
+            "detail": detail,
+            "is_test": crate::security::probe_addr::synthetic_requester(&to_email, "").is_some(),
+            "created_at": created_at.to_rfc3339(),
+        }));
+    }
+
+    // The headline the operator actually wants: the last week, split by outcome, with the fleet's own
+    // test traffic counted separately instead of being mixed into the customer numbers.
+    let totals = sqlx::query(
+        "SELECT status, \
+                count(*) FILTER (WHERE created_at > now() - interval '7 days') AS last_7d, \
+                count(*) AS all_time \
+         FROM email_send_log GROUP BY status ORDER BY status",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    let mut by_status = serde_json::Map::new();
+    for row in &totals {
+        let status: String = row.try_get("status")?;
+        let last_7d: i64 = row.try_get("last_7d")?;
+        let all_time: i64 = row.try_get("all_time")?;
+        by_status.insert(status, json!({"last_7d": last_7d, "all_time": all_time}));
+    }
+
+    Ok(Json(json!({
+        "items": items,
+        "count": items.len(),
+        "by_status": by_status,
+    })))
+}

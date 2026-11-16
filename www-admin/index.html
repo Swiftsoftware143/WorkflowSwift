@@ -2649,6 +2649,56 @@ async function renderBranding(c){
     bpBlank.textContent=branded?'':'Nothing is set yet, so every mail carries the WorkflowSwift wordmark and name — the header above. Set a name or upload a logo to make it yours.';
   };
   paint();
+
+  // ── RECENT PLATFORM MAIL (2026-11-16) ───────────────────────────────────────────────────────
+  // `email_send_log` records every hand-off to the mail provider, but nothing in this console read
+  // it back — "did that customer's welcome mail go out?" needed a psql session, so a silent mail
+  // failure looked exactly like a quiet week. Operator-only: the table carries no account id, so a
+  // per-tenant read is not expressible, and a tenant must never see another tenant's recipients.
+  // Addresses arrive MASKED from the server; test machinery is tagged, never hidden.
+  if(showAdminTab()){
+    const mailCard=h('div',{className:'mt-5 pt-4',id:'mail-log-card',style:'border-top:1px solid #e2e8f0'});
+    mailCard.appendChild(h('div',{className:'font-semibold mb-1'},'Recent platform mail'));
+    mailCard.appendChild(h('p',{className:'text-xs text-gray-500 mb-3'},'What this app actually handed to the mail provider, newest first. Test traffic is tagged "test" and counted separately, so it never reads as customer mail.'));
+    const mailBody=h('div',{id:'mail-log-body'},h('p',{className:'text-gray-400 text-sm'},'Loading...'));
+    mailCard.appendChild(mailBody);
+    host.appendChild(mailCard);
+    (async()=>{
+      const r=await api('/admin/email-log?limit=50');
+      if(!r){mailBody.innerHTML='<p class="text-red-400 text-sm">Could not load the mail log: '+(LAST_ERR||'unknown error')+'</p>';return}
+      mailBody.innerHTML='';
+      const st=r.by_status||{};
+      const chips=h('div',{className:'flex gap-2 mb-3',style:'flex-wrap:wrap'});
+      Object.keys(st).sort().forEach(k=>{
+        const v=st[k]||{};
+        chips.appendChild(h('span',{className:'badge',style:'background:#eef2ff;color:#3730a3'},
+          k+': '+(v.last_7d||0)+' in 7 days ('+(v.all_time||0)+' all time)'));
+      });
+      mailBody.appendChild(chips);
+      const items=r.items||[];
+      if(!items.length){mailBody.appendChild(h('p',{className:'text-gray-400 text-sm'},'No mail has been sent by this app yet.'));return}
+      const tbl=h('table',{className:'tbl',style:'width:100%;font-size:12px'});
+      const th=h('tr');
+      ['When','Recipient','Template','Status','Detail'].forEach(t=>th.appendChild(h('th',{},t)));
+      tbl.appendChild(h('thead',{},th));
+      const tb=h('tbody');
+      items.forEach(it=>{
+        const tr=h('tr');
+        const when=(it.created_at||'').replace('T',' ').slice(0,16);
+        tr.appendChild(h('td',{},when));
+        const recTd=h('td',{},it.recipient||'');
+        if(it.is_test){recTd.appendChild(h('span',{className:'badge',style:'background:#f1f5f9;color:#64748b;margin-left:6px'},'test'))}
+        tr.appendChild(recTd);
+        tr.appendChild(h('td',{},it.template||'—'));
+        const colour=/^(sent|delivered|accepted)$/i.test(it.status||'')?'#065f46':(/^(failed|error|bounced)$/i.test(it.status||'')?'#b91c1c':'#92400e');
+        tr.appendChild(h('td',{},h('span',{style:'color:'+colour+';font-weight:600'},it.status||'—')));
+        tr.appendChild(h('td',{style:'color:#64748b'},(it.detail||'').slice(0,80)));
+        tb.appendChild(tr);
+      });
+      tbl.appendChild(tb);
+      mailBody.appendChild(tbl);
+    })();
+  }
 }
 
 // The signed-in account's OWN tier comes from GET /auth/me (`plan_name`), which the server
