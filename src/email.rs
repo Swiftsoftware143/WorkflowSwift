@@ -1034,6 +1034,71 @@ fn workflow_failed_bodies(app_url: &str, vars: &serde_json::Value) -> (String, S
     (subject, text_body, html_body)
 }
 
+/// The plan-request receipt: the ONE mail that answers a request to BUY.
+///
+/// WHY THIS IS A FUNCTION (2026-11-16). The live probe can prove the recipient and the dispatch but
+/// never the words (a withheld probe address stores only the kind of mail), so the renderer is pinned
+/// by a unit test in BOTH directions: with the operator's "how to pay" words set, the receipt prints
+/// them under "How to pay now:"; with the field empty the body is byte-identical to the copy that
+/// shipped before. That is what makes "a customer who asked to buy is told where to send the money,
+/// and an ordinary help ticket never carries bank details" a test rather than a claim.
+///
+/// `payment_instructions` is the operator's own text (`billing_instructions::load`), read by the
+/// caller — never invented here. `payment_providers` holds zero rows on this install, so a filed
+/// plan request IS the buying path and the person who filed it is ready to pay.
+fn plan_request_receipt_bodies(vars: &serde_json::Value) -> (String, String, String) {
+    let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
+    let request_subject = vars
+        .get("ticket_subject")
+        .and_then(|v| v.as_str())
+        .unwrap_or("your request");
+    let app_url = vars
+        .get("app_url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("https://app.workflowswift.com");
+    let safe_subject = request_subject.replace('<', "&lt;").replace('>', "&gt;");
+    // HOW TO PAY (2026-11-16). Empty stays exactly as before: no heading, no block, original bytes.
+    let how_to_pay = vars
+        .get("payment_instructions")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let (pay_text, pay_html) = if how_to_pay.is_empty() {
+        (String::new(), String::new())
+    } else {
+        // The operator's words are free text, so the HTML arm escapes them; the plain-text arm keeps
+        // them verbatim (that part carries no markup by definition).
+        let safe_pay = how_to_pay
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        (
+            format!("\n\nHow to pay now:\n\n{how_to_pay}"),
+            format!(
+                "<p style=\"background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:12px 16px;color:#1e293b\"><strong>How to pay now:</strong><br><span style=\"white-space:pre-wrap\">{safe_pay}</span></p>"
+            ),
+        )
+    };
+    let text_body = format!(
+        "Hi {name},\n\nThanks — we have your request:\n\n    {request_subject}{pay_text}\n\nNothing has been charged. A person (not a robot) reads it and answers you by email, and you can see where it stands under Support on your dashboard: {app_url}/dashboard\n\nIf you would rather not go ahead, reply to this message and we will close it.\n\n- WorkflowSwift"
+    );
+    let html_body = format!(
+        "<html><body style=\"font-family:Arial,sans-serif;line-height:1.6;color:#333\">\
+         <p>Hi {name},</p>\
+         <p>Thanks — we have your request:</p>\
+         <p style=\"background:#f3f4f6;padding:12px 16px;border-radius:8px;border-left:4px solid #4f46e5;color:#111827\"><strong>{safe_subject}</strong></p>\
+         {pay_html}\
+         <p style=\"color:#374151\"><strong>Nothing has been charged.</strong> A person (not a robot) reads it and answers you by email, and you can see where it stands under Support on your dashboard.</p>\
+         <p><a href=\"{app_url}/dashboard\" style=\"color:#4f46e5\">Open your dashboard</a></p>\
+         <p style=\"font-size:13px;color:#9ca3af\">If you would rather not go ahead, reply to this message and we will close it.<br>- WorkflowSwift</p></body></html>"
+    );
+    (
+        "We have your plan request".to_string(),
+        text_body,
+        html_body,
+    )
+}
+
 async fn send_email_fallback(
     cfg: &EmailConfig,
     to: &str,
@@ -1407,37 +1472,10 @@ async fn send_email_fallback(
         // written while the customer's inbox stayed empty. Reached whenever the account has no
         // `plan_request_receipt` template row, which is the normal state on a fresh install.
         "plan_request_receipt" => {
-            let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
-            let request_subject = vars
-                .get("ticket_subject")
-                .and_then(|v| v.as_str())
-                .unwrap_or("your request");
-            let app_url = vars
-                .get("app_url")
-                .and_then(|v| v.as_str())
-                .unwrap_or("https://app.workflowswift.com");
-            let safe_subject = request_subject.replace('<', "&lt;").replace('>', "&gt;");
-            let text_body = format!(
-                "Hi {name},\n\nThanks — we have your request:\n\n    {request_subject}\n\nNothing has been charged. A person (not a robot) reads it and answers you by email, and you can see where it stands under Support on your dashboard: {app_url}/dashboard\n\nIf you would rather not go ahead, reply to this message and we will close it.\n\n- WorkflowSwift"
-            );
-            let html_body = format!(
-                "<html><body style=\"font-family:Arial,sans-serif;line-height:1.6;color:#333\">\
-                 <p>Hi {name},</p>\
-                 <p>Thanks — we have your request:</p>\
-                 <p style=\"background:#f3f4f6;padding:12px 16px;border-radius:8px;border-left:4px solid #4f46e5;color:#111827\"><strong>{safe_subject}</strong></p>\
-                 <p style=\"color:#374151\"><strong>Nothing has been charged.</strong> A person (not a robot) reads it and answers you by email, and you can see where it stands under Support on your dashboard.</p>\
-                 <p><a href=\"{app_url}/dashboard\" style=\"color:#4f46e5\">Open your dashboard</a></p>\
-                 <p style=\"font-size:13px;color:#9ca3af\">If you would rather not go ahead, reply to this message and we will close it.<br>- WorkflowSwift</p></body></html>"
-            );
-            send_branded(
-                cfg,
-                to,
-                "We have your plan request",
-                &text_body,
-                &html_body,
-                branding,
-            )
-            .await
+            // HOW TO PAY (2026-11-16): the words travel inside this renderer, which is pinned by
+            // `the_plan_receipt_prints_how_to_pay_only_when_the_operator_wrote_it`.
+            let (subject, text_body, html_body) = plan_request_receipt_bodies(vars);
+            send_branded(cfg, to, &subject, &text_body, &html_body, branding).await
         }
         // THE RECEIPT FOR AN ORDINARY HELP REQUEST (2026-11-16). The plan arm above answers a
         // customer who asked to BUY; this one answers a customer who asked for HELP — "I cannot sign
@@ -2577,6 +2615,77 @@ async fn send_via_smtp(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // HOW TO PAY (2026-11-16). The operator's own words must actually reach the receipt — the live
+    // probe can prove the recipient and the dispatch but never the words (a withheld address stores
+    // only the kind), so the renderer is pinned here in both directions. OFF must be byte-for-byte
+    // the copy that shipped before: an install that never sets the field sends what it always sent.
+    // The ordinary help receipt is a DIFFERENT template (`support_request_receipt`) that never reads
+    // this field, so a customer who wrote in about a password is never answered with bank details.
+    #[test]
+    fn the_plan_receipt_prints_how_to_pay_only_when_the_operator_wrote_it() {
+        let words =
+            "Pay by bank transfer to WorkflowSwift Ltd, sort code 00-00-00, account 12345678.";
+        let with = json!({
+            "name": "Pay Proof",
+            "ticket_subject": "Plan request: Professional plan",
+            "payment_instructions": words,
+            "app_url": "https://app.workflowswift.com",
+        });
+        let (subject, text, html) = plan_request_receipt_bodies(&with);
+        assert_eq!(subject, "We have your plan request");
+        assert!(
+            text.contains("How to pay now:"),
+            "a request to buy must say how to pay: {text}"
+        );
+        assert!(
+            text.contains(words),
+            "the operator's words must appear verbatim: {text}"
+        );
+        assert!(
+            text.contains("Nothing has been charged"),
+            "the promise survives the new block: {text}"
+        );
+        assert!(
+            html.contains("How to pay now:") && html.contains(words),
+            "the html arm carries the same block: {html}"
+        );
+
+        // Off: no heading, and the plain-text body is EXACTLY the shipped copy.
+        let without = json!({
+            "name": "Pay Proof",
+            "ticket_subject": "Plan request: Professional plan",
+            "payment_instructions": "",
+            "app_url": "https://app.workflowswift.com",
+        });
+        let (_, plain, plain_html) = plan_request_receipt_bodies(&without);
+        assert!(
+            !plain.contains("How to pay now:") && !plain_html.contains("How to pay now:"),
+            "an empty field must say nothing new"
+        );
+        let expected = "Hi Pay Proof,\n\nThanks — we have your request:\n\n    Plan request: Professional plan\n\nNothing has been charged. A person (not a robot) reads it and answers you by email, and you can see where it stands under Support on your dashboard: https://app.workflowswift.com/dashboard\n\nIf you would rather not go ahead, reply to this message and we will close it.\n\n- WorkflowSwift";
+        assert_eq!(
+            plain, expected,
+            "with no words set the receipt must be exactly the copy that shipped before"
+        );
+
+        // The words are operator free text: the HTML arm must not let them inject markup.
+        let hostile = json!({
+            "name": "Pay Proof",
+            "ticket_subject": "Plan request: Professional plan",
+            "payment_instructions": "<script>alert(1)</script>",
+            "app_url": "https://app.workflowswift.com",
+        });
+        let (_, _, hostile_html) = plan_request_receipt_bodies(&hostile);
+        assert!(
+            !hostile_html.contains("<script>alert(1)</script>"),
+            "the operator's words are escaped in the html arm"
+        );
+        assert!(
+            hostile_html.contains("&lt;script&gt;"),
+            "escaped, not dropped: {hostile_html}"
+        );
+    }
 
     #[test]
     fn the_failed_run_notice_names_the_workflow_and_the_run_list() {

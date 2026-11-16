@@ -769,6 +769,18 @@ pub fn create_router(state: AppState) -> Router {
             get(handlers::admin_settings_handler::get_setting)
                 .put(handlers::admin_settings_handler::update_setting),
         )
+        // HOW A CUSTOMER PAYS YOU (2026-11-16, fleet parity with FunnelSwift/IncentiveSwift/ADASwift).
+        // `payment_providers` holds ZERO rows on this installation, so a plan REQUEST is the buying
+        // path — and until this route nothing in the product told a customer where to send the
+        // money. The operator's own words, stored platform-wide in `admin_settings` key `billing`;
+        // read back by `GET /api/v1/checkout/status` (the plan screen) and by the plan-request
+        // receipt mail. Nested under `/api/v1/admin`, so a workspace token is refused like every
+        // other admin route.
+        .route(
+            "/billing-settings",
+            get(handlers::billing_settings_handler::get_billing_settings)
+                .put(handlers::billing_settings_handler::update_billing_settings),
+        )
         // Tag → free account: the master toggle + the in-app free-plan picker (design §3.3,
         // kanban t_ede5f6ed). Two keys of `admin_settings`
         // (`provision_from_tags_enabled`, `provision_entry_plan_slug`) that the receiver reads;

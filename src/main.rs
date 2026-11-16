@@ -9,6 +9,7 @@
 )]
 mod ai_llm;
 mod auth;
+mod billing_instructions;
 mod body_rejection;
 mod branding;
 mod config;

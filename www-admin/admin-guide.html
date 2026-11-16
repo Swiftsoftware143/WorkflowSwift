@@ -1085,6 +1085,17 @@ when it is set.</p>
       working payment page — the card does not appear at all. <code>GET /payment-providers</code> answers the provider
       list and <code>GET /checkout/status</code> answers whether a purchase can complete; the card is the agreement of the
       two.</p>
+      <h3 id="how-a-customer-pays-you">How a customer pays you</h3>
+      <p>The <strong>Payment Providers</strong> screen also carries a box headed <strong>How a customer pays you</strong>, and it
+      exists because of what happens when no card provider is connected. With no provider row the till cannot take a card, so
+      a customer's press on a plan is filed as a plan request that a person works by hand — and that means they are ready to
+      send you money. Until this box existed the product told them a person would reply and never told them where. Write how
+      you take payment in your own words — a bank transfer with the account details, an invoice, a link to another rail — and
+      press <strong>Save</strong>. The same words then appear on the customer's own <strong>Plan &amp; Billing</strong> screen
+      under <em>How to pay now</em> (including after a reload) and are printed in the receipt email that a filed plan request
+      sends, under the same heading. They are never invented: an empty box means every surface behaves exactly as it did
+      before, and clearing the box and saving puts it back. An ordinary help request never carries them, because it is a
+      different receipt, so a customer who wrote in about a password does not receive bank details.</p>
       <h2 id="mcp-connect-your-ai-tools">MCP &mdash; connect your AI tools</h2>
       <p>Every workspace can hand its own data to an AI client (Claude Code, Cursor, Hermes or your own agent) over the
       Model Context Protocol. The <strong>MCP</strong> entry sits directly above <strong>Profile</strong> in the workspace
@@ -1167,6 +1178,10 @@ when it is set.</p>
       <li>Checkout: <code>/api/v1/checkout/create</code>, <code>/checkout/sessions</code>; providers configured per plan via
         <code>/api/v1/payment-providers</code>. Webhooks: <code>POST /api/v1/webhooks/stripe</code>,
         <code>POST /api/v1/webhooks/paypal</code>.</li>
+      <li>The till's own answer and the operator's paying instructions: <code>GET /api/v1/checkout/status</code> reports
+        whether this install can sell and carries <code>payment_instructions</code>; <code>GET</code> and
+        <code>PUT /api/v1/admin/billing-settings</code> read and save those words (an empty string clears them, which
+        switches every customer surface back to its old copy). Platform admins only.</li>
       <li>Before you rely on a payment key, press <strong>Test key</strong> beside the Save button on
         Admin -&gt; Payment providers: it asks the provider directly whether the key in the box works,
         answers in Stripe's or PayPal's OWN words

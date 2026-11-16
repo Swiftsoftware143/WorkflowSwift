@@ -1951,8 +1951,38 @@ const PSLOTS=[['stripe','Stripe'],['paypal','PayPal'],['square','Square'],['padd
   c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-2"><h2 class="text-xl font-bold">Payment Providers</h2>'
     +'<button class="btn btn-primary btn-sm" id="pp_add">+ Add provider</button></div>'
     +'<p class="text-xs text-gray-400 mb-4">The payment accounts this install can take money through at checkout. A platform administrator manages them here; the secret key and the webhook signing secret are never shown back, and the Encrypted column states whether the saved copy is encrypted at rest.</p>'
+    // HOW A CUSTOMER PAYS YOU (2026-11-16, fleet parity with FunnelSwift/IncentiveSwift/ADASwift).
+    // With no provider row the till answers "request", so a plan REQUEST is the buying path — and
+    // until this box existed the product never told the customer where to send the money. The
+    // operator's own words, stored platform-wide (admin_settings key billing), read back by the
+    // customer Plan screen and by the plan-request receipt.
+    +'<div class="card mb-4" data-pay-instructions="1" style="border-left:4px solid #2563eb">'
+    +'<h3 class="font-bold mb-1">How a customer pays you</h3>'
+    +'<p class="text-xs text-gray-500 mb-2">With no card provider connected, a plan request is the buying path: the customer presses &ldquo;Request &lt;plan&gt;&rdquo; and a request is filed for you. Write how you take payment &mdash; bank details, an invoice, any rail of your own &mdash; and the same words appear on the customer plan screen and in their receipt email. Leave it empty and every surface behaves exactly as it did before.</p>'
+    +'<textarea id="pp_pay_text" class="input" rows="4" data-pay-field="1" placeholder="e.g. Pay by bank transfer to Acme Ltd, sort code 00-00-00, account 12345678, and put your workspace name as the reference. A person on our team switches your plan on as soon as the payment lands."></textarea>'
+    +'<div class="flex items-center gap-3 mt-2"><button class="btn btn-primary btn-sm" id="pp_pay_save">Save</button><span class="text-xs text-gray-600" id="pp_pay_msg" data-pay-msg="1">Reading&hellip;</span></div></div>'
     +'<div id="ppdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
   const list=c.querySelector('#ppdata');
+
+  // HOW A CUSTOMER PAYS YOU (2026-11-16). A failed read leaves the words untouched and SAYS SO,
+  // rather than showing an empty field that would look like "nothing is published". An empty save
+  // is a deliberate CLEAR (the server treats it as the feature going back to off).
+  const payBox=c.querySelector('#pp_pay_text'), payMsg=c.querySelector('#pp_pay_msg'), paySave=c.querySelector('#pp_pay_save');
+  const payState=(set)=>{payMsg.textContent=set?'Published to customers who ask to buy.':'Nothing written yet — nothing is shown to customers.'};
+  const loadPay=async()=>{
+    const d=await api('/admin/billing-settings');
+    if(!d){payMsg.textContent='The saved words could not be read ('+(LAST_ERR||'no answer')+'), so this box may not show what is published. Reload before saving.';return}
+    payBox.value=(d&&d.payment_instructions)||'';
+    payState(!!(d&&d.payment_instructions_set));
+  };
+  paySave.onclick=async()=>{
+    paySave.disabled=true;payMsg.textContent='Saving…';
+    const d=await api('/admin/billing-settings',{method:'PUT',body:JSON.stringify({payment_instructions:payBox.value||''})});
+    paySave.disabled=false;
+    if(!d){payMsg.textContent='Not saved: '+(LAST_ERR||'the server refused');return}
+    payState(!!(d&&d.payment_instructions_set));
+  };
+  loadPay();
 
   // kanban t_48e4dd2a — ask the provider directly whether a payment key works (the FunnelSwift
   // console's button, ported; precedent commit b153f98). Read-only: the app performs ONE balance or

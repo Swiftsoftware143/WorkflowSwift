@@ -1605,6 +1605,11 @@ const PlanView = () => {
       </div>` : ''}
       ${S.usageTried && !S.usage ? html`<div class="card" style="margin-bottom:16px"><p class="text-sm text-gray-600">Your usage figures could not be read just now.</p></div>` : ''}
       ${(S.checkoutStatus && S.checkoutStatus.can_purchase === false) ? html`<div class="card" id="billing-till-closed" style="margin-bottom:16px;border-left:4px solid #f59e0b"><p class="text-sm text-gray-700"><strong>Card payment is not switched on for this installation yet.</strong> Nothing can be charged here, so the buttons below ask our team to switch your workspace instead of opening a payment page.</p></div>` : ''}
+      ${(S.checkoutStatus && String(S.checkoutStatus.payment_instructions || '').trim()) ? html`<div class="card" id="billing-how-to-pay" data-how-to-pay="1" style="margin-bottom:16px;border-left:4px solid #2563eb">
+        <h3 class="font-semibold text-gray-800 mb-1">How to pay now</h3>
+        <p class="text-sm text-gray-700" style="white-space:pre-wrap" data-how-to-pay-text="1">${String(S.checkoutStatus.payment_instructions).trim()}</p>
+        <p class="text-xs text-gray-500 mt-2">Request a plan below and the same words are emailed to you. Nothing is charged until a person on our team confirms your payment.</p>
+      </div>` : ''}
       ${S.checkoutMsg ? html`<div class="card" style="margin-bottom:16px;border-left:4px solid #f59e0b"><p class="text-sm text-gray-700">${S.checkoutMsg}</p></div>` : ''}
       ${S.requestForPlan ? html`<div class="card" id="billing-request" style="margin-bottom:16px;border-left:4px solid #2563eb">
         <h3 class="font-semibold text-gray-800 mb-1">Ask our team to switch you to ${(S.requestForPlan.name || S.requestForPlan.slug)}</h3>

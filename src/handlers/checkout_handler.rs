@@ -1246,7 +1246,9 @@ pub async fn create_checkout_session(
 /// page, and the refusal that files the ask — was unreachable from the console. The admin tier
 /// editor even promised the operator "with a link set, a customer pressing Upgrade is taken straight
 /// to it", which the buyer's screen never did. This route answers the two facts that screen needs:
-/// whether a provider is armed, and how many tiers carry a usable hosted payment page.
+/// whether a provider is armed, and how many tiers carry a usable hosted payment page — plus, since
+/// 2026-11-16, the operator's own "how to pay" words, because a request-only till leaves a ready
+/// buyer with nowhere to send the money.
 ///
 /// The provider is resolved with the SAME precedence `create_checkout_session` applies — a tier's own
 /// `payment_provider` column, else this install's default — because a status that disagreed with the
@@ -1298,6 +1300,13 @@ pub async fn checkout_status(
         "sellable_links": sellable_links,
         // A sale can complete on either arm `create_checkout_session` implements.
         "can_purchase": configured || sellable_links > 0,
+        // HOW TO PAY (2026-11-16). With no provider row this install cannot take a card, so the
+        // screen offers a plan REQUEST — and until this field existed nothing in the product told
+        // the buyer where to send the money. The operator's own words, empty when he has written
+        // none (feature off). Read on every visit, so the words survive a reload.
+        "payment_instructions": crate::billing_instructions::load(&state.db)
+            .await
+            .unwrap_or_default(),
     })))
 }
 

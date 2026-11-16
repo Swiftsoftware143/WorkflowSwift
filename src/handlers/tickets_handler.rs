@@ -502,6 +502,13 @@ pub(crate) async fn notify_plan_request_receipt_to_customer(
     let vars = json!({
         "name": name,
         "ticket_subject": subject,
+        // HOW TO PAY (2026-11-16). This template answers a request to BUY — `payment_providers` is
+        // empty on this install, so a plan request IS the buying path, and until these words existed
+        // the receipt said "a person will reply" and never where to send the money. Empty when the
+        // operator has written none, which leaves the mail byte-for-byte as it was.
+        "payment_instructions": crate::billing_instructions::load(&state.db)
+            .await
+            .unwrap_or_default(),
         "app_url": "https://app.workflowswift.com",
     });
     match crate::email::send_email(state, Some(aid), &email, "plan_request_receipt", &vars).await {

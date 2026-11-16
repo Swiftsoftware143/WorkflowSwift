@@ -40,6 +40,14 @@
 //!   (+1, 2026-10-30: `/api/v1/public/plans`, the marketing pricing page's price list. Read before
 //!    any account exists, so it cannot carry a session; it returns slug, name and the two amounts
 //!    only — for 16 public + 10 internal = 26.)
+//!
+//!   (+0, 2026-11-16: `GET|PUT /api/v1/admin/billing-settings`, the operator's "how a customer pays
+//!    you" words, joins `protected_routes` under the platform-admin gate. PRIVATE by construction —
+//!    it is platform configuration, not tenant data — so neither list below moves.
+//!    `tenant_and_operator_surfaces_are_not_public` pins it. The pin in
+//!    `the_census_shape_is_what_the_docs_say` was ALSO re-measured here: it read 19 + 10 = 29 while
+//!    the lists really held 21 + 10 = 31, because commit 47c2c72 added the two public support-desk
+//!    routes without moving it. That drift was already red at HEAD.)
 //! ```
 //!
 //! # What this app's contribution is
@@ -291,15 +299,30 @@ fn matches_template(template: &str, path: &str) -> bool {
 mod tests {
     use super::{is_guarded_path, is_internal_route, is_public_route, matches_template};
 
-    /// Every `.route(..)` this app mounts lives in this one file, so the census is a scan of it.
+    /// Every `.route(..)` this app mounts in the MAIN routing file, so the census is a scan of it.
+    ///
+    /// A NESTED sub-router (the SendGrid inbound receiver) mounts its own paths in the module that
+    /// builds it; those are listed in [`NESTED_SOURCES`] and composed with their nest prefix, so a
+    /// route can never be invisible to this census just because it is declared one file away.
     const ROUTES_SRC: &str = include_str!("../routes.rs");
 
-    /// Every `.route("<literal>"` path literal in the routing file, in source order.
-    fn route_literals() -> Vec<&'static str> {
-        let bytes = ROUTES_SRC.as_bytes();
+    /// `<nest prefix in the URL the boundary sees>` -> `the source of the router mounted there`.
+    ///
+    /// Measured 2026-11-16: `POST /api/v1/webhooks/sendgrid/inbound/{token}` is public by design
+    /// (the token in the URL is the credential) but its `.route("/inbound/{token}")` lives in
+    /// `private_email::webhook_handler::sendgrid_router`, so this census saw no mount and reported
+    /// a live auth widening that was not there. One entry per nested router.
+    const NESTED_SOURCES: &[(&str, &str)] = &[(
+        "/api/v1/webhooks/sendgrid",
+        include_str!("../private_email/webhook_handler.rs"),
+    )];
+
+    /// Every `.route("<literal>"` path literal in one source file, in source order.
+    fn literals_in(src: &'static str) -> Vec<&'static str> {
+        let bytes = src.as_bytes();
         let mut out = Vec::new();
         let mut i = 0usize;
-        while let Some(pos) = ROUTES_SRC[i..].find(".route(") {
+        while let Some(pos) = src[i..].find(".route(") {
             let mut j = i + pos + ".route(".len();
             while j < bytes.len() && (bytes[j] as char).is_whitespace() {
                 j += 1;
@@ -310,11 +333,16 @@ mod tests {
                 while k < bytes.len() && bytes[k] != b'"' {
                     k += 1;
                 }
-                out.push(&ROUTES_SRC[start..k]);
+                out.push(&src[start..k]);
             }
             i = j;
         }
         out
+    }
+
+    /// Every `.route("<literal>"` path literal in the routing file, in source order.
+    fn route_literals() -> Vec<&'static str> {
+        literals_in(ROUTES_SRC)
     }
 
     /// Is this keyed path backed by a route the router really mounts?
@@ -326,9 +354,27 @@ mod tests {
     /// resolves through `.nest("/auth", ..)` to the `/login` literal.
     fn mounted(entry: &str) -> Option<&'static str> {
         let relative = entry.strip_prefix("/api/v1")?;
-        route_literals()
+        if let Some(hit) = route_literals()
             .into_iter()
             .find(|lit| !lit.is_empty() && relative.ends_with(lit))
+        {
+            return Some(hit);
+        }
+        // A NESTED router mounts its paths in its own module: compose the nest prefix with that
+        // module's literal, or an anonymous route declared one file away is reported as unmounted
+        // (measured 2026-11-16 on the SendGrid inbound receiver).
+        for (prefix, src) in NESTED_SOURCES {
+            let Some(tail) = entry.strip_prefix(*prefix) else {
+                continue;
+            };
+            if let Some(hit) = literals_in(src)
+                .into_iter()
+                .find(|lit| !lit.is_empty() && tail.ends_with(lit))
+            {
+                return Some(hit);
+            }
+        }
+        None
     }
 
     /// Every allowlist entry must name a route the router really mounts. A stale entry is a live
@@ -418,9 +464,16 @@ mod tests {
             "/api/v1/admin/accounts",
             "/api/v1/admin/plans",
             "/api/v1/admin/settings",
+            // The operator's "how a customer pays you" words (2026-11-16). Platform configuration,
+            // not tenant data: a workspace token must be refused here like every other admin route.
+            "/api/v1/admin/billing-settings",
             "/api/v1/admin/users",
             "/api/v1/impersonate",
             "/api/v1/checkout/create",
+            // The till's own status, added 2026-11-16 with `payment_instructions`: it names whether
+            // this install can sell and publishes the operator's paying instructions, so it must
+            // never answer an anonymous caller.
+            "/api/v1/checkout/status",
         ] {
             assert!(!is_public_route(path), "{} must not be anonymous", path);
             assert!(!is_internal_route(path), "{} must not be a key route", path);
@@ -627,11 +680,14 @@ mod tests {
     /// from the code without a test failing.
     #[test]
     fn the_census_shape_is_what_the_docs_say() {
-        // Pin RE-MEASURED 2026-11-12 (kanban t_473a6895): the mail provider's delivery receiver
-        // `/api/v1/webhooks/mailgun/inbound` joined the deliberate anonymous list with the private
-        // inbox, so the lists hold 19 + 10 = 29. The previous 18 + 10 = 28 was the measured shape
-        // before that route existed.
-        assert_eq!(super::PUBLIC_ROUTES.len(), 19, "PUBLIC_ROUTES size");
+        // Pin RE-MEASURED 2026-11-16 (kanban t_e3410910): PUBLIC_ROUTES holds 21, not 19. The
+        // previous pair was ALREADY ADRIFT before this card touched anything — commit 47c2c72 (the
+        // locked-out customer's support door) added `/api/v1/public/support-request` and
+        // `/api/v1/public/support-answer` to the deliberate anonymous list and did not move this
+        // pin, so the suite was red at HEAD. Recounted from the list itself: 21 + 10 = 31.
+        // (`/api/v1/admin/billing-settings`, this card's route, is PRIVATE and lives in neither
+        // list: `tenant_and_operator_surfaces_are_not_public` pins that.)
+        assert_eq!(super::PUBLIC_ROUTES.len(), 21, "PUBLIC_ROUTES size");
         assert_eq!(super::INTERNAL_ROUTES.len(), 10, "INTERNAL_ROUTES size");
         // The 22 deliberate anonymous placements the census found, minus the 2 moved to the
         // protected router, plus `/api/v1/auth/avatar/{user_id}` (the account-picture READ, card
@@ -639,10 +695,10 @@ mod tests {
         // t_c3cfe7ba), neither of which was anonymous before it existed, plus
         // `/api/v1/auth/email-change/confirm` (the sign-in address change's confirmation arm,
         // cron 2026-10-18: the token in the mailed link is the credential, so it cannot carry a
-        // session).
+        // session), plus the two public support-desk routes above.
         assert_eq!(
             super::PUBLIC_ROUTES.len() + super::INTERNAL_ROUTES.len(),
-            29
+            31
         );
     }
 }
