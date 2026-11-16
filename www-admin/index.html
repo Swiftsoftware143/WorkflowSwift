@@ -2411,6 +2411,51 @@ function renderProfile(c){
       };
       right.appendChild(caBtn);
     }
+
+    // ── download your data (2026-11-16) ────────────────────────────────────────────────
+    // GET /api/v1/account/export has been mounted since 2026-11-15 (routes.rs, parity with
+    // FunnelSwift) and this console had no control for it: a backend route with no UI is a defect.
+    // It is scoped by THIS session's account, so there is nothing to type and nothing to choose —
+    // the button is the whole interaction. The filename the server sends is the one that is saved.
+    const dlCard = h('div', { className: 'card', id: 'wsac-dl', style: 'margin-top:24px' });
+    dlCard.appendChild(h('h2', { className: 'text-xl font-bold mb-2' }, 'Download your data'));
+    dlCard.appendChild(h('p', { className: 'text-sm text-gray-500 mb-3' },
+      'One file with everything this workspace holds for you: your account details, plan, team, '
+      + 'workspaces, workflows, leads, clients, tags, automations, invoices, brand monitors, '
+      + 'prospecting leads and API key names. Passwords, API secrets and mail-server credentials are '
+      + 'never included, and the file says so.'));
+    const dlBtn = h('button', { className: 'btn btn-primary', id: 'wsac-dlbtn' }, 'Download my data');
+    const dlMsg = h('span', { className: 'text-xs text-gray-500', style: 'margin-left:8px' }, '');
+    dlBtn.onclick = async () => {
+      dlBtn.disabled = true;
+      const label = dlBtn.textContent;
+      dlBtn.textContent = 'Preparing your copy…';
+      dlMsg.textContent = '';
+      try {
+        const r = await fetch(API + '/account/export', { headers: { 'Authorization': 'Bearer ' + TOKEN } });
+        if (!r.ok) {
+          let d = null; try { d = await r.json(); } catch (e) {}
+          throw new Error((d && (d.message || d.error)) || ('Error ' + r.status));
+        }
+        const blob = await r.blob();
+        const cd = r.headers.get('Content-Disposition') || '';
+        const m = cd.match(/filename="([^"]+)"/);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = (m && m[1]) || 'workflowswift-account.json';
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+        dlMsg.textContent = 'Saved ' + a.download + ' (' + Math.max(1, Math.round(blob.size / 1024)) + ' KB).';
+      } catch (e) {
+        dlMsg.textContent = 'Could not build your copy: ' + (e.message || e);
+      }
+      dlBtn.disabled = false;
+      dlBtn.textContent = label;
+    };
+    dlCard.appendChild(dlBtn);
+    dlCard.appendChild(dlMsg);
+    host.appendChild(dlCard);
   });
 }
 

@@ -182,6 +182,7 @@
       <a href="#rate-limiting" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Rate limiting</a>
       <a href="#tag-free-account-admin-configurable" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Tag → free account (admin-configurable)</a>
       <a href="#profile-picture" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Your profile picture</a>
+      <a href="#download-your-data" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📦</span> Taking your data with you</a>
       <a href="#operational-notes" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Operational notes</a>
     </nav>
     <div class="sidebar-footer">&copy; 2026 WorkflowSwift &mdash; Admin Console</div>
@@ -1275,6 +1276,21 @@ when it is set.</p>
       <strong>username</strong> and <strong>company</strong>, then saves them with
       <strong>Update profile</strong>. A username is a short name the console can show in place of
       the full name; clearing the box and saving removes it again.</p>
+      <h2 id="download-your-data">Taking your data with you</h2>
+      <p><strong>Profile &amp; Account &rarr; My Profile &rarr; Download my data</strong> saves one file
+      holding what this workspace has on record for you: the account and its plan, the team, the
+      workspaces, every workflow, lead, client, tag, automation, invoice, brand monitor and
+      prospecting lead, and the <em>names</em> of your API keys. The button needs no choices — the
+      file is always this account's own rows, taken from your session, so there is nothing to type
+      and nothing another business could be sent.</p>
+      <p>Deliberately <strong>not</strong> in the file: stored passwords and password hashes, API-key
+      secrets (each key's prefix and dates are included instead), provider credentials,
+      payment-provider secrets and the bodies of individual emails. The file says so in its own
+      <code>excluded</code> note, and its <code>counts</code> section lists how many rows of each
+      collection it holds, so you can see at a glance that nothing was cut short.</p>
+      <p>Route: <code>GET /api/v1/account/export</code>, served as a download named
+      <code>workflowswift-account-&lt;date&gt;.json</code>. The same control exists in the other apps on
+      this platform so a business moving between them gets the same answer.</p>
       <h2 id="operational-notes">Operational notes</h2>
       <ul>
       <li>The container runs with <code>network_mode: host</code> and publishes nothing — the API binds
