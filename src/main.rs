@@ -13,6 +13,7 @@ mod billing_instructions;
 mod body_rejection;
 mod branding;
 mod config;
+mod credential_watch;
 mod db;
 mod email;
 mod error;
@@ -265,6 +266,14 @@ async fn main() {
     // them, so they accumulated for ever. First tick is immediate, so the deploy retires the
     // backlog; never fatal, a janitor must not take the app down.
     probe_sweep::spawn_probe_sweeper(state.db.clone());
+
+    // Tell the OPERATOR when a customer's first password never reached them (kanban t_177ac7ce).
+    // `auth::register` latches `users.password_undelivered` and the console badges the row, but a
+    // badge is only read by somebody who opens the Accounts screen — so until this worker existed a
+    // customer could sit locked out of the product they had just signed up for with nobody told.
+    // First tick is immediate, so a deploy reports the backlog instead of waiting a quarter of an
+    // hour. Never fatal: an alerter must not take the app down.
+    crate::credential_watch::spawn_credential_watch(state.clone());
 
     let app = routes::create_router(state.clone())
         .layer(TraceLayer::new_for_http())

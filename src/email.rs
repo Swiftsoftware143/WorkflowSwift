@@ -1770,6 +1770,42 @@ async fn send_email_fallback(
             );
             send_branded(cfg, to, &subject, &text_body, &html_body, branding).await
         }
+        // THE LOCKED-OUT-CUSTOMER ALERT (kanban t_177ac7ce, 2026-11-16). The shipped path is the
+        // `undelivered_credential_operator_alert` row migration 116 seeds — this arm is the
+        // deploy-safe default for an install whose row was deleted, so a customer who never got
+        // their first password is still reported IN WORDS instead of as a generic notification.
+        "undelivered_credential_operator_alert" => {
+            let workspace = vars
+                .get("workspace")
+                .and_then(|v| v.as_str())
+                .unwrap_or("A workspace");
+            let who = vars
+                .get("who")
+                .and_then(|v| v.as_str())
+                .unwrap_or("a customer");
+            let signed_up = vars
+                .get("signed_up")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let admin_url = vars
+                .get("admin_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("https://admin.workflowswift.com");
+            let subject = "A customer cannot sign in — no password was delivered".to_string();
+            let text_body = format!(
+                "{workspace} signed up, but the email carrying the first password never reached \
+                 the customer, so they cannot sign in.\n\n\
+                 Workspace: {workspace}\n\
+                 Customer: {who}\n\
+                 Signed up: {signed_up}\n\n\
+                 A password reset travels the same mail path that just failed, so it may not reach \
+                 them either. The admin console's Accounts screen badges that row \"password never \
+                 delivered\" and its \"Send login\" button mints a new password and emails it — that \
+                 is the way back in.\n\n\
+                 Admin console: {admin_url}\n"
+            );
+            send_branded(cfg, to, &subject, &text_body, "", branding).await
+        }
         _ => {
             // An unknown template_type must never mail the serialised variables: `vars` holds
             // whatever the caller passed — passwords, reset tokens, ticket bodies — and the old arm
@@ -2293,6 +2329,131 @@ pub async fn send_signup_operator_alert(
             false
         }
     }
+}
+
+/// The operator's own alert address — `admin_settings.billing.operator_alert_email`, the field the
+/// admin console writes on Platform Settings.
+///
+/// ONE reader for every operator alert in this file, so "where does platform mail go?" cannot drift
+/// between arms. `None` (nothing configured, or a blank string) is a NORMAL state, not an error: no
+/// mailbox is ever invented here.
+pub async fn operator_alert_email(state: &AppState) -> Option<String> {
+    let billing: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT value FROM admin_settings WHERE key = 'billing'")
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten();
+    billing
+        .as_ref()
+        .and_then(|v| v.get("operator_alert_email"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Tell the OPERATOR that a customer signed up but never received the mail carrying their first
+/// password (kanban t_177ac7ce, 2026-11-16; parity with ADASwift, FunnelSwift and MissedCall).
+///
+/// WHY THIS EXISTS: `auth::register` latches `users.password_undelivered` when the credentials mail
+/// does not go. The console badges that row and "Send login" mails it again — but a badge is only
+/// seen by somebody who opens the Accounts screen, so a customer can sit locked out of the product
+/// they just signed up for with nobody told. Measured on the sibling app ADASwift (2026-11-15): two
+/// days unusable.
+///
+/// Recipient = the operator's own `operator_alert_email` (resolved once per pass by
+/// `credential_watch::alert_once`). UNSET sends nothing; this code never invents a mailbox. Sent
+/// through the SYSTEM mail configuration (`None`), never the customer's workspace, so it still
+/// arrives when that workspace's own mail path is the broken thing.
+///
+/// Returns what the send ACTUALLY did — `sent`, `withheld` or `unknown` — read back from the row the
+/// funnel wrote for this attempt. `Ok(())` from `send_email` covers a transport WITHHOLD (a reserved
+/// or harness recipient, an address no relay can deliver to), and a withheld message is not a
+/// report; the caller must not retire the account on it.
+///
+/// `email_send_log` has NO subject column in this app, so the once-per-account key the watch reads is
+/// `template` + `to_email` + `status = 'sent'` + this ACCOUNT's id in `detail`. The funnel's own
+/// success row carries an empty detail, so this function writes that account's id into the row it
+/// just wrote — and only when the attempt really was `sent`, so a withheld address still retries.
+/// One line per alert in the operator's mail history, and the watch never notes that customer again.
+pub async fn send_undelivered_credential_operator_alert(
+    state: &AppState,
+    user_id: Uuid,
+    customer_email: &str,
+    workspace: &str,
+    owner_name: &str,
+    signed_up: &str,
+    to: &str,
+) -> Result<String, String> {
+    let who = if owner_name.trim().is_empty() {
+        customer_email.to_string()
+    } else {
+        format!("{} ({})", owner_name.trim(), customer_email)
+    };
+    let workspace = if workspace.trim().is_empty() {
+        customer_email
+    } else {
+        workspace.trim()
+    };
+    let signed_up = if signed_up.trim().is_empty() {
+        "unknown"
+    } else {
+        signed_up.trim()
+    };
+    let vars = json!({
+        "workspace": workspace,
+        "who": who,
+        "email": customer_email,
+        "signed_up": signed_up,
+        "admin_url": "https://admin.workflowswift.com",
+    });
+    match send_email(state, None, to, crate::credential_watch::TEMPLATE, &vars).await {
+        Ok(()) => {}
+        // The funnel already recorded the failure (and its reason) in the history; there is nothing
+        // to add and nothing to retire, so the next pass simply tries again.
+        Err(e) => return Err(e),
+    }
+
+    // Read back what the funnel's OWN row for this attempt says. The window is a minute, far shorter
+    // than the watch's fifteen-minute interval, so an earlier pass's row can never be misread as
+    // this one's. The row's id comes back with it, because a delivered alert is ANNOTATED in place
+    // below rather than duplicated: the operator's mail history must show one line per alert, not
+    // two.
+    let row: Option<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, status FROM email_send_log \
+          WHERE to_email = $1 AND template = $2 AND created_at > now() - interval '60 seconds' \
+          ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(to)
+    .bind(crate::credential_watch::TEMPLATE)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| format!("read back the alert row: {e}"))?;
+    let (status, row_id) = match row {
+        Some((id, status)) => (status, Some(id)),
+        None => ("unknown".to_string(), None),
+    };
+
+    // THE IDENTITY the once-per-account dedupe reads (`credential_watch::SELECTOR`: this template,
+    // this address, `status = 'sent'`, and the account's id inside `detail`). Written ONLY for a
+    // message the transport actually SENT, so "already reported" means a human was told — a
+    // withheld or unknown attempt leaves the account unreported and the next pass retries. The id
+    // leads the detail because the column is truncated to 240 characters.
+    if status == "sent" {
+        if let Some(row_id) = row_id {
+            let detail: String = format!("user_id={user_id} workspace={workspace}")
+                .chars()
+                .take(240)
+                .collect();
+            let _ = sqlx::query("UPDATE email_send_log SET detail = $2 WHERE id = $1")
+                .bind(row_id)
+                .bind(&detail)
+                .execute(&state.db)
+                .await;
+        }
+    }
+    Ok(status)
 }
 
 /// Compatibility wrapper — used by password reset flow which has no AppState
