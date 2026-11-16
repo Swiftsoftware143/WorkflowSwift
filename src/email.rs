@@ -373,6 +373,9 @@ async fn send_email_inner(
                     // The receipt is not the answer: it says the request arrived and nothing was
                     // charged (cron 2026-10-20).
                     "plan_request_receipt" => "We have your plan request".into(),
+                    // A receipt for an ORDINARY help request (2026-11-16). Named for what the
+                    // customer just did, never for the answer — that arrives later, from a person.
+                    "support_request_receipt" => "We have your message".into(),
                     // The operator's diagnostic is not a notification: the subject has to say it
                     // was a test, or the mail is indistinguishable from real traffic in an inbox.
                     "email_test" => "WorkflowSwift test email".into(),
@@ -1430,6 +1433,45 @@ async fn send_email_fallback(
                 cfg,
                 to,
                 "We have your plan request",
+                &text_body,
+                &html_body,
+                branding,
+            )
+            .await
+        }
+        // THE RECEIPT FOR AN ORDINARY HELP REQUEST (2026-11-16). The plan arm above answers a
+        // customer who asked to BUY; this one answers a customer who asked for HELP — "I cannot sign
+        // in", "my runs are blank". Until now that message wrote the ticket, alerted the operator and
+        // sent the customer nothing, so they had no proof it had reached anyone. Reached whenever the
+        // account has no `support_request_receipt` row, which is every install today, so THIS body is
+        // the mail customers really get. It promises no time, because no human has read it yet.
+        "support_request_receipt" => {
+            let name = vars.get("name").and_then(|v| v.as_str()).unwrap_or("there");
+            let request_subject = vars
+                .get("ticket_subject")
+                .and_then(|v| v.as_str())
+                .unwrap_or("your message");
+            let app_url = vars
+                .get("app_url")
+                .and_then(|v| v.as_str())
+                .unwrap_or("https://app.workflowswift.com");
+            let safe_subject = request_subject.replace('<', "&lt;").replace('>', "&gt;");
+            let text_body = format!(
+                "Hi {name},\n\nThanks — your message reached us:\n\n    {request_subject}\n\nA person (not a robot) reads every message and answers this address. You can follow it under Support on your dashboard: {app_url}/dashboard\n\nIf you meant to add something, reply to this message and it lands on the same request.\n\n- WorkflowSwift"
+            );
+            let html_body = format!(
+                "<html><body style=\"font-family:Arial,sans-serif;line-height:1.6;color:#333\">\
+                 <p>Hi {name},</p>\
+                 <p>Thanks — your message reached us:</p>\
+                 <p style=\"background:#f3f4f6;padding:12px 16px;border-radius:8px;border-left:4px solid #4f46e5;color:#111827\"><strong>{safe_subject}</strong></p>\
+                 <p style=\"color:#374151\">A person (not a robot) reads every message and answers this address. You can follow it under Support on your dashboard.</p>\
+                 <p><a href=\"{app_url}/dashboard\" style=\"color:#4f46e5\">Open your dashboard</a></p>\
+                 <p style=\"font-size:13px;color:#9ca3af\">If you meant to add something, reply to this message and it lands on the same request.<br>- WorkflowSwift</p></body></html>"
+            );
+            send_branded(
+                cfg,
+                to,
+                "We have your message",
                 &text_body,
                 &html_body,
                 branding,

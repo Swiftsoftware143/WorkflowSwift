@@ -416,7 +416,12 @@ pub async fn create(
             &description,
         )
         .await;
-        false
+        // ACKNOWLEDGE THE CUSTOMER (2026-11-16). The plan arm above only covers a request to buy;
+        // an ordinary help request ("I cannot sign in", "my runs are blank") was written to the
+        // queue and acknowledged to nobody — the person who wrote in could not tell whether their
+        // message had reached anyone. Same writer shape as the plan receipt, and exclusive with it,
+        // so one filed ticket can never produce two receipts. Best effort: the row is the record.
+        notify_support_request_receipt(&state, aid, &b.subject).await
     };
     Ok((
         StatusCode::CREATED,
@@ -503,6 +508,48 @@ pub(crate) async fn notify_plan_request_receipt_to_customer(
         Ok(()) => true,
         Err(e) => {
             tracing::warn!(%aid, "plan-request receipt to {email} failed: {e}");
+            false
+        }
+    }
+}
+
+/// Tell the CUSTOMER that an ORDINARY help request was received (2026-11-16).
+///
+/// The plan receipt above answers "I want to buy"; this one answers "help me". Same writer shape —
+/// the workspace's owner row is read from `users` and the mail goes through `email::send_email`, the
+/// one funnel carrying per-account branding, the editable template and the reserved-address gate —
+/// so a probe address is recorded `withheld` and no message is attempted.
+///
+/// Returns whether the mail was QUEUED, which is what the route reports as `acknowledged`: the
+/// console must never promise an acknowledgement that did not happen. Best effort by construction —
+/// the ticket row is the record, and a mail failure must never fail a filed request.
+pub(crate) async fn notify_support_request_receipt(
+    state: &AppState,
+    aid: Uuid,
+    subject: &str,
+) -> bool {
+    let owner: Option<(String, String)> = sqlx::query_as(
+        "SELECT name, email FROM users WHERE aid = $1 AND is_active ORDER BY (role IN ('owner','company_admin')) DESC, sort_order NULLS LAST, created_at ASC LIMIT 1",
+    )
+    .bind(aid)
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten();
+    let Some((name, email)) = owner else {
+        tracing::warn!(%aid, "support receipt: the workspace has no active user to acknowledge");
+        return false;
+    };
+    let vars = json!({
+        "name": name,
+        "ticket_subject": subject,
+        "app_url": "https://app.workflowswift.com",
+    });
+    match crate::email::send_email(state, Some(aid), &email, "support_request_receipt", &vars).await
+    {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(%aid, "support receipt to {email} failed: {e}");
             false
         }
     }
