@@ -500,7 +500,16 @@ pub async fn regenerate_api_key(
 
     let mut tx = state.db.begin().await?;
     // 1) Retire first, so the replacement never collides with the one-active-key index.
-    sqlx::query(
+    //
+    //    ONE PRESS AT A TIME (cron 2026-11-17). The SELECT above runs outside the transaction and
+    //    this UPDATE's result was never inspected, so a DOUBLE PRESS of Regenerate had both presses
+    //    read the same live key: the winner retired it and minted the replacement, the loser's UPDATE
+    //    matched nothing (the row was already inactive) and its mint then collided with the partial
+    //    unique index `api_keys_one_active_per_aid` — surfacing to the customer as HTTP 500
+    //    `{"code":500,"error":true,"message":"Database error"}` (reproduced live 2026-11-17: 201 on
+    //    one press, 500 on the other). `rows_affected` is now load-bearing, so the losing press gets
+    //    the ordinary 409 instead of the mint colliding — the same shape FunnelSwift already ships.
+    let retired = sqlx::query(
         "UPDATE api_keys SET is_active = false, updated_at = NOW() \
          WHERE id = $1 AND user_id = $2 AND aid = $3 AND is_active = true",
     )
@@ -509,6 +518,12 @@ pub async fn regenerate_api_key(
     .bind(aid)
     .execute(&mut *tx)
     .await?;
+    if retired.rows_affected() == 0 {
+        return Err(AppError::Conflict(
+            "This key was already replaced by another press — reload the key list to see the new one."
+                .to_string(),
+        ));
+    }
     // 2) Then mint the replacement on the same connection, in the same transaction.
     let minted = mint_api_key_on(&mut tx, user_id, aid, &name, &target_url).await?;
     // 3) Lifecycle audit — the retired key's 'regenerated' event, on the same transaction (fail
