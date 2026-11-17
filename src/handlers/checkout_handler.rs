@@ -1154,7 +1154,14 @@ pub async fn create_checkout_session(
                     .to_string()
             };
             return Ok((
-                StatusCode::SERVICE_UNAVAILABLE,
+                // 424, not 503 (2026-11-17): this is the BUYER's arm, and every sibling app answers
+                // it 424 (`ADASwift`, `FunnelSwift`, `IncentiveSwift`, `missedcallrespondr` all ship
+                // `FAILED_DEPENDENCY` with `payment_provider_not_configured`). A missing configuration
+                // is not a dead service, and a 5xx is the one class this fleet's CDN may replace with
+                // its own error page — which would swallow the buyer-first sentence below and leave
+                // the upgrade screen showing nothing it can act on. Clients key on the `error` code and
+                // on `message`; the status now matches the code it always sent.
+                StatusCode::FAILED_DEPENDENCY,
                 Json(json!({
                     "error": "payment_provider_not_configured",
                     "message": message,
