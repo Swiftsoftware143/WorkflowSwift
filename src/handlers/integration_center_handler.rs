@@ -769,12 +769,27 @@ pub async fn regenerate_user_key(
     // leaves the customer with the key they already had; once it commits the old key's hash is
     // gone and the very next authentication attempt fails.
     let mut tx = state.db.begin().await?;
+    // RETIRE FIRST, so a double-pressed Regenerate cannot mint a SECOND live key (cron 2026-11-17).
+    // The SELECT above runs outside the transaction and this DELETE's result was never inspected,
+    // so two presses both read the same live row: each minted a replacement and the loser's DELETE
+    // matched nothing — the customer was left holding TWO active keys for a button that promises one
+    // rotation. `rows_affected` is now load-bearing, so the losing press gets the same 409 its
+    // sibling route answers (`api_key_handler::regenerate_api_key`, commit 445b199). Minting on the
+    // same connection keeps the rotation atomic: a mint failure rolls the retire back.
+    let retired = sqlx::query(
+        "DELETE FROM user_api_keys WHERE id = $1 AND user_id = $2 AND is_active = true",
+    )
+    .bind(id)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+    if retired.rows_affected() == 0 {
+        return Err(AppError::Conflict(
+            "This key was already replaced by another press — reload the key list to see the new one."
+                .to_string(),
+        ));
+    }
     let minted = mint_user_key_on(&mut tx, user_id, aid, &key_type, label.as_deref()).await?;
-    sqlx::query("DELETE FROM user_api_keys WHERE id = $1 AND user_id = $2")
-        .bind(id)
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
     tx.commit().await?;
 
     tracing::info!(
