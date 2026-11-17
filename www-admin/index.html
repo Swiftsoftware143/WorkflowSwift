@@ -3446,7 +3446,7 @@ function renderAdminAccounts(c){
   // the ADDRESS heuristic found on a row the list was willing to show. Measured live the same day on
   // FunnelSwift and IncentiveSwift: a harness-minted workspace was invisible to the panel entirely.
   c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Accounts</h2>'+
-    '<div class="flex items-center gap-2"><label class="flex items-center gap-1 text-xs text-gray-600" title="Probe workspaces a test harness minted. Hidden by default because they are not customers; tick this and they are listed so Select probes can reach them."><input type="checkbox" id="accShowProbes" data-tenants="show-probes"'+ (ACC_SHOW_PROBES?' checked':'') +'> show probe workspaces</label>'+
+    '<div class="flex items-center gap-2"><input type="text" id="accSearch" class="input text-xs" data-tenants="search" placeholder="Search name, owner, slug or plan" style="width:230px" autocomplete="off" title="Filter the list as you type — matches the account name, its owner address, the slug and the plan."><span class="text-xs text-gray-500" id="accCount" aria-live="polite"></span><label class="flex items-center gap-1 text-xs text-gray-600" title="Probe workspaces a test harness minted. Hidden by default because they are not customers; tick this and they are listed so Select probes can reach them."><input type="checkbox" id="accShowProbes" data-tenants="show-probes"'+ (ACC_SHOW_PROBES?' checked':'') +'> show probe workspaces</label>'+
     '<button class="btn btn-outline btn-sm" id="accProbes" data-tenants="select-probes" disabled>Select probes (0)</button>'+
     '<span class="text-xs text-gray-500" id="accMonitors" title="live tenancy-canary fixtures that a cron monitor seeds and checks — they stay in the list and are never mass-deleted"></span>'+
     '<button class="btn btn-danger btn-sm" id="accDel" disabled>Delete selected</button></div></div>'+
@@ -3507,6 +3507,26 @@ function renderAdminAccounts(c){
     const a=el.querySelector('#accAll');
     if(a)a.addEventListener('change',()=>{box().forEach(b=>{b.checked=a.checked});sync()});
     box().forEach(b=>b.addEventListener('change',sync));
+    // SEARCH (2026-11-17): the guide has always promised "Search for an account" (the
+    // admin:accounts actions) and this console carried NO search box on any screen, while
+    // every sibling console does. Filter the RENDERED rows as the operator types — name,
+    // owner address, slug and plan, lower-cased — hiding non-matches rather than removing
+    // them, so the tick state and the "Select probes" picker keep working on the same set.
+    // The count line says "N of M" so an empty list reads as "no match", not "no accounts".
+    const searchEl=c.querySelector('#accSearch'), countEl=c.querySelector('#accCount');
+    const applyFilter=()=>{
+      const q=((searchEl&&searchEl.value)||'').trim().toLowerCase();
+      let shown=0;
+      el.querySelectorAll('tbody tr[data-acc]').forEach(tr=>{
+        const hit=!q||(tr.innerText||'').toLowerCase().indexOf(q)>=0;
+        tr.style.display=hit?'':'none'; if(hit)shown++;
+      });
+      if(countEl) countEl.textContent=q
+        ? shown+' of '+LIST.length+' accounts match "'+q+'"'
+        : LIST.length+' account(s)';
+    };
+    if(searchEl) searchEl.addEventListener('input',applyFilter);
+    applyFilter();
     // The reason a row was KEPT — written into that row's name cell, so it is not a generic toast.
     reasons.forEach(f=>{
       const note=document.createElement('div');
