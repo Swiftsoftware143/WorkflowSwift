@@ -2083,6 +2083,13 @@ pub async fn send_support_request_operator_alert(
     subject_line: &str,
     message: &str,
 ) -> bool {
+    // OPERATOR SELF-REQUEST (2026-11-18) — same rule as the plan arm: a support request filed by
+    // the operator's own user (matched on `reply_to`) must not ring the operator's inbox. The ticket
+    // row is untouched; only the alert is withheld.
+    if requester_is_platform_admin(state, reply_to).await {
+        tracing::info!(reply_to = %reply_to, "operator self-request: alert suppressed");
+        return false;
+    }
     let billing: Option<serde_json::Value> =
         match sqlx::query_scalar("SELECT value FROM admin_settings WHERE key = 'billing'")
             .fetch_optional(&state.db)
@@ -2146,12 +2153,50 @@ pub async fn send_support_request_operator_alert(
 /// Best effort by design: the request row is already written and the console's queue reads it, so a
 /// mail failure must never turn a recorded request into an error. Returns whether a send was
 /// attempted and queued, which is what the caller logs.
+/// Is the account named by `aid` a platform operator? This app's platform authority is a `users` row
+/// holding `perm_is_super_admin` or an operator role (`admin`/`super_admin`) — the same predicate the
+/// admin surface admits. A request filed BY the operator (SwiftSoftware / SwiftAdmin) is the operator
+/// talking to themselves: the row still lands in the queue, but ringing their own inbox about it is
+/// noise, so the alert is withheld (2026-11-18).
+async fn account_is_platform_admin(state: &AppState, aid: Uuid) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE aid = $1 \
+           AND (perm_is_super_admin OR role IN ('admin','super_admin')))",
+    )
+    .bind(aid)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(false)
+}
+
+/// Is the requester named by `email` a platform operator? The support-request door knows the filer
+/// only by their address, so this is the same predicate as [`account_is_platform_admin`] resolved by
+/// email. `false` when the address names no user.
+async fn requester_is_platform_admin(state: &AppState, email: &str) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM users WHERE email = $1 \
+           AND (perm_is_super_admin OR role IN ('admin','super_admin')))",
+    )
+    .bind(email)
+    .fetch_one(&state.db)
+    .await
+    .unwrap_or(false)
+}
+
 pub async fn send_plan_request_operator_alert(
     state: &AppState,
     aid: Uuid,
     subject: &str,
     requester_email: &str,
 ) -> bool {
+    // OPERATOR SELF-REQUEST (2026-11-18). When the requester IS the platform operator (SwiftSoftware
+    // / SwiftAdmin — a `users` row holding `perm_is_super_admin` or an operator role), the alert
+    // would mail the operator about a request their own account filed. The row still lands in the
+    // queue; only the alert is withheld, exactly like the synthetic-requester arm below.
+    if account_is_platform_admin(state, aid).await {
+        tracing::info!(aid = %aid, "operator self-request: alert suppressed");
+        return false;
+    }
     let billing: Option<serde_json::Value> =
         match sqlx::query_scalar("SELECT value FROM admin_settings WHERE key = 'billing'")
             .fetch_optional(&state.db)
