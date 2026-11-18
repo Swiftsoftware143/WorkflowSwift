@@ -2107,7 +2107,7 @@ const PSLOTS=[['stripe','Stripe'],['paypal','PayPal'],['square','Square'],['padd
 function renderApiKeys(c){
   c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-2">API Keys</h2>'
     +'<p class="text-xs text-gray-400 mb-4">Bearer credentials for the WorkflowSwift API and the Swift Market Intel Chrome extension. '
-    +'The key value is returned once, at creation — afterwards only its prefix is readable.</p>'
+    +'The value is shown once at creation. You can show it again or rotate it on this screen — both ask for your password first.</p>'
     +'<div class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end mb-5">'
     +'<div class="md:col-span-3"><label class="block text-xs font-medium text-gray-500 mb-1">Name</label>'
     +'<input id="ak_name" class="input" placeholder="what this key is for (e.g. market-intel-extension)"></div>'
@@ -2116,9 +2116,9 @@ function renderApiKeys(c){
 
   const list=c.querySelector('#akdata');
 
-  const showOnce=function(k){
+  const showOnce=function(k,again){
     c.querySelector('#aknew').innerHTML='<div class="p-3 mb-4 rounded-lg bg-amber-50 border border-amber-300">'
-      +'<p class="text-sm font-semibold text-amber-800 mb-1">Copy this key now — the account can read it again from API Keys in the app.</p>'
+      +'<p class="text-sm font-semibold text-amber-800 mb-1">'+(again?'Here is the key again — copy it now.':'Copy this key now — you can show it again here any time.')+'</p>'
       +'<div class="flex items-center gap-2"><code class="text-xs break-all bg-white border rounded px-2 py-1 flex-1">'+escHtml(k.key)+'</code>'
       +'<button class="btn btn-sm" id="ak_copy">Copy</button></div></div>';
     const b=c.querySelector('#ak_copy');
@@ -2140,8 +2140,32 @@ function renderApiKeys(c){
         +'<td class="text-xs text-gray-500">'+String(k.created_at||'').slice(0,10)+'</td>'
         +'<td class="text-xs text-gray-500">'+(k.last_used_at?(()=>{const d=new Date(k.last_used_at);return isNaN(d.getTime())?String(k.last_used_at):d.toLocaleString()})():'never')+'</td>'
         +'<td>'+(k.is_active?'Yes':'No')+'</td>'
-        +'<td class="text-right"><button class="btn btn-sm btn-danger" data-del="'+escHtml(k.id)+'">Delete</button></td></tr>').join('')
+        +'<td class="text-right" style="white-space:nowrap"><button class="btn btn-sm" data-view="'+escHtml(k.id)+'">Show</button> '
+        +'<button class="btn btn-sm" data-rot="'+escHtml(k.id)+'">Rotate</button> '
+        +'<button class="btn btn-sm btn-danger" data-del="'+escHtml(k.id)+'">Delete</button></td></tr>').join('')
       +'</tbody></table>';
+    // Show / Rotate work on the caller's OWN key only: the endpoints are scoped by user AND
+    // account, and `reveal` requires the caller's password (it is audited). Without these two
+    // controls an operator who lost a key could only delete it and mint a new one, which silently
+    // breaks whatever held the old value (the Chrome extension / a customer's integration).
+    list.querySelectorAll('button[data-view]').forEach(b=>b.onclick=async()=>{
+      const id=b.getAttribute('data-view');
+      const pw=prompt('Confirm your account password to show this key again:');
+      if(pw===null)return;
+      if(!pw){showMsg('A password is needed to show the key','error');return}
+      const r=await api('/api-keys/'+encodeURIComponent(id)+'/reveal',{method:'POST',body:JSON.stringify({password:pw})});
+      if(!r||!r.key){showMsg('Could not show the key: '+(LAST_ERR||'request failed'),'error');return}
+      showOnce(r,true);
+    });
+    list.querySelectorAll('button[data-rot]').forEach(b=>b.onclick=async()=>{
+      const id=b.getAttribute('data-rot');
+      if(!confirm('Rotate this key? The old value stops working immediately — anything using it must be updated.'))return;
+      const r=await api('/api-keys/'+encodeURIComponent(id)+'/regenerate',{method:'POST',body:JSON.stringify({})});
+      if(!r||!r.key){showMsg('Could not rotate the key: '+(LAST_ERR||'request failed'),'error');return}
+      showMsg('API key rotated');
+      showOnce(r,true);
+      load();
+    });
     list.querySelectorAll('button[data-del]').forEach(b=>b.onclick=async()=>{
       const id=b.getAttribute('data-del');
       if(!confirm('Delete this API key? Anything using it stops working immediately.'))return;
