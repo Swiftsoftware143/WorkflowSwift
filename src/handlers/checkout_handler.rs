@@ -1331,6 +1331,19 @@ pub async fn checkout_status(
         // What a press on "Upgrade" would reach, in the same field the fleet already reads.
         "can_purchase": can_purchase,
         "sellable_links": sellable_links,
+        // The SAME count under the name three siblings use (`sellable_plans`), so a caller written
+        // against either spelling reads a real number instead of `undefined` on this app.
+        "sellable_plans": sellable_links,
+        // The buyer-facing sentence for the path above, in the field every sibling publishes.
+        // Without it a cross-app surface (or the CoreSwift upgrade pane) read `undefined` here and
+        // painted nothing at all — the buyer pressed Upgrade and was told nothing. Same three
+        // branches as the siblings, against THIS app's ladder.
+        "message": match upgrade_path {
+            "checkout" => "Upgrades are open: pressing Upgrade takes you to a secure payment page.",
+            "payment_link" => "Pressing Upgrade opens the plan's own payment page; the workspace is switched on once the team confirms it.",
+            _ => "Upgrades are not open on this installation yet, and nothing will be charged. Pressing a plan records your request for it so the team can switch your workspace onto it.",
+        },
+
         // HOW TO PAY (2026-11-16). With no provider row this install cannot take a card, so the
         // screen offers a plan REQUEST — and until this field existed nothing in the product told
         // the buyer where to send the money. The operator's own words, empty when he has written
