@@ -118,7 +118,7 @@ window.appGuidePages = {
   // guide's round "?" silently disappeared on Plan & Billing and on MCP (the same defect
   // earlier passes fixed for lists, calendar, team and branding elsewhere in the fleet).
   // Keys must match the NAV ids in `const NAV` above, which is what the widget matches on.
-  plan:          { title: "Plan & Billing", desc: "Your current plan, what this workspace is using, and the plans this installation offers. Every figure here is the server's own count, read fresh each visit. When card payment is not switched on for the installation, a plan button records your request for our team instead of opening a payment page \u2014 nothing is ever charged from this screen.", actions: ["Check which plan this workspace is on", "Read your usage counts against the plan's allowance", "Press a plan to request it, or open its payment page when one is set"] },
+  plan:          { title: "Plan & Billing", desc: "Your current plan, what this workspace is using, and the plans this installation offers. Every figure here is the server's own count, read fresh each visit. When card payment is not switched on for the installation, a plan button records your request for our team instead of opening a payment page \u2014 nothing is ever charged from this screen.", actions: ["Check which plan this workspace is on", "Read your usage counts against the plan's allowance", "Press a plan to request it, or open its payment page when one is set", "See every payment this workspace attempted in Payment history"] },
   mcp:           { title: "MCP", desc: "Connects an AI tool \u2014 Claude Code, Cursor or your own agent \u2014 to read this workspace. Read-only: the tool can look, not change. The server accepts this workspace's API key as its token, so the key on this screen is the same one the API Keys screen shows.", actions: ["Copy the endpoint into your AI tool's MCP settings", "Create a key on API Keys if this workspace has none yet", "Press Reveal to see the key, or Regenerate to replace one you think leaked \u2014 any client still using the old key stops"] },
   dashboard:     { title: "Dashboard", desc: "Your workspace at a glance \u2014 workflows, leads and activity in one place.", actions: ["Scan recent activity", "Jump into a workflow"] },
   inbox:         { title: "Inbox", desc: "Your own addresses on your own domain and the newest mail that reached them. The Recent mail list has a search box that reads the subject, the sender and the opening text of every message; reading and answering happens in the mail client at inbox.workflowswift.com, which is the same account.", actions: ["Add your domain and press Show records", "Press Check again once the records are in DNS", "Create an address and mail to it", "Type in Search subject, sender or text to narrow the recent mail", "Open the mail client to read and answer"] },
@@ -373,7 +373,7 @@ const API = (() => {
   };
 })();
 
-const S = { view:'login', sessionEnded:false, loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, accLoadFailed:false, accPromise:null, dataVer:0, apiKeys:null, userKeys:null, extBuild:null, hexKey:null, hexKeyInput:'', enrich:null, enriching:null, newApiKey:null, builder:null, steps:null, stepsWf:null, stepValidation:null, stepDraft:null, widgetCat:null, notifyChannels:null, notifyRecipients:null, rendSummary:null, renditions:null, rendWf:'', rendStatus:'active', rendSel:null, stitchName:'', modalErr:null, plans:null, plansTried:false, checkoutStatus:null, checkoutStatusTried:false, checkoutMsg:null, checkoutBusy:false, requestForPlan:null, requestPlanBusy:false, requestPlanMsg:null, planReqs:null, planReqsTried:false, planReqWithdrawBusy:false, planReqMsg:null };
+const S = { view:'login', sessionEnded:false, loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, accLoadFailed:false, accPromise:null, dataVer:0, apiKeys:null, userKeys:null, extBuild:null, hexKey:null, hexKeyInput:'', enrich:null, enriching:null, newApiKey:null, builder:null, steps:null, stepsWf:null, stepValidation:null, stepDraft:null, widgetCat:null, notifyChannels:null, notifyRecipients:null, rendSummary:null, renditions:null, rendWf:'', rendStatus:'active', rendSel:null, stitchName:'', modalErr:null, plans:null, plansTried:false, checkoutStatus:null, checkoutStatusTried:false, checkoutSessions:null, checkoutSessionsTried:false, checkoutMsg:null, checkoutBusy:false, requestForPlan:null, requestPlanBusy:false, requestPlanMsg:null, planReqs:null, planReqsTried:false, planReqWithdrawBusy:false, planReqMsg:null };
 
 // Views call their loaders from inside render (the house pattern: `if(!S.x) loadX();`), and
 // every loader calls renderApp() again — a *re-entrant* preact render. The inner render
@@ -1570,6 +1570,7 @@ const PlanView = () => {
   if (!S.usage && !S.usageTried) { S.usageTried = true; loadUsage(); }
   if (!S.planReqsTried) { S.planReqsTried = true; loadPlanRequests(); }
   if (!S.checkoutStatusTried) { S.checkoutStatusTried = true; loadCheckoutStatus(); }
+  if (!S.checkoutSessionsTried) { S.checkoutSessionsTried = true; loadCheckoutSessions(); }
   const tiers = (S.plans && (S.plans.plans || S.plans)) || [];
   const curSlug = (S.planCaps && S.planCaps.plan_slug) || '';
   const curName = (S.planCaps && S.planCaps.plan_name) || '';
@@ -1604,6 +1605,7 @@ const PlanView = () => {
         </div>
       </div>` : ''}
       ${S.usageTried && !S.usage ? html`<div class="card" style="margin-bottom:16px"><p class="text-sm text-gray-600">Your usage figures could not be read just now.</p></div>` : ''}
+      ${S.checkoutSessions ? PayHistory() : ''}
       ${(S.checkoutStatus && S.checkoutStatus.can_purchase === false) ? html`<div class="card" id="billing-till-closed" style="margin-bottom:16px;border-left:4px solid #f59e0b"><p class="text-sm text-gray-700"><strong>Card payment is not switched on for this installation yet.</strong> Nothing can be charged here, so the buttons below ask our team to switch your workspace instead of opening a payment page.</p></div>` : ''}
       ${(S.checkoutStatus && String(S.checkoutStatus.payment_instructions || '').trim()) ? html`<div class="card" id="billing-how-to-pay" data-how-to-pay="1" style="margin-bottom:16px;border-left:4px solid #2563eb">
         <h3 class="font-semibold text-gray-800 mb-1">How to pay now</h3>
@@ -1655,6 +1657,65 @@ const PlanView = () => {
           </div>`)}
       </div>`}
     </div>`;
+};
+// ── PAYMENT HISTORY (2026-11-18) ─────────────────────────────────────────────────────────────────
+// GET /api/v1/checkout/sessions is this app's own read of what the workspace has TRIED to buy (the
+// handler scopes every row to the caller's account, so it can only return our own). The API client
+// carried the method and no page rendered it: four sibling apps show this card, and here a workspace
+// whose press never reached a till — or whose plan was bought on the operator's own payment page —
+// had no screen that said so. Nothing is computed here: the amount, its currency and the outcome are
+// the row's own values; an outcome this build does not know is printed as the server wrote it; and a
+// FAILED read paints NOTHING, so an error is never dressed up as "no payments yet".
+const PAY_STATE = { completed: 'Paid', paid: 'Paid', succeeded: 'Paid',
+  pending: 'Waiting for payment', payment_link: 'Payment page opened',
+  provider_missing: 'Could not start — payments are not switched on yet',
+  expired: 'Payment link expired', failed: 'Did not go through',
+  refunded: 'Refunded', cancelled: 'Cancelled', canceled: 'Cancelled' };
+const payState = (r) => {
+  const st = String((r && r.status) || '').trim().toLowerCase();
+  return PAY_STATE[st] || (st ? st.replace(/_/g, ' ') : '—');
+};
+const payMoney = (r) => {
+  const raw = r && r.amount, cur = String((r && r.currency) || 'USD').toUpperCase();
+  if (raw === null || raw === undefined || raw === '') return '—';
+  const n = Number(raw);
+  if (isNaN(n)) return String(raw) + (cur && cur !== 'USD' ? ' ' + cur : '');
+  return (cur === 'USD' || !cur) ? '$' + n.toFixed(2) : n.toFixed(2) + ' ' + cur;
+};
+const payWhat = (r) => {
+  const t = String((r && r.purchasable_type) || '').toLowerCase();
+  const id = String((r && r.purchasable_id) || '');
+  const tiers = (S.plans && (S.plans.plans || S.plans)) || [];
+  const hit = id ? tiers.find(p => p && String(p.id) === id) : null;
+  if (hit && hit.name) return hit.name + ' plan';
+  if (t === 'plan') return 'Plan subscription';
+  if (t.indexOf('credit') === 0) return 'Credit pack';
+  return t ? t.replace(/[_-]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'Purchase';
+};
+const PayHistory = () => {
+  const rows = (S.checkoutSessions && Array.isArray(S.checkoutSessions.sessions))
+    ? S.checkoutSessions.sessions : [];
+  return html`<div class="card" id="payment-history" data-payment-history="1" style="margin-bottom:16px">
+    <h3 class="font-semibold text-gray-800 mb-1">Payment history</h3>
+    ${rows.length === 0
+      ? html`<p class="text-sm text-gray-600">Nothing has been charged on this workspace yet. When a plan is bought — or a payment is attempted — it appears here with its date, amount and outcome.</p>`
+      : html`<p class="text-sm text-gray-600">Newest first. The amount and the outcome are the ones the payment record carries.</p>
+        <div style="overflow-x:auto"><table class="mt-3" style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>
+          ${['Date', 'What for', 'Amount', 'What happened'].map(c => html`<th style="text-align:left;padding:6px 8px;border-bottom:1px solid #e2e8f0;color:#475569;font-weight:600">${c}</th>`)}
+        </tr></thead><tbody>
+          ${rows.map(r => html`<tr data-payment-row=${String(r.id || '')}>
+            <td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${planReqDate(r.created_at)}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${payWhat(r)}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${payMoney(r)}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${payState(r)}</td>
+          </tr>`)}
+        </tbody></table></div>`}
+  </div>`;
+};
+const loadCheckoutSessions = async () => {
+  try { S.checkoutSessions = await API.listCheckoutSessions(); }
+  catch (e) { S.checkoutSessions = null; }
+  renderApp();
 };
 const loadPlans = async () => {
   if (S.loading) return;
