@@ -106,6 +106,25 @@ pub async fn create_workspace(
     let tid = tenant(&claims)?;
     let name = clean_name(&req.name)?;
 
+    // ONE PRESS AT A TIME PER ACCOUNT (cron 2026-11-18). The ceiling count, the duplicate-name
+    // probe and the INSERT are three statements, so two overlapping presses — a double-click on
+    // "Create workspace", or a create racing a rename — both read dup = none and the loser hits
+    // `ux_workspaces_tenant_name`, which surfaced to the customer as HTTP 500 "Database error".
+    // The tenant-scoped advisory lock makes the three reads and the write one critical section, so
+    // the second press sees the first row and gets the ordinary 409 ("you already have a workspace
+    // with that name"), and the plan ceiling can no longer be beaten by parallelism. It is the
+    // SAME lock `set_default_workspace` and `delete_workspace` already take, and it is taken FIRST
+    // for the deadlock reason the delete documents: a press that holds the lock must never wait on
+    // a row this transaction would then hold. Measured live before the fix (pre-fix binary, this
+    // app): with the tenant lock held by another session a create still answered in 0.01s, i.e. it
+    // never took the lock — the three statements above ran unprotected.
+    let mut tx = state.db.begin().await.map_err(AppError::Database)?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1::text))")
+        .bind(tid.to_string())
+        .execute(&mut *tx)
+        .await
+        .map_err(AppError::Database)?;
+
     // Plan ceiling, when the plan states one. This app sells its allowances in
     // `plan_tiers.features` (JSONB) reached through `account_plans`; a plan that names no
     // `max_workspaces` is uncapped, because a ceiling exists only where one was sold.
@@ -118,7 +137,7 @@ pub async fn create_workspace(
           LIMIT 1",
     )
     .bind(tid)
-    .fetch_optional(&state.db)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(AppError::Database)?
     // A plan whose blob names no `max_workspaces` returns SQL NULL — `fetch_optional` gives
@@ -127,7 +146,7 @@ pub async fn create_workspace(
 
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM workspaces WHERE tenant_id = $1")
         .bind(tid)
-        .fetch_one(&state.db)
+        .fetch_one(&mut *tx)
         .await
         .map_err(AppError::Database)?;
 
@@ -144,7 +163,7 @@ pub async fn create_workspace(
     )
     .bind(tid)
     .bind(&name)
-    .fetch_optional(&state.db)
+    .fetch_optional(&mut *tx)
     .await
     .map_err(AppError::Database)?;
     if dup.is_some() {
@@ -155,16 +174,30 @@ pub async fn create_workspace(
 
     // the very first workspace is always the default
     let make_default = count == 0;
-    let row = sqlx::query(
+    let inserted = sqlx::query(
         "INSERT INTO workspaces (tenant_id, name, is_default) VALUES ($1, $2, $3) \
          RETURNING id, name, is_default, created_at::text AS created_at",
     )
     .bind(tid)
     .bind(&name)
     .bind(make_default)
-    .fetch_one(&state.db)
-    .await
-    .map_err(AppError::Database)?;
+    .fetch_one(&mut *tx)
+    .await;
+    // THE BELT: any path that reaches this INSERT with a taken name (the lock only covers the
+    // presses that take it) answers the same readable 409 its own pre-check does, never a raw
+    // database error. Same arm `rename_workspace` / `set_default_workspace` / `delete_workspace`
+    // carry for their own constraints.
+    let row = match inserted {
+        Ok(row) => row,
+        Err(sqlx::Error::Database(db)) if db.constraint() == Some("ux_workspaces_tenant_name") => {
+            return Err(AppError::Duplicate(
+                "You already have a workspace with that name.".into(),
+            ));
+        }
+        Err(e) => return Err(AppError::Database(e)),
+    };
+
+    tx.commit().await.map_err(AppError::Database)?;
 
     Ok(Json(json!({ "workspace": row_json(&row) })))
 }
@@ -199,7 +232,7 @@ pub async fn rename_workspace(
         ));
     }
 
-    let row = sqlx::query(
+    let updated = sqlx::query(
         "UPDATE workspaces SET name = $1, updated_at = now() WHERE id = $2 AND tenant_id = $3 \
          RETURNING id, name, is_default, created_at::text AS created_at",
     )
@@ -207,8 +240,23 @@ pub async fn rename_workspace(
     .bind(id)
     .bind(tid)
     .fetch_optional(&state.db)
-    .await
-    .map_err(AppError::Database)?
+    .await;
+    // TWO OVERLAPPING RENAMES ARE ONE ANSWER, NOT A DATABASE ERROR (cron 2026-11-18). The
+    // duplicate-name probe above and this UPDATE are two statements, so two presses that overlap —
+    // a double-click on Save, or a rename racing a workspace CREATE — both read `dup = none`, both
+    // UPDATE, and the loser hit `ux_workspaces_tenant_name` as a raw `AppError::Database`, i.e.
+    // HTTP 500 "Database error" for a customer who only saved twice. The create route now closes
+    // its half of this race with the tenant advisory lock; this answers the collision the way its
+    // own pre-check does — a readable 409 — so no request can produce a 500 from a taken name.
+    let row = match updated {
+        Ok(row) => row,
+        Err(sqlx::Error::Database(db)) if db.constraint() == Some("ux_workspaces_tenant_name") => {
+            return Err(AppError::Duplicate(
+                "You already have a workspace with that name.".into(),
+            ));
+        }
+        Err(e) => return Err(AppError::Database(e)),
+    }
     .ok_or_else(|| AppError::NotFound("Workspace not found.".into()))?;
 
     Ok(Json(json!({ "workspace": row_json(&row) })))
