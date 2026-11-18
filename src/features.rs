@@ -302,6 +302,75 @@ pub async fn resolve_limit(
     Ok(None)
 }
 
+/// Is this limit key the SEAT count a plan sells? Seats get the refusal that names the plan which
+/// lifts them (see [`seat_refusal`]); every other limit keeps the generic sentence.
+fn is_seat_key(key: &str) -> bool {
+    matches!(key, "max_users" | "users" | "team_members")
+}
+
+/// The cheapest ACTIVE tier that allows MORE than `current` seats, as `(name, seats, monthly price)`.
+///
+/// `seats` is `-1` for a tier that sells unlimited seats — that IS more than any cap, so such a tier
+/// can lift the refusal. `None` means NO active tier lifts it: that is a dead end the refusal must
+/// say out loud instead of telling the customer to "upgrade" to something that does not exist.
+///
+/// Ported from FunnelSwift's `cheapest_plan_with_more_seats` (measured there 2026-11-05 and
+/// 2026-11-18: every plan capped seats at 1, so the generic "Upgrade to increase your limit" pointed
+/// at a plan that could not deliver). This app's ladder is Free 2 / Starter 10 / Professional 25 /
+/// Enterprise unlimited, so the answer exists — the refusal just never named it.
+pub async fn cheapest_plan_with_more_seats(
+    db: &PgPool,
+    current: i64,
+) -> Result<Option<(String, i64, f64)>, AppError> {
+    let tiers = sqlx::query_as::<_, (Uuid, String, f64)>(
+        "SELECT id, name, COALESCE(price_monthly, 0)::float8 FROM plan_tiers \
+          WHERE is_active = true ORDER BY COALESCE(price_monthly, 0) ASC, name ASC",
+    )
+    .fetch_all(db)
+    .await?;
+    for (id, name, price) in tiers {
+        // The SAME resolver the gate just used, per tier — a tier whose seat count lives in the
+        // features JSONB and one that uses the legacy column are read identically here.
+        let Some(limit) = resolve_limit(db, id, "max_users").await? else {
+            continue;
+        };
+        if limit < 0 || limit > current {
+            return Ok(Some((name, limit, price)));
+        }
+    }
+    Ok(None)
+}
+
+/// The sentence that turns a seat ceiling into a next step.
+///
+/// Measured 2026-11-18: a Free workspace (2 seats = owner + 1 invitee) that invited a second
+/// colleague was told "Team members limit reached (2/2). Upgrade to increase your limit." — no plan
+/// name, no seat count, no price, while Starter (10 seats, $29.00/month) sat on the catalogue. The
+/// Team screen shows this sentence verbatim, and upgrades here are switched on by hand from Plan &
+/// Billing, so "upgrade" has to name what to request.
+async fn seat_refusal(db: &PgPool, current: i64) -> String {
+    match cheapest_plan_with_more_seats(db, current).await {
+        Ok(Some((name, seats, price))) => {
+            let seats_label = if seats < 0 {
+                "unlimited team seats".to_string()
+            } else {
+                format!("{seats} team seats")
+            };
+            if price > 0.0 {
+                format!(
+                    "{name} (${price:.2}/month) includes {seats_label} — open Plan & Billing and request that plan."
+                )
+            } else {
+                format!("The {name} plan includes {seats_label} — open Plan & Billing to switch to it.")
+            }
+        }
+        // No plan sells a bigger seat allowance: telling the customer to "upgrade" would point at
+        // a screen that cannot help. Say what is true and give them a human path.
+        _ => "No plan here includes more seats yet — send us a message from Support and we will raise your allowance."
+            .to_string(),
+    }
+}
+
 /// Enforce a numeric limit for the account's plan.
 pub async fn enforce_feature_limit(
     db: &PgPool,
@@ -319,16 +388,28 @@ pub async fn enforce_feature_limit(
         return Ok(());
     }
     if limit == 0 {
+        let tail = if is_seat_key(feature_key) {
+            seat_refusal(db, limit).await
+        } else {
+            "Upgrade to enable it.".to_string()
+        };
         return Err(AppError::UpgradeRequired(format!(
-            "{} is not included in your current plan. Upgrade to enable it.",
-            label
+            "{} is not included in your current plan. {}",
+            label, tail
         )));
     }
     let usage = count_usage(db, aid, feature_key).await?;
     if usage >= limit {
+        // Same rule for the ceiling: name the plan that lifts it (and its seat count and price),
+        // or say plainly that no plan does.
+        let tail = if is_seat_key(feature_key) {
+            seat_refusal(db, limit).await
+        } else {
+            "Upgrade to increase your limit.".to_string()
+        };
         return Err(AppError::UpgradeRequired(format!(
-            "{} limit reached ({}/{}). Upgrade to increase your limit.",
-            label, usage, limit
+            "{} limit reached ({}/{}). {}",
+            label, usage, limit, tail
         )));
     }
     Ok(())
