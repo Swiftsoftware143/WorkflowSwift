@@ -2158,7 +2158,7 @@ pub async fn send_support_request_operator_alert(
 /// admin surface admits. A request filed BY the operator (SwiftSoftware / SwiftAdmin) is the operator
 /// talking to themselves: the row still lands in the queue, but ringing their own inbox about it is
 /// noise, so the alert is withheld (2026-11-18).
-async fn account_is_platform_admin(state: &AppState, aid: Uuid) -> bool {
+pub(crate) async fn account_is_platform_admin(state: &AppState, aid: Uuid) -> bool {
     sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(SELECT 1 FROM users WHERE aid = $1 \
            AND (perm_is_super_admin OR role IN ('admin','super_admin')))",

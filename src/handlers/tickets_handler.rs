@@ -527,6 +527,14 @@ pub(crate) async fn notify_plan_request_receipt_to_customer(
     aid: Uuid,
     subject: &str,
 ) -> bool {
+    // OPERATOR SELF-REQUEST (2026-11-18). When the filer IS the platform operator
+    // (`perm_is_super_admin` or an operator role), the receipt would mail the operator's own inbox
+    // about a request their own account filed. The ticket row still lands in the queue; only the
+    // receipt is withheld — the same rule as the operator-alert arm above.
+    if crate::email::account_is_platform_admin(state, aid).await {
+        tracing::info!(aid = %aid, "operator self-request: receipt suppressed");
+        return false;
+    }
     let owner: Option<(String, String)> = sqlx::query_as(
         "SELECT name, email FROM users WHERE aid = $1 AND is_active ORDER BY (role IN ('owner','company_admin')) DESC, sort_order NULLS LAST, created_at ASC LIMIT 1",
     )
@@ -575,6 +583,13 @@ pub(crate) async fn notify_support_request_receipt(
     aid: Uuid,
     subject: &str,
 ) -> bool {
+    // OPERATOR SELF-REQUEST (2026-11-18). Same rule as the plan receipt above: a support request
+    // filed by the platform operator's own workspace must not mail the operator a receipt for
+    // talking to themselves. The ticket row still lands in the queue; only the receipt is withheld.
+    if crate::email::account_is_platform_admin(state, aid).await {
+        tracing::info!(aid = %aid, "operator self-request: receipt suppressed");
+        return false;
+    }
     let owner: Option<(String, String)> = sqlx::query_as(
         "SELECT name, email FROM users WHERE aid = $1 AND is_active ORDER BY (role IN ('owner','company_admin')) DESC, sort_order NULLS LAST, created_at ASC LIMIT 1",
     )
