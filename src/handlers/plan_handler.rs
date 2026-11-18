@@ -52,10 +52,10 @@ pub async fn list_plans(State(state): State<AppState>) -> ApiResult<impl IntoRes
 /// no cap and are reported as `"unlimited"` so a page never prints "-1 workflows".
 ///
 /// Deliberately NARROW, and narrower than the authenticated `GET /api/v1/plans`: `slug`, `name`,
-/// the two amounts, the limits a buyer is being sold, and the ordering only. No plan `id`, no
-/// `checkout_url`, no `payment_provider`, no raw feature JSON — a visitor needs a price list, and
-/// the ids and checkout links are the operator console's business. `is_active = false` rows never
-/// reach a member of the public.
+/// the two amounts, the limits a buyer is being sold, the ordering, and the operator's own
+/// `payment_instructions`. No plan `id`, no `checkout_url`, no `payment_provider`, no raw feature
+/// JSON — a visitor needs a price list and a way to pay, and the ids and checkout links are the
+/// operator console's business. `is_active = false` rows never reach a member of the public.
 pub async fn public_list_plans(State(state): State<AppState>) -> ApiResult<impl IntoResponse> {
     let rows = sqlx::query(
         "SELECT slug, name, price_monthly::text AS price_monthly, price_yearly::text AS price_yearly, \
@@ -91,7 +91,17 @@ pub async fn public_list_plans(State(state): State<AppState>) -> ApiResult<impl 
         })
         .collect();
 
-    Ok(Json(json!({"plans": plans, "total": plans.len()})))
+    // HOW TO PAY (2026-11-18): the operator's own payment details, published here so a VISITOR on
+    // the pricing page — not only a signed-in buyer on the Plan screen or a requester reading the
+    // receipt mail — can see how this installation can actually take the money while no card
+    // provider is configured. Empty or absent keeps the page exactly as it shipped.
+    let payment_instructions = crate::billing_instructions::load(&state.db).await;
+
+    Ok(Json(json!({
+        "plans": plans,
+        "total": plans.len(),
+        "payment_instructions": payment_instructions,
+    })))
 }
 
 /// One plan limit as the public page should print it: `null` when the plan does not declare it (so
