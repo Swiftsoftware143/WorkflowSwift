@@ -926,6 +926,13 @@ pub fn create_router(state: AppState) -> Router {
 
     let protected_routes = Router::new()
         .nest("/auth", auth_protected)
+        // The fleet-standard usage read (2026-11-18). `GET /api/v1/me/usage` is the path the
+        // other four apps serve and the path the fleet's own tools document (see the
+        // phantom-relation / plan-gating skills), but here the handler was reachable ONLY as
+        // `GET /api/v1/auth/me/usage` — so a consumer pointed at the standard path got a bare
+        // 404 on this app alone. Same handler, same auth: an anonymous caller is still refused
+        // 401 at the boundary, and `/auth/me/usage` stays in place for this app's console.
+        .route("/me/usage", get(auth::get_usage))
         .nest("/accounts", account_routes)
         .nest("/users", user_routes)
         .nest("/notify", notify_routes)
