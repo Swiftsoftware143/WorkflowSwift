@@ -4,13 +4,82 @@ use axum::{
     Extension,
 };
 use serde_json::json;
-use sqlx::Row;
+use sqlx::{PgConnection, Row};
 use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::auth::models::Claims;
 use crate::error::{ApiResult, AppError};
 use crate::AppState;
+
+/// THE ONE GRANT every plan seat goes through (kanban t_b0774174).
+///
+/// A new workspace could not run a single workflow: the signup granted
+/// `plan_tiers.features->>'credits_monthly'` and NO tier declared the key, so the grant was dead
+/// code and every account (free AND Enterprise) sat at `SUM(amount) = 0` while the Run gate refuses
+/// below 1. A `credits_monthly` grant that only the signup knows about also cannot cover the other
+/// doors that seat a plan — the operator's "assign plan", a resolved plan-request ticket, and the
+/// fleet portfolio sync — so the rule lives here, in one statement, and every door calls it.
+///
+/// THE RULE
+/// * Grant the tier's `credits_monthly`, else ONE CREDIT PER WORKFLOW the tier includes
+///   (`features.max_workflows`, finite positive only). `professional`/`enterprise` store `-1` and
+///   are covered by the declared allowance; the fallback keeps a NEW operator-created tier from
+///   reproducing this defect.
+/// * Only for a workspace that has NEVER had a ledger row (`NOT EXISTS`), so this is a WELCOME
+///   grant, not a refill: a workspace whose credits were spent is never re-credited, and repeated
+///   plan moves cannot farm credits. The guard is inside the INSERT, so it is a single
+///   statement and cannot race another caller.
+/// * Returns the amount granted (`None` = nothing to grant), so a caller can log it.
+pub async fn grant_plan_welcome_credits(
+    conn: &mut PgConnection,
+    aid: Uuid,
+    plan_id: Uuid,
+) -> Result<Option<i32>, AppError> {
+    let granted: Option<i32> = sqlx::query_scalar(
+        r#"
+        INSERT INTO credit_transactions
+               (id, aid, amount, transaction_type, description, reference_id)
+        SELECT $1, $2, g.amount, 'grant',
+               'Welcome credits: first month of ' || COALESCE(g.name, 'your plan'),
+               'plan_allowance:' || COALESCE(g.slug, 'unknown')
+          FROM (
+              SELECT name,
+                     slug,
+                     CASE
+                       -- A declared allowance is the tier's own number; 0 means "this tier grants
+                       -- none" and is honoured. The ceiling exists only so an operator typo cannot
+                       -- mint an unbounded balance.
+                       WHEN (features->>'credits_monthly') ~ '^[0-9]+$'
+                         THEN LEAST((features->>'credits_monthly')::integer, 100000)
+                       -- No declared allowance: one run per workflow the plan includes. `-1` and
+                       -- "unlimited" do not match this regex and grant nothing here.
+                       WHEN (features->>'max_workflows') ~ '^[0-9]+$'
+                         THEN LEAST((features->>'max_workflows')::integer, 1000)
+                       ELSE NULL
+                     END AS amount
+                FROM plan_tiers
+               WHERE id = $3
+          ) g
+         WHERE g.amount > 0
+           AND NOT EXISTS (
+               SELECT 1 FROM credit_transactions ct WHERE ct.aid = $2
+           )
+        RETURNING amount
+        "#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(aid)
+    .bind(plan_id)
+    .fetch_optional(conn)
+    .await?;
+
+    if let Some(amt) = granted {
+        tracing::info!(account = %aid, plan = %plan_id, credits = amt,
+            "welcome credits granted — the workspace can run its plan's workflows");
+    }
+    Ok(granted)
+}
 
 /// Tiered pricing — profit margin optimized
 fn tiered_pricing() -> HashMap<&'static str, (i64, &'static str)> {
@@ -73,35 +142,18 @@ pub async fn credit_balance(
     // Non-rollover available credits (can be negative if overspent)
     let available = balance; // total balance is the real available amount
 
-    // Next reset date: the next monthly anniversary of the ACTIVE plan row's start. Two defects
-    // lived in this one query (t_3914ee20): it named `tp.billing_cycle_start`, a column
-    // `account_plans` has never had (the live table is id/aid/plan_id/status/started_at/expires_at/
-    // created_at/sort_order/is_active), and it filtered on the legacy `is_active` boolean while
-    // every other plan reader in the crate filters `status = 'active'`. Postgres rejected the
-    // statement on every call and `.ok()` swallowed it, so `next_reset` was permanently null with
-    // nothing in the response or the log to show for it — a silent-data-loss bug, not defensive
-    // coding. Now: the same row predicate as `features::resolve_plan_id`, the real column, and `?`
-    // so any future drift is a visible 500 instead of a silently empty field.
+    // NEXT RESET: deliberately NULL — there is NO renewal engine (kanban t_b0774174).
     //
-    // Deliberately NOT `started_at + interval '1 month'`: that reports a date in the PAST for a
-    // plan that started more than a month ago (measured: 1 of the 11 live rows, started
-    // 2026-08-11, would have answered 2026-09-11 on 2026-09-25). Walking the monthly boundaries
-    // forward from the plan start to the first one after `now()` is exact calendar arithmetic and
-    // keeps the field's promise: a "next reset" is always in the future.
-    let next_reset: Option<String> = sqlx::query_scalar::<_, String>(
-        r#"SELECT to_char(boundary, 'YYYY-MM-DD')
-           FROM account_plans tp
-           CROSS JOIN LATERAL generate_series(
-                 tp.started_at + interval '1 month',
-                 NOW() + interval '24 months',
-                 interval '1 month') AS boundary
-           WHERE tp.aid = $1 AND tp.status = 'active' AND boundary > NOW()
-           ORDER BY boundary
-           LIMIT 1"#,
-    )
-    .bind(aid)
-    .fetch_optional(&state.db)
-    .await?;
+    // This field used to answer the next monthly anniversary of the active plan's `started_at`,
+    // with the comment above keeping "the field's promise: a 'next reset' is always in the
+    // future". That promise was never honoured by anything: no code grants credits on a billing
+    // boundary, `credit_transactions.billing_month` has no reader, and the plan allowance is
+    // granted ONCE, when a workspace first lands on a plan (`grant_plan_welcome_credits`). A date
+    // in this field told a customer "credits arrive on the 18th" and nothing ever arrived — the
+    // same class as the dead `credits_monthly` grant this card fixed. The field is kept (no client
+    // in this app renders it, and the response shape stays intact) and answers null until a real
+    // renewal exists; top-ups today are credit packs the team grants by hand.
+    let next_reset: Option<String> = None;
 
     Ok(Json(json!({
         "balance": balance,

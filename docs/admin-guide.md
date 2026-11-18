@@ -334,6 +334,22 @@ credits per call.
 ## Credits, payments and affiliates
 
 - **1 credit per execution**; a run without credits is refused.
+- **The plan's included credit allowance is what makes a workspace runnable.** Each tier declares
+  it in `features.credits_monthly` (Admin → Plans, the *Credits Monthly* box); migration 118 seeded
+  the shipped tiers with 50 / 250 / 1000 / 5000 credits and never overwrites a number an operator
+  has set. The allowance is granted **once per workspace**, at the moment it first lands on a plan —
+  the public signup, the operator's *assign plan*, a resolved plan-request ticket, and the fleet
+  portfolio sync all go through the same one statement
+  (`handlers::credit_handler::grant_plan_welcome_credits`), which refuses to fire when the workspace
+  already has any credit row, so a plan move or a re-sync can never re-credit or farm credits. A
+  tier that declares **no** allowance grants one credit per workflow it includes
+  (`features.max_workflows`, finite positive only) — the fallback that keeps a new tier from
+  reproducing the 2026-11-18 defect in which every tier declared nothing and no workspace could run
+  a single workflow. A declared `0` means "this tier grants none" and is honoured.
+- **There is no monthly renewal.** `credit_transactions.billing_month` is reserved and read by
+  nothing: the allowance is the *first month*, and later top-ups are credit packs the team grants by
+  hand from the Credits screen's request queue. Workspaces that existed before migration 118 and had
+  never had a credit row were backfilled with their plan's allowance (`reference_id = 'migration_118'`).
 - Checkout: `/api/v1/checkout/create`, `/checkout/sessions`; providers configured per plan via
   `/api/v1/payment-providers`. Webhooks: `POST /api/v1/webhooks/stripe`,
   `POST /api/v1/webhooks/paypal`.

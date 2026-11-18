@@ -123,7 +123,10 @@ Base API: `https://workflowswift.com/api/v1` — all non-public endpoints need
 - **Credits**: charged per execution, and the amount comes from the workflow's tier
   (`simple` = 2, `medium` = 3, `complex` = 5, `ai_enhanced` = 7 — the full table is in the
   `deduct` response). Running out is refused by the API, not just warned about in the UI.
-  Check `GET /credits/balance`.
+  Check `GET /credits/balance`. Your plan's **included credits are added to the workspace when it is
+  created**, so a new workspace can run its workflows from the start; the **Credits** screen shows
+  the balance and is the one door for more (a credit-pack request — nothing is charged in the app,
+  and our team adds the credits by hand).
 
 ## Templates
 

@@ -1169,12 +1169,16 @@ when it is set.</p>
       <h2 id="credits-payments-and-affiliates">Credits, payments and affiliates</h2>
       <ul>
       <li><strong>1 credit per execution</strong>; a run without credits is refused.</li>
-      <li><strong>Credits included per month</strong> — each plan tier carries its own monthly credit
-        grant, set on <strong>Admin -&gt; Plans</strong> in the <em>Credits Monthly</em> box (stored as the
-        tier's <code>features.credits_monthly</code>). A new workspace is granted that many credits by its
-        own signup, and the balance screen reports when the next reset is due. An empty box means the tier
-        grants no credits, so a workspace on it starts at zero and can only run once credits are bought or
-        granted by hand.</li>
+      <li><strong>Credits included with the plan</strong> — each plan tier declares its allowance in the
+        <em>Credits Monthly</em> box on <strong>Admin -&gt; Plans</strong> (stored as the tier's
+        <code>features.credits_monthly</code>). The shipped tiers are seeded with 50 / 250 / 1000 / 5000
+        credits and an operator's own number always wins. A workspace is granted that allowance
+        <strong>once</strong>, when it first lands on a plan (its own signup, an admin plan assignment, a
+        resolved plan-request ticket, or the portfolio sync) — a workspace that already holds credit
+        history is never re-credited, and there is no monthly renewal: later top-ups are credit packs the
+        team grants by hand. A tier that declares no allowance grants one credit per workflow it includes,
+        so a new tier can never leave its workspaces unable to run. A declared zero means the tier grants
+        none.</li>
       <li>Checkout: <code>/api/v1/checkout/create</code>, <code>/checkout/sessions</code>; providers configured per plan via
         <code>/api/v1/payment-providers</code>. Webhooks: <code>POST /api/v1/webhooks/stripe</code>,
         <code>POST /api/v1/webhooks/paypal</code>.</li>

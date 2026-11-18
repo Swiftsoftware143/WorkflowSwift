@@ -2077,6 +2077,11 @@ pub async fn admin_assign_plan(
     .execute(&mut *tx)
     .await?;
 
+    // FUND THE PLAN — an assignment that leaves the workspace at 0 credits cannot run anything
+    // (kanban t_b0774174). ONE shared rule, gated on an empty ledger so a later plan move never
+    // re-credits this workspace.
+    crate::handlers::credit_handler::grant_plan_welcome_credits(&mut tx, id, plan_id).await?;
+
     tx.commit().await?;
 
     tracing::info!(account = %id, plan = %plan_slug, "Platform admin moved an account onto a plan");

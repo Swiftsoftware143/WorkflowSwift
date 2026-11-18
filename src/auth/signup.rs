@@ -431,41 +431,15 @@ pub async fn create_account(
         .execute(&mut *tx)
         .await?;
 
-        // Grant the plan's initial monthly credits, when it declares any. The free tier declares
-        // none (`features->>'credits_monthly'` is absent), so this is a no-op there and a real
-        // grant on a plan that does — the same behaviour for both doors.
-        //
-        // `Option<i32>` (not `i32`) is load-bearing, and this is a REAL defect the transaction
-        // surfaced: every plan_tiers row in this app has NO `credits_monthly`, so the cast returns
-        // SQL NULL and decoding it into a bare `i32` errors with `unexpected null; try decoding as
-        // an Option`. `.unwrap_or(None)` used to SWALLOW that error on every single signup and
-        // silently read "no credits" — with `?` (required inside the transaction) the same error
-        // would fail every signup, so the column is decoded as what it can be: NULLABLE.
-        let credits: Option<i32> = sqlx::query_scalar(
-            r#"SELECT (features->>'credits_monthly')::integer
-               FROM plan_tiers WHERE id = $1"#,
-        )
-        .bind(pid)
-        .fetch_optional(&mut *tx)
-        .await?
-        .flatten();
-
-        if let Some(amt) = credits {
-            if amt > 0 {
-                sqlx::query(
-                    r#"INSERT INTO credit_transactions (id, aid, amount, transaction_type, description)
-                       VALUES ($1, $2, $3, 'grant', 'Welcome credits: first month of ' || (
-                         SELECT name FROM plan_tiers WHERE id = $4
-                       ))"#,
-                )
-                .bind(Uuid::new_v4())
-                .bind(account_id)
-                .bind(amt)
-                .bind(pid)
-                .execute(&mut *tx)
-                .await?;
-            }
-        }
+        // GRANT THE PLAN'S ALLOWANCE — the ONE rule, shared by every door that seats a plan
+        // (kanban t_b0774174). Before this, the grant read `features->>'credits_monthly'` and NO
+        // tier declared the key, so it was dead code: every workspace — free and Enterprise alike —
+        // sat at 0 credits and the Run gate refused every run. `grant_plan_welcome_credits` also
+        // falls back to one credit per workflow the plan includes when a tier declares no
+        // allowance, so a NEW operator-created tier cannot reproduce this defect, and it is gated
+        // on an EMPTY ledger so it can only ever fire once per workspace.
+        crate::handlers::credit_handler::grant_plan_welcome_credits(&mut tx, account_id, pid)
+            .await?;
     }
 
     // Seed the industry dashboard. `template_categories` is the source of truth for a real

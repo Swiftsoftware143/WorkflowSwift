@@ -127,6 +127,9 @@ async fn seat_top_plan(
     .bind(plan_id)
     .execute(&mut **tx)
     .await?;
+    // The plan is seated — fund it, or the workspace cannot run anything (kanban t_b0774174).
+    // Same ONE rule the signup uses; gated on an empty ledger so a re-sync never re-credits.
+    crate::handlers::credit_handler::grant_plan_welcome_credits(tx, account_id, plan_id).await?;
     tracing::info!(account = %account_id, plan = %slug, "portfolio sync: account seated on the top plan");
     Ok(Some(slug))
 }

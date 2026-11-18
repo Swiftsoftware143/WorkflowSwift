@@ -118,7 +118,7 @@ footer a{margin-right:18px}
       count(lim.instances, 'instance', 'instances'),
       count(lim.api_keys, 'API key', 'API keys'),
       count(lim.retention_days, 'day of history', 'days of history'),
-      count(lim.credits_monthly, 'workflow credit a month', 'workflow credits a month')
+      count(lim.credits_monthly, 'workflow credit included', 'workflow credits included')
     ].filter(function (t) { return t; });
     if (!rows.length) return 0;
     var old = ul.querySelectorAll('li[data-role="limit"]');

@@ -880,6 +880,12 @@ pub async fn admin_update_status(
                     .bind(plan_id)
                     .execute(&mut *tx)
                     .await?;
+                    // The customer's requested plan is seated — fund it, or the workspace it was
+                    // just moved onto still cannot run a single workflow (kanban t_b0774174).
+                    crate::handlers::credit_handler::grant_plan_welcome_credits(
+                        &mut tx, ticket_aid, plan_id,
+                    )
+                    .await?;
                     sqlx::query("UPDATE tickets SET plan_applied_at = NOW() WHERE id = $1")
                         .bind(id)
                         .execute(&mut *tx)

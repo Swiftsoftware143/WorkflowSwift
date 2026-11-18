@@ -327,7 +327,10 @@
       <li><strong>Credits</strong>: charged per execution, and the amount comes from the workflow's tier
         (<code>simple</code> = 2, <code>medium</code> = 3, <code>complex</code> = 5, <code>ai_enhanced</code> = 7 — the full table is in the
         <code>deduct</code> response). Running out is refused by the API, not just warned about in the UI.
-        Check <code>GET /credits/balance</code>.</li>
+        Check <code>GET /credits/balance</code>. Your plan's <strong>included credits are added to the
+        workspace when it is created</strong>, so a new workspace can run its workflows from the start; the
+        <strong>Credits</strong> screen shows the balance and is the one door for more (a credit-pack
+        request — nothing is charged in the app, and our team adds the credits by hand).</li>
       </ul>
       <p><strong>Downloading your run history.</strong> The <strong>Instances</strong> screen lists every run your
       workspace has had, and its <strong>Export CSV</strong> button downloads the whole record as a spreadsheet you
