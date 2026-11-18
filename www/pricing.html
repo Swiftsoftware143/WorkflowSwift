@@ -87,6 +87,13 @@ footer a{margin-right:18px}
   
 
 
+<div id="how-to-pay" hidden style="background:#fff;border:1px solid #e2e8f0;border-left:4px solid #2563eb;border-radius:12px;padding:18px 20px;margin:18px 0">
+  <h3 style="font-size:15px;font-weight:800;color:#0f172a;margin-bottom:6px">How to pay for a paid plan</h3>
+  <p style="font-size:14px;color:#334155;white-space:pre-wrap" id="how-to-pay-text"></p>
+</div>
+
+<p class="note">Start on Free. To move to a paid plan, sign in and open <strong>Plan &amp; Billing</strong> &mdash; send the upgrade request from there and the plan and its limits are switched for you. Need something bigger than a listed tier? Ask on the same screen and we will quote it.</p>
+
 <section class="navx-rel" aria-labelledby="navx-rel-h"><h2 id="navx-rel-h">Keep exploring WorkflowSwift</h2><ul><li><a href="/swift-market-intel-extension.html">Market Intel extension</a></li><li><a href="/guide.html">Guide</a></li><li><a href="/">Home</a></li><li><a href="/terms.html">Terms of Service</a></li></ul></section>
 <footer>
     <a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/refunds">Refunds</a><a href="/">Home</a>
@@ -153,6 +160,17 @@ footer a{margin-right:18px}
           ? 'Allowances read live from this install\u2019s own plan records just now \u2014 '
             + painted + ' plan' + (painted === 1 ? '' : 's') + ' confirmed, ' + rows + ' limits.'
           : 'Allowances could not be read just now \u2014 the figures above are this page\u2019s own.';
+      }
+      // HOW TO PAY (2026-11-18): the operator's own payment details, published here so a VISITOR —
+      // not only a signed-in buyer on the Plan & Billing screen — can see how this installation can
+      // actually take the money while no card provider is configured. Empty or absent leaves the
+      // block hidden, so the page is exactly what it was before.
+      var pay = (d && typeof d.payment_instructions === 'string') ? d.payment_instructions.trim() : '';
+      var payBox = document.getElementById('how-to-pay');
+      var payText = document.getElementById('how-to-pay-text');
+      if (pay && payBox && payText) {
+        payText.textContent = pay;
+        payBox.hidden = false;
       }
     })
     .catch(function () {
