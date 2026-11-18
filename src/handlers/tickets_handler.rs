@@ -69,6 +69,41 @@ pub struct UpdateInput {
     pub priority: Option<String>,
 }
 
+/// Is this one of the two statuses that take a ticket OUT of the operator's open queue?
+///
+/// Same vocabulary the queue's own count uses (`open_count` is
+/// `COUNT(*) FILTER (WHERE status NOT IN ('closed','resolved'))` in `list_all`), so the guard and
+/// the queue can never disagree about what "still waiting on us" means.
+fn closes_request(status: &str) -> bool {
+    matches!(status.trim().to_lowercase().as_str(), "resolved" | "closed")
+}
+
+/// A CUSTOMER MAY NOT CLOSE THEIR OWN REQUEST (kanban t_d23f1330, 2026-11-18).
+///
+/// The plan arm of `admin_update_status` is operator-gated, but the STATUS write on the customer's
+/// own door was not: measured live on the shipped binary, a customer `PUT
+/// /api/v1/tickets/<own open plan request> {"status":"resolved"}` answered 200, the row turned
+/// `resolved` with `plan_applied_at` NULL, and the workspace stayed on Free — the request left the
+/// operator queue as "handled" with nothing applied and nobody told. `create` carried the same hole
+/// one step earlier: a ticket filed with `"status":"resolved"` was born outside the queue.
+///
+/// The customer's own verb for cancelling is WITHDRAW (`delete` below, which the served console
+/// already calls, and which removes the ask outright), so the refusal names that instead of quietly
+/// taking the request off the operator's desk. Same guard, same sentence as IncentiveSwift d927ee24.
+/// Checked BEFORE anything is written: a refusal leaves no row behind.
+fn refuse_customer_close(claims: &Claims, status: Option<&str>) -> Result<(), AppError> {
+    if claims.perm_is_super_admin.unwrap_or(false) {
+        return Ok(());
+    }
+    if status.map(closes_request).unwrap_or(false) {
+        return Err(AppError::Forbidden(
+            "Only the team can mark a request resolved or closed. To cancel your request, withdraw it."
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
 // Gate rule 5d / class 14 (kanban t_15a04e9d): the statement must be a COMPLETE compile-time
 // literal, visible at the site. A `const` ident cannot be joined by `concat!`, but a `macro_rules!`
 // that expands to a literal can — so the select list stays written ONCE here and every statement is
@@ -221,6 +256,11 @@ pub async fn create(
     if b.subject.trim().is_empty() {
         return Err(AppError::Validation("subject is required".into()));
     }
+    // A ticket cannot be BORN outside the operator's queue (kanban t_d23f1330). The status is the
+    // caller's, so without this a customer filed a plan request with `"status":"resolved"` and it
+    // never appeared in the queue at all — `list_all`'s `open_count` only counts rows whose status
+    // is neither `resolved` nor `closed`. Refused here, before the INSERT (`closes_request`).
+    refuse_customer_close(&claims, b.status.as_deref())?;
     let id = Uuid::new_v4();
     let status = b.status.clone().unwrap_or_else(|| "open".to_string());
     let priority = b.priority.clone().unwrap_or_else(|| "medium".to_string());
@@ -590,6 +630,9 @@ pub async fn update(
         .fetch_optional(&state.db)
         .await?
         .ok_or_else(|| AppError::NotFound("Ticket not found".into()))?;
+    // THE WRITE THAT CLOSED THE REQUEST (kanban t_d23f1330): see `refuse_customer_close`. After the
+    // scoped read (so a stranger still gets the same 404) and BEFORE the UPDATE.
+    refuse_customer_close(&claims, b.status.as_deref())?;
     sqlx::query("UPDATE tickets SET subject=COALESCE($2,subject), description=COALESCE($3,description), status=COALESCE($4,status), priority=COALESCE($5,priority), updated_at=NOW() WHERE id=$1 AND aid=$6")
         .bind(id)
         .bind(b.subject.as_ref().unwrap_or(&cur.subject))
