@@ -1955,10 +1955,10 @@ const PSLOTS=[['stripe','Stripe'],['paypal','PayPal'],['square','Square'],['padd
     // With no provider row the till answers "request", so a plan REQUEST is the buying path — and
     // until this box existed the product never told the customer where to send the money. The
     // operator's own words, stored platform-wide (admin_settings key billing), read back by the
-    // customer Plan screen and by the plan-request receipt.
+    // customer Plan screen, the plan-request receipt, and (2026-11-18) the public pricing page.
     +'<div class="card mb-4" data-pay-instructions="1" style="border-left:4px solid #2563eb">'
     +'<h3 class="font-bold mb-1">How a customer pays you</h3>'
-    +'<p class="text-xs text-gray-500 mb-2">With no card provider connected, a plan request is the buying path: the customer presses &ldquo;Request &lt;plan&gt;&rdquo; and a request is filed for you. Write how you take payment &mdash; bank details, an invoice, any rail of your own &mdash; and the same words appear on the customer plan screen and in their receipt email. Leave it empty and every surface behaves exactly as it did before.</p>'
+    +'<p class="text-xs text-gray-500 mb-2">With no card provider connected, a plan request is the buying path: the customer presses &ldquo;Request &lt;plan&gt;&rdquo; and a request is filed for you. Write how you take payment &mdash; bank details, an invoice, any rail of your own &mdash; and the same words appear on the public pricing page (so a visitor sees them before signing up), on the customer plan screen, and in their receipt email. Leave it empty and every surface behaves exactly as it did before.</p>'
     +'<textarea id="pp_pay_text" class="input" rows="4" data-pay-field="1" placeholder="e.g. Pay by bank transfer to Acme Ltd, sort code 00-00-00, account 12345678, and put your workspace name as the reference. A person on our team switches your plan on as soon as the payment lands."></textarea>'
     +'<div class="flex items-center gap-3 mt-2"><button class="btn btn-primary btn-sm" id="pp_pay_save">Save</button><span class="text-xs text-gray-600" id="pp_pay_msg" data-pay-msg="1">Reading&hellip;</span></div></div>'
     +'<div id="ppdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
