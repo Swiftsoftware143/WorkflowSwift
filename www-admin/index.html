@@ -428,7 +428,7 @@ const tabs=[
   {id:'automation',label:'🤖 Automation',subs:['Automations','Agents','Workspaces']},
   {id:'crm',label:'👥 CRM',subs:['Leads']},
   {id:'tags',label:'🏷️ Tags & Labels',subs:['Tags','Tag Groups']},
-  {id:'integrations',label:'🔌 Integrations',subs:['Integration Targets','Destination Values','Provider Keys','API Keys','n8n Proxy','Bridge']},
+  {id:'integrations',label:'🔌 Integrations',subs:['Integration Targets','Destination Values','Provider Keys','API Keys','MCP','n8n Proxy','Bridge']},
   {id:'support',label:'🎫 Support',subs:['Tickets']},
   {id:'profile',label:'👤 Profile & Account',subs:['My Profile','Team','Plans & Credits','Email Branding','Invoices','Payments','Checkout Sessions']},
   {id:'comms',label:'📧 Communications',subs:['Webhooks']},
@@ -548,6 +548,11 @@ function content(){
     else if(s==='destination-values')renderDestinationValues(c);
     else if(s==='provider-keys')renderProviderKeys(c);
     else if(s==='api-keys')renderApiKeys(c);
+    // The fleet MCP server (hooks.swiftsoftware.net/mcp) already serves this app's data —
+    // twelve read-only entity tools, scoped by the workspace's own API key. Every other
+    // fleet console has a screen that names the endpoint and prints a ready config; this one
+    // had none, so the operator had no way to discover the capability existed at all.
+    else if(s==='mcp')renderMcp(c);
     else if(s==='n8n-proxy')renderN8N(c);
     else if(s==='bridge')renderBridge(c);
   }else if(t==='support'){
@@ -2945,6 +2950,75 @@ function renderList(c,key,label,ep){
     const el=c.querySelector('#ldata');
     if(!d||!d.items||!d.items.length){el.innerHTML='<p class="text-gray-400 text-sm">No items.</p>';return}
     el.innerHTML=`<table class="table"><tbody>`+d.items.map(i=>`<tr><td>${escHtml(i.id||'-')}</td><td class="text-xs text-gray-500">${escHtml(JSON.stringify(i).slice(0,80))}</td></tr>`).join('')+'</tbody></table>';
+  });
+}
+
+
+// --- MCP (cron 2026-11-19) ------------------------------------------------------------------
+// The fleet MCP server at hooks.swiftsoftware.net/mcp is live and already carries TWELVE
+// WorkflowSwift entity tools (workflowswift_clients, _workflows, _instances, _templates,
+// _dashboards, _industries, _widgets, _renditions, _instance_steps, _portfolio,
+// _credit_transactions, _account_plans), each exposing `<entity>_summary` and `<entity>_search`
+// and scoped to the workspace that owns the API key presented as a Bearer token. Nothing in this
+// console mentioned it, so the capability was invisible: an operator could not tell that Claude,
+// Cursor or Hermes could read this account's data. This screen is read-only — it names the
+// endpoint, shows the key that authorises it (prefix only; the secret is never printed here), and
+// hands over a paste-ready client config. Key creation/rotation stays on the API Keys screen so
+// there is exactly ONE writer of a key value.
+const MCP_ENDPOINT='https://hooks.swiftsoftware.net/mcp';
+const MCP_ENTITIES=[
+  ['workflowswift_clients','clients — name, email, phone, industry, active'],
+  ['workflowswift_workflows','workflows — name, category, status'],
+  ['workflowswift_instances','workflow instances — name, status'],
+  ['workflowswift_templates','workflow templates — name, category, public/private'],
+  ['workflowswift_dashboards','dashboards — name, owner'],
+  ['workflowswift_industries','industries — name'],
+  ['workflowswift_widgets','widgets — name, placement'],
+  ['workflowswift_renditions','renditions — name, status'],
+  ['workflowswift_instance_steps','instance steps — step name, status'],
+  ['workflowswift_portfolio','portfolio companies — name, domain'],
+  ['workflowswift_credit_transactions','credit ledger — amount, reason'],
+  ['workflowswift_account_plans','plan history — plan, status'],
+];
+function mcpCopy(text){
+  if(navigator.clipboard&&navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(function(){showMsg('Copied')},function(){showMsg('Copy blocked — select the text and copy it','error')});
+  }else showMsg('Copy blocked — select the text and copy it','error');
+}
+function renderMcp(c){
+  const cfg=JSON.stringify({mcpServers:{workflowswift:{type:'http',url:MCP_ENDPOINT,
+    headers:{Authorization:'Bearer YOUR_API_KEY'}}}},null,2);
+  c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-1">MCP — connect your AI tools</h2>'
+    +'<p class="text-sm text-gray-500 mb-5">Point any MCP client (Claude Code, Cursor, Hermes, or your own agent) at the endpoint below and it can read this workspace\'s WorkflowSwift data. The client authenticates with this workspace\'s API key, so it only ever sees this account. Read-only.</p>'
+    +'<div class="mb-5"><label class="block text-xs font-medium text-gray-500 mb-1">Endpoint</label>'
+    +'<div class="flex items-center gap-2"><code id="mcp_ep" class="text-xs break-all bg-slate-50 border rounded px-2 py-1 flex-1">'+escHtml(MCP_ENDPOINT)+'</code>'
+    +'<button class="btn btn-sm" id="mcp_ep_copy">Copy</button></div></div>'
+    +'<div class="mb-5"><label class="block text-xs font-medium text-gray-500 mb-1">Your key</label>'
+    +'<div id="mcp_key"><p class="text-gray-400 text-sm">Loading...</p></div></div>'
+    +'<div class="mb-5"><label class="block text-xs font-medium text-gray-500 mb-1">Client config — replace YOUR_API_KEY with the key above</label>'
+    +'<pre id="mcp_cfg" style="background:#0f172a;color:#e2e8f0;padding:12px;border-radius:8px;font-size:11px;overflow-x:auto;margin:0">'+escHtml(cfg)+'</pre>'
+    +'<button class="btn btn-sm mt-2" id="mcp_cfg_copy">Copy config</button></div>'
+    +'<h3 class="text-sm font-semibold mb-2">What it can read</h3>'
+    +'<p class="text-xs text-gray-500 mb-3">Each entity answers two tools: <code>&lt;entity&gt;_summary</code> (a count and a rollup) and <code>&lt;entity&gt;_search</code> (a text search across the record\'s own fields).</p>'
+    +'<table class="table"><thead><tr><th>Entity</th><th>Fields</th></tr></thead><tbody>'
+    +MCP_ENTITIES.map(function(p){return '<tr><td><code class="text-xs">'+escHtml(p[0])+'</code></td><td class="text-xs text-gray-500">'+escHtml(p[1])+'</td></tr>'}).join('')
+    +'</tbody></table></div>';
+
+  c.querySelector('#mcp_ep_copy').onclick=function(){mcpCopy(MCP_ENDPOINT)};
+  c.querySelector('#mcp_cfg_copy').onclick=function(){mcpCopy(cfg)};
+
+  const box=c.querySelector('#mcp_key');
+  api('/api-keys').then(function(d){
+    if(d===null){box.innerHTML='<p class="text-red-400 text-sm">'+escHtml(LAST_ERR||'Could not read this account\'s API keys')+'</p>';return}
+    const items=unwrapList(d).filter(function(k){return k.is_active});
+    if(!items.length){
+      box.innerHTML='<p class="text-sm text-gray-500">No active API key on this account yet. Create one under <b>Integrations &rarr; API Keys</b>, then come back to this screen — the MCP server accepts that key as a Bearer token.</p>';
+      return;
+    }
+    box.innerHTML='<p class="text-sm text-gray-600 mb-2">Use one of these keys as the Bearer token. Only the prefix is shown; open <b>Integrations &rarr; API Keys</b> and press Show to read the full value (it asks for your password).</p>'
+      +'<table class="table"><thead><tr><th>Name</th><th>Prefix</th></tr></thead><tbody>'
+      +items.map(function(k){return '<tr><td><strong>'+escHtml(k.name||'-')+'</strong></td><td class="text-xs text-gray-500">'+escHtml(k.prefix||'-')+'&#8230;</td></tr>'}).join('')
+      +'</tbody></table>';
   });
 }
 
