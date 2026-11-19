@@ -183,6 +183,7 @@
       <a href="#tag-free-account-admin-configurable" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Tag → free account (admin-configurable)</a>
       <a href="#profile-picture" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Your profile picture</a>
       <a href="#download-your-data" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📦</span> Taking your data with you</a>
+      <a href="#customer-feedback" class="nav-item" onclick="closeMobile()"><span class="nav-icon">💬</span> Customer feedback</a>
       <a href="#operational-notes" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Operational notes</a>
     </nav>
     <div class="sidebar-footer">&copy; 2026 WorkflowSwift &mdash; Admin Console</div>
@@ -1310,6 +1311,24 @@ when it is set.</p>
       <p>Route: <code>GET /api/v1/account/export</code>, served as a download named
       <code>workflowswift-account-&lt;date&gt;.json</code>. The same control exists in the other apps on
       this platform so a business moving between them gets the same answer.</p>
+      <h2 id="customer-feedback">Customer feedback, in one place</h2>
+      <p><strong>Admin &rarr; Feedback</strong> lists what customers told us through the
+      <strong>&#128172; Feedback</strong> button in their own console: an idea, a bug or a complaint.
+      Every row carries the message itself, the account and the person who sent it, the app and the
+      screen they were looking at when they pressed it, and the time it arrived &mdash; so a report
+      like &ldquo;the export button did nothing&rdquo; reaches you with the screen it happened on
+      already attached.</p>
+      <p>A report is never anonymous: the account and the person come from the sender's own session,
+      not from anything typed into the box. The panel is <strong>read only</strong> &mdash; rows are
+      neither edited nor deleted there, and an answer goes back to the person by email at the address
+      on the row.</p>
+      <p>Feedback is <strong>not</strong> a support ticket. A customer who needs a written answer
+      files a ticket from <strong>Support &rarr; Tickets</strong>, which is where the reply thread and
+      the status live; feedback is the raw note that tells you what to fix.</p>
+      <p>Routes: <code>POST /api/v1/feedback</code> records a note from the sender's session and
+      <code>GET /api/v1/feedback</code> reads the queue, which is platform-operator only. The same
+      panel exists in the other consoles on this platform, so a note about any of the apps is read
+      the same way here.</p>
       <h2 id="operational-notes">Operational notes</h2>
       <ul>
       <li>The container runs with <code>network_mode: host</code> and publishes nothing — the API binds
