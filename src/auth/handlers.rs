@@ -1351,7 +1351,8 @@ pub async fn forgot_password(
 
         sqlx::query("INSERT INTO password_resets (user_id, token, expires_at) VALUES ($1, $2, $3)")
             .bind(user.id)
-            .bind(&token)
+            // DIGEST at rest (2026-11-19) — the mailed link below keeps the raw value.
+            .bind(crate::security::reset_token::hash(&token))
             .bind(expires_at)
             .execute(&state.db)
             .await?;
@@ -1391,7 +1392,9 @@ pub async fn reset_password(
     let reset = sqlx::query_as::<_, (Uuid, Uuid, String, chrono::DateTime<chrono::Utc>, bool, chrono::DateTime<chrono::Utc>)>(
         "SELECT id, user_id, token, expires_at, used, created_at FROM password_resets WHERE token = $1 AND used = false AND expires_at > NOW()",
     )
-    .bind(&req.token)
+    // The column holds the digest (2026-11-19): hash what the caller presents so the mailed raw
+    // token still matches and a stolen DB row never can.
+    .bind(crate::security::reset_token::hash(&req.token))
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| AppError::BadRequest("Invalid or expired reset token".to_string()))?;
