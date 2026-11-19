@@ -2966,19 +2966,10 @@ function renderList(c,key,label,ep){
 // hands over a paste-ready client config. Key creation/rotation stays on the API Keys screen so
 // there is exactly ONE writer of a key value.
 const MCP_ENDPOINT='https://hooks.swiftsoftware.net/mcp';
-const MCP_ENTITIES=[
-  ['workflowswift_clients','clients — name, email, phone, industry, active'],
-  ['workflowswift_workflows','workflows — name, category, status'],
-  ['workflowswift_instances','workflow instances — name, status'],
-  ['workflowswift_templates','workflow templates — name, category, public/private'],
-  ['workflowswift_dashboards','dashboards — name, owner'],
-  ['workflowswift_industries','industries — name'],
-  ['workflowswift_widgets','widgets — name, placement'],
-  ['workflowswift_renditions','renditions — name, status'],
-  ['workflowswift_instance_steps','instance steps — step name, status'],
-  ['workflowswift_portfolio','portfolio companies — name, domain'],
-  ['workflowswift_credit_transactions','credit ledger — amount, reason'],
-  ['workflowswift_account_plans','plan history — plan, status'],
+const MCP_TOOLS=[
+  ['workflowswift_summary','How many leads this workspace holds. Takes no arguments.'],
+  ['workflowswift_search','Text search across this workspace\'s leads — name, email and company. Optional q (empty returns the newest rows) and limit (1-200, default 25), newest first.'],
+  ['workflowswift_list_tenants','ADMIN ONLY: every workspace in WorkflowSwift with its lead count. A workspace key is refused this view; the two tools above show only the caller\'s own data.'],
 ];
 function mcpCopy(text){
   if(navigator.clipboard&&navigator.clipboard.writeText){
@@ -2989,7 +2980,7 @@ function renderMcp(c){
   const cfg=JSON.stringify({mcpServers:{workflowswift:{type:'http',url:MCP_ENDPOINT,
     headers:{Authorization:'Bearer YOUR_API_KEY'}}}},null,2);
   c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-1">MCP — connect your AI tools</h2>'
-    +'<p class="text-sm text-gray-500 mb-5">Point any MCP client (Claude Code, Cursor, Hermes, or your own agent) at the endpoint below and it can read this workspace\'s WorkflowSwift data. The client authenticates with this workspace\'s API key, so it only ever sees this account. Read-only.</p>'
+    +'<p class="text-sm text-gray-500 mb-5">Point any MCP client (Claude Code, Cursor, Hermes, or your own agent) at the endpoint below and it can read this workspace\'s WorkflowSwift leads. The client authenticates with this workspace\'s API key, so it only ever sees this account. Read-only.</p>'
     +'<div class="mb-5"><label class="block text-xs font-medium text-gray-500 mb-1">Endpoint</label>'
     +'<div class="flex items-center gap-2"><code id="mcp_ep" class="text-xs break-all bg-slate-50 border rounded px-2 py-1 flex-1">'+escHtml(MCP_ENDPOINT)+'</code>'
     +'<button class="btn btn-sm" id="mcp_ep_copy">Copy</button></div></div>'
@@ -2998,10 +2989,10 @@ function renderMcp(c){
     +'<div class="mb-5"><label class="block text-xs font-medium text-gray-500 mb-1">Client config — replace YOUR_API_KEY with the key above</label>'
     +'<pre id="mcp_cfg" style="background:#0f172a;color:#e2e8f0;padding:12px;border-radius:8px;font-size:11px;overflow-x:auto;margin:0">'+escHtml(cfg)+'</pre>'
     +'<button class="btn btn-sm mt-2" id="mcp_cfg_copy">Copy config</button></div>'
-    +'<h3 class="text-sm font-semibold mb-2">What it can read</h3>'
-    +'<p class="text-xs text-gray-500 mb-3">Each entity answers two tools: <code>&lt;entity&gt;_summary</code> (a count and a rollup) and <code>&lt;entity&gt;_search</code> (a text search across the record\'s own fields).</p>'
-    +'<table class="table"><thead><tr><th>Entity</th><th>Fields</th></tr></thead><tbody>'
-    +MCP_ENTITIES.map(function(p){return '<tr><td><code class="text-xs">'+escHtml(p[0])+'</code></td><td class="text-xs text-gray-500">'+escHtml(p[1])+'</td></tr>'}).join('')
+    +'<h3 class="text-sm font-semibold mb-2">What it can do</h3>'
+    +'<p class="text-xs text-gray-500 mb-3">Three read-only tools, scoped to the key\'s own workspace. The list below is what the server answers for this app today.</p>'
+    +'<table class="table"><thead><tr><th>Tool</th><th>What it answers</th></tr></thead><tbody>'
+    +MCP_TOOLS.map(function(p){return '<tr><td><code class="text-xs">'+escHtml(p[0])+'</code></td><td class="text-xs text-gray-500">'+escHtml(p[1])+'</td></tr>'}).join('')
     +'</tbody></table></div>';
 
   c.querySelector('#mcp_ep_copy').onclick=function(){mcpCopy(MCP_ENDPOINT)};
