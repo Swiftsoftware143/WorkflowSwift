@@ -1069,10 +1069,20 @@ pub async fn create_checkout_session(
     let provider = match get_active_provider(&state.db, &provider_type).await? {
         Some(p) if !p["api_key"].as_str().unwrap_or("").trim().is_empty() => p,
         other => {
-            let reason = if other.is_some() {
-                "payment_provider_key_missing"
+            // The TOKEN goes in the log (the machine's name for the arm); the SENTENCE goes into
+            // the operator's ticket (2026-11-19). One string used to do both jobs, so the
+            // provider-refusal arm below — where a provider EXISTS and refuses — had to borrow
+            // "no payment provider is configured" or tell the operator nothing at all.
+            let (reason, filed_because) = if other.is_some() {
+                (
+                    "payment_provider_key_missing",
+                    "the saved payment provider key is missing or unreadable",
+                )
             } else {
-                "payment_provider_not_configured"
+                (
+                    "payment_provider_not_configured",
+                    "no payment provider is configured",
+                )
             };
             // ── A TIER CAN BE SOLD WITHOUT AN API KEY (2026-10-24) ──────────────────────────
             // `plan_tiers.checkout_url` is the hosted payment page the OPERATOR pastes into the
@@ -1127,7 +1137,7 @@ pub async fn create_checkout_session(
                     user_id,
                     &plan_slug,
                     quoted(amount, &billing_cycle),
-                    reason,
+                    filed_because,
                     None,
                 )
                 .await
@@ -1175,32 +1185,77 @@ pub async fn create_checkout_session(
 
     let api_key = provider["api_key"].as_str().unwrap_or("").to_string();
 
-    // Create checkout session with the provider
+    // Create checkout session with the provider.
+    //
+    // A REFUSAL HERE IS THE BUYER'S ARM, NOT AN AppError (2026-11-19). The bare `?` these calls
+    // used to carry turned a rejected key or a provider outage into the provider's own
+    // operator-facing sentence in the buyer's response — and NOTHING in the operator's queue, no
+    // receipt, no record. Both arms now hand the refusal to `refuse_provider_session`, which
+    // records the attempt, files the ask, mails the fresh-only receipt and answers a buyer-first
+    // 424; the provider's raw text stays in the server log where an operator can repair it.
     let provider_session = match provider_type.as_str() {
-        "stripe" => {
-            create_stripe_session(
-                &api_key,
-                amount,
-                currency,
-                purchasable_type,
-                &success_url,
-                cancel_url,
-                &metadata,
-            )
-            .await?
-        }
-        "paypal" => {
-            create_paypal_session(
-                &api_key,
-                amount,
-                currency,
-                purchasable_type,
-                &success_url,
-                cancel_url,
-                &metadata,
-            )
-            .await?
-        }
+        "stripe" => match create_stripe_session(
+            &api_key,
+            amount,
+            currency,
+            purchasable_type,
+            &success_url,
+            cancel_url,
+            &metadata,
+        )
+        .await
+        {
+            Ok(session) => session,
+            Err(e) => {
+                return Ok(refuse_provider_session(
+                    &state,
+                    RefusedSession {
+                        account_id,
+                        user_id,
+                        provider_type: &provider_type,
+                        purchasable_type,
+                        purchasable_id,
+                        plan_slug: &plan_slug,
+                        amount,
+                        currency,
+                        billing_cycle: &billing_cycle,
+                        raw: e.to_string(),
+                    },
+                )
+                .await)
+            }
+        },
+        "paypal" => match create_paypal_session(
+            &api_key,
+            amount,
+            currency,
+            purchasable_type,
+            &success_url,
+            cancel_url,
+            &metadata,
+        )
+        .await
+        {
+            Ok(session) => session,
+            Err(e) => {
+                return Ok(refuse_provider_session(
+                    &state,
+                    RefusedSession {
+                        account_id,
+                        user_id,
+                        provider_type: &provider_type,
+                        purchasable_type,
+                        purchasable_id,
+                        plan_slug: &plan_slug,
+                        amount,
+                        currency,
+                        billing_cycle: &billing_cycle,
+                        raw: e.to_string(),
+                    },
+                )
+                .await)
+            }
+        },
         _ => {
             return Err(AppError::BadRequest(format!(
                 "Checkout not supported for provider type: {}",
@@ -1390,7 +1445,11 @@ async fn record_refused_upgrade(
     // The amount the buyer was quoted AND the unit it is per, in ONE value: the ticket text cannot
     // quote a yearly price as "/month" if the two can only travel together (2026-11-10).
     price: QuotedPrice,
-    reason: &str,
+    // A HUMAN SENTENCE saying why the ask was filed — "no payment provider is configured",
+    // "the payment provider refused the checkout session". It is spoken verbatim in the ticket
+    // the operator reads, so the two arms cannot tell the operator the same reason when they
+    // failed for different ones (2026-11-19).
+    filed_because: &str,
     // `Some(the tier's own payment page)` when the buyer was HANDED OVER to it rather than refused
     // (2026-10-24): the ticket then has to say so, because the operator cannot wait for a webhook a
     // hosted page will never send — they confirm the payment themselves and resolve the request.
@@ -1415,9 +1474,8 @@ async fn record_refused_upgrade(
         ),
         None => format!(
             "This workspace pressed Upgrade on Plan & Billing and asked for the {label} plan \
-             (${amount:.2}/{unit}). Self-serve checkout is not open on this installation yet \
-             ({reason}), so the team makes the switch by hand. Nothing was charged. Filed by \
-             {user_id}."
+             (${amount:.2}/{unit}); {filed_because}, so nothing was charged and nothing can be \
+             billed. The team makes the switch by hand. Filed by {user_id}."
         ),
     };
     // `RETURNING id` (2026-11-05) makes "did THIS call write the row?" answerable: the WHERE NOT
@@ -1613,6 +1671,146 @@ async fn hand_off_to_payment_link(
             "currency": currency,
             "purchasable_type": "plan",
             "purchasable_id": plan_id.to_string(),
+        })),
+    )
+}
+
+/// One refused checkout attempt, in ONE value (2026-11-19).
+///
+/// Nine facts travel together and clippy refuses a nine-argument function, which is the right call
+/// here: only the refusal arm needs them, and naming the bundle keeps the call site readable.
+struct RefusedSession<'a> {
+    account_id: Uuid,
+    user_id: Uuid,
+    provider_type: &'a str,
+    purchasable_type: &'a str,
+    purchasable_id: Option<Uuid>,
+    plan_slug: &'a str,
+    amount: f64,
+    currency: &'a str,
+    billing_cycle: &'a str,
+    /// The provider's own sentence — LOGGED, never returned to the buyer.
+    raw: String,
+}
+
+/// A CONFIGURED PROVIDER THAT REFUSES THE SESSION MUST NOT LOSE THE SALE (2026-11-19).
+///
+/// MEASURED on the fleet and ported here from FunnelSwift d9f10d8: with a `payment_providers` row
+/// whose key the provider rejects, `create_checkout_session` propagated the
+/// `AppError::UpstreamRefused` from `create_stripe_session(...).await?`. The buyer read the
+/// provider's own operator-facing sentence ("Stripe returned 401: Invalid API Key provided:
+/// sk_test_…"), while `tickets` gained NOTHING, no receipt was mailed and the operator was never
+/// told — the sale evaporated. The no-provider arm ~100 lines above has filed the ask, mailed the
+/// fresh-only receipt and alerted the operator since 2026-10-23; this is the same failure seen from
+/// the buyer's side, and it now behaves the same way. The provider's raw text stays in the LOG (it
+/// is what an operator needs to repair a key) and never in the response body.
+async fn refuse_provider_session(
+    state: &AppState,
+    refused: RefusedSession<'_>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let RefusedSession {
+        account_id,
+        user_id,
+        provider_type,
+        purchasable_type,
+        purchasable_id,
+        plan_slug,
+        amount,
+        currency,
+        billing_cycle,
+        raw,
+    } = refused;
+    tracing::error!(
+        "checkout/create PROVIDER REFUSED: {raw} for account {account_id} asking for {plan_slug} \
+         through {provider_type} — no charge can occur"
+    );
+
+    // The ATTEMPT is recorded, not just the failure: the operator's history must show that this
+    // workspace tried to buy and where it stopped. `provider_error` is its own status — `failed`
+    // means a payment went wrong AFTER the provider accepted the session, and `pending` promises a
+    // webhook that a session the provider never created can never send (migration 119 widened the
+    // status CHECK). Best effort: a bookkeeping failure must not turn a refused sale into a 500.
+    let recorded = sqlx::query(
+        r#"INSERT INTO checkout_sessions
+           (id, account_id, user_id, provider_type, provider_session_id,
+            purchasable_type, purchasable_id, amount, currency, status, metadata)
+           VALUES ($1, $2, $3, $4, NULL, $5, $6, $7, $8, 'provider_error', $9)"#,
+    )
+    .bind(Uuid::new_v4())
+    .bind(account_id)
+    .bind(user_id)
+    .bind(provider_type)
+    .bind(purchasable_type)
+    .bind(purchasable_id)
+    .bind(amount)
+    .bind(currency)
+    .bind(json!({
+        "kind": if plan_slug.is_empty() { "purchase" } else { "plan" },
+        "reason": "payment_provider_refused",
+        "provider_type": provider_type,
+        "account_id": account_id.to_string(),
+        "plan_id": purchasable_id.map(|id| id.to_string()),
+        "plan_slug": plan_slug,
+        "billing_cycle": billing_cycle,
+    }))
+    .execute(&state.db)
+    .await;
+    if let Err(e) = recorded {
+        tracing::error!(
+            "checkout/create: could not record the refused session for {account_id}: {e:?}"
+        );
+    }
+
+    // THE SAME ASK the no-provider arm files, with the reason that is actually true: when the
+    // operator repairs the provider and confirms the payment, resolving this ticket is what seats
+    // the workspace. Fresh-only receipt, deduped on (workspace, plan, open) like every other door.
+    let (request_recorded, receipt_emailed) = if plan_slug.is_empty() {
+        (false, false)
+    } else {
+        record_refused_upgrade(
+            state,
+            account_id,
+            user_id,
+            plan_slug,
+            quoted(amount, billing_cycle),
+            "the payment provider refused the checkout session",
+            None,
+        )
+        .await
+    };
+
+    // BUYER-FIRST: nothing was charged, and whether the ask was taken. The provider's own error
+    // text is in the server log, where the operator reads it — never in this body.
+    let message = if request_recorded {
+        format!(
+            "No charge was made — the payment provider could not start a checkout, so you cannot \
+             be billed. Your request has been passed to the team that runs this installation, who \
+             can switch this workspace onto the plan you picked.{}",
+            if receipt_emailed {
+                " A copy of your request has been emailed to you."
+            } else {
+                ""
+            }
+        )
+    } else {
+        "No charge was made — the payment provider could not start a checkout, so you cannot be \
+         billed. Press Upgrade again in a moment; if it keeps failing, contact support and name \
+         the plan you wanted."
+            .to_string()
+    };
+
+    // 424 FAILED DEPENDENCY, never a 5xx: a Cloudflare-fronted origin 502/504 body is replaced by
+    // the edge's own page, which would swallow the sentence above (the same reason the
+    // no-provider arm above answers 424).
+    (
+        StatusCode::FAILED_DEPENDENCY,
+        Json(json!({
+            "error": "checkout_session_failed",
+            "message": message,
+            "configured": true,
+            "provider_type": provider_type,
+            "request_recorded": request_recorded,
+            "receipt_emailed": receipt_emailed
         })),
     )
 }

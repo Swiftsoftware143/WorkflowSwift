@@ -1669,6 +1669,10 @@ const PlanView = () => {
 const PAY_STATE = { completed: 'Paid', paid: 'Paid', succeeded: 'Paid',
   pending: 'Waiting for payment', payment_link: 'Payment page opened',
   provider_missing: 'Could not start — payments are not switched on yet',
+  // A CONFIGURED provider that refused the session (2026-11-19). The row exists so the buyer can
+  // see their attempt was taken; the operator has already been told through the same request. The
+  // fallback would print the API token ("provider error") at a customer.
+  provider_error: 'Could not start — the payment provider refused the request',
   expired: 'Payment link expired', failed: 'Did not go through',
   refunded: 'Refunded', cancelled: 'Cancelled', canceled: 'Cancelled' };
 const payState = (r) => {
