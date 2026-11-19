@@ -55,11 +55,15 @@ pub(crate) async fn get_provider_base_url(
         }
     }
 
-    // Hardcoded defaults for native Swift products
+    // Hardcoded defaults for native Swift products. Every sibling runs on THIS box and listens on
+    // its own loopback port (nginx fronts the public hostnames), so these never depend on public
+    // DNS and never name a port another service happens to hold. Each base already carries the
+    // sibling's /api/v1 prefix, so the paths in `fetch_live_destination_values` are the real
+    // suffixes of that app's router.
     match provider {
         "coreswift" => Some("http://localhost:8084".to_string()),
-        "funnelswift" => Some("https://api.funnelswift.app/v1".to_string()),
-        "incentiveswift" => Some("http://localhost:8090".to_string()),
+        "funnelswift" => Some("http://127.0.0.1:8080/api/v1".to_string()),
+        "incentiveswift" => Some("http://127.0.0.1:8083/api/v1".to_string()),
         _ => None,
     }
 }
@@ -222,11 +226,6 @@ pub async fn get_destination_values(
         ("incentiveswift", "campaign") => {
             vec![json!({"id": "default-campaign", "label": "Default Campaign"})]
         }
-        ("incentiveswift", "milestone_level") => vec![
-            json!({"id": "bronze", "label": "Bronze"}),
-            json!({"id": "silver", "label": "Silver"}),
-            json!({"id": "gold", "label": "Gold"}),
-        ],
         _ => vec![json!({"id": "default", "label": "Default"})],
     };
 
@@ -256,10 +255,13 @@ async fn fetch_live_destination_values(
         ("coreswift", "tags") => format!("{}/api/tags", base_url),
         ("coreswift", "pipeline_stage") => format!("{}/api/pipelines", base_url),
         ("coreswift", "category") => format!("{}/api/contacts/categories", base_url),
-        ("funnelswift", "landing_page") => format!("{}/landing_pages", base_url),
+        // FunnelSwift serves its pages at /api/v1/funnels, never /landing_pages (404 on the app).
+        ("funnelswift", "landing_page") => format!("{}/funnels", base_url),
         ("funnelswift", "tags") => format!("{}/tags", base_url),
-        ("incentiveswift", "campaign") => format!("{}/api/campaigns", base_url),
-        ("incentiveswift", "milestone_level") => format!("{}/api/milestones", base_url),
+        // IncentiveSwift serves /api/v1/campaigns (there is no un-versioned /api/campaigns), and
+        // milestones live UNDER a campaign (`/campaigns/:slug/milestones`), so there is no
+        // campaign-independent milestone list to fetch — that destination type is retired.
+        ("incentiveswift", "campaign") => format!("{}/campaigns", base_url),
         _ => return None,
     };
 
@@ -318,14 +320,13 @@ fn parse_provider_response(
         }
         ("funnelswift", "landing_page") => extract_array(body, "landing_pages", "id", "name")
             .unwrap_or_else(|| extract_array(body, "data", "id", "name").unwrap_or_default()),
-        ("funnelswift", "tags")
-        | ("incentiveswift", "campaign")
-        | ("incentiveswift", "milestone_level") => extract_array(body, "data", "id", "name")
-            .unwrap_or_else(|| {
-                extract_array(body, "campaigns", "id", "name").unwrap_or_else(|| {
-                    extract_array(body, "milestones", "id", "name").unwrap_or_default()
-                })
-            }),
+        // FunnelSwift answers a BARE ARRAY for /funnels and /tags, IncentiveSwift wraps its list
+        // as { "campaigns": [...] } — `extract_array` handles both shapes.
+        ("funnelswift", "tags") | ("incentiveswift", "campaign") => {
+            extract_array(body, "data", "id", "name").unwrap_or_else(|| {
+                extract_array(body, "campaigns", "id", "name").unwrap_or_default()
+            })
+        }
         _ => Vec::new(),
     }
 }
@@ -337,7 +338,13 @@ fn extract_array(
     id_field: &str,
     label_field: &str,
 ) -> Option<Vec<serde_json::Value>> {
-    let arr = body.get(array_key)?.as_array()?;
+    let arr = match body.as_array() {
+        // A bare JSON array IS the list. FunnelSwift serialises `Vec<_>` straight into the body
+        // (`list_funnels -> Ok(Json(json!(funnels)))`, `list_tags -> Json<Vec<Tag>>`), so demanding
+        // a wrapper key here made every live FunnelSwift value list resolve to zero destinations.
+        Some(arr) => arr,
+        None => body.get(array_key)?.as_array()?,
+    };
     if arr.is_empty() {
         return None;
     }
@@ -868,4 +875,43 @@ pub async fn backfill_missing_keys(db: &sqlx::PgPool) -> Result<usize, AppError>
 
     tx.commit().await?;
     Ok(minted)
+}
+
+#[cfg(test)]
+mod destination_shape_tests {
+    use super::*;
+
+    /// FunnelSwift's `GET /api/v1/funnels` serialises the Vec straight into the body
+    /// (`Ok(Json(json!(funnels)))`) — a bare array, no wrapper key. Before the fallback in
+    /// `extract_array`, a reachable response still produced zero destinations.
+    #[test]
+    fn funnelswift_bare_array_is_the_landing_page_list() {
+        let body = json!([
+            {"id": "f1", "name": "Demo page", "slug": "demo"},
+            {"id": "f2", "name": "Second page", "slug": "two"},
+        ]);
+        let values = parse_provider_response("funnelswift", "landing_page", &body);
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0]["id"], "f1");
+        assert_eq!(values[0]["label"], "Demo page");
+    }
+
+    /// `GET /api/v1/tags` answers `Json<Vec<Tag>>` — also a bare array.
+    #[test]
+    fn funnelswift_bare_array_is_the_tag_list() {
+        let body = json!([{"id": "t1", "name": "vip", "tenant_id": "x", "is_system": false}]);
+        let values = parse_provider_response("funnelswift", "tags", &body);
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0]["label"], "vip");
+    }
+
+    /// IncentiveSwift wraps its list as `{"campaigns": [...]}`.
+    #[test]
+    fn incentiveswift_campaigns_wrapper_is_read() {
+        let body = json!({"campaigns": [{"id": "c1", "name": "Spin to Win", "slug": "spin"}]});
+        let values = parse_provider_response("incentiveswift", "campaign", &body);
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0]["id"], "c1");
+        assert_eq!(values[0]["label"], "Spin to Win");
+    }
 }
