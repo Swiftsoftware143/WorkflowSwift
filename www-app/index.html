@@ -1848,7 +1848,7 @@ const requestPlan = async () => {
   const term = (p._term === 'yearly') ? 'yearly' : 'monthly';
   const chosen = planTerms(p).find(t => t.term === term) || planTerms(p)[0] || { amount: Number(p.price_monthly) || 0, term: 'monthly' };
   try {
-    await API.post('/tickets', {
+    const res = await API.post('/tickets', {
       subject: 'Upgrade request: ' + name + ' plan (' + term + ')',
       description: 'This workspace asked to move to the ' + name + ' plan ($' + fmtAmt(chosen.amount)
         + '/' + (term === 'yearly' ? 'year' : 'month') + ') from Plan & Billing. Self-serve checkout is not open yet, so the switch has to be'
@@ -1873,7 +1873,8 @@ const requestPlan = async () => {
     // the press produced: it clears the refusal, and it carries the "nothing was charged" fact.
     S.checkoutMsg = null;
     S.requestPlanMsg = 'Request sent \u2014 our team will switch this workspace to ' + name
-      + ' and confirm here. Nothing was charged.';
+      + ' and confirm here. Nothing was charged.'
+      + ((res && res.acknowledged === true) ? ' We have emailed you a copy of this request.' : '');
     // The card below lists it on the same screen, so the buyer can see the ask exist.
     S.planReqsTried = false;
   } catch (e) {
@@ -1967,8 +1968,10 @@ const TicketModal = () => {
     if (!subject) return toast('A subject is required', 'err');
     S.loading=true; renderApp();
     try {
-      await API.post('/tickets', { subject, description: String(f.body || ''), priority: f.priority || 'medium', source: 'console' });
-      toast('Ticket opened — our team can see it now');
+      const res = await API.post('/tickets', { subject, description: String(f.body || ''), priority: f.priority || 'medium', source: 'console' });
+      toast(res && res.acknowledged === true
+        ? 'Request sent - a receipt is on its way to your email address.'
+        : 'Request sent - it is with our team. You can follow it on your dashboard.');
       S.tickets = null; closeModal();
     } catch(e){ toast(e.message, 'err'); }
     S.loading=false; renderApp();
