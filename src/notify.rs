@@ -445,10 +445,47 @@ pub async fn deliver(
 
     let mut results: Vec<Value> = Vec::new();
     let mut failures = 0usize;
+    let mut suppressed = 0usize;
     let mut first_error = String::new();
     for r in &recipients {
         let addr = r.address(channel);
         let sent = if channel == "email" {
+            // AN OPT-OUT IS A REFUSAL, NOT A DELIVERY (2026-11-20). `email::send_email` answers
+            // `Ok` for a recipient who asked not to be mailed — the gate keeps the message off the
+            // wire, which is not a failure the graph should retry — but recording that as `sent`
+            // would tell the operator and the run log that a message was delivered when it was
+            // deliberately stopped (the same class as the suppressed receipt that read as sent).
+            if let crate::compliance::Verdict::Refuse(reason) = crate::compliance::gate(
+                &state.db,
+                &addr,
+                crate::compliance::class_for("workflow_notify"),
+            )
+            .await
+            {
+                suppressed += 1;
+                record_attempt(
+                    &state.db,
+                    Attempt {
+                        aid,
+                        workflow_id,
+                        step_index,
+                        channel,
+                        recipient: &addr,
+                        status: "suppressed",
+                        detail: &reason,
+                    },
+                )
+                .await;
+                results.push(json!({
+                    "user_id": r.user_id.to_string(),
+                    "name": r.name,
+                    "to": addr,
+                    "billing_contact": r.billing_contact,
+                    "status": "suppressed",
+                    "detail": reason,
+                }));
+                continue;
+            }
             let vars = json!({
                 "name": r.name,
                 "email": r.email,
@@ -499,15 +536,34 @@ pub async fn deliver(
         }));
     }
 
-    let status = if failures == 0 { "sent" } else { "failed" };
-    let detail = if failures == 0 {
+    let status = if failures > 0 {
+        "failed"
+    } else if suppressed > 0 && suppressed == results.len() {
+        // Nobody was mailed: every recipient of this step has asked not to be. Calling that `sent`
+        // is the misreport this arm exists to prevent, and calling it `refused` (a 4xx) would fail
+        // an automation for doing the right thing — so it gets its own word.
+        "suppressed"
+    } else {
+        "sent"
+    };
+    let detail = if failures > 0 {
         format!(
-            "{channel} sent to {} of the account's own people",
+            "{failures} of {} {channel} sends failed: {first_error}",
             results.len()
+        )
+    } else if status == "suppressed" {
+        format!(
+            "{suppressed} of {} recipients have asked not to be mailed — nothing was sent",
+            results.len()
+        )
+    } else if suppressed > 0 {
+        format!(
+            "{channel} sent to {} of the account's own people; {suppressed} have asked not to be mailed",
+            results.len() - suppressed
         )
     } else {
         format!(
-            "{failures} of {} {channel} sends failed: {first_error}",
+            "{channel} sent to {} of the account's own people",
             results.len()
         )
     };
@@ -524,6 +580,9 @@ pub async fn deliver(
 pub fn outcome_error(outcome: &NotifyOutcome) -> Option<AppError> {
     match outcome.status.as_str() {
         "sent" => None,
+        // Nothing was attempted because the recipient asked not to be mailed. That is not an error
+        // the graph should retry, and it is not a delivery either — the run log carries it.
+        "suppressed" => None,
         "throttled" => Some(AppError::TooManyRequests(outcome.detail.clone())),
         "refused" => Some(AppError::BadRequest(outcome.detail.clone())),
         _ => Some(AppError::Upstream(outcome.detail.clone())),
