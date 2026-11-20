@@ -914,55 +914,94 @@ pub async fn admin_update_status(
     let mut applied_plan_name: Option<String> = None;
     if changed && matches!(status.as_str(), "resolved" | "closed") && !already_applied {
         if let Some(slug) = requested_plan.as_deref() {
-            let plan: Option<(Uuid, Option<String>)> = sqlx::query_as(
-                "SELECT id, name FROM plan_tiers WHERE slug = $1 AND is_active = true",
+            // The requested tier's PRICE travels with it (2026-11-19): the move below is REFUSED
+            // when the workspace already holds a dearer plan, and tiers are compared on the
+            // catalogue price every tier carries (`price_monthly` — the ladder the tiers are
+            // ordered on). Same guard as ADASwift 7128abe / IncentiveSwift b2b9d004.
+            let plan: Option<(Uuid, Option<String>, f64)> = sqlx::query_as(
+                "SELECT id, name, COALESCE(price_monthly, 0)::float8 FROM plan_tiers \
+                  WHERE slug = $1 AND is_active = true",
             )
             .bind(slug)
             .fetch_optional(&state.db)
             .await?;
             match plan {
-                Some((plan_id, plan_name)) => {
-                    let mut tx = state.db.begin().await?;
-                    sqlx::query(
-                        "UPDATE account_plans SET status = 'superseded', is_active = false, expires_at = NOW() \
-                         WHERE aid = $1 AND status = 'active'",
+                Some((plan_id, plan_name, requested_price)) => {
+                    // The workspace's CURRENT tier: slug and catalogue price together, newest
+                    // ACTIVE row first — the same row `features::resolve_plan_id` reads.
+                    let current: Option<(String, f64)> = sqlx::query_as(
+                        "SELECT pt.slug, COALESCE(pt.price_monthly, 0)::float8 \
+                           FROM account_plans ap JOIN plan_tiers pt ON pt.id = ap.plan_id \
+                          WHERE ap.aid = $1 AND ap.status = 'active' \
+                          ORDER BY ap.started_at DESC, ap.created_at DESC LIMIT 1",
                     )
                     .bind(ticket_aid)
-                    .execute(&mut *tx)
+                    .fetch_optional(&state.db)
                     .await?;
-                    sqlx::query(
-                        "INSERT INTO account_plans (aid, plan_id, status, started_at) \
-                         VALUES ($1, $2, 'active', NOW())",
-                    )
-                    .bind(ticket_aid)
-                    .bind(plan_id)
-                    .execute(&mut *tx)
-                    .await?;
-                    // The customer's requested plan is seated — fund it, or the workspace it was
-                    // just moved onto still cannot run a single workflow (kanban t_b0774174).
-                    crate::handlers::credit_handler::grant_plan_welcome_credits(
-                        &mut tx, ticket_aid, plan_id,
-                    )
-                    .await?;
-                    sqlx::query("UPDATE tickets SET plan_applied_at = NOW() WHERE id = $1")
-                        .bind(id)
+                    let current_slug = current.as_ref().map(|(s, _)| s.clone());
+                    let current_price = current.as_ref().map(|(_, p)| *p).unwrap_or(0.0);
+                    if current_slug.is_some()
+                        && current_slug.as_deref() != Some(slug)
+                        && current_price > requested_price + 0.001
+                    {
+                        // CLOSING A REQUEST IS NOT THE SAME AS APPLYING IT (2026-11-19). The queue
+                        // keeps stale asks, so an older request for a cheaper tier can sit beside a
+                        // workspace that has since been put on a dearer one. Honouring that row
+                        // would silently DOWNGRADE a paying customer because an operator cleared a
+                        // queue, and re-grant that cheaper plan's welcome credits. A strictly
+                        // cheaper ask is answered with the plan left where it is and
+                        // `plan_applied_at` still NULL, so the row stays visibly unapplied. An
+                        // equal-price ask still goes through (that is a side switch).
+                        tracing::info!(
+                            ticket = %id,
+                            account = %ticket_aid,
+                            held = %current_slug.as_deref().unwrap_or_default(),
+                            asked = %slug,
+                            "Plan request resolved: the workspace already holds a dearer plan - no downgrade applied"
+                        );
+                    } else {
+                        let mut tx = state.db.begin().await?;
+                        sqlx::query(
+                            "UPDATE account_plans SET status = 'superseded', is_active = false, expires_at = NOW() \
+                             WHERE aid = $1 AND status = 'active'",
+                        )
+                        .bind(ticket_aid)
                         .execute(&mut *tx)
                         .await?;
-                    tx.commit().await?;
-                    // THE CUSTOMER IS TOLD BY THIS RESOLVE'S OWN NOTICE (kanban t_e12d2e73), so
-                    // this path is deliberately NOT wired to `plan_handler::notify_plan_change`:
-                    // `notify_customer` below sends the `ticket_update` mail, and
-                    // `email::ticket_update_wording` states "your workspace is now on the <plan>
-                    // plan … this change charged you nothing" whenever a plan was applied. A second
-                    // "plan changed" mail here would announce the same click twice.
-                    plan_applied = true;
-                    applied_plan_name = plan_name;
-                    tracing::info!(
-                        ticket = %id,
-                        account = %ticket_aid,
-                        plan = %slug,
-                        "Plan request resolved — the workspace was moved onto the requested plan"
-                    );
+                        sqlx::query(
+                            "INSERT INTO account_plans (aid, plan_id, status, started_at) \
+                             VALUES ($1, $2, 'active', NOW())",
+                        )
+                        .bind(ticket_aid)
+                        .bind(plan_id)
+                        .execute(&mut *tx)
+                        .await?;
+                        // The customer's requested plan is seated — fund it, or the workspace it was
+                        // just moved onto still cannot run a single workflow (kanban t_b0774174).
+                        crate::handlers::credit_handler::grant_plan_welcome_credits(
+                            &mut tx, ticket_aid, plan_id,
+                        )
+                        .await?;
+                        sqlx::query("UPDATE tickets SET plan_applied_at = NOW() WHERE id = $1")
+                            .bind(id)
+                            .execute(&mut *tx)
+                            .await?;
+                        tx.commit().await?;
+                        // THE CUSTOMER IS TOLD BY THIS RESOLVE'S OWN NOTICE (kanban t_e12d2e73), so
+                        // this path is deliberately NOT wired to `plan_handler::notify_plan_change`:
+                        // `notify_customer` below sends the `ticket_update` mail, and
+                        // `email::ticket_update_wording` states "your workspace is now on the <plan>
+                        // plan … this change charged you nothing" whenever a plan was applied. A second
+                        // "plan changed" mail here would announce the same click twice.
+                        plan_applied = true;
+                        applied_plan_name = plan_name;
+                        tracing::info!(
+                            ticket = %id,
+                            account = %ticket_aid,
+                            plan = %slug,
+                            "Plan request resolved — the workspace was moved onto the requested plan"
+                        );
+                    }
                 }
                 None => {
                     tracing::warn!(
