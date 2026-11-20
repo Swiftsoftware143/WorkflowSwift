@@ -2857,6 +2857,7 @@ async function renderPlansCredits(c){
     <div class="card"><h2 class="text-xl font-bold mb-4">My Plan</h2><div id="pldata"><p class="text-gray-400 text-sm">Loading...</p></div></div>
     <div class="card"><h2 class="text-xl font-bold mb-4">Credits</h2><div id="crdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>
     <div class="card"><h2 class="text-xl font-bold mb-4">All plans</h2><div id="plall"><p class="text-gray-400 text-sm">Loading...</p></div></div>
+    <div class="card" id="packsadmin" style="display:none"><h2 class="text-xl font-bold mb-1">Credit packs for sale</h2><p class="text-sm text-gray-500 mb-4">What a customer can ask for on their Credits screen. Change a price or add a pack here; a retired pack stops being offered but stays on the requests that already asked for it.</p><div id="pkadmin"><p class="text-gray-400 text-sm">Loading...</p></div></div>
   </div>`;
   const me=await api('/auth/me');
   const cat=await api('/plans');
@@ -2938,6 +2939,86 @@ async function renderPlansCredits(c){
     all.querySelectorAll('button[data-buy-plan]').forEach(btn=>{
       btn.onclick=()=>buyPlan(btn);
     });
+  }
+
+  // ── Credit packs for sale (operator only, cron run 2026-11-20) ─────────────────────────────
+  // The customer console lists these packs and files a `credit_pack_request` ticket to obtain one.
+  // Until this card the only writers of `credit_packages` were the seed migration and hand-run SQL,
+  // so re-pricing what the business sells meant editing production tables. The card is drawn only
+  // for a super admin — a workspace token is refused by the routes themselves as well.
+  if(ME&&ME.perm_is_super_admin){
+    const pkCard=c.querySelector('#packsadmin');
+    const pkHost=c.querySelector('#pkadmin');
+    if(pkCard)pkCard.style.display='';
+    const pkInput='border rounded px-2 py-1 text-sm';
+    const drawPacks=async()=>{
+      if(!pkHost)return;
+      pkHost.innerHTML='<p class="text-gray-400 text-sm">Loading...</p>';
+      const d=await api('/admin/credit-packages');
+      if(!d||!Array.isArray(d.packages)){
+        pkHost.innerHTML='<p class="text-red-400 text-sm">Could not load the packs'+(LAST_ERR?': '+escHtml(LAST_ERR):'')+'</p>';
+        return;
+      }
+      const rows=d.packages;
+      pkHost.innerHTML='<table class="table"><thead><tr><th>Pack</th><th>Credits</th><th>Price</th><th>Status</th><th></th></tr></thead><tbody>'
+        + rows.map(p=>'<tr data-pack="'+escHtml(p.id)+'">'
+          +'<td><input class="'+pkInput+'" data-f="name" value="'+escHtml(p.name)+'" style="width:180px"></td>'
+          +'<td><input class="'+pkInput+'" data-f="credits" type="number" min="1" value="'+escHtml(String(p.credits))+'" style="width:100px"></td>'
+          +'<td><input class="'+pkInput+'" data-f="price" type="number" min="0" step="0.01" value="'+Number(p.price||0).toFixed(2)+'" style="width:110px"></td>'
+          +'<td>'+(p.is_active?'<span class="badge badge-green">On sale</span>':'<span class="badge">Retired</span>')+'</td>'
+          +'<td class="text-right whitespace-nowrap"><button class="btn btn-sm btn-primary" data-pksave="'+escHtml(p.id)+'">Save</button> '
+            +(p.is_active
+              ?'<button class="btn btn-sm" data-pkretire="'+escHtml(p.id)+'">Retire</button>'
+              :'<button class="btn btn-sm" data-pkrevive="'+escHtml(p.id)+'">Put back on sale</button>')
+          +'</td></tr>').join('')
+        +'</tbody></table>'
+        +'<div class="flex flex-wrap items-end gap-3 mt-4 pt-4 border-t">'
+        +'<div><label class="block text-xs text-gray-500 mb-1">New pack name</label><input id="pk_new_name" class="'+pkInput+'" placeholder="e.g. Team Pack"></div>'
+        +'<div><label class="block text-xs text-gray-500 mb-1">Credits</label><input id="pk_new_credits" class="'+pkInput+'" type="number" min="1" value="1000" style="width:100px"></div>'
+        +'<div><label class="block text-xs text-gray-500 mb-1">Price ($)</label><input id="pk_new_price" class="'+pkInput+'" type="number" min="0" step="0.01" value="99.00" style="width:110px"></div>'
+        +'<button class="btn btn-primary btn-sm" id="pk_add">Add pack</button>'
+        +'</div>';
+      pkHost.querySelectorAll('button[data-pksave]').forEach(b=>{
+        b.onclick=async()=>{
+          const tr=b.closest('tr');
+          const val=f=>{const el=tr.querySelector('input[data-f="'+f+'"]');return el?el.value:''};
+          b.disabled=true; b.textContent='Saving…';
+          const r=await api('/admin/credit-packages/'+encodeURIComponent(b.getAttribute('data-pksave')),{method:'PUT',body:JSON.stringify({name:val('name'),credits:Number(val('credits')),price:val('price')})});
+          if(r){showMsg('Pack saved','success');drawPacks();}
+          else{showMsg('Could not save: '+(LAST_ERR||'unknown error'),'error');b.disabled=false;b.textContent='Save';}
+        };
+      });
+      pkHost.querySelectorAll('button[data-pkretire]').forEach(b=>{
+        b.onclick=async()=>{
+          if(!confirm('Stop offering this pack? Requests that already asked for it keep their record.'))return;
+          b.disabled=true; b.textContent='Retiring…';
+          const r=await api('/admin/credit-packages/'+encodeURIComponent(b.getAttribute('data-pkretire')),{method:'DELETE'});
+          if(r){showMsg('Pack retired','success');drawPacks();}
+          else{showMsg('Could not retire: '+(LAST_ERR||'unknown error'),'error');b.disabled=false;b.textContent='Retire';}
+        };
+      });
+      pkHost.querySelectorAll('button[data-pkrevive]').forEach(b=>{
+        b.onclick=async()=>{
+          b.disabled=true; b.textContent='Restoring…';
+          const r=await api('/admin/credit-packages/'+encodeURIComponent(b.getAttribute('data-pkrevive')),{method:'PUT',body:JSON.stringify({is_active:true})});
+          if(r){showMsg('Pack is on sale again','success');drawPacks();}
+          else{showMsg('Could not restore: '+(LAST_ERR||'unknown error'),'error');b.disabled=false;b.textContent='Put back on sale';}
+        };
+      });
+      const addBtn=pkHost.querySelector('#pk_add');
+      if(addBtn)addBtn.onclick=async()=>{
+        const name=(pkHost.querySelector('#pk_new_name').value||'').trim();
+        const credits=Number(pkHost.querySelector('#pk_new_credits').value||0);
+        const price=pkHost.querySelector('#pk_new_price').value||'';
+        if(!name){showMsg('Give the pack a name','error');return;}
+        if(!(credits>0)){showMsg('Credits must be at least 1','error');return;}
+        addBtn.disabled=true; addBtn.textContent='Adding…';
+        const r=await api('/admin/credit-packages',{method:'POST',body:JSON.stringify({name:name,credits:credits,price:price,is_active:true})});
+        if(r){showMsg('Pack added — it is on sale now','success');drawPacks();}
+        else{showMsg('Could not add: '+(LAST_ERR||'unknown error'),'error');addBtn.disabled=false;addBtn.textContent='Add pack';}
+      };
+    };
+    drawPacks();
   }
 
   const cr=await api('/credits/balance');
