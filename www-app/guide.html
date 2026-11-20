@@ -172,6 +172,7 @@
       <a href="#surfaces" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Surfaces</a>
       <a href="#dashboard-data-cards-brand-monitor-competitor-watch" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Dashboard: Data Cards, Brand Monitor, Competitor Watch</a>
       <a href="#keys-two-different-things" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Keys: two different things</a>
+      <a href="#mcp" class="nav-item" onclick="closeMobile()"><span class="nav-icon">🤖</span> MCP</a>
       <a href="#plans-and-limits" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Plans and limits</a>
       <a href="#your-account" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Your account and sign-in</a>
       <a href="#email-branding" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Email branding</a>
@@ -449,6 +450,37 @@
       <li><strong>This is the credential the Chrome extension uses</strong> (see <em>Chrome extension - Swift Market
         Intel</em> below): extension Options -&gt; <em>API token</em>.</li>
       </ul>
+      <h2 id="mcp">🤖 MCP &mdash; connect your AI tools</h2>
+      <p><strong>MCP</strong> is the open standard an AI client &mdash; Claude Code, Cursor, Hermes, or your own
+      agent &mdash; speaks to read your business data. WorkflowSwift runs one on the fleet server, so you do not
+      install anything: you paste one endpoint and one key into the client and it can read this workspace. It is
+      <strong>read-only</strong> &mdash; every tool is a SELECT, there is no write tool and no free-form SQL
+      door, and operator-wide tools are refused for a workspace credential, so an assistant cannot change or
+      delete anything.</p>
+      <p><strong>Where it is in the console:</strong> <strong>MCP</strong> sits in the navigation directly above
+      <strong>Profile</strong> (this app has no separate Settings screen &mdash; Profile is the account page),
+      labelled exactly <strong>MCP</strong>. The screen carries four things:</p>
+      <ul>
+        <li><strong>The endpoint</strong> &mdash; <code>https://hooks.swiftsoftware.net/mcp</code>, with a
+        <strong>Copy</strong> button.</li>
+        <li><strong>Your token</strong> &mdash; the same workspace key the <strong>API Keys</strong> screen
+        shows, by its first characters and its name. <strong>Reveal</strong> shows the whole key so you can copy
+        it; on a key minted before keys were stored viewably, the screen says so and offers
+        <strong>Regenerate</strong> instead. <strong>Regenerate</strong> replaces the key in one step and the old
+        one stops working immediately, so any client already wired up stops until you paste the new key in.</li>
+        <li><strong>What it can read</strong> &mdash; one line per read-only tool, named exactly as the client
+        sees it: leads, clients, workflows, workflow instances, templates, dashboards, instance steps, widgets,
+        renditions, credit transactions, industries, portfolio companies and account plans. Each entity answers
+        a <code>_summary</code> or a <code>_search</code>, and every answer holds only this workspace&rsquo;s
+        rows.</li>
+        <li><strong>Connect</strong> &mdash; a ready-made client configuration block with this endpoint and an
+        <code>Authorization: Bearer</code> line where your key goes; <strong>Copy config</strong> puts it on
+        your clipboard.</li>
+      </ul>
+      <p>If the token block says you have no active key, create one on the <strong>API Keys</strong> screen and
+      come back &mdash; the MCP screen reads the same key, so the two can never disagree. If a client says it
+      cannot reach the server, check that the key is the one this screen shows: a regenerated or revoked key
+      stops working immediately, by design.</p>
       <h2 id="plans-and-limits">Plans and limits</h2>
       <p>Plan limits are enforced <strong>at the API</strong> (<code>402 Payment Required</code> when you exceed them) and can be
       set per plan by an admin: <code>max_workflows</code>, <code>max_templates</code>, <code>max_instances</code>, <code>max_users</code>,
