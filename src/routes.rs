@@ -1107,7 +1107,19 @@ pub fn create_router(state: AppState) -> Router {
             "/payment-providers/{provider_type}/test",
             post(handlers::checkout_handler::test_payment_provider),
         )
-        .nest("/admin", admin_routes)
+        .nest(
+            "/admin",
+            admin_routes
+                .route(
+                    "/do-not-mail",
+                    get(crate::compliance::list_suppressions)
+                        .post(crate::compliance::add_suppression),
+                )
+                .route(
+                    "/do-not-mail/{address}",
+                    delete(crate::compliance::remove_suppression),
+                ),
+        )
         // Layer order: in axum the LAST `.layer()` is the OUTERMOST, so the request path is
         // pre_auth_rate_limit -> auth -> per-account rate limit -> handler.
         //
@@ -1333,7 +1345,18 @@ pub fn create_router(state: AppState) -> Router {
             "/checkout/session/{id}",
             get(handlers::checkout_handler::get_checkout_session_public),
         )
-        .merge(public_body_routes);
+        .merge(public_body_routes)
+        // The opt-out the workflow notification mail carries (2026-11-20). Anonymous by necessity —
+        // the token in the message IS the credential — and mounted here, not in the module, so the
+        // route literal the `route_policy` census scans can see it.
+        .route(
+            "/public/unsubscribe/{token}",
+            get(crate::compliance::show_unsubscribe).post(crate::compliance::one_click),
+        )
+        .route(
+            "/public/unsubscribe",
+            post(crate::compliance::one_click_body),
+        );
 
     // Combine: public + protected merged
     let api_v1 = Router::new().merge(public_routes).merge(protected_routes);

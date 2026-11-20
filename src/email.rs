@@ -316,6 +316,7 @@ async fn send_email_inner(
     to: &str,
     template_type: &str,
     vars: &serde_json::Value,
+    opt_out: Option<(String, String)>,
 ) -> Result<(), String> {
     // Get email config from DB admin_settings (DB only — no env fallback)
     let cfg = match get_email_config(state).await {
@@ -403,6 +404,16 @@ async fn send_email_inner(
 
             let use_html = t.is_html.unwrap_or(true);
 
+            // The opt-out footer rides on the rendered body for the stoppable classes only. Appended
+            // here (not in each template) so every stored template gets the same way out.
+            let (text_body, html_body) = match &opt_out {
+                Some((text_footer, html_footer)) => (
+                    format!("{text_body}{text_footer}"),
+                    format!("{html_body}{html_footer}"),
+                ),
+                None => (text_body, html_body),
+            };
+
             if use_html && !html_body.is_empty() {
                 send_branded(&cfg, to, &subject, &text_body, &html_body, Some(&branding)).await
             } else {
@@ -411,7 +422,15 @@ async fn send_email_inner(
         }
         None => {
             // Fallback to hardcoded template
-            send_email_fallback(&cfg, to, template_type, vars, Some(&branding)).await
+            send_email_fallback(
+                &cfg,
+                to,
+                template_type,
+                vars,
+                Some(&branding),
+                opt_out.as_ref(),
+            )
+            .await
         }
     }
 }
@@ -481,7 +500,43 @@ pub async fn send_email(
         record_withheld_send(state, to, template_type, domain, subject_hint.as_deref()).await;
         return Ok(());
     }
-    let result = send_email_inner(state, aid, to, template_type, vars).await;
+
+    // ── EMAIL COMPLIANCE GATE (2026-11-20) ──────────────────────────────────────────────────────
+    // One gate in front of every message, in the funnel rather than at each caller, so a send path
+    // added later inherits it. `transactional` (receipts, password resets, security notices) is never
+    // stopped by preference; `notification` / `bulk` are, and that is the class `workflow_notify`
+    // belongs to — the mail a workflow sends to whoever it names. A refused send is recorded, so
+    // "the opt-out worked" is a row and not a claim.
+    let mail_class = crate::compliance::class_for(template_type);
+    if let crate::compliance::Verdict::Refuse(reason) =
+        crate::compliance::gate(&state.db, to, mail_class).await
+    {
+        tracing::info!(
+            to = %to,
+            %reason,
+            template = %template_type,
+            "not dispatched: this address asked not to be mailed"
+        );
+        let subject_hint = inline_subject(template_type, vars);
+        crate::compliance::log_refused(&state.db, mail_class, to, subject_hint.as_deref(), &reason)
+            .await;
+        return Ok(()); // a deliberate refusal is not an error the caller should retry
+    }
+
+    // The way out, in the message itself: only the stoppable classes carry the footer, because a
+    // "stop these emails" link in a password reset would be a promise the gate does not keep.
+    let opt_out = if mail_class == crate::compliance::TRANSACTIONAL {
+        None
+    } else {
+        Some(crate::compliance::footer(
+            &state.config.jwt_secret,
+            to,
+            mail_class,
+            "WorkflowSwift",
+        ))
+    };
+
+    let result = send_email_inner(state, aid, to, template_type, vars, opt_out).await;
     record_send_outcome(state, to, template_type, &result).await;
     result
 }
@@ -1105,6 +1160,7 @@ async fn send_email_fallback(
     template_type: &str,
     vars: &serde_json::Value,
     branding: Option<&Branding>,
+    opt_out: Option<&(String, String)>,
 ) -> Result<(), String> {
     let app_url = vars
         .get("app_url")
@@ -1351,6 +1407,16 @@ async fn send_email_fallback(
                  <p style=\"font-size:13px;color:#9ca3af\">- WorkflowSwift</p></body></html>"
             );
             let text_body = format!("Hi {name},\n\nA workflow you own sent you this notification:\n\n{message}\n\n- WorkflowSwift");
+            // The way out, on the one mail that reaches someone with no console (2026-11-20). It is
+            // the only class that carries it: the link has to be in the message, or the recipient has
+            // to reply and hope.
+            let (text_body, html_body) = match opt_out {
+                Some((text_footer, html_footer)) => (
+                    format!("{text_body}{text_footer}"),
+                    format!("{html_body}{html_footer}"),
+                ),
+                None => (text_body, html_body),
+            };
             send_branded(cfg, to, subject, &text_body, &html_body, branding).await
         }
         // The OWNER's notice that a run FAILED (cron 2026-11-10). Before this arm existed a failed

@@ -529,6 +529,23 @@ when it is set.</p>
       customer's own words — and a change emails the workspace's owner straight away. Re-sending the
       status a ticket already has sends nothing.</td>
       </tr>
+      <tr>
+      <td><code>/api/v1/admin/do-not-mail</code></td>
+      <td>GET / POST</td>
+      <td><strong>&ldquo;Stop mailing me.&rdquo;</strong> Every workflow notification carries a
+      <em>Stop these emails</em> link at the bottom; pressing it writes that address onto this list, and
+      no workflow mail is sent to it again. GET lists who is on it (address, which class is stopped, why,
+      and when); POST with <code>{"address"}</code> adds one by hand for a request that arrives by phone
+      or reply. Receipts, password resets and security notices are never stopped by this list &mdash; those
+      are not optional. Super-admin only.</td>
+      </tr>
+      <tr>
+      <td><code>/api/v1/admin/do-not-mail/{address}</code></td>
+      <td>DELETE</td>
+      <td>Take an address back off the list when someone asks to be mailed again. Every class for that
+      address is removed in one go, so a leftover <em>bulk</em> row cannot keep refusing the very mail
+      you meant to restore. Answers <code>{"removed": n, "address"}</code>. Super-admin only.</td>
+      </tr>
       </tbody>
       </table>
       <p>A tenant (<code>accounts</code>) carries ONE identifier: <code>account_slug</code>, NOT NULL UNIQUE (<code>tenants_slug_key</code>),

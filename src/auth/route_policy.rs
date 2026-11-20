@@ -214,6 +214,14 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // nothing else. The REQUEST twin (`POST /api/v1/auth/email-change`) is NOT here and must never
     // be: it needs the session whose address it is.
     "/api/v1/auth/email-change/confirm",
+    // --- the email opt-out (2026-11-20) ----------------------------------------------------------
+    // A person who does not have an account here opens this from a notification mail, in a browser
+    // with no session. The HMAC token in the path IS the credential: it names exactly one address
+    // and one class, it cannot be forged without this app's secret, and the handler writes one
+    // suppression row for that address and nothing else. Both arms (the page and the RFC 8058
+    // one-click POST) are anonymous for that reason. Nothing about any account is read or returned.
+    "/api/v1/public/unsubscribe/{token}",
+    "/api/v1/public/unsubscribe",
 ];
 
 /// Service-to-service routes whose own shared key (`X-Internal-Key` = `INTERNAL_SYNC_KEY`) is the
@@ -687,7 +695,12 @@ mod tests {
         // pin, so the suite was red at HEAD. Recounted from the list itself: 21 + 10 = 31.
         // (`/api/v1/admin/billing-settings`, this card's route, is PRIVATE and lives in neither
         // list: `tenant_and_operator_surfaces_are_not_public` pins that.)
-        assert_eq!(super::PUBLIC_ROUTES.len(), 21, "PUBLIC_ROUTES size");
+        // Pin RE-MEASURED 2026-11-20: PUBLIC_ROUTES holds 23 (the two email-opt-out arms —
+        // `/api/v1/public/unsubscribe/{token}` and `/api/v1/public/unsubscribe` — joined the
+        // deliberate anonymous list with the compliance gate), 23 + 10 = 33.
+        // (`/api/v1/admin/billing-settings` and the new `/api/v1/admin/do-not-mail` pair are PRIVATE
+        // and live in neither list: `tenant_and_operator_surfaces_are_not_public` pins that.)
+        assert_eq!(super::PUBLIC_ROUTES.len(), 23, "PUBLIC_ROUTES size");
         assert_eq!(super::INTERNAL_ROUTES.len(), 10, "INTERNAL_ROUTES size");
         // The 22 deliberate anonymous placements the census found, minus the 2 moved to the
         // protected router, plus `/api/v1/auth/avatar/{user_id}` (the account-picture READ, card
@@ -698,7 +711,7 @@ mod tests {
         // session), plus the two public support-desk routes above.
         assert_eq!(
             super::PUBLIC_ROUTES.len() + super::INTERNAL_ROUTES.len(),
-            31
+            33
         );
     }
 }

@@ -3217,7 +3217,14 @@ function renderAdminSettings(c){
    +'<pre id="eresult" class="text-xs text-gray-600 mt-3 whitespace-pre-wrap"></pre></div>'
    +'<div class="card mt-4"><h2 class="text-xl font-bold mb-1">Recent sends</h2>'
    +'<p class="text-xs text-gray-500 mb-3">The last 50 transactional emails this installation tried to send, newest first. The one-line status above only remembers the MOST RECENT message &mdash; every later mail overwrites it &mdash; so this list is the history: a welcome or password mail the provider refused stays visible here after other mail succeeds. Reserved/test addresses are not listed &mdash; a withheld row was never an attempt and no customer was affected.</p>'
-   +'<div id="esends"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
+   +'<div id="esends"><p class="text-gray-400 text-sm">Loading...</p></div></div>'
+   // The do-not-mail list (2026-11-20). The workflow notification mail now carries a "Stop these
+   // emails" link; this is where the operator sees who took it up, and where an address can be
+   // stopped by hand (a phone request, a complaint). Backed by /admin/do-not-mail.
+   +'<div class="card mt-4"><h2 class="text-xl font-bold mb-1">Do not mail</h2>'
+   +'<p class="text-xs text-gray-500 mb-3">Anyone who pressed &ldquo;Stop these emails&rdquo; in a notification is listed here, and no workflow mail is sent to them again. Receipts, password resets and security notices keep working &mdash; those are not optional. Adding an address below stops workflow mail to it immediately.</p>'
+   +'<div class="flex gap-2 items-center flex-wrap mb-3"><input id="dnm_addr" type="email" placeholder="someone@example.com" style="max-width:320px;padding:7px 9px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"><button class="btn btn-primary btn-sm" id="dnm_add">Stop mail to this address</button><span id="dnm_msg" class="text-xs"></span></div>'
+   +'<div id="dnm_list"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
 
   // Tag → free account (design §3.3): the master toggle + the in-app entry-plan picker. Both keys
   // are read by POST /api/v1/internal/provision-free-account, the receiver FunnelSwift's tag
@@ -3318,6 +3325,41 @@ function renderAdminSettings(c){
     };
   };
   loadSends();
+
+  // The do-not-mail list: the same discipline as the send history above — a failed read is an ERROR,
+  // never an empty list ("nobody has opted out" is a statement about the customer's list).
+  const loadDnm=async()=>{
+    const el=c.querySelector('#dnm_list');
+    if(!el)return;
+    const d=await api('/admin/do-not-mail');
+    if(!d||!d.suppressions){el.innerHTML='<p class="text-red-500 text-sm">Could not load the do-not-mail list. It is not empty &mdash; it could not be read.</p>';return}
+    if(!d.suppressions.length){el.innerHTML='<p class="text-gray-400 text-sm">Nobody has asked this app to stop mailing them.</p>';return}
+    const esc2=s=>String(s==null?'':s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+    el.innerHTML='<table class="w-full text-sm"><thead><tr class="text-xs text-gray-500 text-left"><th class="py-1">When</th><th>Address</th><th>Stops</th><th>Why</th><th></th></tr></thead><tbody>'
+      +d.suppressions.map(s=>'<tr class="border-t"><td class="py-1 whitespace-nowrap text-xs text-gray-500">'+esc2(s.created_at?new Date(s.created_at).toLocaleString():'')+'</td><td class="text-xs font-mono">'+esc2(s.address)+'</td><td class="text-xs">'+(s.mail_class==='all'?'all workflow mail':esc2(s.mail_class))+'</td><td class="text-xs" title="'+esc2(s.source||'')+'">'+esc2(s.reason)+'</td><td class="text-right"><button class="btn btn-sm btn-ghost" data-allow="'+esc2(s.address)+'">Allow again</button></td></tr>').join('')
+      +'</tbody></table>';
+    el.querySelectorAll('button[data-allow]').forEach(b=>b.onclick=async()=>{
+      b.disabled=true;
+      const r=await api('/admin/do-not-mail/'+encodeURIComponent(b.getAttribute('data-allow')),{method:'DELETE'});
+      if(!r){b.disabled=false;showMsg('Could not lift the block: '+(LAST_ERR||'request failed'),'error');return}
+      showMsg('Mail to that address is allowed again');
+      await loadDnm();
+    });
+  };
+  loadDnm();
+  const dnmAdd=c.querySelector('#dnm_add'), dnmAddr=c.querySelector('#dnm_addr'), dnmMsg=c.querySelector('#dnm_msg');
+  if(dnmAdd)dnmAdd.onclick=async()=>{
+    const addr=((dnmAddr&&dnmAddr.value)||'').trim();
+    if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(addr)){
+      if(dnmMsg){dnmMsg.textContent='That does not look like an email address.';dnmMsg.style.color='#b91c1c'}
+      return;
+    }
+    dnmAdd.disabled=true;
+    const r=await api('/admin/do-not-mail',{method:'POST',body:JSON.stringify({address:addr})});
+    dnmAdd.disabled=false;
+    if(dnmMsg){dnmMsg.textContent=r?'Saved — workflow mail to that address stops now.':('Save failed: '+(LAST_ERR||'request failed'));dnmMsg.style.color=r?'#166534':'#b91c1c'}
+    if(r){if(dnmAddr)dnmAddr.value='';await loadDnm();}
+  };
 
   api('/admin/settings/email').then(d=>{
     const form=c.querySelector('#emailform');
