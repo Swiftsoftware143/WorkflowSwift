@@ -319,6 +319,13 @@ const API = (() => {
     // the "running now" count is the separate /dashboard/workspace tile (kanban t_b2f20b5b), so
     // this route's unique value is workflows / clients / templates (kanban t_3a8ccd2a).
     getDashboardStats: () => send(base + '/dashboard/stats', { headers: headers() }).then(handle),
+    // GET /dashboard/workspace -- the "running now" panel (kanban t_b2f20b5b). The panel at
+    // `#wsdash` has always read `S.wsDash.active_count / total_automations / active_instances`,
+    // but the call it makes (API.getWorkspaceDashboard) was never DEFINED here: the call threw
+    // a TypeError, `loadWsDash` caught it and left `S.wsDash` null, so the whole card silently
+    // never rendered for ANY workspace. The route answers
+    // {"dashboard":{active_count,total_automations,active_instances[]}}.
+    getWorkspaceDashboard: () => send(base + '/dashboard/workspace', { headers: headers() }).then(handle),
     getPlanCapabilities: () => send(base + '/plans/capabilities', { headers: headers() }).then(handle),
     // GET /auth/me/usage -- this workspace's own counts (workflows, users, templates, instances,
     // automations, integrations, api keys, clients, tags, industries). The route has been served
