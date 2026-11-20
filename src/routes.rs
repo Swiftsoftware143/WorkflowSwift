@@ -728,6 +728,22 @@ pub fn create_router(state: AppState) -> Router {
 
     // ── Admin routes (protected by admin middleware) ──
     let admin_routes = Router::new()
+        // Credit packs the OPERATOR sells (cron run 2026-11-20). The customer console already
+        // lists these packs and files a `credit_pack_request` ticket to obtain one, but the only
+        // writers of `credit_packages` were the seed migration and hand-run SQL — re-pricing a
+        // pack meant editing production tables. Nested under `/api/v1/admin`, so a workspace token
+        // is refused like every other admin route; DELETE retires a pack instead of removing the
+        // row a request ticket still references.
+        .route(
+            "/credit-packages",
+            get(handlers::credit_handler::admin_list_credit_packages)
+                .post(handlers::credit_handler::admin_create_credit_package),
+        )
+        .route(
+            "/credit-packages/{id}",
+            put(handlers::credit_handler::admin_update_credit_package)
+                .delete(handlers::credit_handler::admin_deactivate_credit_package),
+        )
         // Usage dashboard
         .route(
             "/usage",

@@ -389,3 +389,183 @@ pub async fn deduct_credit(
         "balance": new_balance
     })))
 }
+
+// ── Credit-pack administration (cron run 2026-11-20) ────────────────────────────────────────────
+// The customer console lists the packs (`GET /api/v1/credits/packages`) and files a
+// `credit_pack_request` ticket to obtain one, but until now the OPERATOR had no way to create a
+// pack or change a price: the only writers were `migrations/013_seed_data.sql` and hand-run SQL, so
+// re-pricing what you sell meant editing production tables. These four routes are the console's
+// surface for that data. A pack is DEACTIVATED, never deleted: a request ticket references it and
+// must still render the pack it asked for after it is retired from sale.
+
+/// A price coming from a browser as either `9.99` or `"9.99"`, normalised to two decimals.
+/// `None` means "not a usable price", so the caller answers a sentence instead of a 500.
+fn pack_price_text(v: &serde_json::Value) -> Option<String> {
+    let raw = match v {
+        serde_json::Value::String(s) => s.trim().to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        _ => return None,
+    };
+    if raw.is_empty() {
+        return None;
+    }
+    match raw.parse::<f64>() {
+        Ok(f) if f.is_finite() && f >= 0.0 => Some(format!("{:.2}", f)),
+        _ => None,
+    }
+}
+
+fn pack_json(row: &sqlx::postgres::PgRow) -> serde_json::Value {
+    json!({
+        "id": row.try_get::<String, _>("id").unwrap_or_default(),
+        "name": row.try_get::<String, _>("name").unwrap_or_default(),
+        "credits": row.try_get::<i32, _>("credits").unwrap_or(0),
+        "price": row.try_get::<String, _>("price").unwrap_or_else(|_| "0.00".to_string()),
+        "is_active": row.try_get::<bool, _>("is_active").unwrap_or(true),
+        "sort_order": row.try_get::<i32, _>("sort_order").unwrap_or(0),
+        "created_at": row.try_get::<String, _>("created_at").unwrap_or_default(),
+    })
+}
+
+/// The pack body shared by create and update. Every field is optional so PUT is a true patch:
+/// the console sends only what the operator changed, and an omitted field keeps its stored value.
+#[derive(serde::Deserialize)]
+pub struct CreditPackageBody {
+    pub name: Option<String>,
+    pub credits: Option<i32>,
+    pub price: Option<serde_json::Value>,
+    pub is_active: Option<bool>,
+    pub sort_order: Option<i32>,
+}
+
+/// GET /api/v1/admin/credit-packages — EVERY pack, active or not (the console's management list).
+pub async fn admin_list_credit_packages(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> ApiResult<impl IntoResponse> {
+    crate::handlers::admin_settings_handler::require_admin(&claims)?;
+    let rows = sqlx::query(
+        "SELECT id::text, name, credits, price::text, is_active, COALESCE(sort_order, 0)::int AS sort_order, created_at::text FROM credit_packages ORDER BY is_active DESC, sort_order ASC, credits ASC",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    let packages: Vec<serde_json::Value> = rows.iter().map(pack_json).collect();
+    Ok(Json(json!({"packages": packages})))
+}
+
+/// POST /api/v1/admin/credit-packages — put a new pack on sale.
+pub async fn admin_create_credit_package(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Json(body): Json<CreditPackageBody>,
+) -> ApiResult<impl IntoResponse> {
+    crate::handlers::admin_settings_handler::require_admin(&claims)?;
+    let name = body.name.unwrap_or_default().trim().to_string();
+    if name.is_empty() {
+        return Err(AppError::BadRequest("A pack needs a name".to_string()));
+    }
+    if name.chars().count() > 255 {
+        return Err(AppError::BadRequest(
+            "That pack name is too long".to_string(),
+        ));
+    }
+    let credits = body.credits.unwrap_or(0);
+    if credits <= 0 {
+        return Err(AppError::BadRequest(
+            "A pack must grant at least one credit".to_string(),
+        ));
+    }
+    let price = body
+        .price
+        .as_ref()
+        .and_then(pack_price_text)
+        .ok_or_else(|| {
+            AppError::BadRequest("Enter a price as a number, for example 9.99".to_string())
+        })?;
+    let row = sqlx::query(
+        "INSERT INTO credit_packages (name, credits, price, is_active, sort_order) \
+         VALUES ($1, $2, $3::numeric, COALESCE($4, true), COALESCE($5, 0)) \
+         RETURNING id::text, name, credits, price::text, is_active, COALESCE(sort_order, 0)::int AS sort_order, created_at::text",
+    )
+        .bind(&name)
+        .bind(credits)
+        .bind(&price)
+        .bind(body.is_active)
+        .bind(body.sort_order)
+        .fetch_one(&state.db)
+        .await?;
+    Ok(Json(pack_json(&row)))
+}
+
+/// PUT /api/v1/admin/credit-packages/{id} — change a name, grant or PRICE, or re-activate a pack.
+pub async fn admin_update_credit_package(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(body): Json<CreditPackageBody>,
+) -> ApiResult<impl IntoResponse> {
+    crate::handlers::admin_settings_handler::require_admin(&claims)?;
+    let pid = Uuid::parse_str(&id)
+        .map_err(|_| AppError::NotFound("That credit pack no longer exists".to_string()))?;
+    let name = body.name.map(|n| n.trim().to_string());
+    if let Some(ref n) = name {
+        if n.is_empty() {
+            return Err(AppError::BadRequest("A pack needs a name".to_string()));
+        }
+        if n.chars().count() > 255 {
+            return Err(AppError::BadRequest(
+                "That pack name is too long".to_string(),
+            ));
+        }
+    }
+    if let Some(c) = body.credits {
+        if c <= 0 {
+            return Err(AppError::BadRequest(
+                "A pack must grant at least one credit".to_string(),
+            ));
+        }
+    }
+    let price = match body.price.as_ref() {
+        None => None,
+        Some(v) => Some(pack_price_text(v).ok_or_else(|| {
+            AppError::BadRequest("Enter a price as a number, for example 9.99".to_string())
+        })?),
+    };
+    let row = sqlx::query(
+        "UPDATE credit_packages SET name = COALESCE($2, name), credits = COALESCE($3, credits), \
+         price = COALESCE($4::numeric, price), is_active = COALESCE($5, is_active), \
+         sort_order = COALESCE($6, sort_order) WHERE id = $1 \
+         RETURNING id::text, name, credits, price::text, is_active, COALESCE(sort_order, 0)::int AS sort_order, created_at::text",
+    )
+        .bind(pid)
+        .bind(name)
+        .bind(body.credits)
+        .bind(price)
+        .bind(body.is_active)
+        .bind(body.sort_order)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("That credit pack no longer exists".to_string()))?;
+    Ok(Json(pack_json(&row)))
+}
+
+/// DELETE /api/v1/admin/credit-packages/{id} — retire a pack from sale (keeps the row: a request
+/// ticket that asked for it must still render it). Idempotent: retiring twice answers the row.
+pub async fn admin_deactivate_credit_package(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> ApiResult<impl IntoResponse> {
+    crate::handlers::admin_settings_handler::require_admin(&claims)?;
+    let pid = Uuid::parse_str(&id)
+        .map_err(|_| AppError::NotFound("That credit pack no longer exists".to_string()))?;
+    let row = sqlx::query(
+        "UPDATE credit_packages SET is_active = false WHERE id = $1 \
+         RETURNING id::text, name, credits, price::text, is_active, COALESCE(sort_order, 0)::int AS sort_order, created_at::text",
+    )
+        .bind(pid)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| AppError::NotFound("That credit pack no longer exists".to_string()))?;
+    Ok(Json(pack_json(&row)))
+}
