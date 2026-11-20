@@ -1108,6 +1108,22 @@ const setTplSurface = (v) => { S.tplSurface = v; S.templates = null; loadTemplat
 // body is answered 400 "Failed to parse the request body as JSON: EOF while parsing a value at line
 // 1 column 0" — measured live 2026-10-14 with this console's own call. `{}` takes the route's own
 // defaults (the template's name/description) and answers 201 (kanban t_6c589b6b).
+/* SESSION HANDOFF TO THE MAIL CLIENT (2026-11-20). The Inbox pane promises "it is the same account, so
+   there is nothing to sign in to twice", and the door dropped the customer on a login form on another
+   host with a password they only ever saw once, in the welcome email. The console now hands the SAME
+   session over in the URL FRAGMENT (#token=...), which a browser never sends to the server, so it
+   cannot reach an nginx access log or a Referer header. The mail client stores it as its own session
+   and strips the fragment before its first render. WorkflowSwift keeps its session in
+   sessionStorage (`wf_token`) with a localStorage fallback. DELEGATED, capture phase, because the
+   Inbox pane is re-rendered on every tab switch. */
+document.addEventListener('click', function (ev) {
+  const a = ev.target && ev.target.closest ? ev.target.closest('#inboxOpen') : null;
+  if (!a) return;
+  let t = '';
+  try { t = sessionStorage.getItem('wf_token') || localStorage.getItem('ws_fs_token') || ''; } catch (e) {}
+  if (t) a.href = 'https://inbox.workflowswift.com/#token=' + encodeURIComponent(t);
+}, true);
+
 const installTemplate = async (id) => { try { await API.post('/templates/'+id+'/install', {}); toast('Template installed as workflow'); setView('workflows'); S.workflows=null; } catch(e){ toast(e.message,'err'); } };
 const exportTemplate = async (id, name) => { try { const data = await API.get('/templates/'+id+'/export'); const payload = (data && data.template) || data; const blob = new Blob([JSON.stringify(payload,null,2)], { type:'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = (name||'template').replace(/[^A-Za-z0-9._-]/g,'_') + '.workflowswift.json'; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url), 4000); toast('Template exported'); } catch(e){ toast(e.message,'err'); } };
 // Run-history CSV: GET /api/v1/instances/export?format=csv is scoped by the caller's OWN
