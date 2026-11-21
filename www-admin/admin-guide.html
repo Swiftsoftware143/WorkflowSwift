@@ -216,13 +216,13 @@ any plan carries a usable payment link, each paid plan shows <strong>Buy this pl
 opens the payment page and files the same plan request in your queue at the same moment, so a sale
 that does not complete is still in front of you. On an installation with neither, the button reads
 <strong>Request this plan</strong>, takes no money, and the message says so.</p>
-      <p><strong>Moving a workspace onto a plan tells the customer.</strong> On an installation with no
+      <p><strong>Moving an account onto a plan tells the customer.</strong> On an installation with no
       payment provider — every install today — this console's plan picker <em>is</em> the till: press it and
-      the workspace is moved. That used to be silent, so the customer's only clue was a screen whose
-      allowances had changed. Moving a workspace now emails its own owner through the app's transactional
+      the account is moved. That used to be silent, so the customer's only clue was a screen whose
+      allowances had changed. Moving an account now emails its own owner through the app's transactional
       mail: which plan they are on, that nothing was charged, and where to see what it includes. The message
       beside the row says in plain English whether that email went out (or that no customer address was
-      found, or that the mail could not be sent — the plan is set either way). Moving a workspace onto the
+      found, or that the mail could not be sent — the plan is set either way). Moving an account onto the
       plan it already holds emails nobody, so a double-click cannot send the same news twice, and a request
       resolved from <em>Plan Requests</em> keeps its own answer mail (which names the plan) instead of
       getting a second one.</p>
@@ -256,7 +256,7 @@ when it is set.</p>
       prefilled with the stored number (<code>-1</code> means unlimited), a number you type replaces it, and
       leaving it empty keeps the current value. Saving works on both doors &mdash; a NEW plan and an edited
       one &mdash; so a tier that grants unlimited can say so without SQL. Whatever you set here is what the
-      gate enforces: once a workspace holds its allowance, adding one more industry is refused and the
+      gate enforces: once an account holds its allowance, adding one more industry is refused and the
       customer is told to upgrade.</p>
       <p><strong>Retired keys (kanban t_1aa78926).</strong> <code>csv_export</code>, <code>webhook_export</code> and <code>google_sheets</code> used to be
       settable per plan and are gone — from <code>plan_tiers.features</code>, from the plan payloads and from
@@ -267,7 +267,7 @@ when it is set.</p>
       the defect, not a feature. A flag belongs here only together with the gate that enforces it.
       <br><strong>Note (2026-10-31): the app now DOES stream a CSV &mdash; the account's whole run history</strong>
       (see <a href="#run-history-csv">Run history as a CSV</a> below). The three plan keys stay retired,
-      because that download is not an entitlement: it is switched on for every workspace whatever its
+      because that download is not an entitlement: it is switched on for every account whatever its
       tier, so there is no flag to sell and no gate to enforce.</p>
       <p><strong>Retired keys (kanban t_413b4aab).</strong> <code>custom_branding</code>, <code>audit_logs</code> and <code>custom_reports</code> are gone
       the same way (migration <code>075_retire_unbacked_plan_flags.sql</code>). They were off on Free but on from a
@@ -456,7 +456,7 @@ when it is set.</p>
       own account (<code>account_slug</code> exactly <code>workflowswift</code>). Same mirror rule as the single
       delete: an account whose <code>WFS &lt;uuid&gt;</code> mirrors cannot be retired is refused with its reason.
       Admin &rarr; <strong>Accounts</strong> is the panel: per-row checkbox, select-all header, and one
-      <em>Delete selected</em> button that stays disabled until a row is picked. A workspace a test run
+      <em>Delete selected</em> button that stays disabled until a row is picked. An account a test run
       minted is hidden from this panel by default; tick <strong>show probe accounts</strong> beside those
       buttons to list it wearing its <em>probe</em> badge, <strong>Select probes (N)</strong> ticks exactly
       those rows, and <strong>Delete selected</strong> retires them (the live canary monitors keep their badge
@@ -471,8 +471,8 @@ when it is set.</p>
       company's console (it impersonates the company — never the account that owns the portfolio list),
       and a company with no account behind it reads <strong>No account</strong> instead of offering a
       button that goes nowhere. The <strong>Plan</strong> column prints the
-      tier the workspace is held to by its catalogue NAME (<em>Free</em>, <em>Professional</em>) — and when
-      nobody ever put that workspace on a plan the same cell adds <em>(no plan chosen)</em>, so a tier the
+      tier the account is held to by its catalogue NAME (<em>Free</em>, <em>Professional</em>) — and when
+      nobody ever put that account on a plan the same cell adds <em>(no plan chosen)</em>, so a tier the
       app falls back to never reads as one the customer bought. The <strong>Plan</strong> picker on the
       <em>Users (Tenants)</em> screen prints the same catalogue name, but the value it sends when you
       press <em>Set plan</em> is the tier's slug, which is what that route takes.</td>
@@ -480,14 +480,14 @@ when it is set.</p>
       <tr>
       <td><code>/api/v1/admin/accounts/{id}/resend-credentials</code></td>
       <td>POST</td>
-      <td><strong>&ldquo;I never got the email and I can&rsquo;t sign in.&rdquo;</strong> When a signup mints a
-      workspace owner&rsquo;s first password and the mail carrying it never leaves, the account exists but nobody
+      <td><strong>&ldquo;I never got the email and I can&rsquo;t sign in.&rdquo;</strong> When a signup mints an
+      account owner&rsquo;s first password and the mail carrying it never leaves, the account exists but nobody
       has ever read the password &mdash; and a reset code travels the same mail path that just failed. The app
       records that state on the user and <code>GET /api/v1/admin/accounts</code> now publishes it per row as
       <code>owner_credentials_undelivered</code>, so the Accounts table marks that owner with a red
       <b>no password delivered</b> badge and a <b>send new password</b> button. Pressing it mints a brand-new
       password, emails it through the same <em>welcome</em> template the signup door uses, clears the badge and
-      ends that workspace&rsquo;s existing sessions, so the old password stops working immediately. The answer is
+      ends that account&rsquo;s existing sessions, so the old password stops working immediately. The answer is
       <code>{id, email, credentials_emailed, withheld, handover_password}</code>: when the address is a reserved
       test address or the provider refuses the send, <code>credentials_emailed</code> is <code>false</code> and
       the password comes back in <code>handover_password</code> so the console prints it on screen and you can
@@ -496,16 +496,16 @@ when it is set.</p>
       <tr>
       <td><code>/api/v1/admin/accounts/{id}/owner</code></td>
       <td>POST</td>
-      <td><strong>A workspace nobody can sign in to at all.</strong> A workspace can exist with a name, a
+      <td><strong>An account nobody can sign in to at all.</strong> An account can exist with a name, a
       slug and a plan and not one login: the Accounts table then shows a red <b>no login yet</b> badge and
       every other action on the screen needs a person to act on, so there was no repair here at all. Press
-      <b>Create login</b> on that row, give the address of the person who should own the workspace, and the
+      <b>Create login</b> on that row, give the address of the person who should own the account, and the
       first owner account is created &mdash; role <em>user</em>, the same shape every sign-up door mints &mdash;
-      together with the workspace&rsquo;s API keys, in one transaction, and the details are emailed through the
+      together with the account&rsquo;s API keys, in one transaction, and the details are emailed through the
       <em>welcome</em> template. The answer is <code>{tenant_id, owner_user_id, owner_email,
       credentials_emailed, withheld, handover_password}</code>: a reserved test address is withheld at the
       source, and whenever no mail left, the password returns in <code>handover_password</code> so the console
-      prints it on the row for you to hand over. It refuses a workspace that already has somebody in it
+      prints it on the row for you to hand over. It refuses an account that already has somebody in it
       (<code>409</code> &mdash; giving a second person access is what a teammate invite is for), an address that
       already has an account (<code>409</code>), and a missing or malformed address (<code>422</code>).
       Super-admin only.</td>
@@ -518,7 +518,7 @@ when it is set.</p>
       <tr>
       <td><code>/api/v1/admin/usage</code></td>
       <td>GET</td>
-      <td>Usage dashboard — per workspace: the plan tier the gates enforce, its credits, workflow runs and whether its automation backend is provisioned, with platform totals. Test machinery the app runs itself (the tenancy canaries and any harness-minted workspace) is <b>not</b> counted as a customer: those rows are held back from the table and the totals, exactly as on the Accounts screen, and <code>?include_probe=1</code> shows them with <code>reserved_owner: true</code> (the answer also reports <code>probe_hidden</code>, how many rows were withheld). The console's own <b>show probe workspaces</b> switch sets that flag.</td>
+      <td>Usage dashboard — per account: the plan tier the gates enforce, its credits, workflow runs and whether its automation backend is provisioned, with platform totals. Test machinery the app runs itself (the tenancy canaries and any harness-minted account) is <b>not</b> counted as a customer: those rows are held back from the table and the totals, exactly as on the Accounts screen, and <code>?include_probe=1</code> shows them with <code>reserved_owner: true</code> (the answer also reports <code>probe_hidden</code>, how many rows were withheld). The console's own <b>show probe accounts</b> switch sets that flag.</td>
       </tr>
       <tr>
       <td><code>/api/v1/admin/impersonate</code> / <code>stop-impersonation</code></td>
@@ -528,16 +528,16 @@ when it is set.</p>
       <tr>
       <td><code>/api/v1/admin/tickets</code></td>
       <td>GET</td>
-      <td>Cross-tenant support queue — every workspace's tickets newest-first, with the workspace name,
+      <td>Cross-tenant support queue — every account's tickets newest-first, with the account name,
       optional <code>status</code> / <code>source</code> filters (<code>source=plan_request</code> is the
       <strong>Plan requests</strong> screen). Super-admin only.</td>
       </tr>
       <tr>
       <td><code>/api/v1/admin/tickets/{id}</code></td>
       <td>PUT</td>
-      <td>Move ANY workspace's ticket to a new status (<code>open</code> / <code>pending</code> /
+      <td>Move ANY account's ticket to a new status (<code>open</code> / <code>pending</code> /
       <code>closed</code> / <code>resolved</code>). Status only — the subject and description stay the
-      customer's own words — and a change emails the workspace's owner straight away. Re-sending the
+      customer's own words — and a change emails the account's owner straight away. Re-sending the
       status a ticket already has sends nothing.</td>
       </tr>
       <tr>
@@ -728,10 +728,10 @@ when it is set.</p>
       type declares an <code>smtp</code> credential this n8n does not hold, and ONE such node made a tenant's entire
       generated workflow un-activatable (<code>Missing required credential: smtp</code>).</p>
   <p><strong>Sales alerts.</strong> The <strong>Sales alerts</strong> card on this screen takes the
-  address you want told when a workspace asks to buy a plan. Filing a plan request &mdash; from the
+  address you want told when an account asks to buy a plan. Filing a plan request &mdash; from the
   customer's Plan &amp; Billing screen, or by pressing Upgrade while checkout is not switched on &mdash;
   already emails the customer a receipt; with an address in that box the same moment also emails you,
-  naming the workspace, the plan it asked for and who asked, so the row you have to move does not wait
+  naming the account, the plan it asked for and who asked, so the row you have to move does not wait
   for you to notice it. Leave the box empty and nothing is sent &mdash; no mailbox is invented &mdash;
   and the request still lands in Plans &rarr; Plan requests. The alert travels through this
   installation's own email provider (the card below), so a broken transport fails it the same way as
@@ -797,12 +797,12 @@ when it is set.</p>
         screen says so instead of claiming a send: the answer is <code>sent:false</code> with the reason.</li>
       </ul>
       <h2 id="mailbox-storage-reminders">Mailbox storage reminders &mdash; what goes out in your name</h2>
-<p>The mailbox has a storage allowance that comes from the workspace&rsquo;s plan (0.1 GB on the free tier, more as the plan rises). The app watches that number on every inbound delivery and on every counts read, and emails the <strong>workspace owner</strong> when usage first crosses <strong>50%</strong>, <strong>75%</strong> and <strong>99%</strong> of it. Each of the three levels is sent <strong>at most once per calendar month</strong> &mdash; the app keeps a ledger row per workspace, level and month, so a busy inbox cannot turn the reminder into a stream of mail.</p>
+<p>The mailbox has a storage allowance that comes from the account&rsquo;s plan (0.1 GB on the free tier, more as the plan rises). The app watches that number on every inbound delivery and on every counts read, and emails the <strong>account owner</strong> when usage first crosses <strong>50%</strong>, <strong>75%</strong> and <strong>99%</strong> of it. Each of the three levels is sent <strong>at most once per calendar month</strong> &mdash; the app keeps a ledger row per account, level and month, so a busy inbox cannot turn the reminder into a stream of mail.</p>
 <p><strong>What the reminder never does:</strong> it deletes nothing to make room, and <em>inbound mail is never refused because the quota is full</em>. At 100% only new <strong>attachments and uploaded files</strong> are refused, with a message carrying the real numbers; the messages themselves keep arriving. This is deliberate: an inbox that bounces loses the owner business, so the quota is a number the customer is shown and a limit on files, never a gate on incoming mail.</p>
-<p><strong>Where the wording is edited:</strong> <strong>Email Templates</strong> in this console, type <code>storage_warning</code>. The reminder carries the real figures as placeholders &mdash; <code>{{percent}}</code>, <code>{{used}}</code>, <code>{{quota}}</code>, <code>{{mail_used}}</code>, <code>{{files_used}}</code>, <code>{{threshold}}</code>, <code>{{inbox_url}}</code>, <code>{{plans_url}}</code>, plus <code>{{retention}}</code> and <code>{{retention_days}}</code> when the workspace&rsquo;s retention rule is set. A template row for that type is optional: with none saved, the app sends its own plain-text wording, and a customer never sees an empty email.</p>
-<p><strong>What the operator should tell a customer who asks:</strong> the reminder is a warning, not a bill and not a deletion notice. If they want more room, the plan is the lever &mdash; the reminder&rsquo;s <code>{{plans_url}}</code> placeholder points at the workspace&rsquo;s own Billing &amp; Plans tab for exactly that reason.</p>
+<p><strong>Where the wording is edited:</strong> <strong>Email Templates</strong> in this console, type <code>storage_warning</code>. The reminder carries the real figures as placeholders &mdash; <code>{{percent}}</code>, <code>{{used}}</code>, <code>{{quota}}</code>, <code>{{mail_used}}</code>, <code>{{files_used}}</code>, <code>{{threshold}}</code>, <code>{{inbox_url}}</code>, <code>{{plans_url}}</code>, plus <code>{{retention}}</code> and <code>{{retention_days}}</code> when the account&rsquo;s retention rule is set. A template row for that type is optional: with none saved, the app sends its own plain-text wording, and a customer never sees an empty email.</p>
+<p><strong>What the operator should tell a customer who asks:</strong> the reminder is a warning, not a bill and not a deletion notice. If they want more room, the plan is the lever &mdash; the reminder&rsquo;s <code>{{plans_url}}</code> placeholder points at the account&rsquo;s own Billing &amp; Plans tab for exactly that reason.</p>
 <h2 id="workspaces-agents-and-tickets">Workspaces, agents and tickets</h2>
-      <p>Users create <strong>workspaces</strong> within their tenant (the <code>portfolio_companies</code> table); a workspace carries
+      <p>Users create <strong>workspaces</strong> within their tenant (the <code>workspaces</code> table); a workspace carries
       a name and a slug, <code>POST</code> takes an optional <code>industry_slug</code> that seeds that workspace's dashboard, and
       <code>GET /api/v1/agents?workspace_id={id}</code> scopes the agent list to one workspace. <strong>Provider keys are
       per tenant, never per workspace</strong> — see BYOK below.</p>
@@ -889,9 +889,9 @@ when it is set.</p>
       </tr>
       </tbody>
       </table>
-      <p><strong>Every workspace has it.</strong> The export is not gated by plan or feature flag: no
+      <p><strong>Every account has it.</strong> The export is not gated by plan or feature flag: no
       <code>csv_export</code> entitlement exists any more (see <a href="#plan-limits-settable-and-enforced">Plan
-      limits</a>), so a Free workspace downloads exactly the same file a paid one does.</p>
+      limits</a>), so a Free account downloads exactly the same file a paid one does.</p>
       <h2 id="renditions-manage">Renditions — edit, expire and purge</h2>
       <p>The <strong>Workflows</strong> tab's <strong>Renditions</strong> panel lists the account's generated media
       versions of workflow output — the finished files a Render step (or the n8n mirror's log node) posts into
@@ -899,7 +899,7 @@ when it is set.</p>
       <em>change</em> one: this panel is where an operator edits a single rendition's status and URLs, expires one, or
       purges every rendition whose retention window has already passed.</p>
       <p>The screen is tenant-scoped, so it acts on the account the console is signed in as — or, when you are
-      <em>Impersonating</em> a workspace, on that workspace. Each row shows the step, provider, type, status, a link to
+      <em>Impersonating</em> an account, on that account. Each row shows the step, provider, type, status, a link to
       the preview (when one is stored) and when it was created, with <strong>Edit</strong> and <strong>Del</strong> on
       the right.</p>
       <ul>
@@ -1126,26 +1126,26 @@ when it is set.</p>
       before, and clearing the box and saving puts it back. An ordinary help request never carries them, because it is a
       different receipt, so a customer who wrote in about a password does not receive bank details.</p>
       <h2 id="mcp-connect-your-ai-tools">MCP &mdash; connect your AI tools</h2>
-      <p>Every workspace can hand its own data to an AI client (Claude Code, Cursor, Hermes or your own agent) over the
-      Model Context Protocol. The <strong>MCP</strong> entry sits directly above <strong>Profile</strong> in the workspace
-      navigation, and that screen carries four things: the endpoint, this workspace's key, the tools that key can reach,
+      <p>Every account can hand its own data to an AI client (Claude Code, Cursor, Hermes or your own agent) over the
+      Model Context Protocol. The <strong>MCP</strong> entry sits directly above <strong>Profile</strong> in the console
+      navigation, and that screen carries four things: the endpoint, this account's key, the tools that key can reach,
       and a copy-paste client config.</p>
       <table>
         <tr><th>Block</th><th>What it does</th></tr>
         <tr><td>Endpoint</td><td><code>https://hooks.swiftsoftware.net/mcp</code> &mdash; one address for the whole
-        fleet; the key you present decides which workspace you are reading.</td></tr>
-        <tr><td>Your token</td><td>This workspace's own API key. Only the prefix is listed: <strong>Reveal</strong> asks
+        fleet; the key you present decides which account you are reading.</td></tr>
+        <tr><td>Your token</td><td>This account's own API key. Only the prefix is listed: <strong>Reveal</strong> asks
         for your sign-in password before it shows the key (and records that it did), and <strong>Regenerate</strong>
         retires the old key and mints a replacement in one step, so anything already wired to it stops immediately.</td></tr>
         <tr><td>Tools</td><td>Read-only. Each entity answers a <code>&lt;key&gt;_summary</code> (how many exist) and a
         <code>&lt;key&gt;_search</code> (text filter, newest first, at most 200 rows): leads, clients, workflows,
         instances, templates, dashboards, instance steps, widgets, renditions, credit transactions, industries,
         portfolio companies and account plans. <code>&lt;key&gt;_list_tenants</code> exists as well and is refused for a
-        workspace key &mdash; only the platform operator can call it.</td></tr>
+        account key &mdash; only the platform operator can call it.</td></tr>
         <tr><td>Connect</td><td>A JSON snippet for your client's config, with <code>YOUR_API_KEY</code> standing in for
         the key above.</td></tr>
       </table>
-      <p>Nothing in this set of tools changes data, and nothing reaches outside the workspace whose key was presented.
+      <p>Nothing in this set of tools changes data, and nothing reaches outside the account whose key was presented.
       A client that lists tools receives them in pages, so an agent that shows only the first page is showing itself part
       of the catalogue. There is deliberately no audit block on that screen: the MCP service keeps its own audit log and
       exposes no route to read it, and a screen must never show a block it cannot back.</p>
@@ -1201,12 +1201,12 @@ when it is set.</p>
       <li><strong>Credits included with the plan</strong> — each plan tier declares its allowance in the
         <em>Credits Monthly</em> box on <strong>Admin -&gt; Plans</strong> (stored as the tier's
         <code>features.credits_monthly</code>). The shipped tiers are seeded with 50 / 250 / 1000 / 5000
-        credits and an operator's own number always wins. A workspace is granted that allowance
+        credits and an operator's own number always wins. An account is granted that allowance
         <strong>once</strong>, when it first lands on a plan (its own signup, an admin plan assignment, a
-        resolved plan-request ticket, or the portfolio sync) — a workspace that already holds credit
+        resolved plan-request ticket, or the portfolio sync) — an account that already holds credit
         history is never re-credited, and there is no monthly renewal: later top-ups are credit packs the
         team grants by hand. A tier that declares no allowance grants one credit per workflow it includes,
-        so a new tier can never leave its workspaces unable to run. A declared zero means the tier grants
+        so a new tier can never leave its accounts unable to run. A declared zero means the tier grants
         none.</li>
       <li>Checkout: <code>/api/v1/checkout/create</code>, <code>/checkout/sessions</code>; providers configured per plan via
         <code>/api/v1/payment-providers</code>. Webhooks: <code>POST /api/v1/webhooks/stripe</code>,
@@ -1326,7 +1326,7 @@ when it is set.</p>
       the full name; clearing the box and saving removes it again.</p>
       <h2 id="download-your-data">Taking your data with you</h2>
       <p><strong>Profile &amp; Account &rarr; My Profile &rarr; Download my data</strong> saves one file
-      holding what this workspace has on record for you: the account and its plan, the team, the
+      holding what this account has on record for you: the account and its plan, the team, the
       workspaces, every workflow, lead, client, tag, automation, invoice, brand monitor and
       prospecting lead, and the <em>names</em> of your API keys. The button needs no choices — the
       file is always this account's own rows, taken from your session, so there is nothing to type

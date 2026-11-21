@@ -1156,9 +1156,9 @@ function renderPlanRequests(c){
   const card=h('div',{className:'card'});
   card.appendChild(h('h2',{className:'text-xl font-bold mb-2'},'Plan requests'));
   card.appendChild(h('p',{className:'text-sm text-gray-500 mb-4'},
-    'Every workspace that asked to move to a paid plan, or for a credit pack. Nothing is charged '
-    +'when a request is filed: our team makes the switch or adds the credits on the workspace, then '
-    +'marks the request handled here. Marking a plan request handled moves the workspace onto the tier '
+    'Every account that asked to move to a paid plan, or for a credit pack. Nothing is charged '
+    +'when a request is filed: our team makes the switch or adds the credits on the account, then '
+    +'marks the request handled here. Marking a plan request handled moves the account onto the tier '
     +'it asked for; marking a credit request handled adds the pack\u2019s credits. Either way the '
     +'customer is emailed straight away, so nobody is left waiting on an answer.'));
   const bar=h('div',{className:'flex items-center gap-3 mb-3'});
@@ -1219,18 +1219,18 @@ function renderPlanRequests(c){
     if(!rows.length){
       body.appendChild(h('div',{className:'text-sm text-gray-500'},
         'No plan requests yet. A customer who presses “Request this plan” on their Plan & Billing '
-        +'screen appears here with the workspace it came from.'));
+        +'screen appears here with the account it came from.'));
       return;
     }
     const tbl=h('table',{className:'table',id:'planRequestsTable'});
     const head=h('tr',{});
-    ['Workspace','Plan asked for','Request','Status','Filed',''].forEach(x=>head.appendChild(h('th',{},x)));
+    ['Account','Plan asked for','Request','Status','Filed',''].forEach(x=>head.appendChild(h('th',{},x)));
     tbl.appendChild(h('thead',{},head));
     const tb=h('tbody',{});
     rows.forEach(r=>{
       const tr=h('tr',{});
       if(isProbe(r)) tr.setAttribute('data-probe','1');
-      const wsCell=h('td',{className:'font-medium'}, r.account_name||'(unknown workspace)');
+      const wsCell=h('td',{className:'font-medium'}, r.account_name||'(unknown account)');
       if(isProbe(r)){
         const probeBadge=h('span',{className:'badge',style:'margin-left:6px;background:#e5e7eb;color:#374151'},'harness');
         probeBadge.title='Filed by a test harness ('+String(r.account_probe)+'), not a customer';
@@ -1269,12 +1269,12 @@ function renderPlanRequests(c){
           // credits landed instead of "Marked handled", which reads as if nothing happened.
           const granted=(ok&&ok.credits_applied)||0;
           showMsg(granted
-            ? ('Marked handled \u2014 '+granted+' credits added to the workspace'
+            ? ('Marked handled \u2014 '+granted+' credits added to the account'
                 +(ok.credits_balance!=null?(' (balance '+ok.credits_balance+')'):''))
             : applied
-            ? ('Marked handled \u2014 the workspace is now on '+(name||'the requested plan'))
+            ? ('Marked handled \u2014 the account is now on '+(name||'the requested plan'))
             : (name
-                ? ('Marked handled \u2014 that request\u2019s plan was not switched automatically; set it on the workspace')
+                ? ('Marked handled \u2014 that request\u2019s plan was not switched automatically; set it on the account')
                 : 'Marked handled'));
           load();
         }},'Mark handled');
@@ -1304,9 +1304,9 @@ function renderSupportQueue(c){
   const card=h('div',{className:'card'});
   card.appendChild(h('h2',{className:'text-xl font-bold mb-2'},'Support tickets'));
   card.appendChild(h('p',{className:'text-sm text-gray-500 mb-4'},
-    'Every ticket any workspace has filed, newest first. Write the answer and press Send — the '
+    'Every ticket any account has filed, newest first. Write the answer and press Send — the '
     +'customer reads that sentence on their own Tickets screen and is emailed that the request '
-    +'moved. Plan and credit requests are resolved on Plan Requests, where the workspace is '
+    +'moved. Plan and credit requests are resolved on Plan Requests, where the account is '
     +'actually moved onto the tier it asked for.'));
   const bar=h('div',{className:'flex items-center gap-3 mb-3'});
   const note=h('span',{className:'text-xs text-gray-500'},'loading…');
@@ -1334,13 +1334,13 @@ function renderSupportQueue(c){
     note.textContent=rows.length+' ticket(s) — '+rows.filter(isOpen).length+' still open';
     if(!rows.length){
       body.appendChild(h('div',{className:'text-sm text-gray-500'},
-        'No tickets yet. A workspace files one from its own Tickets screen.'));
+        'No tickets yet. An account files one from its own Tickets screen.'));
       return;
     }
     rows.forEach(t=>{
       const box=h('div',{className:'card',style:'margin-bottom:10px'});
       const head=h('div',{className:'flex items-center justify-between mb-1'});
-      const who=(t.account_name||'(unknown workspace)');
+      const who=(t.account_name||'(unknown account)');
       const harness=String(t.account_probe||'').trim();
       head.appendChild(h('div',{className:'font-semibold text-sm'},
         who+' — '+String(t.subject||'')+(harness?' (harness)':'')));
@@ -1965,7 +1965,7 @@ const PSLOTS=[['stripe','Stripe'],['paypal','PayPal'],['square','Square'],['padd
     +'<div class="card mb-4" data-pay-instructions="1" style="border-left:4px solid #2563eb">'
     +'<h3 class="font-bold mb-1">How a customer pays you</h3>'
     +'<p class="text-xs text-gray-500 mb-2">With no card provider connected, a plan request is the buying path: the customer presses &ldquo;Request &lt;plan&gt;&rdquo; and a request is filed for you. Write how you take payment &mdash; bank details, an invoice, any rail of your own &mdash; and the same words appear on the public pricing page (so a visitor sees them before signing up), on the customer plan screen, and in their receipt email. Leave it empty and every surface behaves exactly as it did before.</p>'
-    +'<textarea id="pp_pay_text" class="input" rows="4" data-pay-field="1" placeholder="e.g. Pay by bank transfer to Acme Ltd, sort code 00-00-00, account 12345678, and put your workspace name as the reference. A person on our team switches your plan on as soon as the payment lands."></textarea>'
+    +'<textarea id="pp_pay_text" class="input" rows="4" data-pay-field="1" placeholder="e.g. Pay by bank transfer to Acme Ltd, sort code 00-00-00, account 12345678, and put your account name as the reference. A person on our team switches your plan on as soon as the payment lands."></textarea>'
     +'<div class="flex items-center gap-3 mt-2"><button class="btn btn-primary btn-sm" id="pp_pay_save">Save</button><span class="text-xs text-gray-600" id="pp_pay_msg" data-pay-msg="1">Reading&hellip;</span></div></div>'
     +'<div id="ppdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
   const list=c.querySelector('#ppdata');
@@ -2480,7 +2480,7 @@ function renderProfile(c){
     const dlCard = h('div', { className: 'card', id: 'wsac-dl', style: 'margin-top:24px' });
     dlCard.appendChild(h('h2', { className: 'text-xl font-bold mb-2' }, 'Download your data'));
     dlCard.appendChild(h('p', { className: 'text-sm text-gray-500 mb-3' },
-      'One file with everything this workspace holds for you: your account details, plan, team, '
+      'One file with everything your account holds for you: your account details, plan, team, '
       + 'workspaces, workflows, leads, clients, tags, automations, invoices, brand monitors, '
       + 'prospecting leads and API key names. Passwords, API secrets and mail-server credentials are '
       + 'never included, and the file says so.'));
@@ -2653,8 +2653,8 @@ async function renderBranding(c){
   // `PUT /api/v1/private-email/signature/workspace` (the ONLY writer of `tenant_email_signatures`)
   // had no UI at all. One row per account, five plain fields, read back from the same route.
   const sigCard=h('div',{className:'mt-5 pt-4',style:'border-top:1px solid #e2e8f0'});
-  sigCard.appendChild(h('div',{className:'font-semibold mb-1',id:'wsig-title'},'Workspace signature'));
-  sigCard.appendChild(h('p',{className:'text-xs text-gray-500 mb-3'},'The default signature every address in this workspace uses under the logo: name, title, company, phone and one short line. An address can override it, or turn it off, in the mail client. A field left blank here stays blank in the message — it is never invented.'));
+  sigCard.appendChild(h('div',{className:'font-semibold mb-1',id:'wsig-title'},'Account signature'));
+  sigCard.appendChild(h('p',{className:'text-xs text-gray-500 mb-3'},'The default signature every address in this account uses under the logo: name, title, company, phone and one short line. An address can override it, or turn it off, in the mail client. A field left blank here stays blank in the message — it is never invented.'));
   const sigFields=[['full_name','Name','e.g. Dana Whitfield',60],['job_title','Title','e.g. Managing Director',60],['company','Company','e.g. Acme Corp',60],['phone','Phone','e.g. +1 305 555 0123',40],['line','One line under it','e.g. Acme Corp — fixed prices, written quotes',160]];
   const sigInputs={};
   const sigGrid=h('div',{className:'grid grid-cols-2 gap-4'});
@@ -2673,16 +2673,16 @@ async function renderBranding(c){
     sigSave.disabled=true;sigSave.textContent='Saving...';
     const r=await api('/private-email/signature/workspace',{method:'PUT',body:JSON.stringify(body)});
     sigSave.disabled=false;sigSave.textContent='Save signature';
-    if(r){sigMsg.textContent=r.detail||'Saved.';sigMsg.style.color='#065f46';showMsg('Workspace signature saved','success');}
+    if(r){sigMsg.textContent=r.detail||'Saved.';sigMsg.style.color='#065f46';showMsg('Account signature saved','success');}
     else {sigMsg.textContent='Save failed: '+LAST_ERR;sigMsg.style.color='#b91c1c';}
   };
   sigCard.appendChild(sigSave);
   host.appendChild(sigCard);
   (async()=>{
     const r=await api('/private-email/signature/workspace');
-    if(!r){sigMsg.textContent='Could not load the workspace signature: '+LAST_ERR;sigMsg.style.color='#b91c1c';return}
+    if(!r){sigMsg.textContent='Could not load the account signature: '+LAST_ERR;sigMsg.style.color='#b91c1c';return}
     Object.keys(sigInputs).forEach(k=>{sigInputs[k].value=((r.signature||{})[k]||'');});
-    sigMsg.textContent=r.has_signature?'This signature is added to every message unless an address changes it.':'No workspace signature yet — a field left blank stays blank in every message.';
+    sigMsg.textContent=r.has_signature?'This signature is added to every message unless an address changes it.':'No account signature yet — a field left blank stays blank in every message.';
     sigMsg.style.color='#64748b';
   })();
 
@@ -2826,9 +2826,9 @@ async function requestPlan(btn){
     const priced=price?('$'+price+'/mo'):'price on request';
     const r=await api('/tickets',{method:'POST',body:JSON.stringify({
       subject:'Plan request — '+name+' ('+priced+')',
-      description:'This workspace asked to move to the '+name+' plan (slug: '+slug+', '+priced+').\n\n'
+      description:'This account asked to move to the '+name+' plan (slug: '+slug+', '+priced+').\n\n'
         +'Filed from Admin > Profile & Account > Plans & Credits. No payment was taken in the console: '
-        +'our team sets the plan up on this workspace and confirms.',
+        +'our team sets the plan up on this account and confirms.',
       priority:'high',
       source:'plan_request',
       // The tier travels with the row (2026-10-21). Without it the operator's Resolve had
@@ -2845,7 +2845,7 @@ async function requestPlan(btn){
       showMsg('You already have an open request for '+name+' — our team is on it, and its live status is listed below.');
       btn.textContent='Requested'; btn.disabled=false; return;
     }
-    showMsg('Request sent — our team will move this workspace to '+name+'. Nothing was charged.');
+    showMsg('Request sent — our team will move this account to '+name+'. Nothing was charged.');
     btn.textContent='Requested';
   }catch(e){
     showMsg('Could not file the request: '+String((e&&e.message)||e),'error');
@@ -3049,9 +3049,9 @@ function renderList(c,key,label,ep){
 // there is exactly ONE writer of a key value.
 const MCP_ENDPOINT='https://hooks.swiftsoftware.net/mcp';
 const MCP_TOOLS=[
-  ['workflowswift_summary','How many leads this workspace holds. Takes no arguments.'],
-  ['workflowswift_search','Text search across this workspace\'s leads — name, email and company. Optional q (empty returns the newest rows) and limit (1-200, default 25), newest first.'],
-  ['workflowswift_list_tenants','ADMIN ONLY: every workspace in WorkflowSwift with its lead count. A workspace key is refused this view; the two tools above show only the caller\'s own data.'],
+  ['workflowswift_summary','How many leads this account holds. Takes no arguments.'],
+  ['workflowswift_search','Text search across this account\'s leads — name, email and company. Optional q (empty returns the newest rows) and limit (1-200, default 25), newest first.'],
+  ['workflowswift_list_tenants','ADMIN ONLY: every account in WorkflowSwift with its lead count. An account key is refused this view; the two tools above show only the caller\'s own data.'],
 ];
 function mcpCopy(text){
   if(navigator.clipboard&&navigator.clipboard.writeText){
@@ -3062,7 +3062,7 @@ function renderMcp(c){
   const cfg=JSON.stringify({mcpServers:{workflowswift:{type:'http',url:MCP_ENDPOINT,
     headers:{Authorization:'Bearer YOUR_API_KEY'}}}},null,2);
   c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-1">MCP — connect your AI tools</h2>'
-    +'<p class="text-sm text-gray-500 mb-5">Point any MCP client (Claude Code, Cursor, Hermes, or your own agent) at the endpoint below and it can read this workspace\'s WorkflowSwift leads. The client authenticates with this workspace\'s API key, so it only ever sees this account. Read-only.</p>'
+    +'<p class="text-sm text-gray-500 mb-5">Point any MCP client (Claude Code, Cursor, Hermes, or your own agent) at the endpoint below and it can read this account\'s WorkflowSwift leads. The client authenticates with this account\'s API key, so it only ever sees this account. Read-only.</p>'
     +'<div class="mb-5"><label class="block text-xs font-medium text-gray-500 mb-1">Endpoint</label>'
     +'<div class="flex items-center gap-2"><code id="mcp_ep" class="text-xs break-all bg-slate-50 border rounded px-2 py-1 flex-1">'+escHtml(MCP_ENDPOINT)+'</code>'
     +'<button class="btn btn-sm" id="mcp_ep_copy">Copy</button></div></div>'
@@ -3072,7 +3072,7 @@ function renderMcp(c){
     +'<pre id="mcp_cfg" style="background:#0f172a;color:#e2e8f0;padding:12px;border-radius:8px;font-size:11px;overflow-x:auto;margin:0">'+escHtml(cfg)+'</pre>'
     +'<button class="btn btn-sm mt-2" id="mcp_cfg_copy">Copy config</button></div>'
     +'<h3 class="text-sm font-semibold mb-2">What it can do</h3>'
-    +'<p class="text-xs text-gray-500 mb-3">Three read-only tools, scoped to the key\'s own workspace. The list below is what the server answers for this app today.</p>'
+    +'<p class="text-xs text-gray-500 mb-3">Three read-only tools, scoped to the key\'s own account. The list below is what the server answers for this app today.</p>'
     +'<table class="table"><thead><tr><th>Tool</th><th>What it answers</th></tr></thead><tbody>'
     +MCP_TOOLS.map(function(p){return '<tr><td><code class="text-xs">'+escHtml(p[0])+'</code></td><td class="text-xs text-gray-500">'+escHtml(p[1])+'</td></tr>'}).join('')
     +'</tbody></table></div>';
@@ -3113,16 +3113,16 @@ let USAGE_SHOW_PROBES=false;
 function planToldNote(r){
   if(!r) return '';
   if(r.notified===true) return ' The customer has been emailed about the change.';
-  if(r.notify_reason==='unchanged') return ' The workspace was already on that plan, so no email was sent.';
+  if(r.notify_reason==='unchanged') return ' The account was already on that plan, so no email was sent.';
   if(r.notify_reason==='no_recipient') return ' No customer email address was found, so nobody was told.';
   if(r.notify_reason==='mail_failed') return ' The customer could NOT be emailed — the plan is set, so tell them yourself.';
   return '';
 }
 function renderAdminUsage(c){
   c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-1"><h2 class="text-xl font-bold">Platform Usage</h2>'
-   +'<div class="flex items-center gap-2"><label class="flex items-center gap-1 text-xs text-gray-600" title="Probe workspaces (harness-minted, or owned by an address on a reserved test domain) are not customers. Hidden by default, exactly as on the Accounts screen; tick this to include them in the table and the totals."><input type="checkbox" id="usageShowProbes" data-usage="show-probes"'+ (USAGE_SHOW_PROBES?' checked':'') +'> show probe workspaces</label>'
+   +'<div class="flex items-center gap-2"><label class="flex items-center gap-1 text-xs text-gray-600" title="Probe accounts (harness-minted, or owned by an address on a reserved test domain) are not customers. Hidden by default, exactly as on the Accounts screen; tick this to include them in the table and the totals."><input type="checkbox" id="usageShowProbes" data-usage="show-probes"'+ (USAGE_SHOW_PROBES?' checked':'') +'> show probe accounts</label>'
    +'<span class="text-xs text-gray-400" id="utot"></span></div></div>'
-   +'<p class="text-xs text-gray-400 mb-4">One row per workspace: the plan it is on, its credit balance, how many workflow runs it has made, and whether its automation backend is provisioned. Totals for the platform sit above the table. Test machinery this app runs itself (the tenancy canaries and any harness workspace) is counted as a customer only while the switch above is ticked.</p>'
+   +'<p class="text-xs text-gray-400 mb-4">One row per account: the plan it is on, its credit balance, how many workflow runs it has made, and whether its automation backend is provisioned. Totals for the platform sit above the table. Test machinery this app runs itself (the tenancy canaries and any harness account) is counted as a customer only while the switch above is ticked.</p>'
    +'<div id="udata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
   const fail=()=>{const h=c.querySelector('#udata');if(h)h.innerHTML='<p class="text-red-400">Not available.</p>'};
   const spBox=c.querySelector('#usageShowProbes');
@@ -3153,15 +3153,15 @@ function renderAdminUsage(c){
     const when=v=>{const t=Date.parse(v);return isNaN(t)?'\u2014':new Date(t).toLocaleDateString()};
     const kpi=(label,val)=>'<div class="rounded-lg bg-gray-50 px-3 py-2"><div class="text-xs uppercase text-gray-400">'+label+'</div><div class="text-lg font-semibold">'+val+'</div></div>';
     let html='<div class="grid grid-cols-4 gap-3 mb-4">'
-      +kpi('Workspaces',rows.length)
+      +kpi('Accounts',rows.length)
       +kpi('Workflow runs',runs.toLocaleString())
       +kpi('Credits outstanding',credits.toLocaleString())
       +kpi('Automation provisioned',prov+' / '+rows.length)+'</div>';
     html+='<div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr class="text-left text-xs uppercase text-gray-400 border-b">'
-      +'<th class="py-2">Workspace</th><th class="py-2">Plan</th><th class="py-2">Credits</th><th class="py-2">Workflow runs</th><th class="py-2">Automation</th><th class="py-2">Created</th></tr></thead><tbody>';
+      +'<th class="py-2">Account</th><th class="py-2">Plan</th><th class="py-2">Credits</th><th class="py-2">Workflow runs</th><th class="py-2">Automation</th><th class="py-2">Created</th></tr></thead><tbody>';
     rows.forEach(r=>{
-      const probeBadge=r.reserved_owner||r.probe_harness?' <span class="badge badge-yellow" title="Fleet machinery, not a customer: a harness-minted workspace or an owner on a reserved test domain. Hidden unless the switch above is ticked.">probe</span>':'';
-      html+='<tr class="border-b last:border-0"><td class="py-2 font-medium">'+esc(r.account_name||'(untitled workspace)')+probeBadge+'</td>'
+      const probeBadge=r.reserved_owner||r.probe_harness?' <span class="badge badge-yellow" title="Fleet machinery, not a customer: a harness-minted account or an owner on a reserved test domain. Hidden unless the switch above is ticked.">probe</span>':'';
+      html+='<tr class="border-b last:border-0"><td class="py-2 font-medium">'+esc(r.account_name||'(untitled account)')+probeBadge+'</td>'
         +'<td class="py-2">'+planPicker(r)+'</td>'
         +'<td class="py-2">'+Number(r.credits_balance||0).toLocaleString()+'</td>'
         +'<td class="py-2">'+Number(r.workflows_run||0).toLocaleString()+'</td>'
@@ -3175,14 +3175,14 @@ function renderAdminUsage(c){
       sel.onchange=async()=>{
         const aid=sel.getAttribute('data-usage-plan'), slug=sel.value;
         if(!aid||!slug)return;
-        if(!confirm('Move this workspace to the "'+slug+'" plan?')){renderAdminUsage(c);return;}
+        if(!confirm('Move this account to the "'+slug+'" plan?')){renderAdminUsage(c);return;}
         const r=await api('/admin/accounts/'+encodeURIComponent(aid)+'/plan',{method:'PUT',body:JSON.stringify({plan_slug:slug})});
-        if(r)showMsg('Workspace moved to the '+slug+' plan.'+planToldNote(r));
+        if(r)showMsg('Account moved to the '+slug+' plan.'+planToldNote(r));
         else showMsg('Plan change failed: '+LAST_ERR,'error');
         renderAdminUsage(c);
       };
     });
-    const tot=c.querySelector('#utot');if(tot)tot.textContent=rows.length+' workspaces'+(Number(d.probe_hidden||0)>0?' (+'+d.probe_hidden+' probe hidden)':'');
+    const tot=c.querySelector('#utot');if(tot)tot.textContent=rows.length+' accounts'+(Number(d.probe_hidden||0)>0?' (+'+d.probe_hidden+' probe hidden)':'');
   }).catch(fail);
 }
 
@@ -3205,7 +3205,7 @@ function renderAdminSettings(c){
    +'<p class="text-xs text-gray-500 mb-4">When FunnelSwift tags one of its leads with WorkflowSwift, this app creates a free account for that business on the plan you pick here and emails them their login. On by default &mdash; switch it off here if you do not want tags to create accounts.</p>'
    +'<div id="provbody"><p class="text-gray-400 text-sm">Loading...</p></div></div>'
    +'<div class="card mt-4"><h2 class="text-xl font-bold mb-1">Sales alerts</h2>'
-   +'<p class="text-xs text-gray-500 mb-3">When a workspace asks to buy a plan &mdash; from its Plan &amp; Billing screen, or by pressing Upgrade while checkout is not switched on &mdash; the request lands in Plans &rarr; Plan requests. Put your own address here and WorkflowSwift emails you the moment the ask is filed, so you are told about the row you have to move. Leave it empty to send nothing.</p>'
+   +'<p class="text-xs text-gray-500 mb-3">When an account asks to buy a plan &mdash; from its Plan &amp; Billing screen, or by pressing Upgrade while checkout is not switched on &mdash; the request lands in Plans &rarr; Plan requests. Put your own address here and WorkflowSwift emails you the moment the ask is filed, so you are told about the row you have to move. Leave it empty to send nothing.</p>'
    +'<div class="flex gap-2 items-center flex-wrap"><input id="oa_email" type="email" placeholder="you@yourdomain.com" style="max-width:320px;padding:7px 9px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"><button class="btn btn-primary btn-sm" id="oa_save">Save alert address</button><span id="oa_msg" class="text-xs"></span></div></div>'
    +'<div class="card mt-4"><h2 class="text-xl font-bold mb-4">Platform Settings</h2><div id="sdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>'
    +'<div class="card mt-4"><h2 class="text-xl font-bold mb-1">Email Provider</h2>'
@@ -3529,7 +3529,7 @@ function probeBadgeHtml(harness){
 // the state; the `Create login` button on the row is the repair.
 function noLoginBadgeHtml(a){
   if(!(a && (a.user_count||0)===0)) return '';
-  return '<div style="margin-top:4px"><span class="badge" style="background:#fee2e2;color:#991b1b" title="This workspace exists but nobody can sign in to it: it has no login at all. Press Create login to mint the owner account and email its details.">no login yet</span></div>';
+  return '<div style="margin-top:4px"><span class="badge" style="background:#fee2e2;color:#991b1b" title="This account exists but nobody can sign in to it: it has no login at all. Press Create login to mint the owner account and email its details.">no login yet</span></div>';
 }
 function ownerCellHtml(a){
   const oe=String((a&&(a.owner_email||a.email))||'').trim();
@@ -3547,7 +3547,7 @@ function ownerCellHtml(a){
 // table clears it.
 function credUndeliveredHtml(a){
   if(!(a && a.owner_credentials_undelivered)) return '';
-  return '<div style="margin-top:4px"><span class="badge" style="background:#fef3c7;color:#92400e" title="The first password we minted for this owner was never delivered &mdash; a provider refusal, or a reserved test address withheld at source. Nobody has ever read it, so this workspace cannot be signed into until you send a new one.">password never delivered</span></div>';
+  return '<div style="margin-top:4px"><span class="badge" style="background:#fef3c7;color:#92400e" title="The first password we minted for this owner was never delivered &mdash; a provider refusal, or a reserved test address withheld at source. Nobody has ever read it, so this account cannot be signed in to until you send a new one.">password never delivered</span></div>';
 }
 
 // WHEN a workspace was last actually used (cron 2026-10-27). `last_sign_in` is the newest
@@ -3815,7 +3815,7 @@ function renderAdminAccounts(c){
     el.querySelectorAll('button.acc-owner').forEach(b=>b.addEventListener('click', async ()=>{
       const aid=b.getAttribute('data-acc'); if(!aid) return;
       const label=b.textContent;
-      const wsName=b.getAttribute('data-name')||'this workspace';
+      const wsName=b.getAttribute('data-name')||'this account';
       const mail=String(prompt('The email address of the person who should own '+wsName+':','')||'').trim();
       if(!mail) return;
       if(!confirm('Create the first login for '+wsName+' and email the details to '+mail+'?')) return;
@@ -4357,7 +4357,7 @@ window.appGuidePages = {
   "dashboard:competitor-watch": { title: "Competitor Watch", desc: "The competitors this account tracks.", actions: ["Add a competitor", "Open a competitor's record"] },
   "dashboard:prospecting": { title: "Prospecting", desc: "Potential customers the platform has surfaced for this account.", actions: ["Review a prospect", "Move a prospect into your CRM"] },
   "workflows:all-workflows": { title: "Workflows", desc: "The workflows this account runs: each one is a series of steps that run in order.", actions: ["Create a workflow", "Open a workflow to edit its steps", "Run a workflow"] },
-  "workflows:instances": { title: "Workflow Instances", desc: "Every run of a workflow, with the status of each and how long it took. Export CSV downloads every run this workspace has ever had as a spreadsheet — the run's name, the workflow it belongs to, its status, when it started and finished, how many minutes it took, and the error text if it failed — so you can hand the whole record to a client, an auditor or your own bookkeeping.", actions: ["See a run's steps", "Retry a failed run", "Press Export CSV to download the whole run history"] },
+  "workflows:instances": { title: "Workflow Instances", desc: "Every run of a workflow, with the status of each and how long it took. Export CSV downloads every run this account has ever had as a spreadsheet — the run's name, the workflow it belongs to, its status, when it started and finished, how many minutes it took, and the error text if it failed — so you can hand the whole record to a client, an auditor or your own bookkeeping.", actions: ["See a run's steps", "Retry a failed run", "Press Export CSV to download the whole run history"] },
   "workflows:templates": { title: "Templates", desc: "Reusable workflow blueprints you can start a new workflow from.", actions: ["Preview a template", "Create a workflow from a template"] },
   "automation:automations": { title: "Automations", desc: "Rules that run without anyone watching: when something happens, do something.", actions: ["Create an automation", "Enable or disable one"] },
   "automation:agents": { title: "Agents", desc: "The AI agents attached to this account and what they are set up to do.", actions: ["Open an agent", "Edit an agent's instructions"] },
@@ -4370,17 +4370,17 @@ window.appGuidePages = {
   "integrations:provider-keys": { title: "Provider Keys", desc: "Your own API keys for the third-party services this app uses. Keys are stored encrypted and are never shown again in full.", actions: ["Save a provider key", "See which providers are connected", "Replace or remove a key"] },
   "integrations:api-keys": { title: "API Keys", desc: "The keys this app issues so other systems can call it on this account's behalf.", actions: ["Create a key", "Copy a key at creation, view it again later", "Revoke a key"] },
   "integrations:n8n-proxy": { title: "n8n Proxy", desc: "The link to the automation engine: what it can call here and how it authenticates.", actions: ["Review the configuration"] },
-  "integrations:bridge": { title: "AI Bridge", desc: "The server-side queue of inbound AI task files this install has been handed, and the results written back for them. It is a platform-level queue, not a per-workspace setting, so the platform operator is the only one who can read it.", actions: ["Review the queued inbound tasks"] },
-  "support:tickets": { title: "Tickets", desc: "Every support request on this install, newest first: the ones a workspace files from its own Tickets screen, the plan requests filed from a customer's Plan & Billing screen, and the messages a visitor with no account sends from the public contact page. An answer you write here is stored on the request and emailed to whoever asked &mdash; a message from the contact page reaches the address they typed. Closing a plan request applies the plan it named. The number on the Support tab is how many requests are still waiting for an answer.", actions: ["Read every request with the workspace or address it came from", "Write the answer and mark it resolved or closed", "Apply the plan a plan request named", "The number on the Support tab is the waiting count"] },
+  "integrations:bridge": { title: "AI Bridge", desc: "The server-side queue of inbound AI task files this install has been handed, and the results written back for them. It is a platform-level queue, not a per-account setting, so the platform operator is the only one who can read it.", actions: ["Review the queued inbound tasks"] },
+  "support:tickets": { title: "Tickets", desc: "Every support request on this install, newest first: the ones an account files from its own Tickets screen, the plan requests filed from a customer's Plan & Billing screen, and the messages a visitor with no account sends from the public contact page. An answer you write here is stored on the request and emailed to whoever asked &mdash; a message from the contact page reaches the address they typed. Closing a plan request applies the plan it named. The number on the Support tab is how many requests are still waiting for an answer.", actions: ["Read every request with the account or address it came from", "Write the answer and mark it resolved or closed", "Apply the plan a plan request named", "The number on the Support tab is the waiting count"] },
   "profile:my-profile": { title: "My Profile", desc: "Your own profile: name, username, company, the address you sign in with, password and picture. What you set here is what appears across the console.", actions: ["Set your name, username, company and picture", "Change your sign-in email (we email a confirmation link)", "Change your password"] },
   "profile:team": { title: "Team", desc: "The people who can sign in to this account, and the role each one holds.", actions: ["Invite a team member", "Change a member's role"] },
   "profile:plans-credits": { title: "Plans & Credits", desc: "The plan this account is on, the limits that plan carries and the credits it has. A plan is a bundle of limits and features.", actions: ["See your current plan", "Compare the plans on offer", "Check your credit balance"] },
-  "profile:email-branding": { title: "Email Branding", desc: "Put your own name, colour and logo on the transactional email this app sends for your account, instead of the default WorkflowSwift header. The workspace signature (name, title, company, phone, one line) is set below the branding and is the default every address uses in the mail client. A new logo replaces the one already saved. Send me a preview email mails a sample of your own branded mail to the address you sign in with, so you see exactly what a customer receives; a reserved test address cannot receive it, so no preview is sent and the card tells you why.", actions: ["Upload your logo", "Set your brand name and colour", "Set the workspace signature every address starts with", "Press Send me a preview email to see the real header in your own inbox"] },
+  "profile:email-branding": { title: "Email Branding", desc: "Put your own name, colour and logo on the transactional email this app sends for your account, instead of the default WorkflowSwift header. The account signature (name, title, company, phone, one line) is set below the branding and is the default every address uses in the mail client. A new logo replaces the one already saved. Send me a preview email mails a sample of your own branded mail to the address you sign in with, so you see exactly what a customer receives; a reserved test address cannot receive it, so no preview is sent and the card tells you why.", actions: ["Upload your logo", "Set your brand name and colour", "Set the account signature every address starts with", "Press Send me a preview email to see the real header in your own inbox"] },
   "profile:invoices": { title: "Invoices", desc: "The invoices raised on this account.", actions: ["Open an invoice"] },
   "profile:payments": { title: "Payment Providers", desc: "The payment accounts this install can take money through at checkout, and whether each is in test or live mode. A platform administrator manages them here.", actions: ["Add a payment provider", "Switch a provider between test and live", "Remove a provider from checkout"] },
   "profile:checkout-sessions": { title: "Checkout Sessions", desc: "Every payment session this account has started. A read-only history of what was attempted.", actions: ["Match a session to a plan change"] },
   "comms:webhooks": { title: "Webhooks", desc: "Outgoing notifications: when something happens here, we POST it to a URL you control.", actions: ["Add a webhook URL", "Choose the events it receives", "Review recent deliveries"] },
-  "admin:usage": { title: "Platform Usage", desc: "One row per workspace: the plan tier the gates enforce, its credit balance, how many workflow runs it has made and whether its automation backend is provisioned, with platform totals above the table. Test machinery this app runs itself — the tenancy canaries and any workspace a probe harness minted — is not counted as a customer: those rows are held back from the table and from the totals, the header says how many were withheld, and the show probe workspaces switch brings them back marked probe so you can still see them. The Plan cell is a picker: moving a workspace onto a plan here emails that workspace's owner — which plan they are on, that nothing was charged, and where to see what it includes — and the message beside the row says whether that mail went out. Saving the plan a workspace already has emails nobody.", actions: ["Read each workspace's plan and usage", "Move a workspace onto a plan and read whether the customer was emailed", "Tick show probe workspaces to see the test accounts that are normally held back", "Open the raw API answer for support"] },
+  "admin:usage": { title: "Platform Usage", desc: "One row per account: the plan tier the gates enforce, its credit balance, how many workflow runs it has made and whether its automation backend is provisioned, with platform totals above the table. Test machinery this app runs itself — the tenancy canaries and any account a probe harness minted — is not counted as a customer: those rows are held back from the table and from the totals, the header says how many were withheld, and the show probe accounts switch brings them back marked probe so you can still see them. The Plan cell is a picker: moving an account onto a plan here emails that account's owner — which plan they are on, that nothing was charged, and where to see what it includes — and the message beside the row says whether that mail went out. Saving the plan an account already has emails nobody.", actions: ["Read each account's plan and usage", "Move an account onto a plan and read whether the customer was emailed", "Tick show probe accounts to see the test accounts that are normally held back", "Open the raw API answer for support"] },
   "admin:settings": { title: "Settings", desc: "This app's own configuration for your account, including the mail server and the other integration slots.", actions: ["Set the mail server credentials", "Check whether email is configured"] },
   "admin:users": { title: "Users (Tenants)", desc: "Every account (tenant) on this install and the plan it is on. There is no user directory here — this panel lists accounts; deleting one is done from the Accounts panel.", actions: ["Move an account to a different plan"] },
   "admin:accounts": { title: "Accounts", desc: "Every customer account on this install; your own portfolio companies are held out of the list unless Include portfolio companies is ticked, and each row you bring back carries a portfolio badge. Select rows to delete the ones you no longer want.", actions: ["Search for an account", "Include portfolio companies to see your own companies in the list", "Delete the selected accounts"] },
@@ -4390,7 +4390,7 @@ window.appGuidePages = {
   "admin:email-templates": { title: "Email Templates", desc: "The emails this app sends. Edit the subject and body without touching code.", actions: ["Preview a template", "Edit a template"] },
   "admin:industry-sources": { title: "Industry Sources", desc: "The sources used to classify industries and surface content for them.", actions: ["Review a source"] },
   "workflows:renditions": { title: "Renditions", desc: "The media versions a workflow's Render step produced — one row per generated asset, with the step it came from, the provider, its type and status, and a link to the preview. Expire removes a single rendition; Purge expired sets every rendition past its retention window to purged in one go, and that cannot be undone.", actions: ["Open a rendition's preview", "Edit a rendition's status, preview address or thumbnail", "Expire one rendition", "Purge every rendition past its retention window"] },
-  "admin:plan-requests": { title: "Plan Requests", desc: "Every workspace that asked to move to a paid plan, or asked for a credit pack. Nothing is charged when a request is filed. Marking a plan request handled moves the workspace onto the tier it asked for; marking a credit request handled adds the pack's credits — and either way the customer is emailed straight away, so nobody is left waiting on an answer. The Hide test-harness rows switch only filters rows already on screen, so no request can be lost by ticking it.", actions: ["Mark a plan request handled to seat the workspace on the tier it asked for", "Mark a credit request handled to add the pack's credits", "Tick Hide test-harness rows to hide probe requests without losing them", "Press Refresh to re-read the queue"] },
+  "admin:plan-requests": { title: "Plan Requests", desc: "Every account that asked to move to a paid plan, or asked for a credit pack. Nothing is charged when a request is filed. Marking a plan request handled moves the account onto the tier it asked for; marking a credit request handled adds the pack's credits — and either way the customer is emailed straight away, so nobody is left waiting on an answer. The Hide test-harness rows switch only filters rows already on screen, so no request can be lost by ticking it.", actions: ["Mark a plan request handled to seat the account on the tier it asked for", "Mark a credit request handled to add the pack's credits", "Tick Hide test-harness rows to hide probe requests without losing them", "Press Refresh to re-read the queue"] },
   "admin:feedback": { title: "Feedback", desc: "What customers told the platform — an idea, a bug or a complaint — each row carrying the message, the account and person who sent it, the app and the screen they were on, and when it arrived. This panel is read only: an answer goes to the person by email at the address on the row.", actions: ["Read what a customer reported", "Find which screen a report came from"] },
   "admin:site-config": { title: "Site Configuration", desc: "The public site settings: titles, social links, analytics and the legal pages.", actions: ["Edit the site copy", "Save the configuration"] }
 };
