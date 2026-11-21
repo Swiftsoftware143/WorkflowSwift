@@ -84,8 +84,10 @@
   function toast(msg, kind) {
     var t = document.createElement('div');
     t.textContent = msg;
-    t.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:22px;z-index:99;padding:10px 16px;border-radius:10px;'
-      + 'font-size:13px;color:#fff;background:' + (kind === 'error' ? '#b91c1c' : '#111827') + ';box-shadow:0 6px 24px rgba(0,0,0,.18)';
+    t.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:22px;z-index:var(--z-toast);padding:10px 16px;border-radius:10px;'
+      + 'font-size:13px;'
+      + (kind === 'error' ? 'color:#fff;background:#b91c1c;' : 'color:var(--surface-0);background:var(--ink);')
+      + 'box-shadow:var(--shadow-2)';
     document.body.appendChild(t);
     setTimeout(function () { t.remove(); }, 3600);
   }
@@ -569,7 +571,7 @@
       + '<button class="btn btn-ghost" id="mRefresh" title="Refresh">Refresh</button>'
       + '<input id="mSearch" type="search" value="' + esc(S.q) + '" placeholder="Search subject, sender or text"'
       + ' aria-label="Search mail" autocomplete="off" style="flex:1 1 100%;box-sizing:border-box;padding:7px 10px;'
-      + 'border:1px solid var(--line);border-radius:8px;font:inherit;background:#fff">'
+      + 'border:1px solid var(--line);border-radius:8px;font:inherit;background:var(--surface-2)">'
       + (S.q ? '<button class="btn btn-ghost" id="mSearchClear" title="Clear the search">Clear search</button>' : '')
       + '</div>';
     if (!msgs.length) {
@@ -885,7 +887,7 @@
         if (box) box.innerHTML = '<div class="badge open">Summarising…</div>';
         try {
           var s = await api('POST', '/private-email/messages/' + m.id + '/summarize', {});
-          if (box) box.innerHTML = '<div class="badge" style="background:#eef2ff;color:#1e3a8a;display:block">'
+          if (box) box.innerHTML = '<div class="badge" style="background:var(--accent-soft);color:var(--accent);display:block">'
             + '<strong>Summary</strong><div style="margin-top:4px;white-space:pre-wrap">' + esc(s.summary) + '</div></div>';
         } catch (e) { if (box) box.innerHTML = '<div class="badge open">' + esc(fail(e)) + '</div>'; }
         return;
@@ -978,7 +980,7 @@
       + '<label class="f">Subject</label><input id="cSubject" value="' + esc(subject) + '">'
       + '<label class="f">Message</label><textarea id="cBody" rows="8">' + esc(body) + '</textarea>'
       + '<label class="f">Signature</label>'
-      + '<div id="cSigWrap" style="border:1px solid var(--line);border-radius:8px;padding:12px;background:#fff;max-height:200px;overflow:auto"></div>'
+      + '<div id="cSigWrap" style="border:1px solid var(--line);border-radius:8px;padding:12px;background:var(--surface-ref);max-height:200px;overflow:auto"></div>'
       + '<label id="cSigRow" style="display:flex;gap:8px;align-items:flex-start;margin:10px 0 0;font-size:13px;line-height:1.35">'
       + '<input type="checkbox" id="cSigOn" checked style="width:auto;margin:2px 0 0">'
       + '<span>Include the signature on this message</span></label>'
@@ -1109,7 +1111,7 @@
               : 'The workspace signature and logo are set in Email Branding in the CRM. This address does not have its own wording.';
             var prev = $('sPreview');
             prev.innerHTML = (d && d.html)
-              ? '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">What goes under the message today</div><div style="border:1px solid var(--line);border-radius:8px;padding:12px;background:#fff">' + d.html + '</div>'
+              ? '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">What goes under the message today</div><div style="border:1px solid var(--line);border-radius:8px;padding:12px;background:var(--surface-ref)">' + d.html + '</div>'
               : '<div style="font-size:12px;color:var(--muted)">' + esc((d && d.detail) || 'Nothing is added to messages from this address.') + '</div>';
             paint();
           } catch (e) { $('sErr').textContent = fail(e); }

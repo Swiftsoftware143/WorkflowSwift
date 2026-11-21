@@ -106,22 +106,22 @@
     widget.innerHTML =
       '<style>' +
       '#inline-guide-widget{position:fixed;bottom:24px;right:24px;z-index:99999;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}' +
-      '#ig-toggle{width:48px;height:48px;border-radius:50%;border:none;background:#4f46e5;color:#fff;font-size:22px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(79,70,229,0.4);transition:transform .15s,box-shadow .15s;display:flex;align-items:center;justify-content:center;line-height:1}' +
+      '#ig-toggle{width:48px;height:48px;border-radius:50%;border:none;background:var(--accent);color:#fff;font-size:22px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(79,70,229,0.4);transition:transform .15s,box-shadow .15s;display:flex;align-items:center;justify-content:center;line-height:1}' +
       '#ig-toggle:hover{transform:scale(1.08);box-shadow:0 6px 18px rgba(79,70,229,0.5)}' +
-      '#ig-panel{position:fixed;bottom:80px;right:24px;width:360px;max-width:calc(100vw - 48px);background:#fff;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,0.18);border:1px solid #e5e7eb;overflow:hidden;display:none;max-height:60vh;overflow-y:auto}' +
+      '#ig-panel{position:fixed;bottom:80px;right:24px;width:360px;max-width:calc(100vw - 48px);background:var(--surface-3);color:var(--ink);border-radius:16px;box-shadow:var(--shadow-2);border:1px solid var(--line);overflow:hidden;display:none;max-height:60vh;overflow-y:auto}' +
       '#ig-panel.open{display:block}' +
       '#ig-header{padding:16px 18px 12px;background:linear-gradient(135deg,#4f46e5,#3730a3);color:#fff;display:flex;align-items:center;justify-content:space-between}' +
       '#ig-header h3{margin:0;font-size:15px;font-weight:600}' +
       '#ig-close{background:rgba(255,255,255,0.2);border:none;color:#fff;width:28px;height:28px;border-radius:8px;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;padding:0;line-height:1}' +
       '#ig-close:hover{background:rgba(255,255,255,0.35)}' +
       '#ig-body{padding:14px 18px 16px}' +
-      '#ig-desc{font-size:14px;color:#374151;line-height:1.55;margin:0 0 12px}' +
-      '#ig-actions-title{font-size:12px;font-weight:600;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin:0 0 6px}' +
+      '#ig-desc{font-size:14px;color:var(--ink);line-height:1.55;margin:0 0 12px}' +
+      '#ig-actions-title{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin:0 0 6px}' +
       '#ig-actions{list-style:none;padding:0;margin:0}' +
-      '#ig-actions li{font-size:13px;color:#374151;padding:5px 0 5px 20px;position:relative}' +
-      '#ig-actions li::before{content:"\u2192";position:absolute;left:2px;color:#4f46e5;font-weight:700}' +
-      '#ig-dismiss{display:block;margin-top:12px;padding:8px 14px;border:1px solid #d1d5db;border-radius:8px;background:#fff;color:#6b7280;font-size:13px;cursor:pointer;text-align:center;width:100%}' +
-      '#ig-dismiss:hover{background:#f9fafb}' +
+      '#ig-actions li{font-size:13px;color:var(--ink);padding:5px 0 5px 20px;position:relative}' +
+      '#ig-actions li::before{content:"\u2192";position:absolute;left:2px;color:var(--accent);font-weight:700}' +
+      '#ig-dismiss{display:block;margin-top:12px;padding:8px 14px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--muted);font-size:13px;cursor:pointer;text-align:center;width:100%}' +
+      '#ig-dismiss:hover{background:var(--surface-3)}' +
       '</style>' +
       '<button id="ig-toggle" aria-label="Help" title="Guide">?</button>' +
       '<div id="ig-panel">' +
