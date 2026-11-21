@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script id="ws-theme-boot">(function(){try{var t=null;try{var m=document.cookie.match(/(?:^|;\s*)ws_theme=([^;]+)/);if(m)t=m[1];}catch(e){}if(!t){try{t=localStorage.getItem('ws_theme');}catch(e){}}if(t!=='dark'&&t!=='light'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches){t='dark';}if(t==='dark'||t==='light'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}})();</script>
+
+<style id="ws-theme">:root{color-scheme:dark}
+html[data-theme="dark"]{color-scheme:dark}
+html[data-theme="light"]{--bg-dark:#f6f7fb;--bg-card:#ffffff;--bg-elevated:#ffffff;--border:#dde1ea;--text-primary:#16181d;--text-secondary:#4b5563;--text-muted:#6b7280;--indigo:#4f46e5;--indigo-light:#4f46e5;--indigo-glow:#eef2ff;color-scheme:light}
+html[data-theme="light"] .topbar-badge{color:#4338ca}
+html[data-theme="light"] .alert-info{color:#1d4ed8}
+html[data-theme="light"] .alert-warning{color:#9a3412}
+html[data-theme="light"] .alert-success{color:#15803d}
+html[data-theme="light"] .alert-danger{color:#b91c1c}
+html[data-theme="light"] tr:hover td{background:rgba(0,0,0,0.03)}
+html[data-theme="light"] a.section-title:hover{background:rgba(0,0,0,0.04)}
+.ws-theme-toggle{position:fixed;left:12px;bottom:12px;z-index:2147483000;display:inline-flex;align-items:center;gap:6px;background:var(--bg-elevated);color:var(--text-primary);border:1px solid var(--border);border-radius:999px;padding:7px 12px;box-shadow:0 1px 2px rgba(0,0,0,.35);cursor:pointer;font:13px/1 system-ui,-apple-system,sans-serif}
+.ws-theme-toggle:hover{background:var(--bg-card)}
+</style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WorkflowSwift — User Guide</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.svg">
+<style>
+  :root {
+    --indigo: #4f46e5; --indigo-light: #a5b4fc; --indigo-dark: #3730a3; --indigo-glow: rgba(79, 70, 229, 0.15);
+    --bg-dark: #0E0F12; --bg-card: #16181D; --bg-elevated: #1E2028; --border: #2A2D38;
+    --text-primary: #F1F5F9; --text-secondary: #CBD5E1; --text-muted: #94A3B8;
+    --success: #22C55E; --warning: #F97316; --danger: #EF4444; --info: #3B82F6;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background: var(--bg-dark); color: var(--text-primary); line-height: 1.6; min-height: 100vh; }
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-track { background: var(--bg-dark); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+  .app-layout { display: flex; min-height: 100vh; }
+
+  .sidebar { width: 260px; background: var(--bg-card); border-right: 1px solid var(--border); position: fixed; top: 0; left: 0; height: 100vh; overflow-y: auto; z-index: 100; display: flex; flex-direction: column; }
+  .sidebar-logo { display: flex; align-items: center; gap: 12px; padding: 24px; border-bottom: 1px solid var(--border); }
+  .sidebar-logo .logo-icon { width: 40px; height: 40px; border-radius: 12px; background: linear-gradient(135deg, var(--indigo), #8B5CF6); display: flex; align-items: center; justify-content: center; font-size: 20px; flex-shrink: 0; }
+  .sidebar-logo h1 { font-size: 18px; font-weight: 600; color: var(--text-primary); }
+  .sidebar-logo p { font-size: 11px; color: var(--text-muted); }
+  .sidebar-nav { flex: 1; padding: 16px 12px; overflow-y: auto; }
+  .sidebar-nav .section-title { padding: 8px 12px 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); }
+  .nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px; font-size: 14px; font-weight: 500; color: var(--text-secondary); text-decoration: none; transition: all 0.15s ease; cursor: pointer; border: none; background: none; width: 100%; text-align: left; margin-bottom: 2px; }
+  .nav-item:hover { background: var(--border); color: var(--text-primary); }
+  .nav-item.active { background: var(--indigo-glow); color: var(--indigo-light); border-left: 2px solid var(--indigo-light); }
+  .nav-item .nav-icon { width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 16px; }
+  .sidebar-footer { padding: 16px 24px; border-top: 1px solid var(--border); text-align: center; font-size: 12px; color: var(--text-muted); }
+
+  .main-content { margin-left: 260px; flex: 1; display: flex; flex-direction: column; }
+  .topbar { padding: 16px 28px; border-bottom: 1px solid var(--border); background: var(--bg-card); display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 50; }
+  .topbar h2 { font-size: 16px; font-weight: 600; }
+  /* 2026-11-07 AA: --indigo-light (#4f46e5) on the glow chip #1f1f3b = 2.53:1 */
+  .topbar-badge { background: var(--indigo-glow); color: #c7d2fe; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 500; }
+  .content-area { flex: 1; padding: 28px; overflow-y: auto; max-width: 1100px; }
+
+  h1 { font-size: 32px; font-weight: 700; margin-bottom: 8px; }
+  h2 { font-size: 24px; font-weight: 700; margin: 48px 0 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 18px; font-weight: 600; margin: 28px 0 12px; color: var(--indigo-light); }
+  h4 { font-size: 15px; font-weight: 600; margin: 20px 0 8px; }
+  p { margin-bottom: 16px; color: var(--text-secondary); }
+  a { color: var(--indigo-light); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .lead { font-size: 18px; color: var(--text-secondary); margin-bottom: 32px; padding: 16px 0; border-bottom: 1px solid var(--border); }
+
+  .card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-bottom: 20px; }
+  .card-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .card-header .card-icon { width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, var(--indigo), #7C3AED); display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; }
+  .card-header h3 { margin: 0; padding: 0; border: none; color: var(--text-primary); font-size: 16px; }
+
+  .feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin: 20px 0; }
+  .feature-card { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 10px; padding: 20px; transition: border-color 0.2s; }
+  .feature-card:hover { border-color: var(--indigo); }
+  .feature-card .fc-icon { width: 40px; height: 40px; border-radius: 10px; background: var(--indigo-glow); display: flex; align-items: center; justify-content: center; font-size: 18px; margin-bottom: 12px; }
+  .feature-card h4 { margin: 0 0 8px; font-size: 14px; }
+  .feature-card p { margin: 0; font-size: 13px; color: var(--text-muted); }
+
+  code { background: var(--bg-elevated); color: var(--indigo-light); padding: 2px 8px; border-radius: 4px; font-size: 13px; font-family: 'SF Mono', 'Fira Code', monospace; }
+  pre { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 8px; padding: 16px; overflow-x: auto; margin: 16px 0; font-size: 13px; font-family: 'SF Mono', 'Fira Code', monospace; color: var(--text-secondary); line-height: 1.5; }
+  pre code { background: none; padding: 0; color: var(--text-secondary); }
+
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px; }
+  th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid var(--border); }
+  th { background: var(--bg-elevated); font-weight: 600; color: var(--text-primary); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+  td { color: var(--text-secondary); }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  .badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 500; }
+  .badge-indigo { background: var(--indigo-glow); color: var(--indigo-light); }
+  .badge-green { background: rgba(34,197,94,0.15); color: var(--success); }
+  .badge-orange { background: rgba(249,115,22,0.15); color: var(--warning); }
+  .badge-red { background: rgba(239,68,68,0.15); color: var(--danger); }
+  .badge-blue { background: rgba(59,130,246,0.15); color: var(--info); }
+
+  .step-list { list-style: none; counter-reset: step; }
+  .step-list li { counter-increment: step; padding: 16px 16px 16px 52px; position: relative; margin-bottom: 8px; background: var(--bg-elevated); border-radius: 8px; border: 1px solid var(--border); }
+  .step-list li::before { content: counter(step); position: absolute; left: 14px; top: 14px; width: 26px; height: 26px; border-radius: 50%; background: var(--indigo); color: white; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; }
+  .step-list li strong { color: var(--text-primary); }
+  .step-list li p { margin: 4px 0 0; font-size: 13px; }
+
+  .alert { padding: 14px 18px; border-radius: 8px; margin: 16px 0; border-left: 3px solid; font-size: 14px; }
+  .alert-info { background: rgba(59,130,246,0.08); border-color: var(--info); color: #93C5FD; }
+  .alert-warning { background: rgba(249,115,22,0.08); border-color: var(--warning); color: #FDBA74; }
+  .alert-success { background: rgba(34,197,94,0.08); border-color: var(--success); color: #86EFAC; }
+  .alert-danger { background: rgba(239,68,68,0.08); border-color: var(--danger); color: #FCA5A5; }
+
+  a.section-title { display: block; padding: 8px 12px 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); text-decoration: none; cursor: pointer; }
+  a.section-title:hover { color: var(--indigo-light); background: rgba(255,255,255,0.03); border-radius: 6px; }
+
+  .stats-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 20px 0; }
+  .stat-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .stat-card .stat-value { font-size: 28px; font-weight: 700; color: var(--text-primary); }
+  .stat-card .stat-label { font-size: 13px; color: var(--text-muted); margin-top: 4px; }
+  .stat-card .stat-change { font-size: 12px; color: var(--success); margin-top: 4px; }
+
+  dl { display: grid; grid-template-columns: 140px 1fr; gap: 8px 16px; margin: 12px 0; }
+  dt { font-weight: 600; color: var(--text-primary); font-size: 13px; padding: 6px 0; }
+  dd { color: var(--text-secondary); font-size: 13px; padding: 6px 0; }
+  dd code { font-size: 12px; }
+
+  .faq-item { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
+  .faq-q { padding: 14px 18px; background: var(--bg-elevated); font-weight: 600; font-size: 14px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; color: var(--text-primary); border: none; width: 100%; text-align: left; }
+  .faq-q:hover { background: var(--bg-card); }
+  .faq-a { padding: 16px 18px; border-top: 1px solid var(--border); font-size: 14px; color: var(--text-secondary); display: none; }
+  .faq-a.open { display: block; }
+
+  .kv-tag { display: inline-flex; align-items: center; gap: 6px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; font-size: 13px; font-family: 'SF Mono', monospace; color: var(--text-secondary); }
+  .kv-tag .kv-key { color: var(--text-muted); }
+  .kv-tag .kv-val { color: var(--indigo-light); }
+
+  .template-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin: 16px 0; }
+  .tmpl-card { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 12px; padding: 20px; text-align: center; transition: border-color 0.2s; }
+  .tmpl-card:hover { border-color: var(--indigo); }
+  .tmpl-card .tmpl-icon { font-size: 36px; margin-bottom: 8px; display: block; }
+  .tmpl-card h4 { margin: 0 0 4px; }
+  .tmpl-card p { margin: 0; font-size: 12px; color: var(--text-muted); }
+  .tmpl-card .tmpl-badge { display: inline-block; margin-top: 8px; }
+
+  ul { color: var(--text-secondary); margin: 8px 0 16px 24px; }
+  ul li { margin-bottom: 4px; }
+
+  .mobile-menu-btn { display: none; position: fixed; top: 14px; left: 14px; z-index: 200; background: var(--bg-card); border: 1px solid var(--border); color: var(--text-primary); width: 40px; height: 40px; border-radius: 8px; cursor: pointer; font-size: 20px; align-items: center; justify-content: center; }
+  @media (max-width: 900px) {
+    .sidebar { transform: translateX(-100%); transition: transform 0.25s ease; }
+    .sidebar.open { transform: translateX(0); }
+    .sidebar-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 99; }
+    .sidebar-overlay.open { display: block; }
+    .main-content { margin-left: 0; }
+    .mobile-menu-btn { display: flex; }
+    .topbar { padding: 14px 16px 14px 64px; }
+    .content-area { padding: 16px; }
+    .feature-grid { grid-template-columns: 1fr; }
+    .template-grid { grid-template-columns: 1fr; }
+    dl { grid-template-columns: 1fr; gap: 2px; }
+    dt { padding-bottom: 0; }
+  }
+
+  /* kanban t_b92fbd43 — the guide's two tables have a min-content width of 592px, and
+     .main-content / .content-area are flex items with the default min-width:auto, so that width
+     propagated outward: measured 2026-10-22 at 390x844 the document scrolled 624px wide (234px of
+     overflow) and every block on the page inherited it. A table scrolls inside its own box now. */
+  .main-content, .content-area { min-width: 0; }
+  .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; max-width: 100%; }
+  .note { background: var(--bg-elevated); border: 1px solid var(--border); border-left: 3px solid var(--indigo-light); border-radius: 8px; padding: 14px 18px; margin: 20px 0; font-size: 14px; color: var(--text-secondary); }
+</style>
+<link rel="canonical" href="https://workflowswift.com/guide"></head>
+<body>
+<button class="mobile-menu-btn" id="mobileMenuBtn" onclick="toggleMobileSidebar()">=</button>
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleMobileSidebar()"></div>
+<div class="app-layout">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-icon">⚡</div>
+      <div>
+        <h1>WorkflowSwift</h1>
+        <p>User Guide v1.0</p>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="section-title">Contents</div>
+      <a href="#getting-started" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Getting started</a>
+      <a href="#tenancy-users-and-roles" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Tenancy, users and roles</a>
+      <a href="#workspaces" class="nav-item" onclick="closeMobile()"><span class="nav-icon">🗂️</span> Workspaces</a>
+      <a href="#workflows" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Workflows</a>
+      <a href="#templates" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Templates</a>
+      <a href="#surfaces" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Surfaces</a>
+      <a href="#dashboard-data-cards-brand-monitor-competitor-watch" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Dashboard: Data Cards, Brand Monitor, Competitor Watch</a>
+      <a href="#keys-two-different-things" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Keys: two different things</a>
+      <a href="#mcp" class="nav-item" onclick="closeMobile()"><span class="nav-icon">🤖</span> MCP</a>
+      <a href="#plans-and-limits" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Plans and limits</a>
+      <a href="#your-account" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Your account and sign-in</a>
+      <a href="#email-branding" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Email branding</a>
+      <a href="#integrations" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Integrations</a>
+      <a href="#tag-free-account" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Tag → free account</a>
+      <a href="#chrome-extension-swift-market-intel" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Chrome extension — Swift Market Intel</a>
+      <a href="#support" class="nav-item" onclick="closeMobile()"><span class="nav-icon">📄</span> Support</a>
+    </nav>
+    <div class="sidebar-footer">&copy; 2026 WorkflowSwift &mdash; Workflow Automation Platform</div>
+  </aside>
+  <div class="main-content">
+    <header class="topbar">
+      <h2>WorkflowSwift — User Guide</h2>
+      <span class="topbar-badge">v1.0 &middot; Workflows, Steps &amp; Integrations</span>
+    </header>
+<nav class="navx-crumb" aria-label="Breadcrumb"><a href="/">Home</a><span class="navx-sep" aria-hidden="true">&rsaquo;</span><span aria-current="page">Guide</span></nav><script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://workflowswift.com/"},{"@type":"ListItem","position":2,"name":"Guide","item":"https://workflowswift.com/guide.html"}]}</script><style id="navx-style">.navx-crumb{display:flex;flex-wrap:wrap;gap:.45rem;align-items:center;font-size:.82rem;max-width:1100px;margin:0 auto;padding:14px 18px 0;line-height:1.4}.navx-crumb a{text-decoration:underline;text-underline-offset:2px}.navx-crumb .navx-sep{opacity:.55}.navx-crumb [aria-current]{opacity:.75}.navx-rel{max-width:1100px;margin:34px auto 18px;padding:16px 18px;border:1px solid rgba(128,128,128,.45);border-radius:10px;background:rgba(128,128,128,.08);color:inherit}.navx-rel h2{font-size:1rem;margin:0 0 .6rem;letter-spacing:.01em}.navx-rel ul{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:.45rem 1.4rem}.navx-rel a{text-decoration:underline;text-underline-offset:2px;font-size:.93rem}</style>
+
+
+
+
+    <div class="content-area">
+      <h1>WorkflowSwift — User Guide</h1>
+      <p class="lead">WorkflowSwift turns a captured lead or form entry into automated, multi-step follow-up: an
+      incoming webhook creates an instance, the engine walks the steps, and each step can pull a
+      dashboard Data Card, call an endpoint you own, notify a webhook, wait, or fork.</p>
+      <p>Base API: <code>https://workflowswift.com/api/v1</code> — all non-public endpoints need
+      <code>Authorization: Bearer &lt;token&gt;</code> from <code>POST /auth/login</code>. Health: <code>GET /api/v1/health</code>.</p>
+      <h2 id="getting-started">Getting started</h2>
+      <ol>
+      <li>Register at <code>https://app.workflowswift.com/register</code>. Your <strong>organization (tenant) is created
+         automatically</strong> — it carries its tenant slug (<code>account_slug</code>, the NOT NULL UNIQUE identifier),
+         the footer text (<code>footer_year</code> / <code>footer_company</code>) and your <strong>Hexomatic key</strong>.</li>
+      <li>You land on a dashboard pre-configured for the <strong>industry</strong> you picked at signup, with named
+         <strong>Data Cards</strong> (dashboard widgets) already seeded.</li>
+      <li>Invite team members (<code>POST /users/invite</code>) — they join <strong>your</strong> tenant, with their own
+         password and role (<code>admin</code> / <code>member</code>).</li>
+      </ol>
+      <h2 id="tenancy-users-and-roles">Tenancy, users and roles</h2>
+      <ul>
+      <li>One tenant = one business account. Users, workflows, clients, leads, API keys and provider
+        keys all belong to the tenant; reads are scoped to it server-side.</li>
+      <li><code>GET /users</code> returns only your tenant's users; <code>GET /users/team</code> lists team members.</li>
+      <li>The <strong>Admin area is only reachable by a super admin.</strong> Everyone else gets <code>403</code> from
+        <code>/api/v1/admin/*</code>, enforced at the API (not just hidden in the UI).</li>
+      </ul>
+      <h2 id="workspaces">Workspaces</h2>
+      <p>One business account can hold several <strong>workspaces</strong> — separate drawers for separate
+      clients, locations or brands you run from the same account. Exactly one is the default a fresh
+      sign-in opens. The <strong>🗂️ button at the top of the console</strong> opens the switcher:</p>
+      <ul>
+      <li><strong>Switch</strong> — move this session into another workspace. The console reloads into it.</li>
+      <li><strong>Add workspace</strong> — create another drawer (your plan may cap how many).</li>
+      <li><strong>Rename / Make default / Delete</strong> — shown to the owner and admins. Members can switch
+        and add, but not rename, delete or re-point the default.</li>
+      <li><strong>At least one workspace is always kept</strong>, and you cannot delete the workspace you are
+        signed into — switch away first. Portfolio businesses are never removed.</li>
+      </ul>
+      <h2 id="workflows">Workflows</h2>
+      <ul>
+      <li><strong>Create</strong>: from scratch or from the template gallery — <code>Templates Gallery</code> (system) and
+        <code>My Workflows</code> (your own / cloned).</li>
+      <li><strong>Steps</strong>: add, edit (name, description, config), reorder, delete. A step's <strong>type is fixed
+        when you create it</strong> — to change the type, delete the step and add a new one.</li>
+      <li><strong>Step 1 is a Data Card step</strong>: it picks a dashboard widget <strong>by name</strong> (e.g. "Orlando
+        Plumbers") from the widgets in your dashboard — nothing is hardcoded. The API refuses any other
+        first step, and it refuses it on <strong>every</strong> door that decides the order: adding a step, moving a
+        step, and a <strong>template</strong> (which installs as a workflow — see Templates below).</li>
+      <li><strong>Step types</strong>: Data Card, AI Action, Notify, Delay/Wait, Fork, HTTP Request, Action,
+        Render Video/Image/Audio, Condition, Webhook and Manual/Approval — and <strong>every one of them
+        executes</strong>. The API refuses any other step type (<code>POST /workflows/{id}/steps</code> answers <code>400</code>), so
+        a step that cannot run can no longer be created. <strong>Research is retired</strong> for that reason: no path
+        in this app performs a research call.</li>
+      <li><strong>Export is retired</strong> (2026-10-02): the destinations it advertised — CSV download, Resend,
+        SendGrid, CoreSwift CRM — have no sender and no store on either side (this app holds no
+        Resend/SendGrid credential, offers no file download, and CoreSwift is an inbound lead push, not an
+        export contract). Every run used to be POSTed at a platform webhook that is not registered and the
+        step was <strong>recorded as completed having exported nothing</strong>. The API refuses the type now, the
+        Builder no longer offers it, and an old Export step is skipped with a warning that says so. To get
+        data out, use an <strong>HTTP Request</strong> step pointing at an endpoint you own.</li>
+      <li><strong>Custom-code steps are retired</strong> (2026-10-02): the <strong><code>transform</code></strong> and <strong><code>code</code></strong> step types
+        accepted a block of JavaScript, and the <code>format</code> step described a transformation, but the only
+        real behaviour any of them had was a JavaScript node inside n8n carrying your code verbatim. That
+        node <strong>cannot run on this install</strong> (n8n here has no JavaScript task runner configured, and its
+        own Code node fails), and turning the runner on would mean running your code inside the service
+        that holds n8n's own credentials. <strong>Nothing here executes tenant code</strong>, so the API refuses all
+        three types, the Builder never offered them, and an old step of one of those types is skipped with
+        a warning that names the gap — it is never reported as having transformed anything. If you need
+        custom logic, use an <strong>HTTP Request</strong> step to call a service you own that runs your code.</li>
+      <li><strong>Design is retired</strong> (2026-10-02): the <strong><code>design</code></strong> step type said it would "generate visual
+        assets via configured provider", but nothing in this app renders one — no provider, no route and
+        no stored asset. A run recorded the step as <strong>completed</strong> while nothing was designed, and the run
+        carried no warning at all. Nothing collected the step's <code>style</code> / <code>dimensions</code> either: the Builder
+        never offered <code>design</code>. The API refuses the type now, and an old Design step is skipped with a
+        warning that names the gap — it is never reported as having produced a design. To generate an
+        asset, use a <strong>Render Image/Video/Audio</strong> step pointed at a provider endpoint you own, or an
+        <strong>HTTP Request</strong> step to a service that renders it.</li>
+      <li><strong>AI Action runs on your own provider key</strong> (2026-10-02). In the Builder, pick AI Action, choose
+        the provider — <strong>OpenAI, Anthropic, DeepSeek or Gemini</strong> — and write the prompt; connect that
+        provider's key once under <strong>Provider Keys</strong>. The step sends your prompt straight to that provider
+        and the run stores the provider's own reply as the step's output, together with the provider's HTTP
+        status. It costs <strong>0 credits</strong>: it runs on your key, never a platform one. The write path refuses a
+        step whose provider is not one of those four, and refuses one that names none. With no key
+        connected the step is <strong>skipped</strong> with that reason in the run history; a provider error (a rejected
+        key, a rate limit) <strong>fails</strong> the step and shows the provider's status code. Nothing is ever
+        reported as generated unless the provider generated it.
+        <strong>The n8n copy runs it too</strong> (2026-10-02): when your plan mirrors a workflow into n8n
+        (Deploy), the mirrored graph's AI Action step calls back into this app, so a run started from
+        the n8n copy's own webhook performs the same AI Action — same provider, same prompt, same key.
+        It used to be a pass-through in that copy: the mirrored step did nothing, silently.</li>
+      <li><strong>Notify</strong>: a step can post to a <strong>webhook</strong>, send <strong>email</strong>, or send <strong>sms</strong> — set it up for
+        either, both, or just the webhook. What each channel does:</li>
+      <li><strong>Webhook</strong> POSTs <code>{message, data}</code> to the URL you put in the step's Recipient field, so the
+          receiving end gets the run's own item. Its URL goes through the same destination check as an
+          HTTP Request step, and a destination that answers non-2xx (or cannot be reached) fails the step —
+          the run history records the status and the reason, so a notification that did not go out is never
+          reported as sent.</li>
+      <li><strong>Email</strong> sends a message from the platform, and <strong>SMS</strong> sends a text. Both reach <strong>your
+          account's own people only</strong>: your account's users and its billing contact for email, and the
+          phone numbers on those same people's user records for SMS. There is deliberately no box for
+          typing an arbitrary address or number — the platform will not send mail or texts to people who
+          are not on your account. Pick an audience in the step instead: <em>All account users</em>, <em>Billing
+          contact</em>, or <em>One named account user</em>.</li>
+      <li>A channel appears in the step's Channel list <strong>only when the platform has a sender configured
+          for it</strong> (an admin sets that up under Settings → Email Provider / SMS Provider). If nothing is
+          configured for email or SMS, the channel is not offered and the step is refused rather than
+          silently built to do nothing.</li>
+      <li>Every send is recorded: sent, failed, refused, or throttled. A refusal (for example a person
+          with no phone number on file) names the reason in the run, and your account has an hourly
+          sending cap so a looping workflow cannot flood a mailbox. Past the cap the send is refused and
+          the run says so.</li>
+      <li>If your plan mirrors the workflow into n8n (Deploy), the mirrored copy sends through this app's
+          own provider — no credential is copied into n8n, and the mirrored graph stays activatable.</li>
+      <li><strong>HTTP Request / Action / Render Video/Image/Audio</strong>: an HTTP Request or Action step calls the
+        URL you configure, with the method you pick, and the run history records the status and the reply.
+        A Render step calls your provider's <code>endpoint</code> and logs the result under <strong>Renditions</strong> (provider,
+        asset id and URL come from the provider's own response). Both refuse a destination that resolves
+        inside the platform's own network — loopback, private or link-local addresses are never called —
+        so a step can not be used to read an internal service.</li>
+      <li><strong>Deploy to n8n</strong> (plan-gated) and <strong>run manually</strong>. A manual run creates an <strong>instance</strong> with
+        traceable state, a step-by-step history and full execution logs.</li>
+      <li>The n8n copy is what an <strong>external</strong> caller triggers: <strong><code>POST</code></strong> the webhook path the deploy
+        response returns (<code>webhook_path</code>, and <code>webhook_method</code> names the verb — <code>POST</code>; the same path
+        answers a <code>GET</code> with a 404 that names POST). n8n answers <code>200 "Workflow was started"</code> as soon as
+        it accepts the trigger, so that caller never waits for the run. A run that then <strong>fails reports
+        itself</strong>: it appears in <strong>Instances</strong> as <code>failed</code>, and
+        its run history names the failing step and the reason the step gave. A run that <strong>succeeds</strong> is
+        visible in n8n's own execution record and does not create an instance of its own.
+        The n8n copy goes through the <strong>same destination check</strong> as the in-process run: a step whose URL
+        resolves inside the platform's own network (loopback, private or link-local), is empty, or is an
+        n8n run-time expression is <strong>not</strong> deployed — the deploy (or the run that mirrors it) reports the
+        step and the reason and writes nothing to n8n, so n8n never calls a destination the app itself
+        would refuse.</li>
+      <li><strong>Credits</strong>: charged per execution, and the amount comes from the workflow's tier
+        (<code>simple</code> = 2, <code>medium</code> = 3, <code>complex</code> = 5, <code>ai_enhanced</code> = 7 — the full table is in the
+        <code>deduct</code> response). Running out is refused by the API, not just warned about in the UI.
+        Check <code>GET /credits/balance</code>. Your plan's <strong>included credits are added to the
+        workspace when it is created</strong>, so a new workspace can run its workflows from the start; the
+        <strong>Credits</strong> screen shows the balance and is the one door for more (a credit-pack
+        request — nothing is charged in the app, and our team adds the credits by hand).</li>
+      </ul>
+      <p><strong>Downloading your run history.</strong> The <strong>Instances</strong> screen lists every run your
+      workspace has had, and its <strong>Export CSV</strong> button downloads the whole record as a spreadsheet you
+      can keep: one row per run with the run's name, the workflow it belongs to, its status, when it started
+      and finished, how many minutes a finished run took, and the error text if it failed. The file is built
+      from <em>your own</em> workspace only — the account comes from your sign-in, never from the request — so it
+      is safe to hand to a client, an auditor or your bookkeeper. A failed download says so in words rather
+      than saving an empty file.</p>
+      <h2 id="templates">Templates</h2>
+      <ul>
+      <li>A template is a <strong>starting point for a workflow</strong>: <code>Install as Workflow</code> (<code>POST
+        /templates/{id}/install</code>) copies its steps into a new workflow of yours, which you can then edit
+        in the Builder. <code>Export JSON</code> downloads the template as a file, <code>Import JSON</code> creates a new
+        private template from one.</li>
+      <li>Every template step is a <strong>step type this app can actually run</strong>, and install copies it
+        as-is. That is now enforced on the way in: a template carrying a step type with no executor is
+        refused — on create, on import and on install — with the offending step named and the valid
+        types listed, so an install can no longer produce a workflow made of steps that do nothing.</li>
+      <li>A template's <strong>step 1 is the installed workflow's step 1</strong>, so the Data-Card rule holds here too:
+        a template whose first step (the lowest <code>sort_order</code>) is not a <strong>Data Card</strong> is refused — on
+        create, on import <strong>and</strong> on install — with the offending step and its type named, because the
+        Builder would refuse to build that workflow. (Workflows this platform created itself with another
+        first step — the inbound-capture <code>integration</code> — keep running and stay editable; the rule governs
+        what the API lets you <em>build</em>.)</li>
+      <li>Every template in the gallery is a checklist of the same shape. <strong>Government Contracting Lifecycle</strong>
+        is ten stages; <strong>Client Onboarding</strong>, <strong>Lead Generation</strong>, <strong>Newsletter Campaign</strong> and <strong>Project
+        Delivery</strong> are six or seven each. The first step is the Data Card every workflow opens with (pick
+        your dashboard widget for it), each stage after it is a <strong>Manual / Approval</strong> step — the run parks
+        at the stage and you <strong>Approve</strong> or <strong>Reject</strong> it from the instance's run history to move on — and a
+        blueprint that waits on a clock carries a <strong>Delay / Wait</strong> step, which the background worker advances
+        when its due time arrives.</li>
+      <li>A template that carries <strong>no steps cannot be installed</strong>, so the gallery shows it as <code>0 steps</code> and
+        draws no install button (the API refuses it either way: <code>Template has no steps. Cannot install an
+        empty template.</code>).</li>
+      <li>A template that is <strong>not included in your plan is locked</strong> — the lock is enforced server-side,
+        so the padlock badge is not just decoration.</li>
+      </ul>
+      <h2 id="surfaces">Surfaces</h2>
+      <p>A <strong>Surface</strong> is a named frontend/deployment target inside your tenant (website, mobile app,
+      chatbot, Alexa skill, kiosk): <code>GET/POST /surfaces</code> (name, slug, description).</p>
+      <ul>
+      <li>Surfaces are <strong>defined only in the admin panel</strong> — there is no standalone Surfaces page for
+        regular users.</li>
+      <li>Users instead get a <strong>surface selector / filter</strong> inside the editors, and workflows and leads
+        can be tagged with a surface (<code>surface_id</code>).</li>
+      <li>Today the surface filter is applied by <strong>workflows</strong> and <strong>leads</strong>; content, templates,
+        exports and prospecting do not filter by surface yet.</li>
+      </ul>
+      <h2 id="dashboard-data-cards-brand-monitor-competitor-watch">Dashboard: Data Cards, Brand Monitor, Competitor Watch</h2>
+      <ul>
+      <li><strong>Data Cards</strong> are named widgets. Workflow: Add Widget → name → type (prospecting / partners /
+        contracts) → fill with data (search, import, or connect a source).</li>
+      <li><strong>Competitor Watch</strong> is real: a competitor needs its website, and <em>Check</em> fetches that page,
+        fingerprints it and compares it with the previous check. The first check records a baseline and says so;
+        the next one says either "no change since &lt;time&gt;" or that the page changed, with both sizes. A page that
+        cannot be reached, or that resolves to a private address, is reported as not checked — never as "no
+        change". Every check is kept: <em>History</em> on a competitor's row lists each baseline and each detected
+        change with the date and what differed, so last month's change is still readable after this month's check.
+        <em>Edit</em> fixes the name, the website or the notes (a mistyped website blocks checking, so it must be
+        correctable), and unticking <em>Watch this competitor</em> pauses its checks without deleting its history.
+        <em>Delete</em> removes the competitor and its history.</li>
+      <li><strong>Brand Monitor</strong> needs a web-mention provider, which this app does not have connected yet.
+        <em>Scan for mentions</em> therefore tells you it is not connected and returns nothing. It does <strong>not</strong>
+        show illustrative mentions any more — the previous behaviour invented platforms, URLs, snippets and
+        sentiment scores.</li>
+      <li>Data flow is <code>extension / API / n8n → dashboard display → optionally feeds a workflow</code>.
+        Custom metrics come in through <code>POST /dashboard/push-widget-data</code> with a metric key.</li>
+      <li>Your tenant has one tab per industry you have selected; the dashboard also exposes live stats,
+        an activity timeline and per-workspace views.</li>
+      </ul>
+      <h2 id="keys-two-different-things">Keys: two different things</h2>
+      <div class="table-scroll">
+      <table>
+      <thead>
+      <tr>
+      <th></th>
+      <th>Where it comes from</th>
+      <th>What it is for</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+      <td><strong>API Keys</strong></td>
+      <td><code>POST /api-keys</code> — generated by WorkflowSwift, stored hashed, and readable again with your password</td>
+      <td>Calling WorkflowSwift programmatically</td>
+      </tr>
+      <tr>
+      <td><strong>Provider Keys</strong></td>
+      <td><code>POST /provider-keys</code> — <strong>yours</strong>, from OpenAI / Resend / SendGrid / social etc.</td>
+      <td>Letting WorkflowSwift call <em>your</em> third-party providers</td>
+      </tr>
+      </tbody>
+      </table>
+      </div>
+      <ul>
+      <li><strong>Bring your own keys (BYOK).</strong> Every third-party key is entered by <strong>you</strong> in the app, at
+        tenant level; it is never a global paste by an admin and never env-var-only.</li>
+      <li>Provider keys are returned <strong>masked</strong> (<code>sk-…161</code>) by every read endpoint — the raw value is
+        never sent back.</li>
+      <li><strong>Every stored credential is encrypted at rest</strong>, the Hexomatic enrichment key included
+        (<code>GET/PUT /accounts/hexomatic-key</code>). It is sealed with the app's master key
+        (<code>enc:v1:</code>, AES-256) before it reaches the database, opened only to build the mask the
+        screen shows, and is never part of the account record a read endpoint returns. Clearing the
+        field deletes it; an empty field means no key.</li>
+      <li><strong>API keys authenticate.</strong> Send the raw key (<code>workflowswift_&#8230;</code>) as the
+        <code>Authorization: Bearer</code> header value (the same header the login JWT uses). Press
+        <strong>View</strong> on the API Keys screen, re-enter your password, and copy the same key again at any
+        time — every view is recorded. <strong>Regenerate</strong> replaces it in one action and the previous key
+        stops working immediately. The <em>Integration keys</em> listed under it (webhook secrets, surface
+        tokens) are records for webhooks and embeds — no API call authenticates with them.</li>
+      <li>A key honours the row it was minted with: <code>is_active = false</code> or an <code>expires_at</code> in the past is
+        refused with <code>401</code>; <code>permissions</code> (<code>[]</code> = full account scope, <code>["read"]</code> = read-only, <code>"*"</code> =
+        everything) is enforced per request, so a read-only key gets <code>403</code> on a write; <code>last_used_at</code> is
+        stamped on every successful use. Minting is gated by your plan (<code>api_access</code>, <code>max_api_keys</code> -&gt;
+        <code>402</code> without them).</li>
+      <li><strong>This is the credential the Chrome extension uses</strong> (see <em>Chrome extension - Swift Market
+        Intel</em> below): extension Options -&gt; <em>API token</em>.</li>
+      </ul>
+      <h2 id="mcp">🤖 MCP &mdash; connect your AI tools</h2>
+      <p><strong>MCP</strong> is the open standard an AI client &mdash; Claude Code, Cursor, Hermes, or your own
+      agent &mdash; speaks to read your business data. WorkflowSwift runs one on the fleet server, so you do not
+      install anything: you paste one endpoint and one key into the client and it can read this workspace. It is
+      <strong>read-only</strong> &mdash; every tool is a SELECT, there is no write tool and no free-form SQL
+      door, and operator-wide tools are refused for a workspace credential, so an assistant cannot change or
+      delete anything.</p>
+      <p><strong>Where it is in the console:</strong> <strong>MCP</strong> sits in the navigation directly above
+      <strong>Profile</strong> (this app has no separate Settings screen &mdash; Profile is the account page),
+      labelled exactly <strong>MCP</strong>. The screen carries four things:</p>
+      <ul>
+        <li><strong>The endpoint</strong> &mdash; <code>https://hooks.swiftsoftware.net/mcp</code>, with a
+        <strong>Copy</strong> button.</li>
+        <li><strong>Your token</strong> &mdash; the same workspace key the <strong>API Keys</strong> screen
+        shows, by its first characters and its name. <strong>Reveal</strong> shows the whole key so you can copy
+        it; on a key minted before keys were stored viewably, the screen says so and offers
+        <strong>Regenerate</strong> instead. <strong>Regenerate</strong> replaces the key in one step and the old
+        one stops working immediately, so any client already wired up stops until you paste the new key in.</li>
+        <li><strong>What it can read</strong> &mdash; one line per read-only tool, named exactly as the client
+        sees it: leads, clients, workflows, workflow instances, templates, dashboards, instance steps, widgets,
+        renditions, credit transactions, industries, portfolio companies and account plans. Each entity answers
+        a <code>_summary</code> or a <code>_search</code>, and every answer holds only this workspace&rsquo;s
+        rows.</li>
+        <li><strong>Connect</strong> &mdash; a ready-made client configuration block with this endpoint and an
+        <code>Authorization: Bearer</code> line where your key goes; <strong>Copy config</strong> puts it on
+        your clipboard.</li>
+      </ul>
+      <p>If the token block says you have no active key, create one on the <strong>API Keys</strong> screen and
+      come back &mdash; the MCP screen reads the same key, so the two can never disagree. If a client says it
+      cannot reach the server, check that the key is the one this screen shows: a regenerated or revoked key
+      stops working immediately, by design.</p>
+      <h2 id="plans-and-limits">Plans and limits</h2>
+      <p>Plan limits are enforced <strong>at the API</strong> (<code>402 Payment Required</code> when you exceed them) and can be
+      set per plan by an admin: <code>max_workflows</code>, <code>max_templates</code>, <code>max_instances</code>, <code>max_users</code>,
+      <code>max_automations</code>, <code>max_integrations</code>, <code>max_api_keys</code>, <code>max_clients</code>, <code>max_portfolio</code>,
+      <code>max_tags</code>, <code>max_industries</code>, <code>retention_days</code>, plus the on/off features enforced by a gate —
+      <code>n8n_deploy</code>, <code>api_access</code>. <code>-1</code> (or <code>unlimited</code>) means unlimited.</p>
+      <p>Three more on/off entries — <code>priority_support</code> ("Priority email and chat support"),
+      <code>dedicated_support</code> ("Dedicated account manager") and <code>sla_guarantee</code> ("Service level agreement
+      guarantee") — are <strong>not enforced by code and are not meant to be</strong>. They record which plan promises
+      what to the support team, and they are honoured by the support process, not by an API check.</p>
+      <p><strong>Retired plan features (2026-10-02).</strong> <code>csv_export</code>, <code>webhook_export</code> and <code>google_sheets</code> are no
+      longer plan features. They were listed as included on every plan, but nothing in this app ever
+      produced a CSV, pushed an export over a webhook, or could reach Google Sheets — so they promised
+      something you would never have received. Export itself was retired as a workflow step on the same
+      day (see <em>Export is retired</em> above). <code>custom_branding</code> ("White-label branding options"),
+      <code>audit_logs</code> ("Access to audit log history") and <code>custom_reports</code> ("Custom report builder access")
+      were retired in the same pass for the same reason: no branding renderer, no audit history (the
+      audit table is empty and nothing writes to it) and no report builder exist anywhere in the product.
+      A plan feature now exists only where the app actually enforces it.</p>
+      <p>Your tier today:</p>
+      <div class="table-scroll">
+      <table>
+      <thead>
+      <tr>
+      <th></th>
+      <th>Workflows</th>
+      <th>Users</th>
+      <th>Instances</th>
+      <th>API access</th>
+      <th>n8n deploy</th>
+      </tr>
+      </thead>
+      <tbody>
+      <tr>
+      <td>Free</td>
+      <td>3</td>
+      <td>2</td>
+      <td>10</td>
+      <td>–</td>
+      <td>–</td>
+      </tr>
+      <tr>
+      <td>Starter</td>
+      <td>15</td>
+      <td>10</td>
+      <td>100</td>
+      <td>✓</td>
+      <td>✓</td>
+      </tr>
+      <tr>
+      <td>Professional</td>
+      <td>unlimited</td>
+      <td>25</td>
+      <td>1000</td>
+      <td>✓</td>
+      <td>✓</td>
+      </tr>
+      <tr>
+      <td>Enterprise</td>
+      <td>unlimited</td>
+      <td>unlimited</td>
+      <td>unlimited</td>
+      <td>✓</td>
+      <td>✓</td>
+      </tr>
+      </tbody>
+      </table>
+
+      <h3>Changing plan</h3>
+      <p><strong>Plan &amp; Billing</strong> (in the sidebar) shows the plan you are on today, what it
+      includes, and your current usage against its allowance — the same numbers the API enforces.</p>
+      <p>Press the button on the plan you want. If self-serve checkout is open on this install you are
+      taken to the secure checkout page and the plan changes when the payment completes. If checkout is
+      <em>not</em> open yet, that same press files the request for you (a
+      <strong>“Request the &lt;plan&gt; plan”</strong> button stays on screen only if sending failed —
+      pressing it retries): nothing is charged, the request goes straight to our team, and it also
+      appears on your <strong>Tickets</strong> screen so you can see it was filed.</p>
+      <p>Right there on <strong>Plan &amp; Billing</strong>, a <strong>Your plan requests</strong>
+      card lists every request this workspace has made — which plan, the day it was asked for, and
+      where it stands. <strong>Withdraw</strong> takes back a request you no longer want: nothing
+      was charged, and you can ask again at any time. Once our team has made the switch, the same
+      card says the day it happened.</p>
+      <p><strong>Moved by our team without a request?</strong> An operator can also move a workspace
+      onto a plan straight from our console — for example when you agree something by email. That
+      click is your purchase, so the workspace's owner gets an email saying which plan the workspace
+      is now on, that <em>nothing was charged</em> for it, and where to see exactly what the plan
+      includes. If you expected a different plan, reply to that message and we will put it right.</p>
+      <p><strong>Payment history</strong> sits on the same screen. It lists every payment this
+      workspace has attempted — the date, what it was for, the amount with its currency, and what
+      happened to it in plain words (paid, waiting for payment, the payment page was opened but
+      nothing came back, it could not be started because payments are switched off on this
+      install, or the payment provider refused to start it — in that last case, as with the one
+      before it, nothing was charged and your request was filed for our team). Nothing on that
+      card is calculated by the page: the figures and the outcome are
+      the payment record's own, so a row you do not recognise is a row you can send us and we will
+      read back from the same record.</p>
+      <p>Either way you get an <strong>email receipt</strong> confirming what you asked for, and a second
+      email when the team has made the switch. Your plan name on the dashboard updates at the same time.</p>
+      <p>If no plan has ever been chosen for this workspace, the page says that plainly — <strong>No
+      plan chosen yet</strong> — and names the free limits it is already running on, instead of
+      presenting a tier as the plan you hold. Nothing is blocked while it says that: pick a tier
+      below and it becomes your plan.</p>
+
+      </div>
+      <h2 id="your-account">Your account and sign-in</h2>
+      <p><strong>Available to every user.</strong> The <strong>👤 Profile</strong> screen in the console is your own
+      account, not the workspace's settings. It holds:</p>
+      <ul>
+      <li><strong>Profile picture</strong> — PNG, JPEG, WebP or GIF up to 2 MB. <strong>Remove picture</strong> puts your
+        initials back.</li>
+      <li><strong>Name and company</strong> — shown beside your messages and in team lists.</li>
+      <li><strong>Level</strong> — the plan your account actually runs on, read from the server each time the screen
+        opens (never a cached copy, never the role word).</li>
+      <li><strong>Sign-in email</strong> — the address you sign in with. Changing it is confirmed, not immediate:
+        type the new address and press <strong>Send confirmation link</strong>, and we mail that new address a
+        link that expires in 2 hours and works once. <strong>Your current address keeps working until you
+        open that link</strong>, so a typo can never lock you out of your own account.</li>
+      <li><strong>Change password</strong> — your new password plus the one you signed in with. A wrong current
+        password is named beside the box instead of signing you out.</li>
+      <li><strong>Signed-in devices</strong> — <strong>Sign out of every other device</strong> ends every other
+        session on your account: an old phone you sold, a laptop you shared. It does not change your password,
+        and the browser you press it from stays signed in, so anyone still holding that old session is out at
+        their next click.</li>
+      <li><strong>Download a copy of my data</strong> — saves one file holding everything this workspace
+        keeps: workflows, leads, clients, tags, automations, invoices, brand monitors, prospecting lists,
+        teammates and the names of your API keys. Passwords, API-key secrets and payment credentials are
+        never included, and the file says so on its first page. Nothing is emailed and nothing is deleted —
+        it is a copy, and you can download it as often as you like.</li>
+      <li><strong>Close My Account</strong> &mdash; the exit door, last on the screen. It asks for your password
+        and the word <strong>CLOSE</strong>, then ends your sign-in and every API key on the account, and you
+        cannot sign in again. Your workflows, runs and history are kept on record and are not deleted, so
+        support can help you if you close it by mistake.</li>
+      </ul>
+      <div class="note">If the confirmation mail never arrives, check the address you typed — the change does
+      not happen without it, and your old address still works. Sign in with the new address once you have
+      confirmed it; the old one stops working at that moment.</div>
+      <h2 id="email-branding">Email branding</h2>
+      <p><strong>Available, per account.</strong> Open the console and go to <strong>👤 Profile &amp; Account → Email Branding</strong>,
+      then set:</p>
+      <ul>
+      <li><strong>Logo</strong> — upload a PNG, JPEG, WebP or GIF up to 2 MB. Once one is set there is a <strong>Replace</strong> and a
+        <strong>Remove</strong> button too.</li>
+      <li><strong>Brand display name</strong> — up to 60 characters, printed above the message.</li>
+      <li><strong>Brand colour</strong> — a hex colour such as <code>#4f46e5</code>; it draws the rule under your logo.</li>
+      </ul>
+      <p>Under the fields, <strong>Preview</strong> shows the header every email from this account opens with,
+      and it changes as you type: a brand name appears centred in bold, a logo replaces that name line, and
+      the brand colour draws the rule underneath. Nothing is saved until you press
+      <strong>Save branding</strong>, and the preview is the same header the mail itself carries, so what you
+      see is what a recipient gets.</p>
+      <p>Under that preview, <strong>Send me a preview email</strong> sends the same sample to your own account
+      address. The request names no recipient, so the button can never mail anybody else. Save your branding
+      first &mdash; what arrives is exactly what the next real email from this account looks like in an inbox. The
+      line under the button is the server's own answer and says plainly when nothing was sent, for example
+      when the account address is on a reserved test domain that cannot receive mail.</p>
+      <p>Below it, <strong>Show the exact email</strong> answers the other question without sending anything:
+      press it and a frame opens with the message <em>our server</em> renders for this account &mdash; your header
+      at the top, every merge field filled in (your name, your sign-in address), and the exact wording a
+      recipient receives. It needs no inbox and mails nobody. The box above the button is drawn by your
+      browser; this frame is the real thing, so if the two ever disagree, the frame is what people get.
+      Save your branding first &mdash; an unsaved logo or name is not in the frame yet.</p>
+      <p>Press <strong>Save branding</strong>. From then on every transactional email this account sends — the welcome /
+      login-credentials mail, team invitations, password resets, purchase confirmations and workflow
+      notifications — opens with your logo and name. The logo is served from your own account's public URL
+      (<code>GET /api/v1/branding/logo/{account_id}</code>), which is what lets a mail client load it. Until
+      you set a name or a logo the mail carries the WorkflowSwift wordmark and name instead, because
+      branding is per account.</p>
+      <div class="note">The older <em>account-level</em> white-label fields were a different thing and are
+      still retired: the logo, brand-name and colour columns those held were <strong>dropped on
+      2026-10-02</strong>, and the "Custom Branding" plan feature that promised white-labelling was retired
+      the same day. <strong>The Email Branding screen above is the supported way to brand your mail.</strong>
+      The footer text on your account (<code>footer_year</code> / <code>footer_company</code>) <em>is</em>
+      real and settable through <code>PUT /api/v1/accounts</code>.</div>
+
+      <h2 id="integrations">Integrations</h2>
+      <ul>
+      <li><strong>CoreSwift spoke</strong>: <code>GET /integrations/coreswift/status</code> reports whether your CoreSwift key is
+        connected, <code>GET /integrations/coreswift/lists</code> proxies the CoreSwift list catalogue, and
+        <code>POST /integrations/coreswift/push</code> pushes captured leads manually. The key itself is stored per
+        account through the provider-key surface (<code>GET/POST /api/v1/provider-keys</code>) — the credential store
+        every delivery path in this app reads.</li>
+      <li><strong>Integration targets</strong> (<code>/integration-targets</code>) are the configured destinations a run can push
+        to. A target routes by EITHER a literal <code>webhook_url</code> OR a <code>provider_preset</code> chosen from the
+        provider catalogue (<code>GET /provider-presets</code>); the admin console's <strong>Integrations →
+        Integration Targets</strong> panel sets either, and the dispatch uses the preset's <code>base_url</code> when the
+        target has no webhook URL. What is still NOT wired is a step's binding to a target: the <strong>Builder
+        has no target picker and the steps API accepts no binding field</strong>, so a workflow you build in the
+        app does not dispatch to a target.</li>
+      <li><strong>Retired 2026-10-02</strong>: the per-user "Integration Center" store
+        and its routes. <code>GET</code>/<code>POST /api/v1/integrations</code>, <code>GET
+        /api/v1/integrations/native</code>, <code>POST /api/v1/integrations/native/{provider}</code>, <code>DELETE
+        /api/v1/integrations/{provider}</code> and <code>POST /api/v1/integrations/health-check</code> are gone (404);
+        provider credentials live only in the account's provider-key store, the one every delivery path
+        reads.</li>
+      <li><strong>Incoming webhook</strong>: <code>POST /api/v1/incoming</code> is what other Swift tools push leads to. It is
+        protected by an internal key.</li>
+      </ul>
+      <h2 id="tag-free-account">Tag → free account</h2>
+      <p>When a lead is given one of this app's <strong>&lt;App&gt; — Free</strong> system tags in FunnelSwift (for example
+      <code>WorkflowSwift — Free</code>), FunnelSwift asks WorkflowSwift to create a <strong>free account</strong> for that lead,
+      using the lead's own name and email. WorkflowSwift then emails the new user their login details, so
+      they can sign in and upgrade here whenever they are ready.</p>
+      <p>The switch is in the admin console under <strong>Admin → Settings → Tag → free account</strong>
+      (<code>admin_settings.provision_from_tags_enabled</code>). It <strong>ships ON</strong>, so a tagged lead gets an account
+      immediately; turn it off and the receiver refuses the request
+      (<code>403 refused / provisioning_disabled</code>) and creates nothing. Tagging the same lead twice does <strong>not</strong>
+      create a duplicate account — the second attempt is recognised by email and ignored. The entry plan is
+      chosen next to the switch. The account is created here, in the destination app, so the lead signs in
+      at the app they actually want and upgrades on this app's own plans.</p>
+      <h2 id="chrome-extension-swift-market-intel">Chrome extension — Swift Market Intel</h2>
+      <ul>
+      <li><strong>Download</strong>: <code>https://workflowswift.com/swift-market-intel-extension-1.2.0.zip</code>
+        (rolling alias <code>/swift-market-intel-extension.zip</code>; pin the versioned file — the alias can lag
+        behind the CDN cache). Install guide: <code>/swift-market-intel-extension.html</code>.</li>
+      <li><strong>Install</strong>: unpack the zip, then <code>chrome://extensions</code> → Developer mode → <em>Load unpacked</em> →
+        pick the folder containing <code>manifest.json</code>. Not on the Chrome Web Store, so updates are manual.</li>
+      <li><strong>Connect</strong>: extension Options → paste your API token → leave <strong>API Base URL</strong> at
+        <code>https://workflowswift.com/api/v1</code> → <em>Test Connection</em> → Save.</li>
+      <li><strong>Collect</strong>: open a supported listing → extension icon → <em>Scrape Current Page</em> →
+        <em>Send to WorkflowSwift</em>. Supported: Etsy, Amazon, eBay, Facebook Marketplace, Shopify,
+        Alibaba, AliExpress, Craigslist, Pinterest, TikTok, Instagram, Yelp, Google Maps.</li>
+      <li><strong>Sending costs 1 credit</strong> per run (charged to the account the key belongs to). A trigger aimed at
+        a workflow that belongs to a <em>different</em> account is refused with <code>403</code>, an unknown one with <code>404</code>
+        — the target is resolved against your own workflows first, so one tenant cannot fire another's.</li>
+      <li><strong>Endpoints it uses</strong> (all under <code>/api/v1</code>, <code>Authorization: Bearer &lt;token&gt;</code>):
+        <code>GET /bridge/commands</code>, <code>GET /bridge/status</code>, <code>POST /workflows/trigger</code>,
+        <code>POST /bridge/ingest</code>, and <code>POST /bridge/commands/ack</code> — after the
+        extension runs a command it polled, it reports the outcome back
+        (<code>{command_id, status: "completed"|"failed", result}</code>) and the server stamps that
+        command <code>acknowledged_at</code> with the result, scoped to your own account (an id
+        belonging to another tenant is answered <code>404</code>).</li>
+      <li><strong>History</strong>: 1.1.0 shipped <code>API Base URL = https://workflowswift.com/api</code> (no <code>/v1</code>), so every
+        call returned 404 while <em>Test Connection</em> still reported success. Fixed in 1.2.0, which also
+        drops the <code>&lt;all_urls&gt;</code> host permission (it was listed next to the explicit marketplace
+        origins) and moves the base URL into one shared <code>config.js</code>.</li>
+      </ul>
+      <h2 id="prospecting">Prospecting — finding businesses to reach out to</h2>
+      <p>Prospecting searches for real businesses (by industry, city and state) and can add what the
+      provider knows about one of them. It is <strong>not</strong> a demo and it does not invent anything: if it
+      cannot reach a real data source it says so instead of showing you a made-up list.</p>
+      <ul>
+      <li><strong>It needs your own Google Places key.</strong> Connect it once under
+        <strong>Provider Keys</strong> and pick <em>Google Places API</em>. The key is stored encrypted, is only
+        ever shown back masked, and is used on this account alone.</li>
+      <li><strong>The Hexomatic enrichment key is stored encrypted too.</strong> Paste it on the Prospecting
+        screen once; the server keeps it sealed at rest, shows it back masked
+        (<code>abc…xyz</code>), and uses it for this account only. A key saved before this change is
+        still readable — re-saving it moves it onto the encrypted path.</li>
+      <li><strong>Without a key the screen tells you so.</strong> Searching shows a notice that names the
+        missing key rather than returning companies — before this change the screen returned twenty
+        invented businesses with made-up websites, and a made-up contact email and phone under Enrich.
+        Those rows are gone for good.</li>
+      <li><strong>Results are what Google Places returned:</strong> business name, website, type, address and
+        phone number where Google has one. If Google does not publish a field, it stays blank — the app
+        will not guess a headcount, an email address or a social profile.</li>
+      <li><strong>Enrich</strong> looks the business up by name and fills only the fields that came back. A
+        business it cannot find is reported as no match, not padded out with filler.</li>
+      </ul>
+      <h2 id="inbox">📬 Inbox</h2>
+      <p>The <strong>Inbox</strong> screen holds your own addresses on your own domain and the newest mail that reached them. Add the domain you already own, press <strong>Show records</strong>, paste them at your DNS provider, then press <strong>Check again</strong> until the domain reads Receiving; create the addresses you want on it, within what your plan sells.</p>
+      <p>Above <strong>Recent mail</strong> there is a <strong>Search subject, sender or text</strong> box. Type part of a subject, an address or a phrase from the opening of the message and the list narrows as you type (press Enter to search at once); capitals do not matter. A search that finds nothing says <strong>No mail matches &ldquo;&hellip;&rdquo;</strong> and offers <strong>Clear the search</strong>, so a filtered list is never shown as an empty inbox; <strong>Clear search</strong> beside the box restores the full list. Reading and answering the whole thread happens in the mail client at <a href="https://inbox.workflowswift.com" target="_blank" rel="noopener">inbox.workflowswift.com</a>, which is the same account.</p>
+
+      <h2 id="support">Support</h2>
+      <p>Contact David via Telegram. Tickets: <code>GET/POST /tickets</code>.</p>
+
+    </div>
+  </div>
+</div>
+<script>
+function toggleMobileSidebar() {
+  document.getElementById('sidebar').classList.toggle('open');
+  document.getElementById('sidebarOverlay').classList.toggle('open');
+}
+function closeMobile() {
+  if (window.innerWidth <= 900) {
+    document.getElementById('sidebar').classList.remove('open');
+    document.getElementById('sidebarOverlay').classList.remove('open');
+  }
+}
+</script>
+
+
+
+
+<section class="navx-rel" aria-labelledby="navx-rel-h"><h2 id="navx-rel-h">Keep exploring WorkflowSwift</h2><ul><li><a href="/swift-market-intel-extension.html">Market Intel extension</a></li><li><a href="/pricing.html">Pricing</a></li><li><a href="/">Home</a></li><li><a href="/terms.html">Terms of Service</a></li></ul></section>
+<script>function wsApplyTheme(n){var t=(n==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('ws_theme',t);}catch(e){}try{document.cookie='ws_theme='+t+';domain=workflowswift.com;path=/;max-age=31536000;SameSite=Lax';}catch(e){}var l=document.getElementById('wsThemeLabel');if(l)l.textContent=(t==='dark')?'Day mode':'Night mode';var i=document.getElementById('wsThemeIcon');if(i)i.textContent=(t==='dark')?'☀️':'🌙';var b=document.getElementById('wsThemeToggle');if(b)b.title=(t==='dark')?'Switch to day mode':'Switch to night mode';}
+function wsToggleTheme(){wsApplyTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark');}
+function wsEnsureToggle(){if(document.getElementById('wsThemeToggle'))return;var b=document.createElement('button');b.type='button';b.id='wsThemeToggle';b.className='ws-theme-toggle';b.title='Switch day / night mode';b.setAttribute('aria-label','Switch day / night mode');b.onclick=wsToggleTheme;var i=document.createElement('span');i.id='wsThemeIcon';i.setAttribute('aria-hidden','true');i.textContent='🌙';var l=document.createElement('span');l.id='wsThemeLabel';l.textContent='Night mode';b.appendChild(i);b.appendChild(l);document.documentElement.appendChild(b);wsApplyTheme(document.documentElement.getAttribute('data-theme')||'light');}
+wsEnsureToggle();
+document.addEventListener('DOMContentLoaded',function(){try{wsEnsureToggle();}catch(e){}});</script>
+</body>
+</html>
