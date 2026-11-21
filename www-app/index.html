@@ -413,11 +413,22 @@ const USAGE_ROWS = [
   { key: 'integrations', label: 'Integrations' }, { key: 'api_keys', label: 'API keys' },
   { key: 'users', label: 'Users' }, { key: 'industries', label: 'Industries' }
 ];
-// The only numeric allowance anywhere in this app's plan data: `feature_limits` holds a
-// max_industries row per plan and nothing else, and it is the one /plans/capabilities reports.
-// Every other row shows its count alone rather than an invented ceiling.
-const usageLimitFor = (key) => (key === 'industries' && S.planCaps && S.planCaps.max_industries != null)
-  ? S.planCaps.max_industries : null;
+// The plan's own ceilings now ride beside the counts: GET /auth/me/usage publishes `limits`
+// (resolved through the SAME resolve_limit the write gates enforce, so the number printed here can
+// never disagree with the number that refuses a write; -1 = unlimited) and a `credits` balance.
+// The industries fallback stays for a payload from an older server, and a counter with no readable
+// ceiling shows its count alone rather than an invented limit.
+const usageLimitFor = (key) => {
+  const l = S.usage && S.usage.limits;
+  if (l && l[key] != null) return l[key];
+  return (key === 'industries' && S.planCaps && S.planCaps.max_industries != null)
+    ? S.planCaps.max_industries : null;
+};
+// The plan block the same payload carries, for the heading and the credit allowance. Display only:
+// an absent plan (older server, or an unreadable tier) names nothing, never an invented "Free".
+const usagePlan = () => (S.usage && S.usage.plan) || null;
+const usagePlanName = () => { const p = usagePlan(); return p && p.name ? String(p.name) : ''; };
+const usageCreditMonth = () => { const p = usagePlan(); return p && p.credits_monthly != null ? p.credits_monthly : null; };
 
 // Draft state for the auth + invite forms (kanban t_7e48aeb7) — the shared-object idiom guard
 // rule 5 wants, kept out of the long S literal so the lanes editing this file do not collide.
@@ -1617,13 +1628,17 @@ const PlanView = () => {
           : html`<h3 class="font-semibold text-gray-800 mb-1">No plan chosen yet</h3>
         <p class="text-sm text-gray-600">This workspace has not picked a plan. Every screen here already enforces the <strong>${curName || 'Free'}</strong> limits, so nothing is blocked — the tiers below are what you can move to.</p>`}
       </div>
-      ${S.usage ? html`<div class="card" style="margin-bottom:16px">
-        <h3 class="font-semibold text-gray-800 mb-2">Your usage</h3>
-        <p class="text-sm text-gray-600">What this workspace holds right now. Every figure is the server's own count, read fresh on each visit; the industry allowance is the one your plan carries.</p>
+      ${S.usage ? html`<div class="card" style="margin-bottom:16px" data-usage-strip="1">
+        <h3 class="font-semibold text-gray-800 mb-2">Your usage${usagePlanName() ? (' — ' + usagePlanName() + ' plan') : ''}</h3>
+        <p class="text-sm text-gray-600">What this workspace holds right now, each counter read against the ceiling the server enforces, and the credits left to spend on runs. Every figure is the server's own count, read fresh on each visit.</p>
         <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mt-3">
-          ${USAGE_ROWS.filter(r => S.usage[r.key] != null).map(r => html`<div class="border rounded-lg p-3">
-            <div class="text-lg font-bold text-gray-900">${fmtAmt(S.usage[r.key])}</div>
-            <div class="text-xs text-gray-500 mt-0.5">${r.label}${usageLimitFor(r.key) != null ? (' — of ' + fmtLimit(usageLimitFor(r.key))) : ''}</div>
+          ${S.usage.credits != null ? html`<div class="border rounded-lg p-3" data-usage-key="credits">
+            <div class="text-lg font-bold text-gray-900">${fmtAmt(S.usage.credits)}${usageCreditMonth() != null ? (' of ' + fmtLimit(usageCreditMonth())) : ''}</div>
+            <div class="text-xs text-gray-500 mt-0.5">Credits remaining</div>
+          </div>` : ''}
+          ${USAGE_ROWS.filter(r => S.usage[r.key] != null).map(r => html`<div class="border rounded-lg p-3" data-usage-key="${r.key}">
+            <div class="text-lg font-bold text-gray-900">${fmtAmt(S.usage[r.key])}${usageLimitFor(r.key) != null ? (' of ' + fmtLimit(usageLimitFor(r.key))) : ''}</div>
+            <div class="text-xs text-gray-500 mt-0.5">${r.label}</div>
           </div>`)}
         </div>
       </div>` : ''}

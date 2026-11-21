@@ -528,6 +528,35 @@ pub async fn get_usage_json(db: &PgPool, aid: Uuid) -> serde_json::Value {
     let instances = count_usage(db, aid, "max_instances").await.unwrap_or(0);
     let tags = count_usage(db, aid, "max_tags").await.unwrap_or(0);
     let industries = count_usage(db, aid, "max_industries").await.unwrap_or(0);
+    // The PLAN beside the counts (card: the usage screen showed bare counts, so a customer on the
+    // free tier could not tell "1 workflow" from "1 of 3", and this is the one app where a run
+    // SPENDS a credit — the first time a customer learned their balance was a refusal. The other
+    // fleet apps publish exactly this contract under their own names: FunnelSwift `limits`,
+    // MissedCall `allowances` + `credits`, ADASwift `plan`. Everything here DEGRADES: a plan or a
+    // limit that cannot be read is `null`/absent, never a 500, because this is a display surface.
+    // `limits` is resolved through the SAME `resolve_limit` the write gates enforce, so the number
+    // printed beside a counter can never disagree with the number that refuses a write. `-1` means
+    // unlimited, the fleet's convention.
+    // Resolved ONCE: the plan block and every ceiling below must describe the same tier, and
+    // re-resolving per key meant eleven extra round-trips on a screen that is opened often.
+    let pid = resolve_plan_id(db, aid).await.ok().flatten();
+    let plan = usage_plan_block(db, aid, pid).await;
+    let mut limits = serde_json::Map::new();
+    if let Some(pid) = pid {
+        for key in USAGE_LIMIT_KEYS {
+            if let Ok(Some(v)) = resolve_limit(db, pid, key).await {
+                let bare = key.strip_prefix("max_").unwrap_or(key);
+                limits.insert(bare.to_string(), serde_json::json!(v));
+            }
+        }
+    }
+    let credits: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(amount), 0) FROM credit_transactions WHERE aid = $1",
+    )
+    .bind(aid)
+    .fetch_one(db)
+    .await
+    .unwrap_or(0);
     serde_json::json!({
         "workflows": workflows,
         "users": users,
@@ -538,8 +567,93 @@ pub async fn get_usage_json(db: &PgPool, aid: Uuid) -> serde_json::Value {
         "api_keys": api_keys,
         "clients": clients,
         "tags": tags,
-        "industries": industries
+        "industries": industries,
+        "plan": plan,
+        "limits": limits,
+        "credits": credits
     })
+}
+
+/// The counters whose ceiling a customer can actually hit, in the order the usage screen reads
+/// them. Each key is a `features` JSONB key on `plan_tiers` (see `aliases`), so `limits` is the
+/// gate's own number, not a second copy of it.
+const USAGE_LIMIT_KEYS: [&str; 10] = [
+    "max_workflows",
+    "max_users",
+    "max_templates",
+    "max_instances",
+    "max_automations",
+    "max_integrations",
+    "max_api_keys",
+    "max_clients",
+    "max_tags",
+    "max_industries",
+];
+
+/// `{name, slug, price_monthly, billing_cycle, credits_monthly, assigned}` for the tier
+/// [`resolve_plan_id`] resolves, or `null` when no tier can be read. `assigned` is the same
+/// distinction the Plan & Billing screen makes: `true` when the account HOLDS the plan (an active
+/// `account_plans` row or `accounts.plan_id`), `false` when it is merely bounded by the install's
+/// cheapest tier — a fallback must never be painted as a choice the customer made.
+async fn usage_plan_block(db: &PgPool, aid: Uuid, pid: Option<Uuid>) -> serde_json::Value {
+    let Some(pid) = pid else {
+        return serde_json::Value::Null;
+    };
+    let held: bool = sqlx::query_scalar::<_, Option<bool>>(
+        "SELECT EXISTS(SELECT 1 FROM account_plans WHERE aid = $1 AND status = 'active' \
+                        AND plan_id = $2) OR (SELECT plan_id FROM accounts WHERE id = $1) = $2",
+    )
+    .bind(aid)
+    .bind(pid)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or(None)
+    .unwrap_or(false);
+    // `billing_cycle` is NOT a stored column anywhere in this schema (verified: no relation on the
+    // WorkflowSwift database carries it; checkout takes it as a request parameter and writes only
+    // the invoice). So it is DERIVED from the term the subscription row actually records — a year
+    // or more between `started_at` and `expires_at` is a yearly term — and stays `null` for a
+    // workspace with no active `account_plans` row (the cheapest-tier fallback), because nothing
+    // was bought and there is no term to name.
+    let row: Option<(String, String, Option<f64>, Option<String>)> = sqlx::query_as(
+        "SELECT t.name, t.slug, t.price_monthly::float8, \
+                (SELECT CASE WHEN s.expires_at IS NOT NULL \
+                                  AND s.expires_at - s.started_at >= interval '300 days' \
+                             THEN 'yearly' ELSE 'monthly' END \
+                   FROM account_plans s \
+                  WHERE s.aid = $2 AND s.plan_id = t.id AND s.status = 'active' \
+                  ORDER BY s.started_at DESC LIMIT 1) \
+           FROM plan_tiers t WHERE t.id = $1",
+    )
+    .bind(pid)
+    .bind(aid)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten();
+    let credits_monthly: Option<i64> = sqlx::query_scalar::<_, Option<String>>(
+        "SELECT features ->> 'credits_monthly' FROM plan_tiers WHERE id = $1",
+    )
+    .bind(pid)
+    .fetch_optional(db)
+    .await
+    .ok()
+    .flatten()
+    .flatten()
+    .and_then(|v| v.trim().parse::<i64>().ok());
+    match row {
+        Some((name, slug, price_monthly, billing_cycle)) => serde_json::json!({
+            "name": name,
+            "slug": slug,
+            "price_monthly": price_monthly,
+            "billing_cycle": billing_cycle,
+            "credits_monthly": credits_monthly,
+            "assigned": held,
+        }),
+        None => serde_json::Value::Null,
+    }
 }
 
 async fn count_usage(db: &PgPool, aid: Uuid, feature_key: &str) -> Result<i64, AppError> {
