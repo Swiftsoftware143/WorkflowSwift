@@ -232,6 +232,29 @@ pub async fn register(
 
     let aid = ids.account_id;
     let user_id = ids.user_id;
+
+    // ── EVERY ACCOUNT GETS ITS OWN API KEY AT CREATION (David, 2026-11-21) ────────────────────
+    // Measured before this: every account whose owner never pressed "create key" had none, and an
+    // MCP client had no credential to present. Minted through the app's ONE mint helper, so the hash,
+    // the prefix and the sealed copy are written exactly as the Integration Center writes them.
+    match state.db.acquire().await {
+        Ok(mut conn) => {
+            if let Err(e) = crate::handlers::api_key_handler::mint_api_key_on(
+                &mut conn,
+                user_id,
+                aid,
+                "auto-provisioned",
+                "",
+            )
+            .await
+            {
+                tracing::error!(account = %aid, error = %e, "signup: account created but its API key could NOT be minted");
+            }
+        }
+        Err(e) => {
+            tracing::error!(account = %aid, error = %e, "signup: no connection to mint the API key")
+        }
+    }
     let account_name = ids.account_name;
     let account_slug = ids.account_slug;
     let now = Utc::now();
