@@ -1,7 +1,7 @@
 //! `probe_harness` — attribution for harness-created workspaces (kanban t_4a744754).
 //!
 //! The public signup (`POST /api/v1/auth/register`) mints an `accounts` row named
-//! "<name>'s Workspace", so a workspace minted by a test harness through the real signup door is
+//! "<name>'s Account", so a workspace minted by a test harness through the real signup door is
 //! byte-indistinguishable from a customer's. Policy
 //! (`/opt/swift/docs/fleet-probe-residue-policy-2026-09-28.md`, answer 3c) says attribution must be
 //! DATA; this is the durable half of that, ported verbatim from the shape proven on FunnelSwift

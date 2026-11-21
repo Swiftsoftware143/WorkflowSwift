@@ -79,7 +79,7 @@ pub struct NewAccount<'a> {
     /// `None` keeps the historical public-signup behaviour: the user chose (or will reset) their
     /// own password, so the mail carries no credential line.
     pub password_plain: Option<&'a str>,
-    /// Workspace label; `None` → `"<name>'s Workspace"`, exactly what the public signup mints.
+    /// Workspace label; `None` → `"<name>'s Account"`, exactly what the public signup mints.
     pub account_name: Option<&'a str>,
     /// Workspace slug; `None` → derived from `name`. `accounts.account_slug` is UNIQUE, so a caller
     /// that passes one owns the uniqueness of that value.
@@ -260,7 +260,7 @@ pub async fn create_account(
     let account_name = a
         .account_name
         .map(str::to_string)
-        .unwrap_or_else(|| format!("{}'s Workspace", a.name));
+        .unwrap_or_else(|| format!("{}'s Account", a.name));
     // ── ONE transaction over the WHOLE account (measured defect, kanban t_10b8fba6) ─────────
     // Every row below used to be written as its own statement on its own pooled connection, so a
     // failure anywhere after the `accounts` INSERT left a HALF-WRITTEN account behind — a workspace

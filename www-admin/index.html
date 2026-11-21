@@ -41,6 +41,7 @@ body{font-family:system-ui,-apple-system,sans-serif;background:#f1f5f9;margin:0}
 .table th{background:#f8fafc;color:#64748b;font-weight:600;border-bottom:2px solid #e2e8f0}
 .table td{border-bottom:1px solid #f1f5f9}
 .badge{padding:2px 8px;border-radius:12px;font-size:11px;font-weight:600}
+.badge-muted{background:#e5e7eb;color:#374151}
 .sidebar{width:240px;background:#fff;min-height:100vh;border-right:1px solid #e5e7eb;position:fixed;top:0;left:0;overflow-y:auto;z-index:10}
 .main{margin-left:240px;padding:24px}
 .tab-btn{display:block;width:100%;text-align:left;padding:10px 16px;font-size:14px;color:#374151;cursor:pointer;border:none;background:none;border-radius:6px;transition:all .1s}
@@ -3556,16 +3557,23 @@ function credUndeliveredHtml(a){
 // it cannot be mistaken for a missing value or for today's date.
 function lastSignInHtml(a){
   const raw=String((a&&a.last_sign_in)||'').trim();
-  if(!raw) return '<span class="text-gray-400" title="Nobody in this workspace has ever signed in">Never</span>';
+  if(!raw) return '<span class="text-gray-400" title="Nobody in this account has ever signed in">Never</span>';
   const d=new Date(raw);
   if(isNaN(d.getTime())) return escHtml(raw);
   const pad=n=>String(n).padStart(2,'0');
   return escHtml(d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+' '+pad(d.getHours())+':'+pad(d.getMinutes()));
 }
 
+// The portfolio switch's state lives OUTSIDE the render, the same trap documented for
+// ACC_SHOW_PROBES below: the switch's own handler re-renders this panel, so a flag declared inside
+// `renderAdminUsers` would reset to false on every click and the list would never change. OFF by
+// default — the operator's own companies are held out because they are not customers.
+let USERS_SHOW_PORTFOLIO = false;
 function renderAdminUsers(c){
-  c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Users (Tenants)</h2><button class="btn btn-primary btn-sm" id="addTenant">+ Add Tenants</button></div><p class="text-xs text-gray-400 mb-4">All registered tenants. Tenants manage their own workflows, automations, and integrations. Their portfolio companies are managed here under Admin → Portfolio Companies.</p><p class="text-xs text-gray-400 mb-4">Plan changing is the only supported way to move an account between tiers — there is no self-serve checkout, and a tier that denies API access keeps <code>POST /api-keys</code> at 402 for that account.</p><div id="audata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
-  Promise.all([api('/admin/accounts'),api('/admin/plans')]).then(res=>{
+  c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Users (Tenants)</h2><div class="flex items-center gap-2"><label class="flex items-center gap-1 text-xs text-gray-600" title="Your own portfolio companies. Hidden by default because they are not customers; tick this and they are listed carrying a portfolio badge."><input type="checkbox" id="audShowPortfolio"'+(USERS_SHOW_PORTFOLIO?' checked':'')+'> Include portfolio companies</label><button class="btn btn-primary btn-sm" id="addTenant">+ Add Tenants</button></div></div><p class="text-xs text-gray-400 mb-4">All registered tenants. Tenants manage their own workflows, automations, and integrations. Their portfolio companies are managed here under Admin → Portfolio Companies.</p><p class="text-xs text-gray-400 mb-4">Plan changing is the only supported way to move an account between tiers — there is no self-serve checkout, and a tier that denies API access keeps <code>POST /api-keys</code> at 402 for that account.</p><div id="audata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
+  const upBox=c.querySelector('#audShowPortfolio');
+  if(upBox) upBox.addEventListener('change',()=>{ USERS_SHOW_PORTFOLIO=!!upBox.checked; renderAdminUsers(c); });
+  Promise.all([api('/admin/accounts'+(USERS_SHOW_PORTFOLIO?'?include_portfolio=1':'')),api('/admin/plans')]).then(res=>{
     const d=res[0],pd=res[1];
     const items=(d&&d.accounts)||(d&&d.items)||[];
     const planRows=(((pd&&(pd.plans||pd.items))||[])).filter(p=>p&&p.is_active!==false&&p.slug);
@@ -3580,12 +3588,12 @@ function renderAdminUsers(c){
       items.map(i=>{const cur=(i.plan&&(i.plan.slug||i.plan.name))||i.plan_slug||i.plan_name||'';
         const opts=(plans.length?plans:[cur].filter(Boolean)).map(p=>`<option value="${escHtml(p)}"${p===cur?' selected':''}>${escHtml(planLabels[p]||p)}</option>`).join('');
         const id=escHtml(String(i.id));
-        return `<tr><td><strong>${escHtml(i.name)}</strong></td><td>${ownerCellHtml(i)}</td><td>${escHtml(i.slug||i.account_slug||'')||'-'}</td>`+
+        return `<tr><td><strong>${escHtml(i.name)}</strong>${i.is_portfolio?' <span class="badge badge-muted" title="One of your own portfolio companies, not a customer">portfolio</span>':''}</td><td>${ownerCellHtml(i)}</td><td>${escHtml(i.slug||i.account_slug||'')||'-'}</td>`+
           `<td><select class="input" data-plan-for="${id}">${opts}</select></td>`+
           `<td class="text-xs" data-credits-for="${id}">${i.credits_balance==null?'-':escHtml(String(i.credits_balance))}</td>`+
           `<td class="text-xs">${lastSignInHtml(i)}</td>`+
           `<td class="text-xs text-gray-400">${escHtml((i.created_at||'').slice(0,10))}</td>`+
-          `<td class="text-right"><button class="btn btn-sm btn-ghost" data-set-plan="${id}">Set plan</button> <button class="btn btn-sm btn-ghost" data-adj-credits="${id}" title="Add or remove credits for this workspace">Adjust credits</button></td></tr>`;}).join('')+'</tbody></table>';
+          `<td class="text-right"><button class="btn btn-sm btn-ghost" data-set-plan="${id}">Set plan</button> <button class="btn btn-sm btn-ghost" data-adj-credits="${id}" title="Add or remove credits for this account">Adjust credits</button></td></tr>`;}).join('')+'</tbody></table>';
     // This panel lists TENANTS (GET /admin/accounts) but its columns were `website`/`industry` — which
     // no account row has — and its Edit/Del buttons called /portfolio-companies/{id} with an ACCOUNT
     // id: Edit opened a "Portfolio Company" form over a tenant, and Del asked the portfolio API to
@@ -3614,12 +3622,12 @@ function renderAdminUsers(c){
       const id=b.getAttribute('data-adj-credits');
       const cell=el.querySelector('td[data-credits-for="'+id+'"]');
       const shown=cell?cell.textContent.trim():'';
-      const raw=prompt('Credits to add or remove for this workspace. Enter 100 to add 100, -25 to remove 25.'
+      const raw=prompt('Credits to add or remove for this account. Enter 100 to add 100, -25 to remove 25.'
         +(shown&&shown!=='-'?' It currently has '+shown+'.':''),'');
       if(raw===null)return;
       const amount=parseInt(String(raw).trim(),10);
       if(!amount||isNaN(amount)){showMsg('Enter a whole number of credits, for example 100 or -25','error');return}
-      const note=prompt("Why? This line is shown on the workspace's own credit history (at least 3 characters).",'');
+      const note=prompt("Why? This line is shown on the account's own credit history (at least 3 characters).",'');
       if(note===null)return;
       if(String(note).trim().length<3){showMsg('A note of at least 3 characters is required','error');return}
       const r=await api('/admin/accounts/'+id+'/credits',{method:'POST',body:JSON.stringify({amount:amount,note:String(note).trim()})});
@@ -3650,6 +3658,9 @@ function renderAdminUsers(c){
 // answered 14 rows / 2 tagged for the very same flag. A control that looks armed and does nothing is
 // worse than a missing one.
 let ACC_SHOW_PROBES = false;
+// Same trap, same fix (2026-11-21): the portfolio switch also re-renders this panel, so its state
+// lives out here too. OFF by default — the operator's own companies are not customers.
+let ACC_SHOW_PORTFOLIO = false;
 function renderAdminAccounts(c){
   // Show the workspaces the API holds back from this list (cron 2026-10-25). `GET /admin/accounts`
   // hides every row whose `accounts.probe_harness` tag is set — the attribution a test harness writes
@@ -3658,17 +3669,22 @@ function renderAdminAccounts(c){
   // the ADDRESS heuristic found on a row the list was willing to show. Measured live the same day on
   // FunnelSwift and IncentiveSwift: a harness-minted workspace was invisible to the panel entirely.
   c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Accounts</h2>'+
-    '<div class="flex items-center gap-2"><input type="text" id="accSearch" class="input text-xs" data-tenants="search" placeholder="Search name, owner, slug or plan" style="width:230px" autocomplete="off" title="Filter the list as you type — matches the account name, its owner address, the slug and the plan."><span class="text-xs text-gray-500" id="accCount" aria-live="polite"></span><label class="flex items-center gap-1 text-xs text-gray-600" title="Probe workspaces a test harness minted. Hidden by default because they are not customers; tick this and they are listed so Select probes can reach them."><input type="checkbox" id="accShowProbes" data-tenants="show-probes"'+ (ACC_SHOW_PROBES?' checked':'') +'> show probe workspaces</label>'+
+    '<div class="flex items-center gap-2"><input type="text" id="accSearch" class="input text-xs" data-tenants="search" placeholder="Search name, owner, slug or plan" style="width:230px" autocomplete="off" title="Filter the list as you type — matches the account name, its owner address, the slug and the plan."><span class="text-xs text-gray-500" id="accCount" aria-live="polite"></span><label class="flex items-center gap-1 text-xs text-gray-600" title="Probe accounts a test harness minted. Hidden by default because they are not customers; tick this and they are listed so Select probes can reach them."><input type="checkbox" id="accShowProbes" data-tenants="show-probes"'+ (ACC_SHOW_PROBES?' checked':'') +'> show probe accounts</label>'+
+    '<label class="flex items-center gap-1 text-xs text-gray-600" title="Your own portfolio companies. Hidden by default because they are not customers; tick this and they are listed carrying a portfolio badge, exactly as on the Portfolio Companies screen."><input type="checkbox" id="accShowPortfolio" data-tenants="show-portfolio"'+ (ACC_SHOW_PORTFOLIO?' checked':'') +'> Include portfolio companies</label>'+
     '<button class="btn btn-outline btn-sm" id="accProbes" data-tenants="select-probes" disabled>Select probes (0)</button>'+
     '<span class="text-xs text-gray-500" id="accMonitors" title="live tenancy-canary fixtures that a cron monitor seeds and checks — they stay in the list and are never mass-deleted"></span>'+
     '<button class="btn btn-danger btn-sm" id="accDel" disabled>Delete selected</button></div></div>'+
-    '<p class="text-xs text-gray-400 mb-4">Every account on this platform. Tick rows and press <b>Delete selected</b> to remove them permanently, with all their data. Three are refused by rule and cannot be forced here: the account you are signed in as, a portfolio company (SwiftImpact / ZaarHub / Giraudy) and this app\'s own workspace — the reason is kept next to the row that was kept.</p>'+
+    '<p class="text-xs text-gray-400 mb-4">Every customer account on this platform — your own portfolio companies are held out unless <b>Include portfolio companies</b> above is ticked. Tick rows and press <b>Delete selected</b> to remove them permanently, with all their data. Three are refused by rule and cannot be forced here: the account you are signed in as, a portfolio company (SwiftImpact / ZaarHub / Giraudy) and this app\'s own account — the reason is kept next to the row that was kept.</p>'+
     '<div id="accdata"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
   const btn=c.querySelector('#accDel');
   // The visibility switch (cron 2026-10-25): re-render this panel with the flag flipped, so the row
   // set, the [probe] badges and the "Select probes (n)" count are all rebuilt from ONE listing.
   const spBox=c.querySelector('#accShowProbes');
   if(spBox) spBox.addEventListener('change',()=>{ ACC_SHOW_PROBES=!!spBox.checked; renderAdminAccounts(c); });
+  // The portfolio switch, same pattern: flip the flag, re-render, one listing decides rows, badges
+  // and the count.
+  const pfBox=c.querySelector('#accShowPortfolio');
+  if(pfBox) pfBox.addEventListener('change',()=>{ ACC_SHOW_PORTFOLIO=!!pfBox.checked; renderAdminAccounts(c); });
   // Refusals from the last write, rendered ONCE on the re-render that follows it.
   let reasons=[];
   // The row set the picker works from (cron 2026-10-18). One click ticks every probe row — the same
@@ -3684,7 +3700,7 @@ function renderAdminAccounts(c){
     const a=c.querySelector('#accAll');
     if(a)a.checked=box().length>0&&picked.length===box().length;
   };
-  const load=()=>api('/admin/accounts'+(ACC_SHOW_PROBES?'?include_probe=1':'')).then(d=>{
+  const load=()=>api('/admin/accounts'+(()=>{const q=[];if(ACC_SHOW_PROBES)q.push('include_probe=1');if(ACC_SHOW_PORTFOLIO)q.push('include_portfolio=1');return q.length?('?'+q.join('&')):'';})()).then(d=>{
     const items=(d&&d.accounts)||(d&&d.items)||[];
     LIST=items;
     const el=c.querySelector('#accdata');
@@ -3707,14 +3723,14 @@ function renderAdminAccounts(c){
         const aid=i.id||i.account_id||'';
         return '<tr data-acc="'+aid+'">'+
         '<td><input type="checkbox" class="acc-chk" value="'+aid+'"></td>'+
-        '<td class="acc-name"><strong>'+(i.name||'-')+'</strong></td>'+
+        '<td class="acc-name"><strong>'+(i.name||'-')+'</strong>'+(i.is_portfolio?' <span class="badge badge-muted" title="One of your own portfolio companies, not a customer. Listed only because the portfolio switch above is ticked.">portfolio</span>':'')+'</td>'+
         '<td class="acc-owner">'+ownerCellHtml(i)+credUndeliveredHtml(i)+'</td>'+
         '<td>'+(i.account_slug||i.slug||'-')+'</td>'+
         '<td>'+planCell+'</td>'+
         '<td><span class="badge '+(i.is_active?'bg-green-100 text-green-700':'bg-red-100 text-red-700')+'">'+(i.is_active?'Active':'Inactive')+'</span></td>'+
         '<td class="text-xs">'+lastSignInHtml(i)+'</td>'+
         '<td class="text-xs text-gray-400">'+((i.created_at||'').slice(0,10))+'</td>'+
-        '<td class="text-right">'+(i.user_count===0 && aid ? '<button class="btn btn-sm btn-primary acc-owner" data-acc="'+aid+'" data-name="'+escHtml(String(i.name||''))+'" title="Create the first login for this workspace and email the details to its owner">Create login</button> ' : '')+(i.owner_credentials_undelivered && aid ? '<button class="btn btn-sm btn-primary acc-resend" data-acc="'+aid+'" data-email="'+escHtml(String(i.owner_email||i.email||''))+'" title="Mint a brand-new password for this workspace\'s owner and email it">Send login</button> ' : '')+'<button class="btn btn-sm btn-ghost" onclick="event.preventDefault();startImpersonation(\''+aid+'\')">Impersonate</button></td>'+
+        '<td class="text-right">'+(i.user_count===0 && aid ? '<button class="btn btn-sm btn-primary acc-owner" data-acc="'+aid+'" data-name="'+escHtml(String(i.name||''))+'" title="Create the first login for this account and email the details to its owner">Create login</button> ' : '')+(i.owner_credentials_undelivered && aid ? '<button class="btn btn-sm btn-primary acc-resend" data-acc="'+aid+'" data-email="'+escHtml(String(i.owner_email||i.email||''))+'" title="Mint a brand-new password for this account\'s owner and email it">Send login</button> ' : '')+'<button class="btn btn-sm btn-ghost" onclick="event.preventDefault();startImpersonation(\''+aid+'\')">Impersonate</button></td>'+
       '</tr>'}).join('')+'</tbody></table>';
     const a=el.querySelector('#accAll');
     if(a)a.addEventListener('change',()=>{box().forEach(b=>{b.checked=a.checked});sync()});
@@ -3869,7 +3885,7 @@ function renderAdminAccounts(c){
 }
 
 function renderAdminPortfolio(c){
-  c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Portfolio Companies</h2><button class="btn btn-primary btn-sm" id="addP">+ Add Company</button></div><p class="text-xs text-gray-400 mb-4">Your portfolio companies — SwiftSoftware, SwiftImpact, Giraudy Capital, etc. Admin-only.</p><div id="plist"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
+  c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-4"><h2 class="text-xl font-bold">Portfolio Companies</h2><button class="btn btn-primary btn-sm" id="addP">+ Add Company</button></div><p class="text-xs text-gray-400 mb-4">Your portfolio companies — SwiftSoftware, SwiftImpact, Giraudy Capital, etc. Admin-only. These are YOUR businesses, not customers, so they are held out of the customer list; <b>Open</b> enters a company\'s own account (it impersonates that company, never the account that owns the list). A company with no account behind it says <b>No account</b> rather than offering a button that goes nowhere.</p><div id="plist"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
   api('/portfolio-companies').then(d=>{
     // The API answers a NAMED envelope (`{portfolio_companies:[…]}`); this panel read `d.items`
     // only, so it printed "No companies yet." even when the account had rows (the super-admin has
@@ -3880,11 +3896,28 @@ function renderAdminPortfolio(c){
     const openForm=(id,row)=>showForm('portfolio','Portfolio Company',['name','domain','email','description'],'/portfolio-companies',id,()=>renderPage(),row);
     c.querySelector('#addP').onclick=()=>openForm(null,null);
     if(!items.length){el.innerHTML='<p class="text-gray-400 text-sm">No companies yet.</p>';return}
-    el.innerHTML=`<table class="table"><thead><tr><th>Name</th><th>Website</th><th>Email</th><th>Description</th><th style="width:140px"></th></tr></thead><tbody>`+
-      items.map(i=>`<tr><td><strong>${escHtml(i.name)}</strong></td><td>${escHtml(i.domain)||'-'}</td><td>${escHtml(i.email)||'-'}</td><td class="text-xs text-gray-500">${escHtml(i.description)||'-'}</td><td class="text-right">
+    // WHICH ACCOUNT A COMPANY OPENS (2026-11-21). `account_id` is resolved SERVER-side and is never
+    // the row's `aid`: `aid` is the account that OWNS this portfolio entry (SwiftSoftware owns
+    // Giraudy Capital, SwiftImpact and ZaarHub), so opening it would impersonate the owner and show
+    // every company at once. The server resolves the company's OWN account (same id, else the
+    // sibling account carrying its slug) and answers null when there is none — measured live
+    // 2026-11-21: 7 of 8 rows resolve, SwiftImpact has no account. A null gets the muted badge, never
+    // a button that goes nowhere.
+    el.innerHTML=`<table class="table"><thead><tr><th>Name</th><th>Account</th><th>Website</th><th>Email</th><th>Description</th><th style="width:200px"></th></tr></thead><tbody>`+
+      items.map(i=>{
+        const accId=i.account_id?String(i.account_id):'';
+        const accCell=accId
+          ? '<span class="text-xs">'+(escHtml(i.account_name||'')||'-')+'</span>'
+          : '<span class="badge badge-muted" title="No account exists behind this company yet, so there is nothing to open.">No account</span>';
+        return `<tr><td><strong>${escHtml(i.name)}</strong></td><td>${accCell}</td><td>${escHtml(i.domain)||'-'}</td><td>${escHtml(i.email)||'-'}</td><td class="text-xs text-gray-500">${escHtml(i.description)||'-'}</td><td class="text-right">
+        ${accId?'<button class="btn btn-sm btn-primary" data-open="'+escHtml(accId)+'" title="Enter this company\'s own account">Open</button> ':''}
         <button class="btn btn-sm btn-ghost" data-edit="${escHtml(rowId(i))}">Edit</button>
         <button class="btn btn-sm btn-danger" data-del="${escHtml(rowId(i))}">Del</button>
-      </td></tr>`).join('')+'</tbody></table>';
+      </td></tr>`}).join('')+'</tbody></table>';
+    // Open = the console's ONE impersonation path, so the support session, its banner and its Stop
+    // button behave exactly as they do from the Accounts panel.
+    el.querySelectorAll('button[data-open]').forEach(b=>b.onclick=(ev)=>{ev.preventDefault();
+      startImpersonation(b.getAttribute('data-open'));});
     // Bound by data attribute and handed the ROW OBJECT the list already holds — no GET <ep>/{id},
     // so Edit opens prefilled with the fields the table shows.
     el.querySelectorAll('button[data-edit]').forEach(b=>b.onclick=(ev)=>{ev.preventDefault();
@@ -4350,7 +4383,7 @@ window.appGuidePages = {
   "admin:usage": { title: "Platform Usage", desc: "One row per workspace: the plan tier the gates enforce, its credit balance, how many workflow runs it has made and whether its automation backend is provisioned, with platform totals above the table. Test machinery this app runs itself — the tenancy canaries and any workspace a probe harness minted — is not counted as a customer: those rows are held back from the table and from the totals, the header says how many were withheld, and the show probe workspaces switch brings them back marked probe so you can still see them. The Plan cell is a picker: moving a workspace onto a plan here emails that workspace's owner — which plan they are on, that nothing was charged, and where to see what it includes — and the message beside the row says whether that mail went out. Saving the plan a workspace already has emails nobody.", actions: ["Read each workspace's plan and usage", "Move a workspace onto a plan and read whether the customer was emailed", "Tick show probe workspaces to see the test accounts that are normally held back", "Open the raw API answer for support"] },
   "admin:settings": { title: "Settings", desc: "This app's own configuration for your account, including the mail server and the other integration slots.", actions: ["Set the mail server credentials", "Check whether email is configured"] },
   "admin:users": { title: "Users (Tenants)", desc: "Every account (tenant) on this install and the plan it is on. There is no user directory here — this panel lists accounts; deleting one is done from the Accounts panel.", actions: ["Move an account to a different plan"] },
-  "admin:accounts": { title: "Accounts", desc: "Every account (workspace) on this install. Select rows to delete the ones you no longer want.", actions: ["Search for an account", "Delete the selected accounts"] },
+  "admin:accounts": { title: "Accounts", desc: "Every customer account on this install; your own portfolio companies are held out of the list unless Include portfolio companies is ticked, and each row you bring back carries a portfolio badge. Select rows to delete the ones you no longer want.", actions: ["Search for an account", "Include portfolio companies to see your own companies in the list", "Delete the selected accounts"] },
   "admin:portfolio-companies": { title: "Portfolio Companies", desc: "The portfolio companies this install tracks, with their website, email and description.", actions: ["Add a portfolio company", "Edit a portfolio company", "Remove a portfolio company"] },
   "admin:plans": { title: "Plans", desc: "Manage subscription plans and what each one grants.", actions: ["Create or edit a plan", "Turn features on or off per plan"] },
   "admin:surfaces": { title: "Surfaces", desc: "The surfaces (screens or placements) that content can be published to.", actions: ["Add a surface", "Edit a surface"] },

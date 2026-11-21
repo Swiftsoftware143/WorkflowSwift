@@ -17,15 +17,44 @@ pub async fn list_portfolio_companies(
     Extension(claims): Extension<Claims>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    // WHICH ACCOUNT IS THIS COMPANY? (2026-11-21) The panel needs a handle that OPENS the company's
+    // own console, and `aid` is the wrong handle: `aid` is the OWNER's account (SwiftSoftware
+    // `98b21edd…` owns Giraudy Capital, SwiftImpact and ZaarHub), so opening it impersonates the
+    // owner and shows every company's data at once — a button that does nothing useful. This schema
+    // has no CoreSwift-style `account_tenant_id` column, so the company's own account is resolved
+    // the only way this data supports: the account whose id IS the company's id (self-owned), else
+    // the sibling account carrying the company's slug. Measured on the live install 2026-11-21:
+    // 7 of 8 rows resolve; the single NULL is SwiftImpact (slug `swiftimpact`, no account behind
+    // it), which is exactly the row the console must paint as "No account" rather than offer a dead
+    // Open button. `LIMIT 1` on both arms because `accounts.account_slug` is not unique by
+    // construction.
     // `portfolio_companies.domain` — the company's own web domain. Column added in
     // migrations/058_portfolio_companies_domain.sql: the internal sync contract carries `domain`
     // (ADASwift's twin endpoint stores it on tenants/clients) and this handler already reads it,
     // but the table never had the column, so every sync 42703'd on the statement below.
-    let rows = sqlx::query("SELECT id::text, name, slug, email, description, domain, settings::text, created_at::text FROM portfolio_companies WHERE aid = $1 ORDER BY name")
-        .bind(aid)
-        .fetch_all(&state.db).await?;
+    let rows = sqlx::query(
+        r#"SELECT p.id::text, p.name, p.slug, p.email, p.description, p.domain,
+                  p.settings::text, p.created_at::text,
+                  COALESCE((SELECT a.id::text FROM accounts a WHERE a.id = p.id LIMIT 1),
+                           (SELECT a.id::text FROM accounts a
+                             WHERE a.account_slug = p.slug LIMIT 1)) AS account_id,
+                  COALESCE((SELECT a.name FROM accounts a WHERE a.id = p.id LIMIT 1),
+                           (SELECT a.name FROM accounts a
+                             WHERE a.account_slug = p.slug LIMIT 1)) AS account_name
+             FROM portfolio_companies p
+            WHERE p.aid = $1
+            ORDER BY p.name"#,
+    )
+    .bind(aid)
+    .fetch_all(&state.db)
+    .await?;
     let companies: Vec<serde_json::Value> = rows.iter().map(|r| {
-        json!({"id": r.try_get::<&str,_>("id").unwrap_or(""), "name": r.try_get::<&str,_>("name").unwrap_or(""), "slug": r.try_get::<&str,_>("slug").unwrap_or(""), "email": r.try_get::<&str,_>("email").unwrap_or(""), "description": r.try_get::<&str,_>("description").unwrap_or(""), "domain": r.try_get::<&str,_>("domain").unwrap_or("")})
+        // NULL `account_id` => this company has no account of its own yet; the console renders
+        // "No account" and never an Open button. `aid` is deliberately NOT emitted: it names the
+        // owner, not the company.
+        let account_id: Option<String> = r.try_get("account_id").ok().flatten();
+        let account_name: Option<String> = r.try_get("account_name").ok().flatten();
+        json!({"id": r.try_get::<&str,_>("id").unwrap_or(""), "name": r.try_get::<&str,_>("name").unwrap_or(""), "slug": r.try_get::<&str,_>("slug").unwrap_or(""), "email": r.try_get::<&str,_>("email").unwrap_or(""), "description": r.try_get::<&str,_>("description").unwrap_or(""), "domain": r.try_get::<&str,_>("domain").unwrap_or(""), "account_id": account_id, "account_name": account_name})
     }).collect();
     Ok(Json(json!({"portfolio_companies": companies})))
 }

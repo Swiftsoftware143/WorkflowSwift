@@ -1161,6 +1161,20 @@ pub async fn admin_list_accounts(
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         .unwrap_or(false);
 
+    // THE OWNER'S OWN COMPANIES ARE NOT CUSTOMERS (2026-11-21). `portfolio_companies` holds the
+    // operator's businesses (Xride Drivers, BV Premiere, Giraudy Capital, ZaarHub, SwiftImpact
+    // Solutions today) and every one of them is ALSO an `accounts` row, so this list served all 5 of
+    // them among the 11 accounts with nothing on the row to tell them apart from a paying customer.
+    // They are held back by default and reachable with `?include_portfolio=1`, exactly the shape
+    // `include_probe` already has, and each row carries `is_portfolio` so the console can badge it.
+    // The match is the same pair `list_portfolio_companies` opens by (`portfolio_companies.id` =
+    // the account id when self-owned, else the account slug), so the row held back here is the row
+    // the Portfolio screen can open.
+    let include_portfolio = params
+        .get("include_portfolio")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
     let accounts = sqlx::query(
         r#"WITH resolved AS (
                SELECT a.id, a.name, a.account_slug, a.is_active, a.retention_days,
@@ -1196,15 +1210,27 @@ pub async fn admin_list_accounts(
                       -- list costs one query rather than one per row.
                       (EXISTS (SELECT 1 FROM account_plans apx
                                 WHERE apx.aid = a.id AND apx.status = 'active')
-                       OR a.plan_id IS NOT NULL) AS plan_assigned
+                       OR a.plan_id IS NOT NULL) AS plan_assigned,
+                      -- IS THIS ROW ONE OF THE OPERATOR'S OWN COMPANIES? (2026-11-21) Same pair the
+                      -- Portfolio screen opens by: the account IS the company (id equal), or it is
+                      -- the sibling account carrying the company's slug. Computed in the CTE so the
+                      -- WHERE below and the row's own badge agree by construction.
+                      EXISTS (SELECT 1 FROM portfolio_companies p
+                               WHERE p.id = a.id OR p.slug = a.account_slug) AS is_portfolio
                FROM accounts a
-                 WHERE $1::bool
+                 WHERE ($1::bool
                     OR COALESCE(a.probe_harness, '') = ''
-                    OR a.probe_harness ~* '^CNRY'
+                    OR a.probe_harness ~* '^CNRY')
+                   -- The operator's own businesses are held back from the customer list unless
+                   -- `?include_portfolio=1` asks for them (2026-11-21): they are not customers, and
+                   -- with no marker on the row the operator could not tell them apart from one.
+                   AND ($2::bool
+                    OR NOT EXISTS (SELECT 1 FROM portfolio_companies p
+                                    WHERE p.id = a.id OR p.slug = a.account_slug))
            )
            SELECT r.id, r.name, r.account_slug, r.is_active, r.retention_days,
                   r.retention_purge_at, r.created_at, r.probe_harness, r.credits_balance,
-                  p.name as plan_name, p.slug as plan_slug, r.plan_assigned,
+                  p.name as plan_name, p.slug as plan_slug, r.plan_assigned, r.is_portfolio,
                   (SELECT u.email FROM users u WHERE u.aid = r.id
                    ORDER BY CASE WHEN u.role IN ('owner','company_admin','admin','super_admin')
                                  THEN 0 ELSE 1 END,
@@ -1229,6 +1255,7 @@ pub async fn admin_list_accounts(
            ORDER BY r.created_at DESC"#,
     )
     .bind(include_probe)
+    .bind(include_portfolio)
     .fetch_all(&state.db)
     .await?;
 
@@ -1278,6 +1305,10 @@ pub async fn admin_list_accounts(
         // SQL. `false` = nobody ever put this workspace on a plan and the tier above is the
         // install's fallback; the console must say so rather than presenting it as a purchase.
         let plan_assigned: bool = row.try_get("plan_assigned").unwrap_or(true);
+        // Whether this row is one of the OPERATOR'S OWN companies rather than a customer
+        // (2026-11-21). Only reachable with `?include_portfolio=1`; published so the console can
+        // badge the row it asked back into the list instead of showing it as a paying customer.
+        let is_portfolio: bool = row.try_get("is_portfolio").unwrap_or(false);
         // The AUTHORITATIVE harness attribution (kanban t_4a744754): written at signup by the door
         // that minted the account. Published so the operator's list can badge a harness row
         // instead of GUESSING from its owner address — a harness that signed up with an
@@ -1332,6 +1363,9 @@ pub async fn admin_list_accounts(
             // purchase — the same pair `/auth/me` has answered since 2026-10-28.
             "plan": plan_name.map(|n| json!({"name": n, "slug": plan_slug})),
             "plan_assigned": plan_assigned,
+            // true => one of the operator's own portfolio companies, not a customer. Only present
+            // in the answer when `?include_portfolio=1` asked for those rows back.
+            "is_portfolio": is_portfolio,
             // The workspace's live credit balance (2026-11-09) — the figure `Adjust credits` moves.
             "credits_balance": credits_balance,
             "n8n_provisioned": false
