@@ -3945,6 +3945,8 @@ const App = () => {
           ${NAV.map(n => html`<button class="nav-item ${S.current===n.id?'active':''}" onClick=${()=>setView(n.id)}><span>${n.icon}</span> ${n.label}</button>`)}
           <a class="nav-item" href="/integrations.html" style="text-decoration:none"><span>🔌</span> Integrations</a>
           <a class="nav-item" id="guide-link" href="/guide.html" style="text-decoration:none"><span>📖</span> User Guide</a>
+          <a class="nav-item" id="roadmap-link" href="/roadmap.html" style="text-decoration:none"><span>🗺</span> Roadmap</a>
+          <a class="nav-item" id="updates-link" href="/updates.html" style="text-decoration:none"><span>✨</span> What's new</a>
         </nav>
         <div class="p-3 border-t border-gray-100">
           <div class="flex items-center gap-2 mb-2 min-w-0">
