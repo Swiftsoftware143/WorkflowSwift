@@ -1687,9 +1687,9 @@ const PlanView = () => {
               ${isCurrent(p)
                 ? html`<span class="chip">Current plan</span>`
                 : (planTerms(p).length
-                    ? (S.checkoutStatus && S.checkoutStatus.can_purchase === false
-                        ? planTerms(p).map(t => html`<button class="btn text-sm" data-ask-plan="${p.id}" data-plan-term="${t.term}" onClick=${() => askForPlan(p, t.term)}>${'Request ' + (p.name || p.slug) + ' — ' + t.label}</button>`)
-                        : planTerms(p).map(t => html`<button class="btn text-sm" data-plan-term="${t.term}" onClick=${() => startCheckout(p, t.term)} disabled=${S.checkoutBusy}>${S.checkoutBusy ? 'Starting…' : ('Upgrade — ' + t.label)}</button>`))
+                    ? html`${planPayUrl(p) ? html`<a class="btn text-sm" data-pay-link=${p.id} href=${planPayUrl(p)} target="_blank" rel="noopener">${'Open payment page — ' + (p.name || p.slug)}</a>` : ''}${(S.checkoutStatus && S.checkoutStatus.can_purchase === false) || !!planPayUrl(p)
+                        ? planTerms(p).map(t => html`<button class="${planPayUrl(p) ? 'btn-outline' : 'btn'} text-sm" data-ask-plan="${p.id}" data-plan-term="${t.term}" onClick=${() => askForPlan(p, t.term)}>${(planPayUrl(p) ? 'Ask for ' : 'Request ') + (p.name || p.slug)} — ${t.label}</button>`)
+                        : planTerms(p).map(t => html`<button class="btn text-sm" data-plan-term="${t.term}" onClick=${() => startCheckout(p, t.term)} disabled=${S.checkoutBusy}>${S.checkoutBusy ? 'Starting…' : ('Upgrade — ' + t.label)}</button>`)}`
                     : html`<span class="text-xs text-gray-400">Free — no payment needed</span>`)}
             </div>
           </div>`)}
@@ -1781,6 +1781,14 @@ const planTerms = (p) => {
   if (m > 0) out.push({ term: 'monthly', amount: m, label: 'monthly — $' + fmtAmt(m) + '/mo' });
   if (y > 0) out.push({ term: 'yearly', amount: y, label: 'yearly — $' + fmtAmt(y) + '/yr' });
   return out;
+};
+// A plan's hosted payment page (operator pastes it per plan in admin > Plans; GET /api/v1/plans
+// already returns it). Only an absolute http(s) address is ever rendered — anything else is
+// treated as "no page set", never as a link a buyer could be sent to.
+const planPayUrl = (p) => {
+  const raw = (p && typeof p.checkout_url === 'string') ? p.checkout_url.trim() : '';
+  if (!raw) return '';
+  try { const u = new URL(raw); return (u.protocol === 'https:' || u.protocol === 'http:') ? raw : ''; } catch (e) { return ''; }
 };
 const loadCheckoutStatus = async () => {
   try { S.checkoutStatus = await API.checkoutStatus(); } catch (e) { S.checkoutStatus = null; }
