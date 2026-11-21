@@ -1,36 +1,52 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<script id="ws-theme-boot">(function(){try{var t=null;try{var m=document.cookie.match(/(?:^|;\s*)ws_theme=([^;]+)/);if(m)t=m[1];}catch(e){}if(!t){try{t=localStorage.getItem('ws_theme');}catch(e){}}if(t!=='dark'&&t!=='light'&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches){t='dark';}if(t==='dark'||t==='light'){document.documentElement.setAttribute('data-theme',t);}}catch(e){}})();</script>
+
+<style id="ws-theme">:root{--ink:#111827;--muted:#6b7280;--line:#e5e7eb;--accent:#4f46e5;--accent-soft:#eef2ff;--danger:#b91c1c;--warn:#92400e;--ok:#166534;--surface-0:#f6f7f9;--surface-1:#ffffff;--surface-2:#ffffff;--surface-3:#ffffff;--surface-ref:#eef0f6;--shadow-1:0 1px 2px rgba(17,24,39,.10),0 2px 4px rgba(17,24,39,.06);--shadow-2:0 12px 40px rgba(17,24,39,.22),0 4px 14px rgba(17,24,39,.16);--z-sticky:10;--z-dropdown:20;--z-modal:30;--z-toast:40}
+html[data-theme="dark"]{--ink:#e8eaed;--muted:#9aa0a6;--line:#2d3148;--accent:#818cf8;--accent-soft:#26264a;--danger:#f87171;--warn:#fbbf24;--ok:#34d399;--surface-0:#0f1117;--surface-1:#1a1d27;--surface-2:#222532;--surface-3:#2a2e3d;--surface-ref:#1a1d27;--shadow-1:0 0 0 1px rgba(255,255,255,.05);--shadow-2:0 0 0 1px rgba(255,255,255,.08),0 20px 60px rgba(0,0,0,.6);color-scheme:dark}
+html[data-theme="light"]{color-scheme:light}
+.ws-theme-toggle{position:fixed;left:12px;bottom:12px;z-index:2147483000;display:inline-flex;align-items:center;gap:6px;background:var(--surface-2);color:var(--ink);border:1px solid var(--line);border-radius:999px;padding:7px 12px;box-shadow:var(--shadow-1);cursor:pointer;font:13px/1 system-ui,-apple-system,sans-serif}
+.ws-theme-toggle:hover{background:var(--surface-3);box-shadow:var(--shadow-2)}
+</style>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Sign in — WorkflowSwift</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:linear-gradient(135deg,#1e1b4b,#312e81);display:flex;justify-content:center;align-items:center;min-height:100vh}
-.c{background:#fff;border-radius:12px;padding:40px;width:380px;max-width:95vw;box-shadow:0 12px 40px rgba(0,0,0,.3);text-align:center}
-.c h1{font-size:22px;color:#1e1b4b;margin-bottom:4px}
-.c p.sub{font-size:13px;color:#64748b;margin-bottom:20px}
-.tabs{display:flex;margin-bottom:20px;border-bottom:1px solid #e2e8f0}
-.tab{flex:1;padding:10px;cursor:pointer;font-size:14px;font-weight:600;color:#64748b;border-bottom:2px solid transparent;margin-bottom:-1px}
-.tab.on{color:#4f46e5;border-bottom-color:#4f46e5}
+:root{--ws-body-a:#eef2ff;--ws-body-b:#e0e7ff}
+html[data-theme="dark"]{--ws-body-a:#1e1b4b;--ws-body-b:#312e81}
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:linear-gradient(135deg,var(--ws-body-a),var(--ws-body-b));display:flex;justify-content:center;align-items:center;min-height:100vh;padding:24px}
+.c{background:var(--surface-2);border-radius:12px;padding:40px;width:400px;max-width:95vw;box-shadow:var(--shadow-2);text-align:center}
+.c h1{font-size:22px;color:var(--ink);margin-bottom:4px}
+.c p.sub{font-size:13px;color:var(--muted);margin-bottom:24px}
+.tabs{display:flex;margin-bottom:20px;border-bottom:1px solid var(--line)}
+.tab{flex:1;padding:10px;cursor:pointer;font-size:14px;font-weight:600;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab.on{color:var(--accent);border-bottom-color:var(--accent)}
 .pane{display:none}.pane.on{display:block}
-.c input{width:100%;padding:12px;border:1px solid #d1d5db;border-radius:8px;font-size:14px;margin-bottom:12px;display:block;outline:none}
-.c input:focus{border-color:#4f46e5;box-shadow:0 0 0 2px rgba(99,102,241,.15)}
-.c button{width:100%;padding:12px;background:#4f46e5;color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}
-.c button:hover{background:#4f46e5}
+.c input{width:100%;padding:12px;border:1px solid var(--line);border-radius:8px;font-size:14px;margin-bottom:12px;display:block;outline:none;background:var(--surface-2);color:var(--ink)}
+.c input:focus{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
+.c label{display:block;font-size:12px;font-weight:600;color:var(--ink);margin-bottom:4px;text-align:left}
+.c button{width:100%;padding:12px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer}
+.c button:hover{filter:brightness(1.06);background:var(--accent)}
 .c button:disabled{opacity:.5}
 .msg{padding:10px;border-radius:6px;font-size:13px;margin-top:12px;display:none}
 .msg.e{background:#fee2e2;color:#991b1b;display:block}
-.msg.i{color:#4f46e5;display:block}
+.msg.o{background:#d1fae5;color:#065f46;display:block}
+.msg.i{color:var(--accent);display:block}
 .msg.ok{background:#dcfce7;color:#166534;display:block;text-align:left;line-height:1.5}
-.note{font-size:12px;color:#94a3b8;text-align:left;margin-bottom:12px;line-height:1.5}
-.lbl{display:block;text-align:left;font-size:13px;font-weight:600;color:#374151;margin-bottom:6px}
-.lk{margin-top:16px;font-size:12px;border-top:1px solid #f1f5f9;padding-top:14px}
-.lk a{color:#4f46e5}
-.sup{margin-top:12px;font-size:12px;line-height:1.55;color:#6b7280}
-.sup a{color:#4f46e5}
-.fp{margin-top:2px;font-size:12px}
-.fp a{color:#4f46e5}
+.note{font-size:12px;color:var(--muted);text-align:left;margin-bottom:12px;line-height:1.5}
+.lbl{display:block;text-align:left;font-size:13px;font-weight:600;color:var(--ink);margin-bottom:6px}
+.lk{margin-top:16px;font-size:12px;border-top:1px solid var(--line);padding-top:14px;color:var(--muted)}
+.lk a{color:var(--accent)}
+.sup{margin-top:12px;font-size:12px;line-height:1.55;color:var(--muted)}
+.sup a{color:var(--accent)}
+.fp{margin-top:2px;font-size:12px;color:var(--muted)}
+.fp a{color:var(--accent)}
+html[data-theme="dark"] .msg.e{background:#2a1416;color:#f87171}
+html[data-theme="dark"] .msg.o{background:#12291f;color:#6ee7b7}
+html[data-theme="dark"] .msg.ok{background:#12291f;color:#6ee7b7}
+html[data-theme="dark"] #rplan{background:#26264a!important;border-color:#4f46e5!important;color:#c7d2fe!important}
 </style>
 </head>
 <body>
@@ -230,5 +246,11 @@ var want=chosenPlan();
 .catch(function(err){m.className="msg e";m.textContent="Network error. Please try again.";b.disabled=false;b.textContent="Create free account"});
 }
 </script>
+
+<script>function wsApplyTheme(n){var t=(n==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('ws_theme',t);}catch(e){}try{document.cookie='ws_theme='+t+';domain=workflowswift.com;path=/;max-age=31536000;SameSite=Lax';}catch(e){}var l=document.getElementById('wsThemeLabel');if(l)l.textContent=(t==='dark')?'Day mode':'Night mode';var i=document.getElementById('wsThemeIcon');if(i)i.textContent=(t==='dark')?'☀️':'🌙';var b=document.getElementById('wsThemeToggle');if(b)b.title=(t==='dark')?'Switch to day mode':'Switch to night mode';}
+function wsToggleTheme(){wsApplyTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark');}
+function wsEnsureToggle(){if(document.getElementById('wsThemeToggle'))return;var b=document.createElement('button');b.type='button';b.id='wsThemeToggle';b.className='ws-theme-toggle';b.title='Switch day / night mode';b.setAttribute('aria-label','Switch day / night mode');b.onclick=wsToggleTheme;var i=document.createElement('span');i.id='wsThemeIcon';i.setAttribute('aria-hidden','true');i.textContent='🌙';var l=document.createElement('span');l.id='wsThemeLabel';l.textContent='Night mode';b.appendChild(i);b.appendChild(l);document.documentElement.appendChild(b);wsApplyTheme(document.documentElement.getAttribute('data-theme')||'light');}
+wsEnsureToggle();
+document.addEventListener('DOMContentLoaded',function(){try{wsEnsureToggle();}catch(e){}});</script>
 </body>
 </html>

@@ -151,7 +151,7 @@
   }
 </style>
 <script id="theme-boot">/* Night/day applied before first paint, so the client never flashes the wrong theme. */
-(function(){try{var t=localStorage.getItem('ws_mail_theme');if(!t&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)t='dark';if(t==='dark'||t==='light')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();
+(function(){try{var t=null;try{var m=document.cookie.match(/(?:^|;\s*)ws_theme=([^;]+)/);if(m)t=m[1];}catch(e){}if(!t)t=localStorage.getItem('ws_mail_theme');if(!t&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)t='dark';if(t==='dark'||t==='light')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();
 </script>
 </head>
 <body>
@@ -167,6 +167,7 @@ function wsApplyTheme(name) {
   var t = (name === 'dark') ? 'dark' : 'light';
   document.documentElement.setAttribute('data-theme', t);
   try { localStorage.setItem('ws_mail_theme', t); } catch (e) {}
+  try { document.cookie = 'ws_theme=' + t + ';domain=workflowswift.com;path=/;max-age=31536000;SameSite=Lax'; } catch (e) {}
   var lab = document.getElementById('wsThemeLabel');
   if (lab) lab.textContent = (t === 'dark') ? 'Day mode' : 'Night mode';
   var icon = document.getElementById('wsThemeIcon');
