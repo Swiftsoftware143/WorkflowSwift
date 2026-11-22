@@ -1001,6 +1001,13 @@ pub fn create_router(state: AppState) -> Router {
             get(handlers::branding_handler::get_branding)
                 .put(handlers::branding_handler::put_branding),
         )
+        // The provider's delivery-events address, read by the operator's do-not-mail card so it can
+        // be pasted into the provider once (2026-11-22). PRIVATE: it hands out a capability URL, so
+        // the boundary must refuse an anonymous caller before the handler runs.
+        .route(
+            "/settings/do-not-mail/webhook",
+            get(crate::compliance_events::webhook_url),
+        )
         .route(
             "/settings/branding/logo",
             post(handlers::branding_handler::upload_logo)
@@ -1374,10 +1381,21 @@ pub fn create_router(state: AppState) -> Router {
         // proves each allowlist entry names a literal this router really mounts.
         .nest(
             "/api/v1/webhooks/mailgun",
-            Router::new().route(
-                "/inbound",
-                post(crate::private_email::webhook_handler::inbound_webhook),
-            ),
+            Router::new()
+                .route(
+                    "/inbound",
+                    post(crate::private_email::webhook_handler::inbound_webhook),
+                )
+                // The provider's DELIVERY events (2026-11-22): a hard bounce, a spam complaint and a
+                // list unsubscribe, posted with no session like every provider webhook. The credential
+                // is a secret this app generates and carries IN THE PATH (`mailgun_events_token`),
+                // compared in constant time before anything is written; a wrong token is a 403 and
+                // records nothing. Listed in `auth::route_policy::PUBLIC_ROUTES`, beside the inbound
+                // receiver.
+                .route(
+                    "/events/{token}",
+                    post(crate::compliance_events::events_webhook),
+                ),
         )
         .layer(axum::middleware::from_fn_with_state(
             body_read_deadline,

@@ -3314,7 +3314,15 @@ function renderAdminSettings(c){
    +'<div class="card mt-4"><h2 class="text-xl font-bold mb-1">Do not mail</h2>'
    +'<p class="text-xs text-gray-500 mb-3">Anyone who pressed &ldquo;Stop these emails&rdquo; in a notification is listed here, and no workflow mail is sent to them again. Receipts, password resets and security notices keep working &mdash; those are not optional. Adding an address below stops workflow mail to it immediately.</p>'
    +'<div class="flex gap-2 items-center flex-wrap mb-3"><input id="dnm_addr" type="email" placeholder="someone@example.com" style="max-width:320px;padding:7px 9px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"><button class="btn btn-primary btn-sm" id="dnm_add">Stop mail to this address</button><span id="dnm_msg" class="text-xs"></span></div>'
-   +'<div id="dnm_list"><p class="text-gray-400 text-sm">Loading...</p></div></div>';
+   +'<div id="dnm_list"><p class="text-gray-400 text-sm">Loading...</p></div>'
+   // Where the provider reports its own verdict (2026-11-22). A hard bounce or a spam complaint
+   // arrives at this address and lands in the list above with no human in the loop; the operator
+   // needs the address once, to paste into the provider. Read from the app, never composed here, so
+   // the screen cannot show an address the server would refuse.
+   +'<div class="mt-4 pt-3" style="border-top:1px solid #e5e7eb"><p class="text-xs font-medium text-gray-600 mb-1">Where the provider reports bounces and complaints</p>'
+   +'<p class="text-xs text-gray-500 mb-2">The mail provider tells this installation when a message hard-bounces or is marked as spam, and each of those addresses lands in the list above automatically. Paste this address into the provider\'s webhook settings for the sending domain (events: permanent failures, complaints, unsubscribes) &mdash; it is the only place that address is needed.</p>'
+   +'<div class="flex items-center gap-2 flex-wrap"><code id="dnm_hook" class="text-xs font-mono" style="word-break:break-all">Reading...</code>'
+   +'<button class="btn btn-sm btn-ghost" id="dnm_hook_copy" aria-label="Copy the provider delivery-events address">Copy</button><span id="dnm_hook_msg" class="text-xs"></span></div></div></div>';
 
   // Tag → free account (design §3.3): the master toggle + the in-app entry-plan picker. Both keys
   // are read by POST /api/v1/internal/provision-free-account, the receiver FunnelSwift's tag
@@ -3437,6 +3445,21 @@ function renderAdminSettings(c){
     });
   };
   loadDnm();
+  // The provider's delivery-events address (2026-11-22): the ONE thing an operator has to copy out
+  // of this screen into the provider. A failed read is shown as a failure, never as a blank line.
+  api('/settings/do-not-mail/webhook').then(d=>{
+    const el=c.querySelector('#dnm_hook');
+    if(!el)return;
+    if(!d||!d.url){el.textContent='Could not read the address';el.style.color='#b91c1c';return}
+    el.textContent=d.url;
+    el.style.color='';
+    const b=c.querySelector('#dnm_hook_copy');
+    if(b)b.onclick=async()=>{
+      const m=c.querySelector('#dnm_hook_msg');
+      try{await navigator.clipboard.writeText(d.url);if(m){m.textContent='Copied.';m.style.color='#166534'}}
+      catch(e){if(m){m.textContent='Select the address and copy it.';m.style.color='#64748b'}}
+    };
+  });
   const dnmAdd=c.querySelector('#dnm_add'), dnmAddr=c.querySelector('#dnm_addr'), dnmMsg=c.querySelector('#dnm_msg');
   if(dnmAdd)dnmAdd.onclick=async()=>{
     const addr=((dnmAddr&&dnmAddr.value)||'').trim();

@@ -196,6 +196,11 @@ pub const PUBLIC_ROUTES: &[&str] = &[
     // the raw body (urlencoded or multipart, attachments included) before it can verify anything,
     // which is why it is mounted with its own body-read deadline and a 25 MB envelope.
     "/api/v1/webhooks/mailgun/inbound",
+    // The provider's DELIVERY events (2026-11-22): a hard bounce, a spam complaint and a list
+    // unsubscribe, posted with no session like every provider webhook. The credential is a secret
+    // this app generates and carries IN THE PATH (`mailgun_events_token`), compared in constant
+    // time before anything is written; a wrong token is a 403 and records nothing.
+    "/api/v1/webhooks/mailgun/events/{token}",
     // The OTHER receiver a domain can choose (measured live 2026-11-14: the console hands a
     // SendGrid-hosted customer this URL, and the router existed but was never mounted, so it
     // answered 404). SendGrid signs nothing — the unguessable per-domain `inbound_token` in the
@@ -700,7 +705,10 @@ mod tests {
         // deliberate anonymous list with the compliance gate), 23 + 10 = 33.
         // (`/api/v1/admin/billing-settings` and the new `/api/v1/admin/do-not-mail` pair are PRIVATE
         // and live in neither list: `tenant_and_operator_surfaces_are_not_public` pins that.)
-        assert_eq!(super::PUBLIC_ROUTES.len(), 23, "PUBLIC_ROUTES size");
+        // Pin RE-MEASURED 2026-11-22: PUBLIC_ROUTES holds 24 — the provider's delivery-events
+        // receiver (`/api/v1/webhooks/mailgun/events/{token}`, a hard bounce or complaint has to
+        // reach the app with no session) joined the deliberate anonymous list, 24 + 10 = 34.
+        assert_eq!(super::PUBLIC_ROUTES.len(), 24, "PUBLIC_ROUTES size");
         assert_eq!(super::INTERNAL_ROUTES.len(), 10, "INTERNAL_ROUTES size");
         // The 22 deliberate anonymous placements the census found, minus the 2 moved to the
         // protected router, plus `/api/v1/auth/avatar/{user_id}` (the account-picture READ, card
@@ -711,7 +719,7 @@ mod tests {
         // session), plus the two public support-desk routes above.
         assert_eq!(
             super::PUBLIC_ROUTES.len() + super::INTERNAL_ROUTES.len(),
-            33
+            34
         );
     }
 }

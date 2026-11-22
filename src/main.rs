@@ -13,6 +13,7 @@ mod billing_instructions;
 mod body_rejection;
 mod branding;
 mod compliance;
+mod compliance_events;
 mod config;
 mod credential_watch;
 mod db;
