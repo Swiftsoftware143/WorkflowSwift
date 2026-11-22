@@ -50,6 +50,28 @@
   .back a{color:var(--primary);text-decoration:none}
   footer{max-width:1000px;margin:0 auto;padding:0 24px 40px;font-size:12.5px;color:var(--g500)}
 </style>
+<script id="wf-theme-boot">(function(){try{var t=null;try{var m=document.cookie.match(/(?:^|;\s*)ws_theme=([^;]+)/);if(m)t=m[1];}catch(e){}if(!t){try{t=localStorage.getItem('ws_theme');}catch(e){}}if(t!=='dark'&&t!=='light'&&window.matchMedia){t=window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();</script>
+<style id="wf-theme-dark">
+html{color-scheme:light}
+html[data-theme="dark"]{
+  --primary:#6366f1; --primary-dark:#a78bfa; --primary-bg:#26264a;
+  --g50:#0f1117; --g100:#151925; --g200:#2d3148; --g300:#3a3f56; --g400:#9aa0a6;
+  --g500:#9aa0a6; --g600:#c7cbd4; --g700:#e2e5ea; --g800:#e8eaed; --g900:#f3f5f7;
+  --green:#34d399; --green-bg:#12291f; --amber:#fbbf24; --amber-bg:#2a2413;
+  --red:#f87171; --red-bg:#2a1416;
+  color-scheme:dark;
+}
+html[data-theme="dark"] body{background:var(--g50);color:var(--g800)}
+html[data-theme="dark"] pre,html[data-theme="dark"] code{background:#1a1d27;color:#c4b5fd;border-color:var(--g200)}
+html[data-theme="dark"] .card{background:#1a1d27;border-color:var(--g200);box-shadow:0 0 0 1px rgba(255,255,255,.05)}
+html[data-theme="dark"] .toc,html[data-theme="dark"] section{background:#1a1d27;border-color:var(--g200)}
+html[data-theme="dark"] table,html[data-theme="dark"] th,html[data-theme="dark"] td{border-color:var(--g200)}
+html[data-theme="dark"] th{background:#1a1d27;color:var(--g800)}
+html[data-theme="dark"] input,html[data-theme="dark"] textarea,html[data-theme="dark"] select{background:#151925;color:var(--g800);border-color:var(--g200)}
+html[data-theme="dark"] .tip,html[data-theme="dark"] .note,html[data-theme="dark"] .warn{color:var(--g700)}
+.ws-theme-toggle{position:fixed;right:16px;bottom:16px;z-index:2147483000;display:inline-flex;align-items:center;gap:6px;background:var(--g100);color:var(--g800);border:1px solid var(--g200);border-radius:999px;padding:7px 12px;box-shadow:0 2px 10px rgba(16,24,40,.14);cursor:pointer;font:13px/1 system-ui,-apple-system,sans-serif}
+.ws-theme-toggle:hover{background:var(--g200)}
+</style>
 </head>
 <body>
 <div class="header">
@@ -253,5 +275,12 @@
   <p class="back">← <a href="/">Back to the mail client</a></p>
 </div>
 <footer>WorkflowSwift Mail · this guide describes the mail client you are using, not a different product.</footer>
+<script>
+function wsApplyTheme(n){var t=(n==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('ws_theme',t);}catch(e){}try{document.cookie='ws_theme='+t+';path=/;max-age=31536000;SameSite=Lax';}catch(e){}var l=document.getElementById('wsThemeLabel');if(l)l.textContent=(t==='dark')?'Day mode':'Night mode';var i=document.getElementById('wsThemeIcon');if(i)i.textContent=(t==='dark')?'\u2600\ufe0f':'\ud83c\udf19';var b=document.getElementById('wsThemeToggle');if(b)b.title=(t==='dark')?'Switch to day mode':'Switch to night mode';}
+function wsToggleTheme(){wsApplyTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark');}
+function wsEnsureToggle(){if(document.getElementById('wsThemeToggle'))return;var b=document.createElement('button');b.type='button';b.id='wsThemeToggle';b.className='ws-theme-toggle';b.setAttribute('aria-label','Switch day / night mode');b.onclick=wsToggleTheme;var i=document.createElement('span');i.id='wsThemeIcon';i.setAttribute('aria-hidden','true');var l=document.createElement('span');l.id='wsThemeLabel';b.appendChild(i);b.appendChild(l);document.documentElement.appendChild(b);wsApplyTheme(document.documentElement.getAttribute('data-theme')||'light');}
+wsEnsureToggle();
+document.addEventListener('DOMContentLoaded',function(){try{wsEnsureToggle();}catch(e){}});
+</script>
 </body>
 </html>
