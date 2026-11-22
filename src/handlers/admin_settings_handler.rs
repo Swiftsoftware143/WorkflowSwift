@@ -3030,6 +3030,12 @@ pub async fn test_sms_settings(
     .await
     {
         Ok(()) => Ok(Json(json!({ "status": "sent", "to": to }))),
+        // A WITHHELD NUMBER IS NOT A CONFIGURATION ERROR (2026-11-22). Nothing was attempted, and
+        // no credential would make the NANP fiction block deliverable, so the admin is told what
+        // actually happened instead of being sent hunting for a broken key.
+        Err(e) if crate::sms::suppressed_reason(&e).is_some() => Ok(Json(
+            json!({ "status": "suppressed", "to": to, "detail": e }),
+        )),
         Err(e) => Ok(Json(json!({ "status": "error", "detail": e }))),
     }
 }

@@ -130,6 +130,33 @@ pub fn harness_domain(addr: &str) -> Option<&'static str> {
         .map(|_| brand)
 }
 
+/// Fictitious numbers that can never receive a text.
+///
+/// NANP reserves exchange `555` with subscriber `0100`–`0199` for fiction — `813-555-0101`,
+/// `305-555-0199`. No carrier will ever deliver to one, so handing the number to a text provider
+/// buys nothing but a failed send charged against the same account that carries real customers'
+/// texts. The mail layer has withheld unreachable addresses for months; this is the same gate,
+/// applied to the number (parity with XrideDispatch commit 2ede6cb).
+///
+/// Deliberately TIGHT: only the reserved fiction block. `813-555-1234` is a legitimate number, so
+/// the exchange alone is not enough — the subscriber has to be in 0100–0199 as well.
+pub fn undeliverable_number(number: &str) -> Option<&'static str> {
+    let digits: String = number.chars().filter(char::is_ascii_digit).collect();
+    let digits = digits.trim_start_matches("00");
+    if digits.len() < 10 {
+        return None;
+    }
+    let nsn = &digits[digits.len() - 10..];
+    let (exchange, line) = (&nsn[3..6], &nsn[6..10]);
+    if exchange != "555" {
+        return None;
+    }
+    match line.parse::<u32>() {
+        Ok(subscriber) if (100..=199).contains(&subscriber) => Some("nanp-fiction-555-01xx"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -414,5 +441,29 @@ mod synthetic_requester_tests {
             None
         );
         assert_eq!(synthetic_requester("someone@gmail.com", ""), None);
+    }
+
+    #[test]
+    fn fictitious_numbers_are_held_and_dialable_numbers_are_untouched() {
+        // Whatever shape the operator or the form hands over.
+        assert_eq!(
+            undeliverable_number("8135550101"),
+            Some("nanp-fiction-555-01xx")
+        );
+        assert_eq!(
+            undeliverable_number("+1 (813) 555-0101"),
+            Some("nanp-fiction-555-01xx")
+        );
+        assert_eq!(
+            undeliverable_number("001-305-555-0199"),
+            Some("nanp-fiction-555-01xx")
+        );
+        // Exchange 555 with a real subscriber part is a legitimate number.
+        assert_eq!(undeliverable_number("8135551234"), None);
+        assert_eq!(undeliverable_number("+1 305 555 1234"), None);
+        assert_eq!(undeliverable_number("3051234567"), None);
+        // Too short to judge is not a probe verdict.
+        assert_eq!(undeliverable_number("5550101"), None);
+        assert_eq!(undeliverable_number(""), None);
     }
 }

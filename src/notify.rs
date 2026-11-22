@@ -449,6 +449,51 @@ pub async fn deliver(
     let mut first_error = String::new();
     for r in &recipients {
         let addr = r.address(channel);
+
+        // A NUMBER THAT CAN NEVER RECEIVE A TEXT IS NOT HANDED TO THE PROVIDER (2026-11-22).
+        // `813-555-0101` is in the NANP's reserved fiction block: no carrier will ever deliver to
+        // it, so the send is a guaranteed failure charged against the same account that carries
+        // real customers' texts. The mail arm below has withheld unreachable addresses since
+        // 2026-10-09; this is the same decision for the number, taken BEFORE the sender is asked
+        // for a credential and recorded as `suppressed` rather than `failed` — nothing was
+        // attempted, so it is not something the graph should retry. Parity with XrideDispatch
+        // commit 2ede6cb, where the hole was measured live.
+        if channel == "sms" {
+            if let Some(reason) = crate::security::probe_addr::undeliverable_number(&addr) {
+                suppressed += 1;
+                let detail = format!("{}{reason}", crate::sms::SUPPRESSED_PREFIX);
+                record_attempt(
+                    &state.db,
+                    Attempt {
+                        aid,
+                        workflow_id,
+                        step_index,
+                        channel,
+                        recipient: &addr,
+                        status: "suppressed",
+                        detail: &detail,
+                    },
+                )
+                .await;
+                tracing::info!(
+                    aid = %aid,
+                    workflow_id = ?workflow_id,
+                    step = step_index,
+                    reason = %reason,
+                    "text withheld: the number cannot receive one, so nothing was sent"
+                );
+                results.push(json!({
+                    "user_id": r.user_id.to_string(),
+                    "name": r.name,
+                    "to": addr,
+                    "billing_contact": r.billing_contact,
+                    "status": "suppressed",
+                    "detail": detail,
+                }));
+                continue;
+            }
+        }
+
         let sent = if channel == "email" {
             // AN OPT-OUT IS A REFUSAL, NOT A DELIVERY (2026-11-20). `email::send_email` answers
             // `Ok` for a recipient who asked not to be mailed — the gate keeps the message off the
@@ -552,13 +597,18 @@ pub async fn deliver(
             results.len()
         )
     } else if status == "suppressed" {
+        // Two classes land here: an address that asked not to be mailed, and a number in the
+        // NANP fiction block no carrier can reach (2026-11-22). One sentence covers both without
+        // telling the operator a delivery happened.
         format!(
-            "{suppressed} of {} recipients have asked not to be mailed — nothing was sent",
+            "{suppressed} of {} {channel} recipients were withheld — nothing was sent (an address \
+             that asked not to be mailed, or a number reserved for fiction that no carrier can \
+             deliver to)",
             results.len()
         )
     } else if suppressed > 0 {
         format!(
-            "{channel} sent to {} of the account's own people; {suppressed} have asked not to be mailed",
+            "{channel} sent to {} of the account's own people; {suppressed} were withheld",
             results.len() - suppressed
         )
     } else {

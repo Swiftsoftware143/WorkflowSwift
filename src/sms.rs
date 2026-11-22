@@ -151,11 +151,33 @@ pub fn normalize_phone(raw: &str) -> Result<String, String> {
     }
 }
 
+/// The prefix a withheld number's refusal carries.
+///
+/// A caller that records an outcome (`notify`, the admin test) uses this to record `suppressed`
+/// instead of `failed`: nothing was attempted, so it is not a failure the graph should retry, and it
+/// is not a delivery either. One spelling here means the record and the console cannot drift.
+pub const SUPPRESSED_PREFIX: &str = "undeliverable_number:";
+
+/// The reason a send was withheld before any provider traffic, if it was.
+pub fn suppressed_reason(err: &str) -> Option<&str> {
+    err.strip_prefix(SUPPRESSED_PREFIX)
+}
+
 /// Send one SMS through whichever provider the admin selected in Admin > Settings > SMS.
 ///
 /// Every outcome is the provider's own: a non-2xx is an `Err` carrying its status and body, so a
 /// step result says what actually happened instead of a fabricated "sent".
+///
+/// A NUMBER THAT CAN NEVER RECEIVE A TEXT IS NOT HANDED TO THE PROVIDER (2026-11-22). The gate is
+/// the FIRST thing here — before the provider is chosen, before the credential is read — so every
+/// caller inherits it. Measured in the sibling app (XrideDispatch, commit 2ede6cb): each probe
+/// quote carrying a phone left an `sms … failed` row next to the email the address gate had
+/// correctly held, and one failed send is charged to the same account that carries real customers'
+/// texts.
 pub async fn send_sms(state: &AppState, to: &str, body: &str) -> Result<(), String> {
+    if let Some(reason) = crate::security::probe_addr::undeliverable_number(to) {
+        return Err(format!("{SUPPRESSED_PREFIX}{reason}"));
+    }
     let Some(cfg) = get_sms_config(state).await else {
         return Err("SMS not configured: set the provider in Admin > Settings > SMS".to_string());
     };

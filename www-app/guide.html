@@ -299,7 +299,10 @@
           for it</strong> (an admin sets that up under Settings → Email Provider / SMS Provider). If nothing is
           configured for email or SMS, the channel is not offered and the step is refused rather than
           silently built to do nothing.</li>
-      <li>Every send is recorded: sent, failed, refused, or throttled. A refusal (for example a person
+      <li>Every send is recorded: sent, failed, <strong>suppressed</strong>, refused, or throttled. A
+          suppressed send was deliberately not attempted — an address that asked not to be mailed, or a
+          number in the range reserved for fiction (exchange 555 with a subscriber part of 0100–0199,
+          such as 813-555-0101) that no carrier can ever deliver to. A refusal (for example a person
           with no phone number on file) names the reason in the run, and your account has an hourly
           sending cap so a looping workflow cannot flood a mailbox. Past the cap the send is refused and
           the run says so.</li>
