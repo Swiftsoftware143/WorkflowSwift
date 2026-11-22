@@ -123,7 +123,7 @@ html[data-theme="dark"] [style*="background:#0f172a"]{background-color:#0b0f18!i
   .btn:hover{background:#1d4ed8;transform:translateY(-1px);box-shadow:0 4px 12px rgba(37,99,235,.25)}
   .btn:disabled{opacity:.6;cursor:not-allowed;transform:none;box-shadow:none}
   .btn-red{background:#dc2626}.btn-red:hover{background:#b91c1c}
-  .btn-green{background:#16a34a}.btn-green:hover{background:#15803d}
+  .btn-green{background:#15803d;color:#fff}.btn-green:hover{background:#166534}
   .btn-outline{background:0 0;border:2px solid #e2e8f0;color:#475569}.btn-outline:hover{background:#f8fafc}
   .input{border:2px solid #e2e8f0;border-radius:10px;padding:10px 14px;width:100%;font-size:14px;outline:0;transition:border-color .15s}
   .input:focus{border-color:#2563eb;box-shadow:0 0 0 4px rgba(37,99,235,.08)}
@@ -192,6 +192,26 @@ html[data-theme="dark"] [style*="background:#0f172a"]{background-color:#0b0f18!i
   .tb-tab:hover,.tb-tab.active{background:#2563eb;color:#fff}
   .ind-switch{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:8px 14px;font-weight:600;font-size:.85rem;color:#0f172a;cursor:pointer;display:inline-flex;align-items:center;gap:8px}
   .ind-switch:hover{border-color:#2563eb;color:#2563eb}
+
+  /* ── WCAG AA sweep (axe-core: wcag2a/2aa/21a/21aa), measured on the RUNNING console ────────
+     Light rules first, dark rules separate. A grey that already sits on a dark surface is NOT
+     darkened again: the dashboard tiles keep a dark surface in both themes, so only the widgets
+     that keep a light surface under the dark palette are repainted here. */
+  html[data-theme="light"] .empty{color:var(--ink)}
+  html[data-theme="light"] .b-gray{background:var(--surface-ref);color:var(--ink)}
+  html[data-theme="light"] .text-gray-400{color:#5b6472}
+  html[data-theme="light"] .text-gray-500{color:#4b5563}
+  /* …but these tiles stay dark in both themes, so their sub-labels stay light */
+  html[data-theme="light"] .mfeed:not(.tfeed) .text-gray-400,
+  html[data-theme="light"] .mchart .text-gray-400,
+  html[data-theme="light"] .mcounter .text-gray-400,
+  html[data-theme="light"] .mrevenue .text-gray-400{color:#cbd5e1}
+  /* the custom-metric tile borrowed .mfeed's white type but none of the tile's background */
+  .mfeed.g-slate{background-color:var(--ink);background-image:linear-gradient(135deg,#334155,#475569)}
+  /* `.btn-red` is used without `.btn`, so it inherited the table's dark slate and sat 2.14:1 on red */
+  .btn-red{color:#fff}
+  /* dark: the active nav item was repainted to --muted by the dark `.nav-item` rule (1.95:1 on blue) */
+  html[data-theme="dark"] .nav-item.active{background:#2563eb;color:#fff}
 </style>
 <link rel="stylesheet" href="/tw.css">
 </head>
@@ -832,7 +852,7 @@ const ModalShell = ({title, children, onClose}) => html`
     <div class="modal"><h2 class="text-lg font-bold text-gray-900 mb-4">${title}</h2>${children}<div class="mt-4 flex justify-end gap-2"><button class="btn-outline text-sm" onClick=${onClose}>Close</button></div></div>
   </div>`;
 
-const spinner = () => html`<span class="spinner"></span>`;
+const spinner = () => html`<span class="spinner" role="status" aria-label="Loading"></span>`;
 
 
 // ===== Dashboard (per-category visual dashboard) =====
@@ -945,7 +965,7 @@ const DashboardView = () => {
       <h3 class="font-semibold" style="margin:0 0 2px">Get started</h3>
       <p class="text-sm text-gray-500" style="margin:0 0 10px">Nothing has run yet, so the tiles below are all zero. Two steps and they start counting. This card goes away once you have a workflow or a client.</p>
       ${steps.map((s, i) => html`<div style="display:flex;gap:12px;align-items:flex-start;padding:10px 0${i ? ';border-top:1px solid #e2e8f0' : ''}">
-        <div style="flex:0 0 24px;height:24px;border-radius:50%;background:#eef2ff;color:#4338ca;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center">${i + 1}</div>
+        <div style="flex:0 0 24px;height:24px;border-radius:50%;background:var(--accent-soft);color:#4338ca;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center">${i + 1}</div>
         <div style="flex:1">
           <div class="font-semibold text-sm">${s[0]}</div>
           <div class="text-sm text-gray-500" style="margin:2px 0 6px;max-width:60ch">${s[1]}</div>
@@ -1040,7 +1060,7 @@ const renderWidget = (w, idx) => {
   const title = w.title || 'KPI'; const icon = w.icon || (t.includes('revenue')?'💰':t.includes('trend')?'📈':t.includes('feed')?'🗞️':'＃');
   if (t.includes('feed') || t.includes('activity')) {
     const items = Array.isArray(w.data) ? w.data : (w.data && w.data.items ? w.data.items : []);
-    return html`<div class="mfeed" key=${w.id||idx} style="grid-row:span ${Math.min(2,Math.max(1,(w.position&&w.position.row)?1:2))}"><div class="mtitle-chart"><span>${icon} ${title}</span></div>${items.length?html`<ul class="mfeed">${items.map(it=>html`<li><span>${it.label||it.name||it.title||''}</span><span class="milestone">${fmtAmt(it.value??it.count??(it.milestone?'✓':'—'))}</span></li>`)}</ul>`:html`<div class="text-sm opacity-70">No activity yet.</div>`}</div>`;
+    return html`<div class="mfeed g-slate" key=${w.id||idx} style="grid-row:span ${Math.min(2,Math.max(1,(w.position&&w.position.row)?1:2))}"><div class="mtitle-chart"><span>${icon} ${title}</span></div>${items.length?html`<ul class="mfeed">${items.map(it=>html`<li><span>${it.label||it.name||it.title||''}</span><span class="milestone">${fmtAmt(it.value??it.count??(it.milestone?'✓':'—'))}</span></li>`)}</ul>`:html`<div class="text-sm opacity-70">No activity yet.</div>`}</div>`;
   }
   const n = wnum(w);
   if (t.includes('revenue') || (wcfg(w).currency)) {
@@ -1186,7 +1206,7 @@ const renderTplGrid = () => {
         +'<button class="btn-outline text-sm flex-1" data-tpl-export="'+esc(t.id)+'|'+esc(t.name)+'">Export JSON</button></div>'
         +'</div>';
     }
-    return '<div class="card" style="margin-bottom:0;opacity:.92">'
+    return '<div class="card" style="margin-bottom:0">'
       +'<div class="flex items-start justify-between"><h3 class="font-semibold text-gray-800">'+esc(t.name)+'</h3><span class="badge b-gray">Locked</span></div>'
       +'<p class="text-sm text-gray-500 mt-1 mb-3">'+esc(t.description||'No description')+'</p>'
       +'<div class="mb-3">'+(t.category?'<span class="chip">'+esc(t.category)+'</span>':'')+stepsChip+'<span class="chip">'+lockedChip+'</span></div>'
@@ -1347,7 +1367,7 @@ const ProspectingView = () => {
           <h3 class="font-semibold text-gray-800 mb-2 text-sm">🧩 Hexomatic API key</h3>
           <p class="text-xs text-gray-500 mb-2">Third-party enrichment credential. Stored per account; the server only ever returns it masked.</p>
           <div class="flex gap-2 items-center">
-            <input class="input" style="font-family:ui-monospace,monospace;font-size:12px" placeholder=${masked ? masked : 'not set'} value=${S.hexKeyInput} onInput=${e=>{S.hexKeyInput=e.target.value;}} />
+            <input class="input" aria-label="Provider key value" style="font-family:ui-monospace,monospace;font-size:12px" placeholder=${masked ? masked : 'not set'} value=${S.hexKeyInput} onInput=${e=>{S.hexKeyInput=e.target.value;}} />
             <button class="btn text-sm" onClick=${saveHexomaticKey} disabled=${S.loading}>Save</button>
           </div>
           <p class="text-xs text-gray-400 mt-1">Saved: ${masked ? masked : 'not set'}</p>
@@ -1356,7 +1376,7 @@ const ProspectingView = () => {
       <div class="card">
         <h3 class="font-semibold text-gray-800 mb-3">🔍 Search Businesses</h3>
         ${S.prospectErr ? html`<div class="mb-4" style="border:1px solid #f59e0b;background:#fffbeb;border-radius:8px;padding:12px">
-          <div class="font-semibold text-sm" style="color:#92400e">Prospecting is not returning results</div>
+          <div class="font-semibold text-sm" style="color:var(--warn)">Prospecting is not returning results</div>
           <p class="text-sm mt-1" style="color:#78350f">${S.prospectErr}</p>
         </div>` : null}
         <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
@@ -1460,7 +1480,7 @@ const BrandMonitorView = () => {
           <div class="mt-2">${(b.platforms||[]).map(p=>html`<span class="chip">${p}</span>`)}</div>
           ${b.keywords && b.keywords.length ? html`<p class="text-xs text-gray-400 mt-1">${b.keywords.join(', ')}</p>` : ''}
           <p class="text-sm text-gray-500 mt-2">${statusBadge(b.is_active?'active':'paused')}${b.last_scanned_at ? ' · scanned ' + fmtDate(b.last_scanned_at) : ''}</p>
-          <div class="mt-3 flex gap-2"><button class="btn-outline text-xs" onClick=${()=>scanBrand(b.id)} disabled=${S.scanning === b.id}>${S.scanning === b.id ? spinner() : 'Scan for mentions'}</button><button class="btn-red text-xs" onClick=${()=>delBrand(b.id)}>Delete</button></div>${(S.mentions && S.mentionsFor === b.id) ? html`<div class="mt-3" style="border-top:1px solid #e2e8f0;padding-top:8px">${(S.mentions||[]).length === 0 ? html`<p class="text-sm" style=${S.mentionsErr ? 'color:#92400e' : 'color:#64748b'}>${S.mentionsErr || 'No mentions found.'}</p>` : html`${(S.mentions||[]).map(m=>html`<div style="margin-bottom:8px"><p class="text-sm font-semibold text-gray-800">${m.title || '(mention)'}</p><p class="text-xs text-gray-600">${m.snippet || ''}</p><p class="text-xs text-gray-400">${m.platform || ''}${m.sentiment ? ' · ' + m.sentiment : ''}</p></div>`)}`}${S.mentionsSample ? html`<p class="text-xs mt-2" style="color:#b45309;font-weight:600">sample data — live mention search is not connected yet, so these mentions are illustrative</p>` : ''}</div>` : ''}</div>`)}
+          <div class="mt-3 flex gap-2"><button class="btn-outline text-xs" onClick=${()=>scanBrand(b.id)} disabled=${S.scanning === b.id}>${S.scanning === b.id ? spinner() : 'Scan for mentions'}</button><button class="btn-red text-xs" onClick=${()=>delBrand(b.id)}>Delete</button></div>${(S.mentions && S.mentionsFor === b.id) ? html`<div class="mt-3" style="border-top:1px solid #e2e8f0;padding-top:8px">${(S.mentions||[]).length === 0 ? html`<p class="text-sm" style=${S.mentionsErr ? 'color:var(--warn)' : 'color:var(--muted)'}>${S.mentionsErr || 'No mentions found.'}</p>` : html`${(S.mentions||[]).map(m=>html`<div style="margin-bottom:8px"><p class="text-sm font-semibold text-gray-800">${m.title || '(mention)'}</p><p class="text-xs text-gray-600">${m.snippet || ''}</p><p class="text-xs text-gray-400">${m.platform || ''}${m.sentiment ? ' · ' + m.sentiment : ''}</p></div>`)}`}${S.mentionsSample ? html`<p class="text-xs mt-2" style="color:var(--warn);font-weight:600">sample data — live mention search is not connected yet, so these mentions are illustrative</p>` : ''}</div>` : ''}</div>`)}
       </div>`}
     </div>`;
 };
@@ -1494,7 +1514,7 @@ ${S.checkResult ? html`<div class="card" style="margin-top:16px">
         <h3 class="font-semibold text-gray-800">${S.checkResult.name || 'Competitor'} — last check</h3>
         <p class="text-sm text-gray-600 mt-1">${S.checkResult.summary || ''}</p>
         <p class="text-xs text-gray-400 mt-1">checked ${fmtDate(S.checkResult.checked_at)}</p>
-        ${S.checkSample ? html`<p class="text-xs mt-2" style="color:#b45309;font-weight:600">sample data — live competitor monitoring is not connected yet, so this check is illustrative</p>` : ''}
+        ${S.checkSample ? html`<p class="text-xs mt-2" style="color:var(--warn);font-weight:600">sample data — live competitor monitoring is not connected yet, so this check is illustrative</p>` : ''}
       </div>` : ''}
     </div>`;
 };
@@ -1552,12 +1572,12 @@ const LeadModal = () => {
     S.loading=false; renderApp();
   };
   return html`<${ModalShell} title="Add a Lead" onClose=${closeModal}>
-    <div class="mb-4"><label class="label">Name</label><input class="input" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="Full name" /></div>
-    <div class="mb-4"><label class="label">Email</label><input class="input" value=${f.email} onInput=${e=>f.email=e.target.value} placeholder="name@company.com" /></div>
-    <div class="mb-4"><label class="label">Phone</label><input class="input" value=${f.phone} onInput=${e=>f.phone=e.target.value} placeholder="+1 555 0100" /></div>
-    <div class="mb-4"><label class="label">Company</label><input class="input" value=${f.company} onInput=${e=>f.company=e.target.value} placeholder="Company" /></div>
-    <div class="mb-4"><label class="label">Status</label><select class="input" value=${f.status} onChange=${e=>f.status=e.target.value}>${LEAD_STATUSES.map(s=>html`<option value=${s} selected=${f.status===s}>${s.charAt(0).toUpperCase()+s.slice(1)}</option>`)}</select></div>
-    <div class="mb-4"><label class="label">Notes</label><textarea class="input" rows="3" value=${f.notes} onInput=${e=>f.notes=e.target.value} placeholder="Where they came from, what they want" style="resize:vertical"></textarea></div>
+    <div class="mb-4"><label class="label">Name</label><input class="input" aria-label="Lead name" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="Full name" /></div>
+    <div class="mb-4"><label class="label">Email</label><input class="input" aria-label="Lead email" value=${f.email} onInput=${e=>f.email=e.target.value} placeholder="name@company.com" /></div>
+    <div class="mb-4"><label class="label">Phone</label><input class="input" aria-label="Lead phone" value=${f.phone} onInput=${e=>f.phone=e.target.value} placeholder="+1 555 0100" /></div>
+    <div class="mb-4"><label class="label">Company</label><input class="input" aria-label="Lead company" value=${f.company} onInput=${e=>f.company=e.target.value} placeholder="Company" /></div>
+    <div class="mb-4"><label class="label">Status</label><select class="input" aria-label="Lead status" value=${f.status} onChange=${e=>f.status=e.target.value}>${LEAD_STATUSES.map(s=>html`<option value=${s} selected=${f.status===s}>${s.charAt(0).toUpperCase()+s.slice(1)}</option>`)}</select></div>
+    <div class="mb-4"><label class="label">Notes</label><textarea class="input" aria-label="Lead notes" rows="3" value=${f.notes} onInput=${e=>f.notes=e.target.value} placeholder="Where they came from, what they want" style="resize:vertical"></textarea></div>
     <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Add Lead'}</button>
   <//>`;
 };
@@ -1607,7 +1627,7 @@ const SurfaceFilter = ({ value, onChange }) => {
   ensureSurfaces();
   const list = S.surfaces || [];
   if (!list.length) return null;
-  return html`<select class="input text-sm" style="max-width:200px" value=${value || ''} onChange=${e => onChange(e.target.value)}>
+  return html`<select class="input text-sm" aria-label="Filter by surface" style="max-width:200px" value=${value || ''} onChange=${e => onChange(e.target.value)}>
     <option value="">Surface: All</option>
     ${list.map(s => html`<option key=${s.id} value=${s.id}>Surface: ${s.name}</option>`)}
   </select>`;
@@ -1832,7 +1852,7 @@ const PayHistory = () => {
       ? html`<p class="text-sm text-gray-600">Nothing has been charged on this workspace yet. When a plan is bought — or a payment is attempted — it appears here with its date, amount and outcome.</p>`
       : html`<p class="text-sm text-gray-600">Newest first. The amount and the outcome are the ones the payment record carries.</p>
         <div style="overflow-x:auto"><table class="mt-3" style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>
-          ${['Date', 'What for', 'Amount', 'What happened'].map(c => html`<th style="text-align:left;padding:6px 8px;border-bottom:1px solid #e2e8f0;color:#475569;font-weight:600">${c}</th>`)}
+          ${['Date', 'What for', 'Amount', 'What happened'].map(c => html`<th style="text-align:left;padding:6px 8px;border-bottom:1px solid #e2e8f0;color:var(--ink);font-weight:600">${c}</th>`)}
         </tr></thead><tbody>
           ${rows.map(r => html`<tr data-payment-row=${String(r.id || '')}>
             <td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${planReqDate(r.created_at)}</td>
@@ -2082,7 +2102,7 @@ const TicketsView = () => {
       </header>
       ${list.length === 0 ? html`<div class="empty">No tickets.</div>` : html`
       <div class="card" style="padding:0;overflow:auto"><table class="table"><thead><tr><th>Subject</th><th>Status</th><th>Priority</th><th>Created</th></tr></thead><tbody>
-        ${list.map(t => html`<tr key=${t.id}><td><div class="font-semibold">${t.subject || t.title || '—'}</div>${t.description ? html`<div class="text-xs text-gray-500" style="white-space:pre-wrap">${t.description}</div>` : ''}${t.reply ? html`<div class="text-xs" style="background:#f0fdf4;color:#166534;border-left:3px solid #22c55e;padding:6px 8px;border-radius:6px;margin-top:6px;white-space:pre-wrap">Our answer: ${t.reply}</div>` : ''}</td><td>${statusBadge(t.status || 'open')}</td><td>${t.priority || 'medium'}</td><td>${fmtDate(t.created_at)}</td></tr>`)}
+        ${list.map(t => html`<tr key=${t.id}><td><div class="font-semibold">${t.subject || t.title || '—'}</div>${t.description ? html`<div class="text-xs text-gray-500" style="white-space:pre-wrap">${t.description}</div>` : ''}${t.reply ? html`<div class="text-xs" style="background:#f0fdf4;color:var(--ok);border-left:3px solid #22c55e;padding:6px 8px;border-radius:6px;margin-top:6px;white-space:pre-wrap">Our answer: ${t.reply}</div>` : ''}</td><td>${statusBadge(t.status || 'open')}</td><td>${t.priority || 'medium'}</td><td>${fmtDate(t.created_at)}</td></tr>`)}
       </tbody></table></div>`}
     </div>`;
 };
@@ -2112,9 +2132,9 @@ const TicketModal = () => {
     S.loading=false; renderApp();
   };
   return html`<${ModalShell} title="Open a Ticket" onClose=${closeModal}>
-    <div class="mb-4"><label class="label">Subject</label><input class="input" value=${f.subject} onInput=${e=>f.subject=e.target.value} placeholder="What do you need help with?" /></div>
-    <div class="mb-4"><label class="label">Details</label><textarea class="input" rows="4" value=${f.body} onInput=${e=>f.body=e.target.value} placeholder="What were you doing, and what happened?" style="resize:vertical"></textarea></div>
-    <div class="mb-4"><label class="label">Priority</label><select class="input" value=${f.priority} onChange=${e=>f.priority=e.target.value}>${TICKET_PRIORITIES.map(p=>html`<option value=${p} selected=${f.priority===p}>${p.charAt(0).toUpperCase()+p.slice(1)}</option>`)}</select></div>
+    <div class="mb-4"><label class="label">Subject</label><input class="input" aria-label="Ticket subject" value=${f.subject} onInput=${e=>f.subject=e.target.value} placeholder="What do you need help with?" /></div>
+    <div class="mb-4"><label class="label">Details</label><textarea class="input" aria-label="Ticket details" rows="4" value=${f.body} onInput=${e=>f.body=e.target.value} placeholder="What were you doing, and what happened?" style="resize:vertical"></textarea></div>
+    <div class="mb-4"><label class="label">Priority</label><select class="input" aria-label="Ticket priority" value=${f.priority} onChange=${e=>f.priority=e.target.value}>${TICKET_PRIORITIES.map(p=>html`<option value=${p} selected=${f.priority===p}>${p.charAt(0).toUpperCase()+p.slice(1)}</option>`)}</select></div>
     <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Open Ticket'}</button>
   <//>`;
 };
@@ -2179,18 +2199,18 @@ const ProviderKeysView = () => {
       <div class="card" style="margin-bottom:18px">
         <div style="margin-bottom:12px">
           <label class="label">Provider</label>
-          <select value=${sel} onChange=${e => { S.pkDraft = Object.assign({}, S.pkDraft, { provider: e.target.value }); renderApp(); }}>
+          <select aria-label="Provider" value=${sel} onChange=${e => { S.pkDraft = Object.assign({}, S.pkDraft, { provider: e.target.value }); renderApp(); }}>
             ${slots.map(p => html`<option key=${p.key} value=${p.key} disabled=${p.coming}>${p.name} (${p.key})${p.coming ? ' — Coming Soon' : ''}</option>`)}
           </select>
         </div>
         <div>
           <label class="label">API key</label>
-          <input type="password" class="input" autocomplete="new-password" placeholder="paste the provider key" value=${(S.pkDraft && S.pkDraft.api_key) || ''}
+          <input type="password" class="input" aria-label="Provider API key" autocomplete="new-password" placeholder="paste the provider key" value=${(S.pkDraft && S.pkDraft.api_key) || ''}
             onInput=${e => { S.pkDraft = Object.assign({}, S.pkDraft, { api_key: e.target.value }); }} />
         </div>
         ${selSlot.base ? html`<div style="margin-top:12px">
           <label class="label">Endpoint (only if yours differs)</label>
-          <input type="text" class="input" placeholder="https://api.example.com — leave blank for the provider's own endpoint" value=${(S.pkDraft && S.pkDraft.base_url) || ''}
+          <input type="text" class="input" aria-label="Provider base URL (optional)" placeholder="https://api.example.com — leave blank for the provider's own endpoint" value=${(S.pkDraft && S.pkDraft.base_url) || ''}
             onInput=${e => { S.pkDraft = Object.assign({}, S.pkDraft, { base_url: e.target.value }); }} />
           <p class="text-xs text-gray-400 mt-1">Most providers do not need this. Fill it in when your account uses an endpoint of its own — a regional Mailgun domain, a self-hosted or proxy AI endpoint, an SMTP host.</p>
         </div>` : ''}
@@ -2288,7 +2308,7 @@ const ApiKeysView = () => {
         <p class="text-sm text-gray-500 mb-3">This is the credential a <code>Authorization: Bearer</code> request is checked against. <b>View</b> shows the same key again (you re-enter your password and the view is recorded); <b>Regenerate</b> replaces it — the old key stops working the moment you do.</p>
         ${list.length === 0 ? html`<div class="empty">No API key yet. Press “+ New API Key” to make one.</div>` : html`
         <div style="overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Key</th><th>Status</th><th>Created</th><th>Last used</th><th></th></tr></thead><tbody>
-          ${list.map(k => html`<tr key=${k.id}><td class="font-semibold">${k.name || '—'}<div style="font-family:ui-monospace,monospace;font-size:11px;color:#94a3b8;font-weight:400">id ${k.prefix || '—'}</div></td><td style="font-family:ui-monospace,monospace;font-size:12px;color:#64748b">${maskProgrammatic()}</td><td>${statusBadge(k.is_active?'active':'paused')}</td><td>${fmtDate(k.created_at)}</td><td>${k.last_used_at ? fmtDate(k.last_used_at) : 'never'}</td><td class="text-right">${k.revealable ? html`<button class="btn-outline text-xs" onClick=${()=>viewApiKey(k.id)}>View</button> ` : ''}<button class="btn-outline text-xs" onClick=${()=>regenApiKey(k.id)}>Regenerate</button> <button class="btn-red text-xs" onClick=${()=>revokeApiKey(k.id)}>Revoke</button></td></tr>`)}
+          ${list.map(k => html`<tr key=${k.id}><td class="font-semibold">${k.name || '—'}<div style="font-family:ui-monospace,monospace;font-size:11px;color:var(--muted);font-weight:400">id ${k.prefix || '—'}</div></td><td style="font-family:ui-monospace,monospace;font-size:12px;color:var(--muted)">${maskProgrammatic()}</td><td>${statusBadge(k.is_active?'active':'paused')}</td><td>${fmtDate(k.created_at)}</td><td>${k.last_used_at ? fmtDate(k.last_used_at) : 'never'}</td><td class="text-right">${k.revealable ? html`<button class="btn-outline text-xs" onClick=${()=>viewApiKey(k.id)}>View</button> ` : ''}<button class="btn-outline text-xs" onClick=${()=>regenApiKey(k.id)}>Regenerate</button> <button class="btn-red text-xs" onClick=${()=>revokeApiKey(k.id)}>Revoke</button></td></tr>`)}
         </tbody></table></div>`}
         <p class="text-xs text-gray-500 mt-2">Only a hash is used to authenticate. A key minted before the sealed copy existed carries no <b>View</b> button — <b>Regenerate</b> replaces it with one you can read back.</p>
       </div>
@@ -2297,7 +2317,7 @@ const ApiKeysView = () => {
         <p class="text-sm text-gray-500 mb-3">The secrets this workspace hands to webhooks and embedded widgets. They are records: nothing accepts them as a sign-in to the API — the keys above are what a call authenticates with.</p>
         ${ulist.length === 0 ? html`<div class="empty">No integration keys yet.</div>` : html`
         <div style="overflow:auto"><table class="table"><thead><tr><th>Kind</th><th>Label</th><th>Prefix</th><th>Status</th><th>Created</th><th>Last used</th><th></th></tr></thead><tbody>
-          ${ulist.map(k => html`<tr key=${k.id}><td class="font-semibold">${USER_KEY_KINDS[k.key_type] || k.key_type || '—'}</td><td>${k.label || '—'}</td><td style="font-family:ui-monospace,monospace;font-size:12px;color:#64748b">${maskKey(k)}</td><td>${statusBadge(k.is_active?'active':'paused')}</td><td>${fmtDate(k.created_at)}</td><td>${k.last_used_at ? fmtDate(k.last_used_at) : 'never'}</td><td class="text-right"><button class="btn-outline text-xs" onClick=${()=>viewUserKey(k.id)}>View</button> <button class="btn-outline text-xs" onClick=${()=>regenUserKey(k.id)}>Regenerate</button> <button class="btn-red text-xs" onClick=${()=>revokeUserKey(k.id)}>Revoke</button></td></tr>`)}
+          ${ulist.map(k => html`<tr key=${k.id}><td class="font-semibold">${USER_KEY_KINDS[k.key_type] || k.key_type || '—'}</td><td>${k.label || '—'}</td><td style="font-family:ui-monospace,monospace;font-size:12px;color:var(--muted)">${maskKey(k)}</td><td>${statusBadge(k.is_active?'active':'paused')}</td><td>${fmtDate(k.created_at)}</td><td>${k.last_used_at ? fmtDate(k.last_used_at) : 'never'}</td><td class="text-right"><button class="btn-outline text-xs" onClick=${()=>viewUserKey(k.id)}>View</button> <button class="btn-outline text-xs" onClick=${()=>regenUserKey(k.id)}>Regenerate</button> <button class="btn-red text-xs" onClick=${()=>revokeUserKey(k.id)}>Revoke</button></td></tr>`)}
         </tbody></table></div>`}
         <p class="text-xs text-gray-500 mt-2">A sealed copy exists so <b>View</b> can read a key back; every view is recorded.</p>
       </div>
@@ -2523,10 +2543,10 @@ const McpView = () => {
   const k = activeKey();
   const email = (API.user && API.user.email) || 'this account';
 
-  const label = (t) => html`<div style="font-size:11px;letter-spacing:.09em;color:#64748b;font-weight:700;margin-bottom:10px">${t}</div>`;
+  const label = (t) => html`<div style="font-size:11px;letter-spacing:.09em;color:var(--muted);font-weight:700;margin-bottom:10px">${t}</div>`;
   const card = (title, body) => html`<div class="card" style="margin-bottom:16px">${title ? html`<h3 class="font-semibold text-gray-700 mb-1">${title}</h3>` : null}${body}</div>`;
-  const promptRow = (q) => html`<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:9px 11px;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:7px;background:#fff">
-    <span style="font-size:13px;color:#334155">${q}</span>
+  const promptRow = (q) => html`<div style="display:flex;gap:8px;align-items:center;justify-content:space-between;padding:9px 11px;border:1px solid var(--line);border-radius:8px;margin-bottom:7px;background:var(--surface-2)">
+    <span style="font-size:13px;color:var(--ink)">${q}</span>
     <button class="btn-outline text-sm" onClick=${() => mcpCopy(q)}>Copy</button>
   </div>`;
   const twoColumns = (items) => html`<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
@@ -2535,14 +2555,14 @@ const McpView = () => {
   </div>`;
   const step = (n, heading, body) => html`<div style="display:flex;gap:12px;margin-bottom:14px">
     <div style="flex:0 0 26px;height:26px;border-radius:50%;background:#2563eb;color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700">${n}</div>
-    <div style="flex:1"><div style="font-weight:600;margin-bottom:2px">${heading}</div><div style="color:#64748b;font-size:13px">${body}</div></div></div>`;
+    <div style="flex:1"><div style="font-weight:600;margin-bottom:2px">${heading}</div><div style="color:var(--muted);font-size:13px">${body}</div></div></div>`;
   const addressRow = html`<div style="margin-top:6px">
-    <div style="font-size:11px;color:#64748b;letter-spacing:.08em;font-weight:700;margin-bottom:4px">ADDRESS</div>
+    <div style="font-size:11px;color:var(--muted);letter-spacing:.08em;font-weight:700;margin-bottom:4px">ADDRESS</div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-      <code style="padding:6px 10px;background:#f1f5f9;border-radius:8px;font-size:13px;flex:1;min-width:240px">${MCP_ENDPOINT}</code>
+      <code style="padding:6px 10px;background:var(--surface-ref);color:var(--ink);border-radius:8px;font-size:13px;flex:1;min-width:240px">${MCP_ENDPOINT}</code>
       <button class="btn-outline text-sm" onClick=${() => mcpCopy(MCP_ENDPOINT)}>Copy</button>
     </div>
-    <div style="font-size:12px;color:#64748b;margin-top:6px">The whole address, nothing on the end. If your client is refused by our edge before it authenticates (a 403, not a 401), use <code>https://mcp.swiftsoftware.net/mcp</code> — same server, unfiltered name.</div>
+    <div style="font-size:12px;color:var(--muted);margin-top:6px">The whole address, nothing on the end. If your client is refused by our edge before it authenticates (a 403, not a 401), use <code>https://mcp.swiftsoftware.net/mcp</code> — same server, unfiltered name.</div>
   </div>`;
 
   const stepsFor = (client) => client === 'claude'
@@ -2590,7 +2610,7 @@ const McpView = () => {
   const devTabs = ['How it connects', 'Your API token', 'Claude Code', 'Claude Desktop', 'Codex', 'Cursor', 'Troubleshooting', 'FAQ'];
   const codeBlock = (t) => html`<pre style="background:#0f172a;color:#e2e8f0;padding:12px;border-radius:8px;font-size:11px;overflow-x:auto;margin:8px 0">${t}</pre>`;
   const devPanel = (i) => {
-    const p = (t) => html`<p style="font-size:13px;color:#475569;line-height:1.7;margin:0 0 8px">${t}</p>`;
+    const p = (t) => html`<p style="font-size:13px;color:var(--ink);line-height:1.7;margin:0 0 8px">${t}</p>`;
     switch (i) {
       case 0: return html`
         ${p(html`Your AI app (Claude, ChatGPT, Cursor, an agent) connects to <code>${MCP_ENDPOINT}</code> and authenticates with this account's API key. Every request is scoped to <b>your</b> workspace — another account's rows are refused at the database, not by instruction.`)}
@@ -2616,13 +2636,13 @@ const McpView = () => {
   };
 
   return html`<div style="max-width:820px">
-    <div style="font-size:12px;color:#94a3b8;margin-bottom:6px">WorkflowSwift AI › Connect</div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:6px">WorkflowSwift AI › Connect</div>
     <h2 class="text-xl font-bold mb-1">Connect AI with WorkflowSwift</h2>
     <p class="text-sm text-gray-500 mb-5">Ask Claude or ChatGPT about your workflows, runs, clients and credits — and have it do the reading for you.</p>
 
     ${card('', html`
       ${label('CONNECT WITH YOUR API KEY')}
-      <p style="color:#475569;margin-bottom:14px;max-width:70ch">For ChatGPT and Claude on the web. There is no app to install: you give your AI client this workspace\u2019s API key so every answer is scoped to <strong>your</strong> data and nobody else\u2019s.</p>
+      <p style="color:var(--ink);margin-bottom:14px;max-width:70ch">For ChatGPT and Claude on the web. There is no app to install: you give your AI client this workspace\u2019s API key so every answer is scoped to <strong>your</strong> data and nobody else\u2019s.</p>
       <div style="display:flex;gap:8px;margin-bottom:12px">
         <button class=${st.clientTab === 'chatgpt' ? 'btn text-sm' : 'btn-outline text-sm'} onClick=${() => { st.clientTab = 'chatgpt'; renderApp(); }}>ChatGPT</button>
         <button class=${st.clientTab === 'claude' ? 'btn text-sm' : 'btn-outline text-sm'} onClick=${() => { st.clientTab = 'claude'; renderApp(); }}>Claude</button>
@@ -2636,29 +2656,29 @@ const McpView = () => {
         : (!k ? html`<p class="text-sm text-gray-500">No active API key on this account. Create one on the <a href="javascript:void 0" onClick=${() => setView('api-keys')} style="color:#2563eb">API Keys</a> screen, then come back to connect an MCP client.</p>`
         : html`<div>
           <div class="flex items-center justify-between gap-2 flex-wrap" style="padding:6px 0">
-            <span class="text-sm"><strong>${k.name || 'API key'}</strong> <code class="font-mono" style="font-size:11px;color:#6366f1">${k.prefix || ''}${k.prefix ? '…' : ''}</code><br/><span class="text-xs text-gray-400">${k.created_at ? 'Created ' + new Date(k.created_at).toLocaleDateString() : ''}</span></span>
+            <span class="text-sm"><strong>${k.name || 'API key'}</strong> <code class="font-mono" style="font-size:11px;color:var(--accent)">${k.prefix || ''}${k.prefix ? '…' : ''}</code><br/><span class="text-xs text-gray-400">${k.created_at ? 'Created ' + new Date(k.created_at).toLocaleDateString() : ''}</span></span>
             <span style="white-space:nowrap">
               <button class="btn-outline text-sm" onClick=${() => reveal(k.id, false)}>Reveal</button>
               <button class="btn-outline text-sm" style="margin-left:6px" onClick=${() => reveal(k.id, true)}>Copy</button>
-              <button class="btn-outline text-sm" style="margin-left:6px;color:#b45309" onClick=${() => regen(k.id)}>Regenerate</button>
+              <button class="btn-outline text-sm" style="margin-left:6px;color:var(--warn)" onClick=${() => regen(k.id)}>Regenerate</button>
             </span>
           </div>
-          ${(st.revealed && st.revealedId === k.id) ? html`<div class="flex items-center gap-2 flex-wrap" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:8px;margin-top:6px">
-            <input class="font-mono" style="flex:1;min-width:220px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;padding:6px 10px" readonly value=${st.revealed} onFocus=${e => e.target.select()} />
+          ${(st.revealed && st.revealedId === k.id) ? html`<div class="flex items-center gap-2 flex-wrap" style="background:var(--accent-soft);border:1px solid #bfdbfe;border-radius:6px;padding:8px;margin-top:6px">
+            <input class="font-mono" aria-label="Your revealed API key" style="flex:1;min-width:220px;font-size:12px;border:1px solid var(--line);border-radius:6px;padding:6px 10px" readonly value=${st.revealed} onFocus=${e => e.target.select()} />
             <button class="btn text-sm" onClick=${() => mcpCopy(st.revealed)}>Copy</button>
           </div>` : null}
         </div>`)}
     `)}
 
     ${card('How the connection works', html`
-      <p style="color:#475569;font-size:13px;margin:0;max-width:70ch">We do not keep a list of the apps you have connected — your key is the connection. That means one action disconnects everything at once: regenerate the key above and every client using the old one stops working immediately.</p>
+      <p style="color:var(--ink);font-size:13px;margin:0;max-width:70ch">We do not keep a list of the apps you have connected — your key is the connection. That means one action disconnects everything at once: regenerate the key above and every client using the old one stops working immediately.</p>
     `)}
 
     ${card('', html`
-      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px;border:1px solid #e2e8f0;border-radius:8px;background:#f8fafc">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--surface-ref)">
         <span style="width:10px;height:10px;border-radius:50%;background:#16a34a;display:inline-block"></span>
-        <span style="font-weight:700;color:#1e293b">Ready to connect</span>
-        <span style="font-size:13px;color:#475569">Your account: <strong>${email}</strong></span>
+        <span style="font-weight:700;color:var(--ink)">Ready to connect</span>
+        <span style="font-size:13px;color:var(--ink)">Your account: <strong>${email}</strong></span>
         <span style="flex:1"></span>
         <span style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn-outline text-sm" onClick=${checkServer} disabled=${st.checkBusy}>${st.checkBusy ? 'Checking…' : 'Test connection'}</button>
@@ -2666,16 +2686,16 @@ const McpView = () => {
           <button class="btn-outline text-sm" onClick=${() => { st.devOpen = true; st.devTab = 0; renderApp(); }}>Advanced setup</button>
         </span>
       </div>
-      ${st.checkMsg ? html`<div style="font-size:12px;color:#64748b;margin-top:8px">${st.checkMsg}</div>` : null}
+      ${st.checkMsg ? html`<div style="font-size:12px;color:var(--muted);margin-top:8px">${st.checkMsg}</div>` : null}
     `)}
 
     ${card('', html`
       ${label('WHAT CAN I ASK WORKFLOWSWIFT?')}
-      <p style="color:#475569;margin-bottom:12px;max-width:70ch">Say any of these — or anything like them — to your AI app. Every one is a question, because this connection reads and never writes.</p>
+      <p style="color:var(--ink);margin-bottom:12px;max-width:70ch">Say any of these — or anything like them — to your AI app. Every one is a question, because this connection reads and never writes.</p>
       ${MCP_UI_EXAMPLE_GROUPS.map((g, gi) => html`<details style="border-bottom:1px solid #e2e8f0;padding:10px 0" open=${gi === 0}>
         <summary style="cursor:pointer;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-          <span style="font-weight:600;color:#1e293b">${g.title}</span>
-          <span style="color:#94a3b8;font-size:12px">${g.prompts.length} questions</span>
+          <span style="font-weight:600;color:var(--ink)">${g.title}</span>
+          <span style="color:var(--muted);font-size:12px">${g.prompts.length} questions</span>
           <span style="flex:1"></span>
         </summary>
         <div style="margin-top:10px">
@@ -2687,32 +2707,32 @@ const McpView = () => {
     `)}
 
     ${card('Don\u2019t know what to ask?', html`
-      <p style="color:#475569;font-size:13px;margin-bottom:10px">Tell us what you are trying to do and we will give you things you can say.</p>
+      <p style="color:var(--ink);font-size:13px;margin-bottom:10px">Tell us what you are trying to do and we will give you things you can say.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
-        <input style="flex:1;min-width:220px;border:1px solid #cbd5e1;border-radius:8px;padding:8px 12px;font-size:13px" placeholder="I want to …" value=${st.goal || ''} onInput=${e => { st.goal = e.target.value; }} />
+        <input aria-label="What you want to do" style="flex:1;min-width:220px;border:1px solid var(--line);border-radius:8px;padding:8px 12px;font-size:13px" placeholder="I want to …" value=${st.goal || ''} onInput=${e => { st.goal = e.target.value; }} />
         <button class="btn text-sm" onClick=${giveIdeas}>Give me ideas</button>
       </div>
-      <div style="font-size:12px;color:#94a3b8;margin-top:6px">We will suggest the prompts that fit your goal.</div>
+      <div style="font-size:12px;color:var(--muted);margin-top:6px">We will suggest the prompts that fit your goal.</div>
       ${st.ideas && st.ideas.length ? html`<div style="margin-top:10px">${twoColumns(st.ideas)}</div>` : null}
     `)}
 
     ${card('', html`
       ${label('EVERYTHING AI CAN DO WITH WORKFLOWSWIFT')}
-      <p style="color:#475569;font-size:13px;margin-bottom:8px">Open a section to see what is in it — ${MCP_ENTITY_SPECS.length} kinds of record, every one read-only and every one limited to this workspace.</p>
+      <p style="color:var(--ink);font-size:13px;margin-bottom:8px">Open a section to see what is in it — ${MCP_ENTITY_SPECS.length} kinds of record, every one read-only and every one limited to this workspace.</p>
       ${MCP_ENTITY_SPECS.map(([key, lbl]) => html`<details style="border-bottom:1px solid #e2e8f0;padding:10px 0">
         <summary style="cursor:pointer;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-          <span style="font-weight:600;color:#1e293b">${mcpUiHumanize(lbl)}</span>
-          <code style="font-size:11px;color:#6366f1">${key}</code>
+          <span style="font-weight:600;color:var(--ink)">${mcpUiHumanize(lbl)}</span>
+          <code style="font-size:11px;color:var(--accent)">${key}</code>
           <span style="flex:1"></span>
-          <span style="color:#64748b;font-size:12px;text-align:right">${MCP_ENTITY_DESCRIPTIONS[key] || mcpUiHumanize(lbl)}</span>
+          <span style="color:var(--muted);font-size:12px;text-align:right">${MCP_ENTITY_DESCRIPTIONS[key] || mcpUiHumanize(lbl)}</span>
         </summary>
-        <div style="color:#64748b;font-size:13px;padding:8px 0 4px 2px">Read-only via <code>${key}_summary</code> and <code>${key}_search</code>, scoped to this workspace.</div>
+        <div style="color:var(--muted);font-size:13px;padding:8px 0 4px 2px">Read-only via <code>${key}_summary</code> and <code>${key}_search</code>, scoped to this workspace.</div>
       </details>`)}
     `)}
 
     ${card('', html`
       ${label('WHAT IT WILL NOT DO')}
-      <ul style="margin:0;padding-left:20px;color:#475569;font-size:13px;line-height:1.8">
+      <ul style="margin:0;padding-left:20px;color:var(--ink);font-size:13px;line-height:1.8">
         <li>It cannot delete anything — not a workflow, a client, a template or a dashboard. Deleting stays in the app.</li>
         <li>It cannot add or change anything either: it cannot build a workflow, start a run or edit a step. Reading only.</li>
         <li>It cannot send a message or an email, and it cannot generate a rendition. Runs and mail happen in the app.</li>
@@ -2725,7 +2745,7 @@ const McpView = () => {
         <span style="flex:1"></span>
         <button class="btn-outline text-sm" onClick=${() => { st.devOpen = !st.devOpen; renderApp(); }}>${st.devOpen ? 'Collapse' : 'Expand developer details'}</button>
       </div>
-      <div style="color:#64748b;font-size:13px;margin-bottom:10px">Technical details for developers and advanced users. Most people never need this section.</div>
+      <div style="color:var(--muted);font-size:13px;margin-bottom:10px">Technical details for developers and advanced users. Most people never need this section.</div>
       ${st.devOpen ? html`<div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
           ${devTabs.map((t, i) => html`<button class=${st.devTab === i ? 'btn text-sm' : 'btn-outline text-sm'} onClick=${() => { st.devTab = i; renderApp(); }}>${t}</button>`)}
@@ -2736,11 +2756,12 @@ const McpView = () => {
     `)}
 
     ${card('Need help getting connected?', html`
-      <p style="color:#475569;font-size:13px;margin:0">Copy your setup with the button above and paste it to us, or read the step-by-step in the guide. If your client lists no tools at all, the key is the thing to replace first — that is almost always the cause.</p>
+      <p style="color:var(--ink);font-size:13px;margin:0">Copy your setup with the button above and paste it to us, or read the step-by-step in the guide. If your client lists no tools at all, the key is the thing to replace first — that is almost always the cause.</p>
     `)}
   </div>`;
 };
 
+const TEAM_PERMS = ['dashboard','workflows','templates','instances','automations','leads','surfaces','prospecting','brand_monitor','competitors','credits','api_keys','tickets'];
 const teamRoleLabel = (r) => ({ user:'Owner', admin:'Admin', super_admin:'Super admin', agency_admin:'Agency admin', company_admin:'Admin', team_member:'Team member' })[r] || r || '—';
 const permChips = (p) => { const ks = Object.keys(p || {}).filter(k => p[k]); return ks.length ? ks.join(', ') : 'none'; };
 // The two roles a workspace can hand out. `user` (owner), `admin`/`agency_admin` (platform) and
@@ -2779,17 +2800,17 @@ const TeamView = () => {
           <td class="font-semibold">${u.name || '—'}</td>
           <td>${u.email || '—'}</td>
           <td>${teamEditable(u.role) && teamAmAdmin() ? html`
-            <select class="input" style="padding:4px 8px;font-size:13px;width:auto" value=${u.role} disabled=${S.loading} onChange=${e=>setMemberRole(u, e.target.value)}>
+            <select class="input" aria-label="Role for this member" style="padding:4px 8px;font-size:13px;width:auto" value=${u.role} disabled=${S.loading} onChange=${e=>setMemberRole(u, e.target.value)}>
               <option value="team_member">Member</option>
               <option value="company_admin">Admin</option>
             </select>` : html`<span>${teamRoleLabel(u.role)}</span>`}</td>
           <td>${statusBadge(u.is_active === false ? 'paused' : 'active')}</td>
-          <td style="font-size:12px;color:#64748b">${permChips(u.permissions)}</td>
+          <td style="font-size:12px;color:var(--muted)">${permChips(u.permissions)}</td>
           <td class="text-right whitespace-nowrap">
             ${teamEditable(u.role) ? html`
               <button class="btn-outline text-xs" onClick=${()=>{S.permsTarget=u;S.modalErr=null;S.modal='perms';renderApp();}}>Permissions</button>
               <button class="btn-red text-xs" style="margin-left:6px" onClick=${()=>removeTeamMember(u)}>Remove</button>
-            ` : html`<span class="text-xs" style="color:#94a3b8">view only</span>`}
+            ` : html`<span class="text-xs" style="color:var(--muted)">view only</span>`}
           </td></tr>`)}
       </tbody></table></div>`}
       <p class="text-xs text-gray-500 mt-2">Roles: <strong>Member</strong> can reach only what you tick for them; <strong>Admin</strong> can manage the team too. The account owner and platform roles are view-only here — they cannot be invited, re-roled or removed.</p>
@@ -2829,17 +2850,17 @@ const InviteModal = () => {
     S.loading=false; renderApp();
   };
   return html`<${ModalShell} title="Invite Team Member" onClose=${closeModal}>
-    <div class="mb-4"><label class="label">Name</label><input class="input" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="Jordan Smith" /></div>
-    <div class="mb-4"><label class="label">Email</label><input class="input" value=${f.email} onInput=${e=>f.email=e.target.value} placeholder="jordan@company.com" /></div>
+    <div class="mb-4"><label class="label">Name</label><input class="input" aria-label="Member name" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="Jordan Smith" /></div>
+    <div class="mb-4"><label class="label">Email</label><input class="input" aria-label="Member email" value=${f.email} onInput=${e=>f.email=e.target.value} placeholder="jordan@company.com" /></div>
     <div class="mb-4"><label class="label">Role</label>
-      <select class="input" value=${f.role} onChange=${e=>f.role=e.target.value}>
+      <select class="input" aria-label="Role for the invitation" value=${f.role} onChange=${e=>f.role=e.target.value}>
         <option value="team_member">Member — only the permissions you tick below</option>
         <option value="company_admin">Admin — full workspace access, can manage the team</option>
       </select>
       <p class="text-xs text-gray-500 mt-1">Platform roles (super admin, agency admin) cannot be granted from a workspace.</p></div>
     <div class="mb-4"><label class="label">Permissions</label>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 14px">${TEAM_PERMS.map(k=>html`<label style="font-size:13px;display:flex;gap:8px;align-items:center"><input type="checkbox" onChange=${e=>{perms[k]=e.target.checked;}} />${k.replace(/_/g,' ')}</label>`)}</div></div>
-    ${S.modalErr && html`<div style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:12px;border-radius:10px;font-size:13px;margin-bottom:16px">${S.modalErr}</div>`}
+    ${S.modalErr && html`<div style="background:#fef2f2;border:1px solid #fecaca;color:var(--danger);padding:12px;border-radius:10px;font-size:13px;margin-bottom:16px">${S.modalErr}</div>`}
     <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Send Invite'}</button>
   <//>`;
 };
@@ -2856,7 +2877,7 @@ const PermsModal = () => {
   };
   return html`<${ModalShell} title=${'Permissions — ' + (u.name || u.email || '')} onClose=${closeModal}>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 14px" class="mb-4">${TEAM_PERMS.map(k=>html`<label style="font-size:13px;display:flex;gap:8px;align-items:center"><input type="checkbox" checked=${perms[k]} onChange=${e=>{perms[k]=e.target.checked;}} />${k.replace(/_/g,' ')}</label>`)}</div>
-    ${S.modalErr && html`<div style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:12px;border-radius:10px;font-size:13px;margin-bottom:16px">${S.modalErr}</div>`}
+    ${S.modalErr && html`<div style="background:#fef2f2;border:1px solid #fecaca;color:var(--danger);padding:12px;border-radius:10px;font-size:13px;margin-bottom:16px">${S.modalErr}</div>`}
     <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Save Permissions'}</button>
   <//>`;
 };
@@ -2989,7 +3010,7 @@ const ProfileView = () => {
       const v = await API.get('/settings/branding/preview-body');
       const esc = (t) => String(t || '').replace(/[&<>]/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;' }[c]));
       bdExact.subject = (v && v.subject) || '';
-      bdExact.html = (v && v.html) || ('<pre style="font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;white-space:pre-wrap;padding:16px;color:#111827">' + esc(v && v.text) + '</pre>');
+      bdExact.html = (v && v.html) || ('<pre style="font:13px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;white-space:pre-wrap;padding:16px;color:var(--ink)">' + esc(v && v.text) + '</pre>');
       bdExact.shown = true;
       bdExact.ok = true;
       bdExact.msg = (v && v.logo_is_own)
@@ -3216,9 +3237,9 @@ const ProfileView = () => {
         <h2 class="text-base font-bold text-gray-900 mb-3">Account details</h2>
         <div class="space-y-4">
           <div><label class="label">Email</label><div class="font-semibold">${u.email || '—'}</div></div>
-          <div><label class="label">Level</label><div>${planLabel(u) ? html`<span class="badge b-blue" id="profile-level">${planLabel(u)}</span>` : html`<span class="text-sm" style="color:#94a3b8" id="profile-level">\u2014</span>`}</div></div>
-          <div><label class="label">Name</label><input class="input" id="profile-name" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="Your name" /></div>
-          <div><label class="label">Company</label><input class="input" id="profile-company" value=${f.company} onInput=${e=>f.company=e.target.value} placeholder="Your company" /></div>
+          <div><label class="label">Level</label><div>${planLabel(u) ? html`<span class="badge b-blue" id="profile-level">${planLabel(u)}</span>` : html`<span class="text-sm" style="color:var(--muted)" id="profile-level">\u2014</span>`}</div></div>
+          <div><label class="label">Name</label><input class="input" aria-label="Your name" id="profile-name" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="Your name" /></div>
+          <div><label class="label">Company</label><input class="input" aria-label="Your company" id="profile-company" value=${f.company} onInput=${e=>f.company=e.target.value} placeholder="Your company" /></div>
           <div><label class="label">Username</label><input class="input" id="profile-username" value=${f.username} onInput=${e=>f.username=e.target.value} placeholder="Optional" /><p class="text-xs text-gray-500 mt-1">Optional. Clear it and save to remove it.</p></div>
           <button class="btn text-sm" id="profile-save" onClick=${saveProfile} disabled=${S.loading}>Save changes</button>
         </div>
@@ -3231,7 +3252,7 @@ const ProfileView = () => {
           <div><label class="label">Current sign-in address</label><div class="font-semibold" id="email-current">${u.email || '&mdash;'}</div></div>
           <div><label class="label">New sign-in address</label><input class="input" id="email-new" type="email" autocomplete="email" value=${ec.next} onInput=${e=>{ec.next=e.target.value; if(ec.msg){ec.msg='';ec.kind='';}}} placeholder="you@yourcompany.com" /></div>
           <div class="text-xs text-gray-500">We email a confirmation link to the new address. It expires in 2 hours and works once.</div>
-          ${ec.msg ? html`<div id="email-change-msg" role="status" style=${'padding:10px 12px;border-radius:10px;font-size:13px;' + (ec.kind === 'err' ? 'background:#fef2f2;border:1px solid #fecaca;color:#b91c1c' : (ec.kind === 'ok' ? 'background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46' : 'background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af'))}>${ec.msg}</div>` : ''}
+          ${ec.msg ? html`<div id="email-change-msg" role="status" style=${'padding:10px 12px;border-radius:10px;font-size:13px;' + (ec.kind === 'err' ? 'background:#fef2f2;border:1px solid #fecaca;color:var(--danger)' : (ec.kind === 'ok' ? 'background:#ecfdf5;border:1px solid #a7f3d0;color:var(--ok)' : 'background:var(--accent-soft);border:1px solid #bfdbfe;color:#1e40af'))}>${ec.msg}</div>` : ''}
           <button class="btn text-sm" id="email-change-send" disabled=${ec.busy || S.loading}>${ec.busy ? 'Sending…' : 'Send confirmation link'}</button>
         </form>
       </div>
@@ -3242,7 +3263,7 @@ const ProfileView = () => {
         <div class="flex items-center gap-4 flex-wrap mb-4">
           <div>
             ${bd.logoUrl
-              ? html`<img id="branding-logo-preview" src=${bd.logoUrl + (bd.logoUrl.indexOf('?') >= 0 ? '&' : '?') + 'cb=' + bd.stamp} alt=${bd.name || 'Brand logo'} style="max-height:56px;max-width:220px;border:1px solid #e5e7eb;border-radius:6px;padding:4px;background:#fff" />`
+              ? html`<img id="branding-logo-preview" src=${bd.logoUrl + (bd.logoUrl.indexOf('?') >= 0 ? '&' : '?') + 'cb=' + bd.stamp} alt=${bd.name || 'Brand logo'} style="max-height:56px;max-width:220px;border:1px solid var(--line);border-radius:6px;padding:4px;background:var(--surface-2)" />`
               : html`<div class="text-xs text-gray-400" id="branding-logo-empty">No logo yet</div>`}
           </div>
           <div>
@@ -3254,39 +3275,39 @@ const ProfileView = () => {
           </div>
         </div>
         <div class="space-y-4">
-          <div><label class="label">Brand display name</label><input class="input" id="branding-name" value=${bd.name} onInput=${e=>{ bd.name=e.target.value; syncBrandPreview(); }} placeholder="e.g. Giraudy Capital" /></div>
-          <div><label class="label">Brand colour</label><input class="input" id="branding-color" value=${bd.color} onInput=${e=>{ bd.color=e.target.value; syncBrandPreview(); }} placeholder="#4f46e5" /></div>
+          <div><label class="label">Brand display name</label><input class="input" aria-label="Brand display name" id="branding-name" value=${bd.name} onInput=${e=>{ bd.name=e.target.value; syncBrandPreview(); }} placeholder="e.g. Giraudy Capital" /></div>
+          <div><label class="label">Brand colour</label><input class="input" aria-label="Brand colour" id="branding-color" value=${bd.color} onInput=${e=>{ bd.color=e.target.value; syncBrandPreview(); }} placeholder="#4f46e5" /></div>
           <button class="btn text-sm" id="branding-save" onClick=${saveBranding} disabled=${S.loading}>Save branding</button>
         </div>
         <div style="margin-top:16px;padding-top:14px;border-top:1px solid #e5e7eb">
           <div class="text-xs text-gray-500 mb-2">Preview &mdash; the header every email from this workspace opens with</div>
-          <div style="border:1px solid #e5e7eb;border-radius:8px;padding:16px 14px 12px;background:#fff">
+          <div style="border:1px solid var(--line);border-radius:8px;padding:16px 14px 12px;background:var(--surface-2)">
             <div id="brand-bp-header" style=${(bd.logoUrl || bd.name) ? 'display:block' : 'display:none'}>
               <div style="text-align:center;margin:0 0 8px">
                 ${bd.logoUrl
                   ? html`<img id="brand-bp-logo" src=${bd.logoUrl + (bd.logoUrl.indexOf('?') >= 0 ? '&' : '?') + 'cb=' + bd.stamp} alt=${bd.name || ''} style="max-height:56px;max-width:240px;display:inline-block" />`
                   : html`<img id="brand-bp-logo" alt=${bd.name || ''} style="max-height:56px;max-width:240px;display:none" />`}
-                <div id="brand-bp-name" style="font:700 20px/1.3 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#111827">${bd.name || ''}</div>
+                <div id="brand-bp-name" style="font:700 20px/1.3 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:var(--ink)">${bd.name || ''}</div>
               </div>
               <div id="brand-bp-rule" style="border-top:3px solid #4f46e5;margin:0 0 14px"></div>
             </div>
             <div id="brand-bp-blank" class="text-xs text-gray-500" style=${(bd.logoUrl || bd.name) ? 'display:none' : 'display:block'}>Nothing is set yet, so mail keeps WorkflowSwift's own header.</div>
-            <div style="font-size:13.5px;color:#111827;line-height:1.5">Hi Alex &mdash; this is a sample of the message body. Only the header above comes from your branding.</div>
+            <div style="font-size:13.5px;color:var(--ink);line-height:1.5">Hi Alex &mdash; this is a sample of the message body. Only the header above comes from your branding.</div>
           </div>
           <div style="margin-top:14px;padding-top:14px;border-top:1px solid #e5e7eb">
             <div class="text-xs text-gray-500 mb-2">See it in your own inbox</div>
             <p class="text-xs text-gray-500" style="margin:0 0 8px">This box shows the header inside this page. The button mails the same sample to your own address &mdash; save your branding first, or the preview carries the default WorkflowSwift header.</p>
             <button class="btn text-sm" id="branding-preview-send" onClick=${sendBrandPreview} disabled=${bdPreview.busy || S.loading}>${bdPreview.busy ? 'Sending…' : 'Send me a preview email'}</button>
-            ${bdPreview.msg ? html`<p id="branding-preview-msg" class="text-xs" style=${'margin:8px 0 0;color:' + (bdPreview.ok ? '#047857' : '#b91c1c')}>${bdPreview.msg}</p>` : ''}
+            ${bdPreview.msg ? html`<p id="branding-preview-msg" class="text-xs" style=${'margin:8px 0 0;color:' + (bdPreview.ok ? 'var(--ok)' : 'var(--danger)')}>${bdPreview.msg}</p>` : ''}
           </div>
           <div style="margin-top:14px;padding-top:14px;border-top:1px solid #e5e7eb">
             <div class="text-xs text-gray-500 mb-2">The exact email — rendered by our server, not drawn here</div>
             <p class="text-xs text-gray-500" style="margin:0 0 8px">Shows the real message this workspace sends: your header, the merge fields filled in, the exact wording. Nothing is emailed. Save your branding first so the preview carries it.</p>
             <button class="btn-outline text-sm" id="branding-exact-show" onClick=${showExactMail} disabled=${bdExact.busy || S.loading}>${bdExact.busy ? 'Rendering…' : (bdExact.shown ? 'Show it again' : 'Show the exact email')}</button>
-            ${bdExact.msg ? html`<p id="branding-exact-msg" class="text-xs" style=${'margin:8px 0 0;color:' + (bdExact.ok ? '#047857' : '#b91c1c')}>${bdExact.msg}</p>` : ''}
-            ${bdExact.shown ? html`<div id="branding-exact-box" style="margin-top:10px;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;background:#fff">
-              <div style="padding:10px 12px;border-bottom:1px solid #e5e7eb;background:#f9fafb;font-size:12px;color:#374151"><strong>Subject:</strong> ${bdExact.subject || '(no subject)'}</div>
-              <iframe id="branding-exact-frame" title="The exact email this workspace sends" sandbox="" srcdoc=${bdExact.html} style="width:100%;height:480px;border:0;display:block;background:#fff"></iframe>
+            ${bdExact.msg ? html`<p id="branding-exact-msg" class="text-xs" style=${'margin:8px 0 0;color:' + (bdExact.ok ? 'var(--ok)' : 'var(--danger)')}>${bdExact.msg}</p>` : ''}
+            ${bdExact.shown ? html`<div id="branding-exact-box" style="margin-top:10px;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface-2)">
+              <div style="padding:10px 12px;border-bottom:1px solid #e5e7eb;background:var(--surface-ref);font-size:12px;color:var(--ink)"><strong>Subject:</strong> ${bdExact.subject || '(no subject)'}</div>
+              <iframe id="branding-exact-frame" title="The exact email this workspace sends" sandbox="" srcdoc=${bdExact.html} style="width:100%;height:480px;border:0;display:block;background:var(--surface-2)"></iframe>
             </div>` : ''}
           </div>
         </div>
@@ -3299,7 +3320,7 @@ const ProfileView = () => {
           <div><label class="label" for="pw-new">New password</label><input type="password" class="input" id="pw-new" autocomplete="new-password" value=${pw.next} onInput=${e=>pw.next=e.target.value} /></div>
           <div><label class="label" for="pw-confirm">Confirm new password</label><input type="password" class="input" id="pw-confirm" autocomplete="new-password" value=${pw.confirm} onInput=${e=>pw.confirm=e.target.value} /></div>
           <div><label class="label" for="pw-current">Current password</label><input type="password" class="input" id="pw-current" autocomplete="current-password" value=${pw.current} onInput=${e=>{pw.current=e.target.value; if (pw.error) pw.error='';}} /><div class="text-xs text-gray-500 mt-1">For your security, confirm the password you signed in with.</div></div>
-          ${pw.error ? html`<div id="pw-error" role="alert" style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:10px 12px;border-radius:10px;font-size:13px">${pw.error}</div>` : ''}
+          ${pw.error ? html`<div id="pw-error" role="alert" style="background:#fef2f2;border:1px solid #fecaca;color:var(--danger);padding:10px 12px;border-radius:10px;font-size:13px">${pw.error}</div>` : ''}
           <button class="btn text-sm" id="pw-save" disabled=${S.loading}>${S.loading?spinner():'Update password'}</button>
         </form>
       </div>
@@ -3308,7 +3329,7 @@ const ProfileView = () => {
         <h2 class="text-base font-bold text-gray-900 mb-1">Signed-in devices</h2>
         <p class="text-sm text-gray-500 mb-4">If you are still signed in somewhere you no longer control — an old phone, a shared laptop — this ends every other session on your account. This browser stays signed in, so you do not have to find your password again.</p>
         <button class="btn text-sm" id="profile-signout-others" onClick=${signOutOthers} disabled=${dv.busy || S.loading}>${dv.busy ? 'Signing the other devices out…' : 'Sign out of every other device'}</button>
-        ${dv.msg ? html`<div id="profile-devices-msg" role="status" style=${'margin-top:10px;padding:10px 12px;border-radius:10px;font-size:13px;' + (dv.ok ? 'background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46' : 'background:#fef2f2;border:1px solid #fecaca;color:#b91c1c')}>${dv.msg}</div>` : ''}
+        ${dv.msg ? html`<div id="profile-devices-msg" role="status" style=${'margin-top:10px;padding:10px 12px;border-radius:10px;font-size:13px;' + (dv.ok ? 'background:#ecfdf5;border:1px solid #a7f3d0;color:var(--ok)' : 'background:#fef2f2;border:1px solid #fecaca;color:var(--danger)')}>${dv.msg}</div>` : ''}
       </div>
 
 
@@ -3316,13 +3337,13 @@ const ProfileView = () => {
         <h2 class="text-base font-bold text-gray-900 mb-1">📦 Your data</h2>
         <p class="text-sm text-gray-500 mb-4">Download everything this workspace holds &mdash; workflows, leads, clients, tags, automations, invoices, brand monitors, prospecting lists, teammates and API-key names &mdash; as one JSON file. Passwords, API-key secrets and provider credentials are never included.</p>
         <button class="btn-outline text-sm" id="profile-data-download" onClick=${downloadMyData} disabled=${dl.busy || S.loading}>${dl.busy ? 'Preparing your copy…' : 'Download a copy of my data'}</button>
-        ${dl.msg ? html`<div id="profile-data-msg" role="status" aria-live="polite" style=${'margin-top:10px;padding:10px 12px;border-radius:10px;font-size:13px;' + (dl.ok ? 'background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46' : 'background:#fef2f2;border:1px solid #fecaca;color:#b91c1c')}>${dl.msg}</div>` : ''}
+        ${dl.msg ? html`<div id="profile-data-msg" role="status" aria-live="polite" style=${'margin-top:10px;padding:10px 12px;border-radius:10px;font-size:13px;' + (dl.ok ? 'background:#ecfdf5;border:1px solid #a7f3d0;color:var(--ok)' : 'background:#fef2f2;border:1px solid #fecaca;color:var(--danger)')}>${dl.msg}</div>` : ''}
       </div>
 
       <div class="card" id="profile-close-card">
         <h2 class="text-base font-bold text-gray-900 mb-1">🚪 Close My Account</h2>
         <p class="text-sm text-gray-500 mb-4">This ends your sign-in and every API key on the account, and you will not be able to sign in again. Your workflows, runs and history are kept on record and are not deleted, so support can help you if you close it by mistake.</p>
-        ${!ca.armed ? html`<button class="btn-outline text-sm" id="profile-close-arm" style="color:#b91c1c;border-color:#fca5a5" onClick=${()=>{ ca.armed = true; ca.msg=''; ca.ok=false; renderApp(); }} disabled=${ca.busy || S.loading}>Close my account</button>` : html`
+        ${!ca.armed ? html`<button class="btn-outline text-sm" id="profile-close-arm" style="color:var(--danger);border-color:#fca5a5" onClick=${()=>{ ca.armed = true; ca.msg=''; ca.ok=false; renderApp(); }} disabled=${ca.busy || S.loading}>Close my account</button>` : html`
         <div class="space-y-3">
           <div><label class="label" for="profile-close-password">Your password (proves it is you)</label><input type="password" class="input" id="profile-close-password" autocomplete="current-password" value=${ca.pw} onInput=${e=>{ca.pw=e.target.value; if (ca.msg) { ca.msg=''; ca.ok=false; }}} /></div>
           <div><label class="label" for="profile-close-word">Type CLOSE to confirm</label><input type="text" class="input" id="profile-close-word" autocomplete="off" placeholder="CLOSE" value=${ca.word} onInput=${e=>{ca.word=e.target.value; if (ca.msg) { ca.msg=''; ca.ok=false; }}} /></div>
@@ -3331,7 +3352,7 @@ const ProfileView = () => {
             <button class="btn-outline text-sm" id="profile-close-cancel" onClick=${()=>{ ca.armed=false; ca.pw=''; ca.word=''; ca.msg=''; ca.ok=false; renderApp(); }} disabled=${ca.busy}>Never mind</button>
           </div>
         </div>`}
-        ${ca.msg ? html`<div id="profile-close-msg" role="status" aria-live="polite" style=${'margin-top:10px;padding:10px 12px;border-radius:10px;font-size:13px;' + (ca.ok ? 'background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46' : 'background:#fef2f2;border:1px solid #fecaca;color:#b91c1c')}>${ca.msg}</div>` : ''}
+        ${ca.msg ? html`<div id="profile-close-msg" role="status" aria-live="polite" style=${'margin-top:10px;padding:10px 12px;border-radius:10px;font-size:13px;' + (ca.ok ? 'background:#ecfdf5;border:1px solid #a7f3d0;color:var(--ok)' : 'background:#fef2f2;border:1px solid #fecaca;color:var(--danger)')}>${ca.msg}</div>` : ''}
       </div>
 
       <div class="card flex gap-2">
@@ -3370,7 +3391,7 @@ const ApiKeyModal = () => {
   return html`<${ModalShell} title="New API Key" onClose=${closeModal}>
     <div class="mb-4"><label class="label">Name</label><input class="input" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="e.g. Chrome extension" /></div>
     <p class="text-xs text-gray-500 mb-4">A name is just for your reference — use it to say which tool uses this key. The key is generated for you and stays retrievable: press View on this screen, enter your password, and copy it again whenever you need it.</p>
-    ${S.modalErr && html`<div style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c;padding:12px;border-radius:10px;font-size:13px;margin-bottom:16px">${S.modalErr}</div>`}
+    ${S.modalErr && html`<div style="background:#fef2f2;border:1px solid #fecaca;color:var(--danger);padding:12px;border-radius:10px;font-size:13px;margin-bottom:16px">${S.modalErr}</div>`}
     <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Create API Key'}</button>
   <//>`; };
 
@@ -3415,22 +3436,22 @@ const WfModal = () => {
     } catch(e){ toast(e.message,'err'); }
     S.loading=false; renderApp(); };
   return html`<${ModalShell} title=${wf ? 'Edit Workflow' : 'New Workflow'} onClose=${closeModal}>
-    <div class="mb-4"><label class="label">Name</label><input class="input" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="My Workflow" /></div>
-    <div class="mb-4"><label class="label">Category</label><input class="input" value=${f.cat} onInput=${e=>f.cat=e.target.value} placeholder="e.g. Sales" /></div>
-    <div class="mb-4"><label class="label">Description</label><textarea class="input" rows=3 onInput=${e=>f.desc=e.target.value} placeholder="What does this workflow do?">${f.desc}</textarea></div>
+    <div class="mb-4"><label class="label">Name</label><input class="input" aria-label="Workflow name" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="My Workflow" /></div>
+    <div class="mb-4"><label class="label">Category</label><input class="input" aria-label="Workflow category" value=${f.cat} onInput=${e=>f.cat=e.target.value} placeholder="e.g. Sales" /></div>
+    <div class="mb-4"><label class="label">Description</label><textarea class="input" aria-label="Workflow description" rows=3 onInput=${e=>f.desc=e.target.value} placeholder="What does this workflow do?">${f.desc}</textarea></div>
     ${surfaces.length ? html`<div class="mb-4"><label class="label">Surface</label>
-      <select class="input" value=${f.surface} onChange=${e=>f.surface=e.target.value}>
+      <select class="input" aria-label="Surface" value=${f.surface} onChange=${e=>f.surface=e.target.value}>
         <option value="">No surface</option>
         ${surfaces.map(s=>html`<option key=${s.id} value=${s.id}>${s.name}</option>`)}
       </select></div>` : ''}
     <div class="mb-4"><label class="label">Trigger source</label>
-      <select class="input" value=${f.trigger} onChange=${e=>{f.trigger=e.target.value; renderApp();}}>
+      <select class="input" aria-label="Trigger source" value=${f.trigger} onChange=${e=>{f.trigger=e.target.value; renderApp();}}>
         <option value="manual">Manual — only runs when you run it</option>
         <option value="incoming">Incoming — starts when another Swift tool pushes a lead</option>
       </select></div>
     ${f.trigger === 'incoming' ? html`<div class="mb-4">
-      <div><label class="label">Source tool</label><input class="input" value=${f.src} onInput=${e=>f.src=e.target.value} placeholder="e.g. missedcallrespondr" /></div>
-      <div class="mt-3"><label class="label">Campaign slug (optional)</label><input class="input" value=${f.slug} onInput=${e=>f.slug=e.target.value} placeholder="Leave blank to accept every campaign" /></div>
+      <div><label class="label">Source tool</label><input class="input" aria-label="Source tool" value=${f.src} onInput=${e=>f.src=e.target.value} placeholder="e.g. missedcallrespondr" /></div>
+      <div class="mt-3"><label class="label">Campaign slug (optional)</label><input class="input" aria-label="Campaign slug (optional)" value=${f.slug} onInput=${e=>f.slug=e.target.value} placeholder="Leave blank to accept every campaign" /></div>
       <div class="text-xs text-gray-500 mt-1">A lead pushed by another Swift tool starts this workflow when the tool's source matches the box above. The source is the tool's own name — e.g. <code>missedcallrespondr</code>, <code>funnelswift</code> or <code>incentiveswift</code>. A workflow whose NAME contains that source also binds.</div>
     </div>` : ''}
     <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():(wf?'Save Workflow':'Create Workflow')}</button>
@@ -3444,8 +3465,8 @@ const BrandModal = () => {
   if (!S.formSeeded) { f.name=''; f.kw=''; S.formSeeded = true; }
   const save = async () => { if(!f.name) return toast('Brand name required','err'); const keywords = f.kw.split(',').map(s=>s.trim()).filter(Boolean); S.loading=true; renderApp(); try { await API.post('/brand-monitors', { brand_name: f.name, keywords, platforms: ['web','news','social'] }); toast('Brand monitor created'); S.brands=null; closeModal(); } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
   return html`<${ModalShell} title="New Brand Monitor" onClose=${closeModal}>
-    <div class="mb-4"><label class="label">Brand Name</label><input class="input" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="Your Company" /></div>
-    <div class="mb-4"><label class="label">Keywords (comma separated)</label><input class="input" value=${f.kw} onInput=${e=>f.kw=e.target.value} placeholder="brand, product, keyword" /></div>
+    <div class="mb-4"><label class="label">Brand Name</label><input class="input" aria-label="Brand name" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="Your Company" /></div>
+    <div class="mb-4"><label class="label">Keywords (comma separated)</label><input class="input" aria-label="Keywords, comma separated" value=${f.kw} onInput=${e=>f.kw=e.target.value} placeholder="brand, product, keyword" /></div>
     <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Create Monitor'}</button>
   <//>`; };
 const CompetitorModal = () => {
@@ -3456,17 +3477,17 @@ const CompetitorModal = () => {
   if (!S.formSeeded) { f.name=''; f.web=''; S.formSeeded = true; }
   const save = async () => { if(!f.name) return toast('Name required','err'); S.loading=true; renderApp(); try { await API.post('/competitors', { name: f.name, website: f.web }); toast('Competitor added'); S.competitors=null; closeModal(); } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
   return html`<${ModalShell} title="Add Competitor" onClose=${closeModal}>
-    <div class="mb-4"><label class="label">Competitor Name</label><input class="input" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="Competitor Inc" /></div>
-    <div class="mb-4"><label class="label">Website</label><input class="input" value=${f.web} onInput=${e=>f.web=e.target.value} placeholder="https://competitor.com" /></div>
+    <div class="mb-4"><label class="label">Competitor Name</label><input class="input" aria-label="Competitor name" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="Competitor Inc" /></div>
+    <div class="mb-4"><label class="label">Website</label><input class="input" aria-label="Competitor website" value=${f.web} onInput=${e=>f.web=e.target.value} placeholder="https://competitor.com" /></div>
     <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Add Competitor'}</button>
   <//>`; };
 const CompetitorEditModal = () => {
   const d = S.compEdit || {};
   const save = async () => { if(!String(d.name||'').trim()) return toast('Name required','err'); S.loading=true; renderApp(); try { await API.put('/competitors/'+d.id, { name: d.name, website: d.website, description: d.description, is_active: d.is_active!==false }); toast('Competitor updated'); S.competitors=null; S.compEdit=null; closeModal(); } catch(e){ toast(e.message,'err'); } S.loading=false; renderApp(); };
   return html`<${ModalShell} title="Edit Competitor" onClose=${()=>{S.compEdit=null;closeModal();}}>
-    <div class="mb-4"><label class="label">Competitor Name</label><input class="input" value=${d.name||''} onInput=${e=>{d.name=e.target.value;}} placeholder="Competitor Inc" /></div>
-    <div class="mb-4"><label class="label">Website</label><input class="input" value=${d.website||''} onInput=${e=>{d.website=e.target.value;}} placeholder="https://competitor.com" /></div>
-    <div class="mb-4"><label class="label">Notes</label><input class="input" value=${d.description||''} onInput=${e=>{d.description=e.target.value;}} placeholder="What you watch about them" /></div>
+    <div class="mb-4"><label class="label">Competitor Name</label><input class="input" aria-label="Competitor name" value=${d.name||''} onInput=${e=>{d.name=e.target.value;}} placeholder="Competitor Inc" /></div>
+    <div class="mb-4"><label class="label">Website</label><input class="input" aria-label="Competitor website" value=${d.website||''} onInput=${e=>{d.website=e.target.value;}} placeholder="https://competitor.com" /></div>
+    <div class="mb-4"><label class="label">Notes</label><input class="input" aria-label="Competitor notes" value=${d.description||''} onInput=${e=>{d.description=e.target.value;}} placeholder="What you watch about them" /></div>
     <label class="flex items-center gap-2 mb-4 text-sm"><input type="checkbox" checked=${d.is_active!==false} onChange=${e=>{d.is_active=e.target.checked;}} /> Watch this competitor (uncheck to pause checks)</label>
     <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Save changes'}</button>
   <//>`; };
@@ -3578,9 +3599,9 @@ const StepModal = () => {
   const set = (k, v) => { d[k] = v; renderApp(); };
   const editing = !!d.id;
   const field = (label, key, placeholder) => html`<div class="mb-4"><label class="label">${label}</label>
-    <input class="input" value=${d[key]} placeholder=${placeholder || ''} onInput=${e=>set(key, e.target.value)} /></div>`;
+    <input class="input" aria-label=${label} value=${d[key]} placeholder=${placeholder || ''} onInput=${e=>set(key, e.target.value)} /></div>`;
   const area = (label, key, placeholder) => html`<div class="mb-4"><label class="label">${label}</label>
-    <textarea class="input" rows="3" value=${d[key]} placeholder=${placeholder || ''} onInput=${e=>set(key, e.target.value)}></textarea></div>`;
+    <textarea class="input" aria-label=${label} rows="3" value=${d[key]} placeholder=${placeholder || ''} onInput=${e=>set(key, e.target.value)}></textarea></div>`;
   const save = async () => {
     if (!d.name) return toast('Step name is required', 'err');
     const body = { step_type: d.type, name: d.name, description: d.desc || null, config: draftConfig(d) };
@@ -3592,7 +3613,7 @@ const StepModal = () => {
     } catch(e){ toast(e.message, 'err'); } S.loading = false; renderApp();
   };
   const widgetField = html`<div class="mb-4"><label class="label">Data Card — dashboard widget (by name)</label>
-    <select class="input" value=${d.metric_key} onChange=${e => { const w = (S.widgetCat || []).filter(x => x.metric_key === e.target.value)[0];
+    <select class="input" aria-label="Widget metric" value=${d.metric_key} onChange=${e => { const w = (S.widgetCat || []).filter(x => x.metric_key === e.target.value)[0];
       d.metric_key = e.target.value; d.widget_name = w ? w.title : ''; renderApp(); }}>
       <option value="">Select a widget…</option>
       ${(S.widgetCat || []).map(w => html`<option key=${w.id} value=${w.metric_key}>${w.title}${w.metric_key ? ' — ' + w.metric_key : ' (no metric key)'}</option>`)}
@@ -3615,7 +3636,7 @@ const StepModal = () => {
         return html`
           ${area('Prompt', 'prompt', 'Summarise the incoming lead and draft a reply')}
           <div class="mb-4"><label class="label">Provider</label>
-            <select class="input" value=${picked} onChange=${e=>set('provider', e.target.value)}>
+            <select class="input" aria-label="Provider" value=${picked} onChange=${e=>set('provider', e.target.value)}>
               <option value="">Select the provider whose key this step uses…</option>
               ${AI_PROVIDER_SLOTS.map(p => html`<option key=${p[0]} value=${p[0]}>${p[1]}${connected.has(p[0]) ? ' — key connected' : ' — no key yet'}</option>`)}
             </select>
@@ -3649,7 +3670,7 @@ const StepModal = () => {
         const chanLabel = { webhook:'Webhook', email:'Email', sms:'SMS' };
         return html`
           <div class="mb-4"><label class="label">Channel</label>
-            <select class="input" value=${d.channel} onChange=${e=>set('channel', e.target.value)}>
+            <select class="input" aria-label="Notification channel" value=${d.channel} onChange=${e=>set('channel', e.target.value)}>
               ${channels.map(c => html`<option key=${c} value=${c}>${chanLabel[c] || c}</option>`)}
             </select>
             ${channels.length <= 1
@@ -3661,13 +3682,13 @@ const StepModal = () => {
                 ${area('Message (optional)', 'message', 'The workflow ran')}`
             : html`
               <div class="mb-4"><label class="label">Recipient</label>
-                <select class="input" value=${d.recipient_scope} onChange=${e=>set('recipient_scope', e.target.value)}>
+                <select class="input" aria-label="Recipient scope" value=${d.recipient_scope} onChange=${e=>set('recipient_scope', e.target.value)}>
                   ${scopes.map(s => html`<option key=${s} value=${s}>${scopeLabel[s] || s}</option>`)}
                 </select>
                 <div class="text-xs text-gray-500 mt-1">${d.channel === 'sms' ? 'A text' : 'A message'} may only reach your account's own people — never an address typed here.</div>
               </div>
               ${d.recipient_scope === 'user' ? html`<div class="mb-4"><label class="label">Account user</label>
-                <select class="input" value=${d.recipient_user_id} onChange=${e=>set('recipient_user_id', e.target.value)}>
+                <select class="input" aria-label="Notification recipient" value=${d.recipient_user_id} onChange=${e=>set('recipient_user_id', e.target.value)}>
                   <option value="">Select a person…</option>
                   ${people.map(p => html`<option key=${p.user_id} value=${p.user_id}>${p.name || p.email}${p.billing_contact ? ' — billing contact' : ''}${d.channel === 'sms' && !p.has_phone ? ' (no phone)' : ''}</option>`)}
                 </select>
@@ -3680,11 +3701,11 @@ const StepModal = () => {
         `;
       }
       case 'delay': case 'wait': return html`<div class="mb-4"><label class="label">Wait (seconds)</label>
-        <input class="input" type="number" min="1" value=${d.duration_seconds} onInput=${e=>set('duration_seconds', e.target.value)} />
+        <input class="input" aria-label="Wait in seconds" type="number" min="1" value=${d.duration_seconds} onInput=${e=>set('duration_seconds', e.target.value)} />
         <div class="text-xs text-gray-500 mt-1">The instance parks here and the execution worker advances it when due.</div></div>`;
       case 'fork': return area('Branches (one per line)', 'branches', 'branch-a\nbranch-b');
       case 'http-request': case 'action': return html`<div class="mb-4"><label class="label">Method</label>
-        <select class="input" value=${d.method} onChange=${e=>set('method', e.target.value)}>
+        <select class="input" aria-label="HTTP method" value=${d.method} onChange=${e=>set('method', e.target.value)}>
           <option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option>
         </select></div>${field('URL', 'url', 'https://api.example.com/lead')}`;
       case 'webhook': return field('Webhook URL', 'url', 'https://hooks.example.com/incoming');
@@ -3696,8 +3717,8 @@ const StepModal = () => {
   };
   return html`<${ModalShell} title=${editing ? 'Edit Step' : 'Add Step'} onClose=${()=>{S.modal=null;renderApp();}}>
     <div class="mb-4"><label class="label">Step type${editing ? ' (locked after creation)' : ''}</label>
-      ${editing ? html`<div class="input" style="background:#f9fafb"><strong>${stepTypeLabel(d.type)}</strong> <span class="text-xs text-gray-500">${d.type}</span></div>`
-        : html`<select class="input" value=${d.type} onChange=${e=>set('type', e.target.value)}>
+      ${editing ? html`<div class="input" style="background:var(--surface-ref)"><strong>${stepTypeLabel(d.type)}</strong> <span class="text-xs text-gray-500">${d.type}</span></div>`
+        : html`<select class="input" aria-label="Step type" value=${d.type} onChange=${e=>set('type', e.target.value)}>
             <optgroup label="Core step types">${STEP_TYPES.map(t => html`<option key=${t.k} value=${t.k}>${t.label}</option>`)}</optgroup>
             <optgroup label="More">${STEP_TYPES_EXTRA.map(t => html`<option key=${t.k} value=${t.k}>${t.label}</option>`)}</optgroup>
           </select>`}
@@ -3812,7 +3833,7 @@ const RenditionsView = () => {
   const s = S.rendSummary || {};
   const list = S.renditions || [];
   const sel = S.rendSel || [];
-  const chip = (label, n) => html`<span class="text-xs" style="border:1px solid #e5e7eb;border-radius:999px;padding:2px 8px;margin-right:6px">${label} ${n}</span>`;
+  const chip = (label, n) => html`<span class="text-xs" style="border:1px solid var(--line);border-radius:999px;padding:2px 8px;margin-right:6px">${label} ${n}</span>`;
   const card = (r) => { const thumb = r.thumbnail_url || r.preview_url || '';
     const title = r.step_name || r.provider_asset_id || 'Rendition';
     const picked = sel.indexOf(r.id) >= 0;
@@ -3820,7 +3841,7 @@ const RenditionsView = () => {
       ${thumb ? html`<img src=${thumb} alt=${title} style="width:100%;height:120px;object-fit:cover;border-radius:6px;margin-bottom:8px" />`
               : html`<div class="empty" style="height:120px;display:flex;align-items:center;justify-content:center;margin-bottom:8px">${(r.asset_type || 'media')}</div>`}
       <div class="font-semibold text-sm" style="word-break:break-all">${title}</div>
-      <div class="text-xs text-gray-500 mt-1">${r.provider || 'unknown'} · ${r.asset_type || '—'} · ${r.status || '—'}${r.status && r.status !== 'active' ? html`<span style="color:#b45309">(expired — retained until purge)</span>` : null}</div>
+      <div class="text-xs text-gray-500 mt-1">${r.provider || 'unknown'} · ${r.asset_type || '—'} · ${r.status || '—'}${r.status && r.status !== 'active' ? html`<span style="color:var(--warn)">(expired — retained until purge)</span>` : null}</div>
       <div class="text-xs text-gray-400 mt-0.5">${r.created_at ? fmtDate(r.created_at) : ''}</div>
       <div class="mt-2 flex gap-2 items-center">
         <input type="checkbox" checked=${picked} onChange=${()=>toggleRend(r.id)} title="Select for stitching" />
@@ -3833,11 +3854,11 @@ const RenditionsView = () => {
         <div><h1 class="text-xl font-extrabold text-gray-900">Renditions</h1>
           <p class="text-sm text-gray-500 mt-1">Media produced by render steps — logged per workflow.</p></div>
         <div class="flex gap-2 items-center flex-wrap" style="min-width:0;max-width:100%">
-          <select class="input" style="width:auto;max-width:100%" value=${S.rendWf || ''} onChange=${e=>loadWfRenditions(e.target.value)}>
+          <select class="input" aria-label="Filter renditions by workflow" style="width:auto;max-width:100%" value=${S.rendWf || ''} onChange=${e=>loadWfRenditions(e.target.value)}>
             <option value="">All renditions</option>
             ${(S.workflows || []).map(w => html`<option key=${w.id} value=${w.id}>${w.name}</option>`)}
           </select>
-          <select class="input" style="width:auto;max-width:100%" value=${S.rendStatus} onChange=${e=>{S.rendStatus=e.target.value;S.renditions=null;loadRenditions();}}>
+          <select class="input" aria-label="Filter renditions by status" style="width:auto;max-width:100%" value=${S.rendStatus} onChange=${e=>{S.rendStatus=e.target.value;S.renditions=null;loadRenditions();}}>
             <option value="active">Active</option><option value="expired">Expired</option><option value="all">All statuses</option>
           </select>
           <button class="btn-outline text-sm" onClick=${()=>{S.renditions=null;S.rendSummary=null;loadRenditions();}} disabled=${S.loading}>${S.loading ? spinner() : 'Refresh'}</button>
@@ -3852,7 +3873,7 @@ const RenditionsView = () => {
       ${(s.by_type || []).length ? html`<div class="mb-4">${(s.by_type || []).map((b, i) => html`${chip(b.asset_type || '—', b.count)}`)}
         ${(s.by_provider || []).map((b, i) => html`${chip(b.provider || '—', b.count)}`)}</div>` : null}
       <div class="card mb-4 flex items-center gap-2 flex-wrap">
-        <input class="input" style="width:auto" placeholder="Stitch group name" value=${S.stitchName} onInput=${e=>{S.stitchName=e.target.value;renderApp();}} />
+        <input class="input" aria-label="Stitch group name" style="width:auto" placeholder="Stitch group name" value=${S.stitchName} onInput=${e=>{S.stitchName=e.target.value;renderApp();}} />
         <button class="btn text-sm" onClick=${stitchSelected} disabled=${sel.length < 2 || S.loading}>Stitch selected (${sel.length})</button>
         <span class="text-xs text-gray-500">Groups 2+ renditions into one parent rendition.</span>
       </div>
@@ -3893,7 +3914,7 @@ const WorkspacesView = () => {
                 <button class="btn-outline text-sm" onClick=${() => renameWorkspace(w)} disabled=${busy}>Rename</button>
                 <button class="btn-outline text-sm" onClick=${() => deleteWorkspace(w)} disabled=${busy}>Delete</button>
               </div></div>`)}
-        ${S.wsMsg ? html`<div class="text-sm" style="margin-top:10px;color:${S.wsMsg.ok ? '#047857' : '#b91c1c'}">${S.wsMsg.text}</div>` : null}
+        ${S.wsMsg ? html`<div class="text-sm" style="margin-top:10px;color:${S.wsMsg.ok ? 'var(--ok)' : 'var(--danger)'}">${S.wsMsg.text}</div>` : null}
       </div>
       <div class="card">
         <h3 class="font-semibold text-gray-800 mb-1">Add a workspace</h3>
@@ -3989,7 +4010,7 @@ const InboxView = () => {
           <button class="btn-outline text-sm" onClick=${loadInbox} disabled=${S.loading}>${S.loading?spinner():'Refresh'}</button>
         </div>
       </header>
-      ${S.inboxMsg ? html`<div class="card" style="margin-bottom:16px;color:${S.inboxMsg.ok ? '#047857' : '#b91c1c'}">${S.inboxMsg.text}</div>` : null}
+      ${S.inboxMsg ? html`<div class="card" style="margin-bottom:16px;color:${S.inboxMsg.ok ? 'var(--ok)' : 'var(--danger)'}">${S.inboxMsg.text}</div>` : null}
 
       <div class="card" style="margin-bottom:18px">
         <h3 class="font-semibold text-gray-800 mb-1">Your domains</h3>
@@ -4310,24 +4331,24 @@ const App = () => {
           <button class="ind-switch w-full mt-3 justify-center" onClick=${openIndustryPicker}><span class="ind-ico">🏷</span><span class="ind-name">${indName} ▾</span></button>
           <div id="ws-switcher" style="position:relative;margin-top:8px">
             <button class="ind-switch w-full justify-center" onClick=${wsToggleMenu} title="Workspaces" aria-haspopup="true"><span class="ind-ico">🗂️</span><span class="ind-name">${wsCurrentName()} ▾</span></button>
-            ${WS.open ? html`<div style="position:absolute;left:0;top:calc(100% + 6px);min-width:280px;background:#fff;border:1px solid #e2e8f0;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.18);z-index:1000;padding:6px 0;text-align:left">
-              <div style="padding:8px 14px 4px;font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.4px">Workspaces</div>
+            ${WS.open ? html`<div style="position:absolute;left:0;top:calc(100% + 6px);min-width:280px;background:var(--surface-2);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.18);z-index:1000;padding:6px 0;text-align:left">
+              <div style="padding:8px 14px 4px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px">Workspaces</div>
               ${WS.items.length === 0
-                ? html`<div style="padding:6px 14px;font-size:13px;color:#64748b">No workspaces yet.</div>`
+                ? html`<div style="padding:6px 14px;font-size:13px;color:var(--muted)">No workspaces yet.</div>`
                 : WS.items.map(w => {
                     const cur = WS.current && String(WS.current.id) === String(w.id);
                     const admin = wsCanManage();
                     return html`<div key=${w.id}>
                       <div style="display:flex;align-items:center;gap:6px;padding:6px 14px 2px">
-                        <span style="flex:1;font-weight:${cur ? '600' : '400'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#0f172a">${w.name}</span>
-                        ${w.is_default ? html`<span style="font-size:10px;color:#64748b">default</span>` : ''}
+                        <span style="flex:1;font-weight:${cur ? '600' : '400'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)">${w.name}</span>
+                        ${w.is_default ? html`<span style="font-size:10px;color:var(--muted)">default</span>` : ''}
                         ${cur ? html`<span style="font-size:12px">✓</span>` : ''}
                       </div>
                       <div style="display:flex;gap:4px;padding:2px 14px 8px;border-bottom:1px solid #eef2f7">
-                        ${cur ? '' : html`<button onClick=${() => wsSwitch(w.id)} style="background:#fff;color:#2563eb;border:1px solid #bfdbfe;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:600;cursor:pointer">Switch</button>`}
-                        ${admin ? html`<button onClick=${() => wsRename(w.id)} style="background:#fff;color:#1e1b4b;border:1px solid #e2e8f0;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:600;cursor:pointer">Rename</button>` : ''}
-                        ${admin && !w.is_default ? html`<button onClick=${() => wsMakeDefault(w.id)} style="background:#fff;color:#1e1b4b;border:1px solid #e2e8f0;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:600;cursor:pointer">Make default</button>` : ''}
-                        ${admin && !cur ? html`<button onClick=${() => wsDelete(w.id)} style="background:#fff;color:#b91c1c;border:1px solid #fecaca;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:600;cursor:pointer">Delete</button>` : ''}
+                        ${cur ? '' : html`<button onClick=${() => wsSwitch(w.id)} style="background:var(--surface-2);color:#2563eb;border:1px solid #bfdbfe;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:600;cursor:pointer">Switch</button>`}
+                        ${admin ? html`<button onClick=${() => wsRename(w.id)} style="background:var(--surface-2);color:#1e1b4b;border:1px solid var(--line);border-radius:8px;padding:3px 8px;font-size:11px;font-weight:600;cursor:pointer">Rename</button>` : ''}
+                        ${admin && !w.is_default ? html`<button onClick=${() => wsMakeDefault(w.id)} style="background:var(--surface-2);color:#1e1b4b;border:1px solid var(--line);border-radius:8px;padding:3px 8px;font-size:11px;font-weight:600;cursor:pointer">Make default</button>` : ''}
+                        ${admin && !cur ? html`<button onClick=${() => wsDelete(w.id)} style="background:var(--surface-2);color:var(--danger);border:1px solid #fecaca;border-radius:8px;padding:3px 8px;font-size:11px;font-weight:600;cursor:pointer">Delete</button>` : ''}
                       </div>
                     </div>`;
                   })}
@@ -4488,7 +4509,7 @@ renderApp();
 
   var fab = el('button',
     'position:fixed;right:20px;bottom:80px;z-index:1000;display:none;align-items:center;gap:8px;' +
-    'background:#6366f1;color:#fff;border:none;border-radius:24px;padding:11px 16px;font-size:13px;' +
+    'background:#4f46e5;color:#fff;border:none;border-radius:24px;padding:11px 16px;font-size:13px;' +
     'font-weight:600;cursor:pointer;box-shadow:0 4px 16px rgba(99,102,241,.4);font-family:inherit');
   fab.id = 'fbFab';
   fab.type = 'button';
@@ -4501,7 +4522,7 @@ renderApp();
   overlay.id = 'fbOverlay';
 
   var panel = el('div',
-    'background:#fff;color:#111827;border-radius:12px;max-width:520px;width:100%;' +
+    'background:var(--surface-2);color:var(--ink);border-radius:12px;max-width:520px;width:100%;' +
     'box-shadow:0 18px 48px rgba(0,0,0,.35);font-family:inherit;overflow:hidden');
   panel.setAttribute('role', 'dialog');
   panel.setAttribute('aria-modal', 'true');
@@ -4509,11 +4530,11 @@ renderApp();
 
   var head = el('div',
     'display:flex;align-items:center;justify-content:space-between;padding:16px 20px;' +
-    'border-bottom:1px solid #e5e7eb');
+    'border-bottom:1px solid var(--line)');
   var title = el('h3', 'margin:0;font-size:16px;font-weight:700', 'Send feedback');
   title.id = 'fbTitle';
   var closeBtn = el('button',
-    'background:none;border:none;font-size:18px;line-height:1;cursor:pointer;color:#6b7280', '✕');
+    'background:none;border:none;font-size:18px;line-height:1;cursor:pointer;color:var(--muted)', '✕');
   closeBtn.type = 'button';
   closeBtn.setAttribute('aria-label', 'Close feedback');
   head.appendChild(title);
@@ -4521,14 +4542,14 @@ renderApp();
 
   var body = el('div', 'padding:16px 20px');
 
-  var intro = el('p', 'margin:0 0 12px;color:#6b7280;font-size:13px',
+  var intro = el('p', 'margin:0 0 12px;color:var(--muted);font-size:13px',
     'Tell us what is on your mind — an idea, a bug, or a complaint. It is sent with your ' +
     'account and the screen you are on, so we can follow up.');
 
   var kindRow = el('div', 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px');
   var kindBtns = KINDS.map(function (k) {
     var b = el('button',
-      'border:1px solid #d1d5db;background:#fff;color:#374151;border-radius:8px;padding:8px 12px;' +
+      'border:1px solid var(--line);background:var(--surface-2);color:var(--ink);border-radius:8px;padding:8px 12px;' +
       'font-size:13px;font-weight:600;cursor:pointer;font-family:inherit', k.label);
     b.type = 'button';
     b.setAttribute('data-fb-kind', k.id);
@@ -4537,13 +4558,14 @@ renderApp();
     return b;
   });
 
-  var screenLine = el('div', 'font-size:12px;color:#9ca3af;margin-bottom:6px',
+  var screenLine = el('div', 'font-size:12px;color:var(--muted);margin-bottom:6px',
     'Screen: ' + screenName());
 
   var ta = el('textarea',
     'width:100%;box-sizing:border-box;min-height:110px;resize:vertical;padding:10px 12px;' +
-    'border:1px solid #d1d5db;border-radius:8px;font-family:inherit;font-size:14px');
+    'border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:14px');
   ta.id = 'fbMessage';
+  ta.setAttribute('aria-label', 'Your feedback message');
   ta.maxLength = 4000;
   ta.placeholder = 'What happened, or what should we build?';
 
@@ -4557,13 +4579,13 @@ renderApp();
 
   var foot = el('div',
     'display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 20px;' +
-    'border-top:1px solid #e5e7eb;flex-wrap:wrap');
+    'border-top:1px solid var(--line);flex-wrap:wrap');
   var links = el('div', 'font-size:12px');
-  var up = el('a', 'color:#6366f1;text-decoration:none;margin-right:14px', "What's new");
+  var up = el('a', 'color:var(--accent);text-decoration:none;margin-right:14px', "What's new");
   up.href = 'https://swiftsoftware.net/updates';
   up.target = '_blank';
   up.rel = 'noopener';
-  var rm = el('a', 'color:#6366f1;text-decoration:none', 'Roadmap');
+  var rm = el('a', 'color:var(--accent);text-decoration:none', 'Roadmap');
   rm.href = 'https://swiftsoftware.net/roadmap';
   rm.target = '_blank';
   rm.rel = 'noopener';
@@ -4572,11 +4594,11 @@ renderApp();
 
   var actions = el('div', 'display:flex;gap:8px');
   var cancel = el('button',
-    'background:#fff;border:1px solid #d1d5db;border-radius:8px;padding:9px 14px;' +
-    'font-size:13px;font-weight:600;cursor:pointer;color:#374151;font-family:inherit', 'Cancel');
+    'background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:9px 14px;' +
+    'font-size:13px;font-weight:600;cursor:pointer;color:var(--ink);font-family:inherit', 'Cancel');
   cancel.type = 'button';
   var send = el('button',
-    'background:#6366f1;border:1px solid #6366f1;border-radius:8px;padding:9px 14px;' +
+    'background:#4f46e5;border:1px solid #4f46e5;border-radius:8px;padding:9px 14px;' +
     'font-size:13px;font-weight:600;cursor:pointer;color:#fff;font-family:inherit', 'Send feedback');
   send.type = 'button';
   send.id = 'fbSend';
@@ -4593,9 +4615,9 @@ renderApp();
   function paint() {
     kindBtns.forEach(function (b) {
       var on = b.getAttribute('data-fb-kind') === kind;
-      b.style.background = on ? '#6366f1' : '#fff';
-      b.style.color = on ? '#fff' : '#374151';
-      b.style.borderColor = on ? '#6366f1' : '#d1d5db';
+      b.style.background = on ? '#4f46e5' : 'var(--surface-2)';
+      b.style.color = on ? '#fff' : 'var(--ink)';
+      b.style.borderColor = on ? '#4f46e5' : 'var(--line)';
     });
   }
 
@@ -4603,7 +4625,7 @@ renderApp();
 
   function say(text, ok) {
     msg.textContent = text;
-    msg.style.color = ok ? '#059669' : '#b91c1c';
+    msg.style.color = ok ? 'var(--ok)' : 'var(--danger)';
   }
 
   function open() {
@@ -4697,9 +4719,9 @@ renderApp();
 </script>
 <!--/B209-FEEDBACK-APP-->
 
-<script>function wsApplyTheme(n){var t=(n==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('ws_theme',t);}catch(e){}try{document.cookie='ws_theme='+t+';domain=workflowswift.com;path=/;max-age=31536000;SameSite=Lax';}catch(e){}var l=document.getElementById('wsThemeLabel');if(l)l.textContent=(t==='dark')?'Day mode':'Night mode';var i=document.getElementById('wsThemeIcon');if(i)i.textContent=(t==='dark')?'☀️':'🌙';var b=document.getElementById('wsThemeToggle');if(b)b.title=(t==='dark')?'Switch to day mode':'Switch to night mode';}
+<script>function wsApplyTheme(n){var t=(n==='dark')?'dark':'light';document.documentElement.setAttribute('data-theme',t);try{localStorage.setItem('ws_theme',t);}catch(e){}try{document.cookie='ws_theme='+t+';domain=workflowswift.com;path=/;max-age=31536000;SameSite=Lax';}catch(e){}var l=document.getElementById('wsThemeLabel');if(l)l.textContent=(t==='dark')?'Day mode':'Night mode';if(b)b.setAttribute('aria-label',(t==='dark'?'Day mode':'Night mode')+' — switch to '+(t==='dark'?'night':'day')+' mode');var i=document.getElementById('wsThemeIcon');if(i)i.textContent=(t==='dark')?'☀️':'🌙';var b=document.getElementById('wsThemeToggle');if(b)b.title=(t==='dark')?'Switch to day mode':'Switch to night mode';}
 function wsToggleTheme(){wsApplyTheme(document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark');}
-function wsEnsureToggle(){if(document.getElementById('wsThemeToggle'))return;var b=document.createElement('button');b.type='button';b.id='wsThemeToggle';b.className='ws-theme-toggle';b.title='Switch day / night mode';b.setAttribute('aria-label','Switch day / night mode');b.onclick=wsToggleTheme;var i=document.createElement('span');i.id='wsThemeIcon';i.setAttribute('aria-hidden','true');i.textContent='🌙';var l=document.createElement('span');l.id='wsThemeLabel';l.textContent='Night mode';b.appendChild(i);b.appendChild(l);document.documentElement.appendChild(b);wsApplyTheme(document.documentElement.getAttribute('data-theme')||'light');}
+function wsEnsureToggle(){if(document.getElementById('wsThemeToggle'))return;var b=document.createElement('button');b.type='button';b.id='wsThemeToggle';b.className='ws-theme-toggle';b.title='Switch day / night mode';b.setAttribute('aria-label','Night mode — switch to day mode');b.onclick=wsToggleTheme;var i=document.createElement('span');i.id='wsThemeIcon';i.setAttribute('aria-hidden','true');i.textContent='🌙';var l=document.createElement('span');l.id='wsThemeLabel';l.textContent='Night mode';b.appendChild(i);b.appendChild(l);document.documentElement.appendChild(b);wsApplyTheme(document.documentElement.getAttribute('data-theme')||'light');}
 wsEnsureToggle();
 document.addEventListener('DOMContentLoaded',function(){try{wsEnsureToggle();}catch(e){}});</script>
 </body>
