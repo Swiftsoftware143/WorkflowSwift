@@ -457,6 +457,13 @@ const API = (() => {
     enrichBusiness: (b) => send(base + '/prospecting/enrich', { method:'POST', headers: headers(), body: JSON.stringify(b) }).then(handle),
     getHexomaticKey: () => send(base + '/accounts/hexomatic-key', { headers: headers() }).then(handle),
     setHexomaticKey: (key) => send(base + '/accounts/hexomatic-key', { method:'PUT', headers: headers(), body: JSON.stringify({ key }) }).then(handle),
+    // --- Saved prospect searches (kanban t_55404649). GET/POST /dashboard/prospecting and
+    // DELETE /dashboard/prospecting/{id} were mounted and served since the app shipped with NO
+    // console caller, so the screen's own guide promise "Save the results" had no door. These are
+    // their only callers; the `prospect` modal is the save form.
+    listProspectSearches: () => send(base + '/dashboard/prospecting', { headers: headers() }).then(handle),
+    createProspectSearch: (b) => send(base + '/dashboard/prospecting', { method:'POST', headers: headers(), body: JSON.stringify(b) }).then(handle),
+    deleteProspectSearch: (id) => send(base + '/dashboard/prospecting/' + encodeURIComponent(id), { method:'DELETE', headers: headers() }).then(handle),
     // --- Builder + Renditions (kanban t_ef3b13f4): the step-config and rendition APIs were
     // served with NO caller — the Builder view was a stub. These are the only callers.
     getSteps: (id) => send(base + '/workflows/' + encodeURIComponent(id) + '/steps', { headers: headers() }).then(handle),
@@ -1355,14 +1362,39 @@ const loadAutomations = async () => { if(S.loading)return; S.loading=true; rende
 const runAuto = async (id) => { try { await API.post('/automations/'+id+'/run', {}); toast('Automation triggered'); } catch(e){ toast(e.message,'err'); } };
 
 
-// ===== Prospecting (search + results only; no list endpoint) =====
+// ===== Prospecting (search + results + saved searches) =====
+// kanban t_55404649: the saved-search routes (GET/POST /dashboard/prospecting, DELETE
+// /dashboard/prospecting/{id}) were served with NO console caller, while this screen's own guide
+// promises "Save the results". The list below is the read half; the `prospect` modal is the write
+// half — it was an opener with no renderer before this change.
+Object.assign(S, { prospectSearches:null, prospectListBusy:false, prospectListErr:'' });
+const prospectQuery = (s) => s.search_query || [s.industry, s.city, s.state].filter(Boolean).join(', ');
+const loadProspectSearches = async () => {
+  if (S.prospectListBusy) return;
+  S.prospectListBusy = true; S.prospectListErr = '';
+  try { const r = await API.listProspectSearches(); S.prospectSearches = (r && r.searches) || []; }
+  catch(e){ S.prospectSearches = []; S.prospectListErr = e.message || 'Saved searches could not be loaded'; }
+  S.prospectListBusy = false; renderApp();
+};
+const deleteProspectSearch = async (s) => {
+  if (!window.confirm('Delete the saved search "' + prospectQuery(s) + '"?')) return;
+  try {
+    await API.deleteProspectSearch(s.id);
+    S.prospectSearches = (S.prospectSearches || []).filter(x => x.id !== s.id);
+    toast('Saved search deleted');
+  } catch(e){ toast(e.message || 'Could not delete that saved search', 'err'); }
+  renderApp();
+};
 const ProspectingView = () => {
   if (S.hexKey === null && !S.loading) loadHexomaticKey();
+  if (S.prospectSearches === null && !S.prospectListBusy && !S.loading) loadProspectSearches();
   const masked = S.hexKey || '';
+  const saved = S.prospectSearches || [];
   return html`
     <div>
       <header class="flex items-start justify-between mb-5 flex-wrap gap-3">
-        <div><h1 class="text-xl font-extrabold text-gray-900">Prospecting</h1><p class="text-sm text-gray-500 mt-1">Search and enrich target businesses</p></div>
+        <div><h1 class="text-xl font-extrabold text-gray-900">Prospecting</h1><p class="text-sm text-gray-500 mt-1">Search and enrich target businesses</p>
+          <button class="btn text-sm mt-3" onClick=${openProspectModal} disabled=${S.loading}>Save this search</button></div>
         <div class="card" style="margin-bottom:0;padding:12px;flex:1 1 320px;min-width:0;max-width:100%">
           <h3 class="font-semibold text-gray-800 mb-2 text-sm">🧩 Hexomatic API key</h3>
           <p class="text-xs text-gray-500 mb-2">Third-party enrichment credential. Stored per account; the server only ever returns it masked.</p>
@@ -1386,9 +1418,31 @@ const ProspectingView = () => {
         </div>
         <button class="btn" onClick=${runSearch} disabled=${S.loading}>${S.loading?spinner():'Search'}</button>
       </div>
+      <div class="card">
+        <div class="flex items-start justify-between mb-3">
+          <h3 class="font-semibold text-gray-800">💾 Saved searches</h3>
+          <button class="btn-outline text-sm" onClick=${loadProspectSearches} disabled=${S.prospectListBusy}>${S.prospectListBusy?spinner():'Refresh'}</button>
+        </div>
+        <p class="text-xs text-gray-500 mb-3">A saved search keeps the industry, city and state you prospect in, so this workspace remembers the searches that matter to it. Results fill in as your connected data sources report them.</p>
+        ${S.prospectListErr ? html`<div class="mb-3" style="border:1px solid #f59e0b;background:#fffbeb;border-radius:8px;padding:12px">
+          <p class="text-sm" style="color:#78350f">${S.prospectListErr}</p>
+        </div>` : null}
+        ${saved.length === 0 ? html`<div class="empty">No saved searches yet — press Save this search to keep one.</div>` : html`
+        <div class="overflow-x-auto"><table class="w-full text-sm">
+          <thead><tr class="text-left text-gray-500">
+            <th scope="col" class="py-2">Search</th><th scope="col" class="py-2">Results</th><th scope="col" class="py-2">Saved</th><th scope="col" class="py-2 text-right">Actions</th>
+          </tr></thead>
+          <tbody>${saved.map(s => html`<tr class="border-t">
+            <td class="py-2 pr-3">${prospectQuery(s)}</td>
+            <td class="py-2 pr-3">${s.result_count != null ? s.result_count : 0}</td>
+            <td class="py-2 pr-3 text-gray-500">${String(s.created_at || '').slice(0,10)}</td>
+            <td class="py-2 text-right"><button class="btn-red text-xs" aria-label=${'Delete saved search ' + prospectQuery(s)} onClick=${()=>deleteProspectSearch(s)}>Delete</button></td>
+          </tr>`)}</tbody>
+        </table></div>`}
+      </div>
     </div>`;
 };
-const quickSearchField = (id, label, ph) => html`<div><label class="label">${label}</label><input class="input" id=${id} placeholder=${ph} /></div>`;
+const quickSearchField = (id, label, ph) => html`<div><label class="label" for=${id}>${label}</label><input class="input" id=${id} aria-label=${'Prospecting ' + label.toLowerCase()} placeholder=${ph} /></div>`;
 // Defensive mask: the GET already answers masked, but never trust a client render with a raw key.
 const maskKeyStr = (v) => { v = v || ''; if (!v) return ''; if (v.indexOf('...') >= 0) return v;
   return v.length > 8 ? (v.slice(0,3) + '...' + v.slice(-3)) : '\u2022'.repeat(8); };
@@ -3372,7 +3426,39 @@ const openWfModal = (wf) => {
   if (S.surfaces) { S.modal='wf'; renderApp(); return; }
   loadSurfacesOnce(() => { S.modal='wf'; renderApp(); });
 };
-const openProspectModal = () => { S.modal='prospect'; renderApp(); };
+// kanban t_55404649 — `openProspectModal` had NO caller and `S.modal='prospect'` had NO renderer:
+// the Prospecting screen's own guide promises "Save the results", and the saved-search routes were
+// served with no console caller. This is that door: the save form, opened from the Prospecting screen.
+const openProspectModal = () => { S.formSeeded = false; S.modal='prospect'; renderApp(); };
+const ProspectModal = () => {
+  // Draft in the SHARED view object (never a per-render local): save() calls renderApp() itself, and
+  // a per-render local was reset mid-save by that very render (kanban t_8b4aba31's class).
+  const f = viewState('prospect_form', { industry:'', city:'', state:'' });
+  if (!S.formSeeded) {
+    // Prefill from the search card the customer may already have typed into.
+    const typed = (id) => { const el = document.getElementById(id); return el && typeof el.value === 'string' ? el.value : ''; };
+    f.industry = typed('industryInput'); f.city = typed('cityInput'); f.state = typed('stateInput');
+    S.formSeeded = true;
+  }
+  const save = async () => {
+    const industry = String(f.industry || '').trim(), city = String(f.city || '').trim(), state = String(f.state || '').trim();
+    if (!industry || !city || !state) return toast('Industry, city and state are required', 'err');
+    S.loading = true; renderApp();
+    try {
+      await API.createProspectSearch({ industry, city, state });
+      toast('Search saved');
+      S.prospectSearches = null;   // the list re-reads on the next Prospecting render
+      closeModal();
+    } catch(e){ toast(e.message || 'Could not save that search', 'err'); }
+    S.loading = false; renderApp();
+  };
+  return html`<${ModalShell} title="Save this search" onClose=${closeModal}>
+    <p class="text-xs text-gray-500 mb-4">Keeps the industry, city and state you prospect in on this workspace, so the Prospecting screen remembers it. Results fill in as your connected data sources report them.</p>
+    <div class="mb-4"><label class="label" for="prospect-industry">Industry</label><input class="input" id="prospect-industry" aria-label="Saved search industry" value=${f.industry} onInput=${e=>f.industry=e.target.value} placeholder="e.g. Dental" /></div>
+    <div class="mb-4"><label class="label" for="prospect-city">City</label><input class="input" id="prospect-city" aria-label="Saved search city" value=${f.city} onInput=${e=>f.city=e.target.value} placeholder="e.g. Miami" /></div>
+    <div class="mb-4"><label class="label" for="prospect-state">State</label><input class="input" id="prospect-state" aria-label="Saved search state" value=${f.state} onInput=${e=>f.state=e.target.value} placeholder="e.g. FL" /></div>
+    <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Save search'}</button>
+  <//>`; };
 const openBrandModal = () => { S.formSeeded=false; S.modal='brand'; renderApp(); };
 const openCompetitorModal = () => { S.formSeeded=false; S.modal='comp'; renderApp(); };
 const openApiKeyModal = () => { S.formSeeded=false; S.modal='apikey'; S.modalErr=null; renderApp(); };
@@ -4379,7 +4465,7 @@ const App = () => {
         <${Current} key=${S.current + "|" + S.dataVer} />
       </main>
     </div>
-    ${S.modal && (S.modal==='wf' ? html`<${WfModal} />` : S.modal==='lead' ? html`<${LeadModal} />` : S.modal==='ticket' ? html`<${TicketModal} />` : S.modal==='brand' ? html`<${BrandModal} />` : S.modal==='comp' ? html`<${CompetitorModal} />` : S.modal==='compedit' ? html`<${CompetitorEditModal} />` : S.modal==='apikey' ? html`<${ApiKeyModal} />` : S.modal==='invite' ? html`<${InviteModal} />` : S.modal==='perms' ? html`<${PermsModal} />` : S.modal==='industry' ? html`<${IndustryPickerView} asModal />` : S.modal==='step' ? html`<${StepModal} />` : S.modal==='logs' ? html`<${LogsModal} />` : null)}
+    ${S.modal && (S.modal==='wf' ? html`<${WfModal} />` : S.modal==='lead' ? html`<${LeadModal} />` : S.modal==='prospect' ? html`<${ProspectModal} />` : S.modal==='ticket' ? html`<${TicketModal} />` : S.modal==='brand' ? html`<${BrandModal} />` : S.modal==='comp' ? html`<${CompetitorModal} />` : S.modal==='compedit' ? html`<${CompetitorEditModal} />` : S.modal==='apikey' ? html`<${ApiKeyModal} />` : S.modal==='invite' ? html`<${InviteModal} />` : S.modal==='perms' ? html`<${PermsModal} />` : S.modal==='industry' ? html`<${IndustryPickerView} asModal />` : S.modal==='step' ? html`<${StepModal} />` : S.modal==='logs' ? html`<${LogsModal} />` : null)}
     ${S.toast && html`<div class="toast ${S.toast.type}">${S.toast.msg}</div>`}
     ${S.loading && html`<div style="position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:60"><span class="spinner"></span></div>`}
   `;
