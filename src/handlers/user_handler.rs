@@ -477,14 +477,36 @@ pub async fn set_user_role(
         ));
     }
 
-    sqlx::query("UPDATE users SET role = $1, updated_at = now() WHERE id = $2")
-        .bind(role)
-        .bind(id)
-        .execute(&state.db)
-        .await?;
+    // A ROLE CHANGE TAKES EFFECT NOW, NOT AT THE TOKEN'S EXPIRY (2026-11-23).
+    // Authority on every tenant door is decided from the token's `role` claim, and the boundary
+    // (`auth::middleware::user_grant`) only compares that claim against the ROW for platform-admin
+    // authority - so before this line a `company_admin` demoted to `team_member` kept every admin
+    // door their old token carried until that token expired. Moving `sessions_valid_from` in the
+    // SAME statement ends every session minted before the change, which is what makes the demotion
+    // (and the promotion) real: the person signs in again with the password they already know and
+    // gets the role the row now says. FunnelSwift's proven door (804b8a6), ported.
+    // A no-op change is answered as such and moves nothing: signing a teammate out for a click that
+    // changed nothing would be a defect of its own.
+    if user.role == role {
+        return Ok(Json(json!({
+            "message": "Role unchanged",
+            "unchanged": true,
+            "user": { "id": user.id, "email": user.email, "name": user.name, "role": role }
+        })));
+    }
+
+    sqlx::query(
+        "UPDATE users SET role = $1, sessions_valid_from = NOW(), updated_at = now() \
+          WHERE id = $2",
+    )
+    .bind(role)
+    .bind(id)
+    .execute(&state.db)
+    .await?;
 
     Ok(Json(json!({
         "message": "Role updated",
+        "sessions_revoked": true,
         "user": { "id": user.id, "email": user.email, "name": user.name, "role": role }
     })))
 }

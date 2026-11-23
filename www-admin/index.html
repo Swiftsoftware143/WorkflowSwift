@@ -673,7 +673,11 @@ function content(){
     }
     if(s==='my-profile')renderProfile(c);
     else if(s==='email-branding')renderBranding(c);
-    else if(s==='team')renderCRUD(c,'team','Team Member',['name','email','role','last_login_at'],{list:'/users',create:'/users/invite',del:'/users'},false);
+    // kanban 2026-11-23 - PUT /users/{id}/role has existed since the team screen landed but had NO
+    // caller here, so promoting a member to company admin (or demoting one) still needed psql. The
+    // action is drawn only on rows the route accepts (the two tenant roles, never your own row):
+    // a button the API refuses is worse than no button, this file's own rule.
+    else if(s==='team')renderCRUD(c,'team','Team Member',['name','email','role','last_login_at'],{list:'/users',create:'/users/invite',del:'/users'},false,{label:'Change role',fn:'teamRoleChange',show:function(it){const r=String((it&&it.role)||'').toLowerCase();if(r!=='team_member'&&r!=='company_admin')return false;if(ME&&ME.id&&String(it.id)===String(ME.id))return false;return true;}});
     else if(s==='plans-credits')renderPlansCredits(c);
     else if(s==='invoices')renderList(c,'invoices','Invoice','/invoices');
     else if(s==='payments')renderPaymentProviders(c);
@@ -969,7 +973,7 @@ async function renderCRUD(container,key,label,fields,ep,editFields,extraAction,a
     return true;
   };
   const tbody=items.map(it=>'<tr>'+cols.map(f=>`<td>${cellVal(f,it[f])}</td>`).join('')+
-    `<td class="text-right">`+(extraAction?`<button class="btn btn-sm btn-ghost" data-extra="${escHtml(rowId(it))}">${extraAction.label}</button>`:'')
+    `<td class="text-right">`+(extraAction&&(!extraAction.show||extraAction.show(it))?`<button class="btn btn-sm btn-ghost" data-extra="${escHtml(rowId(it))}">${extraAction.label}</button>`:'')
     +(canEdit?`<button class="btn btn-sm btn-ghost" data-edit="${escHtml(rowId(it))}">Edit</button>`:'')
     +(canDel(it)?`<button class="btn btn-sm btn-danger" data-del="${escHtml(rowId(it))}">Del</button>`:'')+'</td></tr>').join('');
   list.innerHTML=`<table class="table"><thead><tr>${thead}<th style="width:140px"></th></tr></thead><tbody>${tbody}</tbody></table>`;
@@ -984,6 +988,39 @@ async function renderCRUD(container,key,label,fields,ep,editFields,extraAction,a
     window[extraAction.fn](b.getAttribute('data-extra'));});
   const ab=container.querySelector('#addBtn'); if(ab)ab.onclick=openAdd;
 }
+
+// CHANGE A MEMBER'S ROLE FROM THIS PANEL (2026-11-23). The route (PUT /users/{id}/role) has
+// existed since the team screen landed and no screen called it, so a promotion or demotion was a
+// psql job. The row is re-read from the list this panel already renders, the select offers exactly
+// the two tenant roles the handler accepts, and the sentence after saving comes from the SERVER's
+// answer - the change ends that person's open sessions, so the new role is real the moment they
+// sign in again.
+window.teamRoleChange=async function(id){
+  let items=[];
+  try{ items=unwrapList(await api('/users')); }catch(e){ items=[]; }
+  const row=items.find(x=>String(x.id)===String(id));
+  const cur=String((row&&row.role)||'team_member');
+  const roles=[['team_member','Team member'],['company_admin','Company admin']];
+  const modal=h('div',{className:'modal-overlay',onclick:function(e){if(e.target===modal)modal.remove()}});
+  const box=h('div',{className:'modal-box'});
+  box.innerHTML='<h2 class="text-lg font-bold mb-2">Change role</h2>'
+    +'<p class="text-sm text-gray-500 mb-4">'+escHtml(String((row&&row.email)||''))+'</p>'
+    +'<label class="block text-xs font-medium text-gray-500 mb-1">Role</label>'
+    +'<select class="input" id="trRole">'+roles.map(r=>'<option value="'+r[0]+'"'+(r[0]===cur?' selected':'')+'>'+r[1]+'</option>').join('')+'</select>'
+    +'<p class="text-xs text-gray-500 mt-2">A company admin can open every admin screen in this workspace. The change ends that person open sessions, so they sign in again and the new role is theirs.</p>'
+    +'<div class="flex justify-end gap-2 mt-4"><button class="btn btn-ghost" id="trCancel">Cancel</button><button class="btn btn-primary" id="trSave">Save</button></div>';
+  modal.appendChild(box); document.body.appendChild(modal);
+  box.querySelector('#trCancel').onclick=()=>modal.remove();
+  box.querySelector('#trSave').onclick=async()=>{
+    const role=box.querySelector('#trRole').value;
+    const r=await api('/users/'+encodeURIComponent(id)+'/role',{method:'PUT',body:JSON.stringify({role:role})});
+    if(!r){ showMsg('Could not change that role: '+(LAST_ERR||'the request failed'),'error'); return; }
+    modal.remove();
+    if(r.unchanged){ showMsg('That person already has that role.'); }
+    else { showMsg('Role updated for '+((row&&row.email)||'that teammate')+(r.sessions_revoked?' - their open sessions are ended, so ask them to sign in again and they will have the new role.':'.'),'success'); }
+    renderPage();
+  };
+};
 
 function renderPage(){renderApp()}
 window.editIt=function(key,label,ep,id,ef,row){showForm(key,label,ef?ef.split(','):['name'],ep,id,renderPage,row)}
