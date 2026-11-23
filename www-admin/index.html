@@ -3313,7 +3313,7 @@ function renderAdminSettings(c){
    // stopped by hand (a phone request, a complaint). Backed by /admin/do-not-mail.
    +'<div class="card mt-4"><h2 class="text-xl font-bold mb-1">Do not mail</h2>'
    +'<p class="text-xs text-gray-500 mb-3">Anyone who pressed &ldquo;Stop these emails&rdquo; in a notification is listed here, and no workflow mail is sent to them again. Receipts, password resets and security notices keep working &mdash; those are not optional. Adding an address below stops workflow mail to it immediately.</p>'
-   +'<div class="flex gap-2 items-center flex-wrap mb-3"><input id="dnm_addr" type="email" placeholder="someone@example.com" style="max-width:320px;padding:7px 9px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"><button class="btn btn-primary btn-sm" id="dnm_add">Stop mail to this address</button><span id="dnm_msg" class="text-xs"></span></div>'
+   +'<div class="flex gap-2 items-center flex-wrap mb-3"><input id="dnm_addr" type="email" placeholder="someone@example.com" style="max-width:320px;padding:7px 9px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"><button class="btn btn-primary btn-sm" id="dnm_add">Stop mail to this address</button><button class="btn btn-sm btn-ghost" id="dnm_csv">Download CSV</button><span id="dnm_msg" class="text-xs"></span><span id="dnm_csv_msg" class="text-xs"></span></div>'
    +'<div id="dnm_list"><p class="text-gray-400 text-sm">Loading...</p></div>'
    // Where the provider reports its own verdict (2026-11-22). A hard bounce or a spam complaint
    // arrives at this address and lands in the list above with no human in the loop; the operator
@@ -3445,6 +3445,27 @@ function renderAdminSettings(c){
     });
   };
   loadDnm();
+  // The same list as a file (2026-11-23): a compliance hand-off, or an answer to "who did we stop
+  // mailing?". Fetched with the session credential — a bare <a href> carries no Authorization header
+  // and would be answered 401, so the button builds the download from the response body.
+  const dnmCsv=c.querySelector('#dnm_csv');
+  if(dnmCsv)dnmCsv.onclick=async()=>{
+    const m=c.querySelector('#dnm_csv_msg');
+    dnmCsv.disabled=true;
+    try{
+      const r=await fetch(API+'/admin/do-not-mail.csv',{headers:TOKEN?{'Authorization':'Bearer '+TOKEN}:{}});
+      if(!r.ok)throw new Error('HTTP '+r.status);
+      const txt=await r.text();
+      const url=URL.createObjectURL(new Blob([txt],{type:'text/csv;charset=utf-8'}));
+      const a=document.createElement('a');a.href=url;a.download='do-not-mail.csv';
+      document.body.appendChild(a);a.click();a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+      if(m){m.textContent='Saved do-not-mail.csv';m.style.color='#166534'}
+    }catch(e){
+      if(m){m.textContent='Could not download the list: '+e.message;m.style.color='#b91c1c'}
+    }
+    dnmCsv.disabled=false;
+  };
   // The provider's delivery-events address (2026-11-22): the ONE thing an operator has to copy out
   // of this screen into the provider. A failed read is shown as a failure, never as a blank line.
   api('/settings/do-not-mail/webhook').then(d=>{

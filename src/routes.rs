@@ -1125,7 +1125,8 @@ pub fn create_router(state: AppState) -> Router {
                 .route(
                     "/do-not-mail/{address}",
                     delete(crate::compliance::remove_suppression),
-                ),
+                )
+                .route("/do-not-mail.csv", get(crate::compliance::suppressions_csv)),
         )
         // Layer order: in axum the LAST `.layer()` is the OUTERMOST, so the request path is
         // pre_auth_rate_limit -> auth -> per-account rate limit -> handler.

@@ -513,6 +513,84 @@ pub(crate) async fn remove_suppression(
     }
 }
 
+/// One CSV cell, always quoted, inner quotes doubled — so a reason sentence containing a comma
+/// cannot split into extra columns when the operator opens the file in a spreadsheet.
+fn csv_cell(s: &str) -> String {
+    format!("\"{}\"", s.replace('"', "\"\""))
+}
+
+/// One CSV line for a suppression row. Pulled out of the handler so the quoting is unit-tested
+/// without a database.
+fn csv_line(address: &str, mail_class: &str, reason: &str, source: &str, added: &str) -> String {
+    format!(
+        "{},{},{},{},{}\n",
+        csv_cell(address),
+        csv_cell(mail_class),
+        csv_cell(reason),
+        csv_cell(source),
+        csv_cell(added)
+    )
+}
+
+/// `GET /api/v1/admin/do-not-mail.csv` — the same list the screen shows, as a file the operator can
+/// keep (a compliance hand-off, or an answer to "who did we stop mailing?"). Admin-only, scoped to
+/// this app's own platform list exactly like [`list_suppressions`], and a failed read is a 500, never
+/// an empty file: "nobody has opted out" is a statement about the customer's list, and a blank export
+/// would make it look true.
+pub(crate) async fn suppressions_csv(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+) -> Response {
+    if let Err(e) = require_admin(&claims) {
+        return e.into_response();
+    }
+    let rows = match sqlx::query_as::<
+        _,
+        (
+            String,
+            String,
+            String,
+            Option<String>,
+            chrono::DateTime<chrono::Utc>,
+        ),
+    >(
+        "SELECT address, mail_class, reason, source, created_at FROM email_suppressions
+          WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 5000",
+    )
+    .bind(PLATFORM_TENANT)
+    .fetch_all(&state.db)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::error!("do-not-mail CSV read failed: {e}");
+            return unavailable();
+        }
+    };
+    let mut out = String::from("address,class,reason,source,added\n");
+    for (address, mail_class, reason, source, created_at) in &rows {
+        out.push_str(&csv_line(
+            address,
+            mail_class,
+            reason,
+            source.as_deref().unwrap_or(""),
+            &created_at.to_rfc3339(),
+        ));
+    }
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"do-not-mail.csv\"",
+            ),
+        ],
+        out,
+    )
+        .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -543,6 +621,25 @@ mod tests {
         assert_eq!(blocking_classes(TRANSACTIONAL), &["transactional"]);
         assert!(blocking_classes(NOTIFICATION).contains(&"all"));
         assert!(!blocking_classes(NOTIFICATION).contains(&"bulk"));
+    }
+
+    #[test]
+    fn a_csv_line_quotes_every_cell_so_a_comma_cannot_split_it() {
+        let line = csv_line(
+            "a@example.invalid",
+            "all",
+            "pressed stop, then complained",
+            "unsubscribe",
+            "2026-11-23T05:00:00Z",
+        );
+        assert_eq!(
+            line,
+            "\"a@example.invalid\",\"all\",\"pressed stop, then complained\",\"unsubscribe\",\"2026-11-23T05:00:00Z\"\n"
+        );
+        // A quote inside a cell is doubled rather than ending the cell early.
+        assert_eq!(csv_cell("say \"no\""), "\"say \"\"no\"\"\"");
+        // An absent source still occupies its column — a short row would shift every later one.
+        assert!(csv_line("a@b.co", "bulk", "manual", "", "t").contains("\"\","));
     }
 
     #[test]
