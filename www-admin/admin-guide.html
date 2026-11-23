@@ -575,6 +575,15 @@ when it is set.</p>
       address is removed in one go, so a leftover <em>bulk</em> row cannot keep refusing the very mail
       you meant to restore. Answers <code>{"removed": n, "address"}</code>. Super-admin only.</td>
       </tr>
+      <tr>
+      <td><code>/api/v1/admin/do-not-mail.csv</code></td>
+      <td>GET</td>
+      <td>The same list as a downloadable file, for a compliance hand-off or a record of who asked to
+      be left alone. The <em>Download CSV</em> button beside the list uses it. Columns are
+      <code>address, class, reason, source, added</code>; every cell is quoted so a reason containing a
+      comma cannot shift the columns. A read that fails answers an error &mdash; never an empty file,
+      which would read as &ldquo;nobody has opted out&rdquo;. Super-admin only.</td>
+      </tr>
       </tbody>
       </table>
       <p>A tenant (<code>accounts</code>) carries ONE identifier: <code>account_slug</code>, NOT NULL UNIQUE (<code>tenants_slug_key</code>),
