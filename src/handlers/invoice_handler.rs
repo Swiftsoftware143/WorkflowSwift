@@ -263,29 +263,21 @@ pub async fn admin_create_invoice(
         return Err(AppError::NotFound("That plan no longer exists".to_string()));
     }
 
-    sqlx::query(
+    let row = sqlx::query_as::<_, InvoiceRow>(
         "WITH ins AS ( \
             INSERT INTO invoices (aid, plan_id, amount, status, due_date, paid_at) \
             VALUES ($1, $2, $3::numeric, $4, CAST($5 AS timestamptz), \
                     CASE WHEN $4 = 'paid' THEN now() ELSE NULL END) \
-            RETURNING id ) \
-         SELECT id FROM ins",
+            RETURNING id, aid, plan_id, amount, status, due_date, paid_at, created_at ) \
+         SELECT i.id, i.aid, i.plan_id, pt.name AS plan_name, a.name AS account_name, \
+                i.amount::text AS amount, i.status, i.due_date, i.paid_at, i.created_at \
+           FROM ins i LEFT JOIN plan_tiers pt ON pt.id = i.plan_id LEFT JOIN accounts a ON a.id = i.aid",
     )
     .bind(account)
     .bind(plan)
     .bind(&amount)
     .bind(status)
     .bind(due.as_deref())
-    .fetch_one(&state.db)
-    .await?;
-
-    let row = sqlx::query_as::<_, InvoiceRow>(
-        "SELECT i.id, i.aid, i.plan_id, pt.name AS plan_name, a.name AS account_name, \
-                i.amount::text AS amount, i.status, i.due_date, i.paid_at, i.created_at \
-           FROM invoices i LEFT JOIN plan_tiers pt ON pt.id = i.plan_id LEFT JOIN accounts a ON a.id = i.aid \
-          WHERE i.aid = $1 ORDER BY i.created_at DESC LIMIT 1",
-    )
-    .bind(account)
     .fetch_one(&state.db)
     .await?;
 
@@ -310,11 +302,10 @@ pub async fn admin_update_invoice(
             UPDATE invoices SET status = $2, \
                    paid_at = CASE WHEN $2 = 'paid' THEN COALESCE(paid_at, now()) ELSE NULL END \
              WHERE id = $1 \
-            RETURNING id ) \
+            RETURNING id, aid, plan_id, amount, status, due_date, paid_at, created_at ) \
          SELECT i.id, i.aid, i.plan_id, pt.name AS plan_name, a.name AS account_name, \
                 i.amount::text AS amount, i.status, i.due_date, i.paid_at, i.created_at \
-           FROM invoices i LEFT JOIN plan_tiers pt ON pt.id = i.plan_id LEFT JOIN accounts a ON a.id = i.aid \
-          WHERE i.id = (SELECT id FROM upd)",
+           FROM upd i LEFT JOIN plan_tiers pt ON pt.id = i.plan_id LEFT JOIN accounts a ON a.id = i.aid",
     )
     .bind(id)
     .bind(status)
