@@ -3315,14 +3315,14 @@ function renderAdminSettings(c){
    +'<p class="text-xs text-gray-500 mb-3">Anyone who pressed &ldquo;Stop these emails&rdquo; in a notification is listed here, and no workflow mail is sent to them again. Receipts, password resets and security notices keep working &mdash; those are not optional. Adding an address below stops workflow mail to it immediately.</p>'
    +'<div class="flex gap-2 items-center flex-wrap mb-3"><input id="dnm_addr" type="email" placeholder="someone@example.com" style="max-width:320px;padding:7px 9px;border:1px solid #d1d5db;border-radius:6px;font-size:13px"><button class="btn btn-primary btn-sm" id="dnm_add">Stop mail to this address</button><button class="btn btn-sm btn-ghost" id="dnm_csv">Download CSV</button><span id="dnm_msg" class="text-xs"></span><span id="dnm_csv_msg" class="text-xs"></span></div>'
    +'<div id="dnm_list"><p class="text-gray-400 text-sm">Loading...</p></div>'
-   // Where the provider reports its own verdict (2026-11-22). A hard bounce or a spam complaint
-   // arrives at this address and lands in the list above with no human in the loop; the operator
-   // needs the address once, to paste into the provider. Read from the app, never composed here, so
-   // the screen cannot show an address the server would refuse.
-   +'<div class="mt-4 pt-3" style="border-top:1px solid #e5e7eb"><p class="text-xs font-medium text-gray-600 mb-1">Where the provider reports bounces and complaints</p>'
-   +'<p class="text-xs text-gray-500 mb-2">The mail provider tells this installation when a message hard-bounces or is marked as spam, and each of those addresses lands in the list above automatically. Paste this address into the provider\'s webhook settings for the sending domain (events: permanent failures, complaints, unsubscribes) &mdash; it is the only place that address is needed.</p>'
-   +'<div class="flex items-center gap-2 flex-wrap"><code id="dnm_hook" class="text-xs font-mono" style="word-break:break-all">Reading...</code>'
-   +'<button class="btn btn-sm btn-ghost" id="dnm_hook_copy" aria-label="Copy the provider delivery-events address">Copy</button><span id="dnm_hook_msg" class="text-xs"></span></div></div></div>';
+   // The provider's reports arrive on their own (2026-11-23): the safety net is OURS, its copy lives
+   // here, and this line says whether it has actually reported yet. Nobody pastes this address into
+   // anything — the fleet registers the three event types per sending domain; the address stays on
+   // screen for support only.
+   +'<div class="mt-4 pt-3" style="border-top:1px solid #e5e7eb"><p class="text-xs font-medium text-gray-600 mb-1">Bounces and complaints report themselves</p>'
+   +'<p class="text-xs text-gray-500 mb-2" id="dnm_hook_status">Checking whether the mail service has reported anything&hellip;</p>'
+   +'<div class="flex items-center gap-2 flex-wrap"><span class="text-xs text-gray-400">For support, the address the mail service posts to is</span><code id="dnm_hook" class="text-xs font-mono" style="word-break:break-all">Reading...</code>'
+   +'<button class="btn btn-sm btn-ghost" id="dnm_hook_copy" aria-label="Copy the delivery-events address">Copy</button><span id="dnm_hook_msg" class="text-xs"></span></div></div></div>';
 
   // Tag → free account (design §3.3): the master toggle + the in-app entry-plan picker. Both keys
   // are read by POST /api/v1/internal/provision-free-account, the receiver FunnelSwift's tag
@@ -3466,14 +3466,25 @@ function renderAdminSettings(c){
     }
     dnmCsv.disabled=false;
   };
-  // The provider's delivery-events address (2026-11-22): the ONE thing an operator has to copy out
-  // of this screen into the provider. A failed read is shown as a failure, never as a blank line.
+  // The provider's reports arrive on their own (2026-11-23). This line says whether they HAVE: a
+  // verified POST writes `mail_events_last`, and `last_event_at` carries its date back here. Nobody
+  // pastes anything — the fleet registers the three event types per sending domain.
   api('/settings/do-not-mail/webhook').then(d=>{
-    const el=c.querySelector('#dnm_hook');
+    const el=c.querySelector('#dnm_hook'), st=c.querySelector('#dnm_hook_status');
     if(!el)return;
-    if(!d||!d.url){el.textContent='Could not read the address';el.style.color='#b91c1c';return}
+    if(!d||!d.url){el.textContent='Could not read the address';el.style.color='#b91c1c';if(st){st.textContent='The delivery-events address could not be read just now. Reload this screen to try again.';st.style.color='#b91c1c'}return}
     el.textContent=d.url;
     el.style.color='';
+    if(st){
+      st.style.color='';
+      if(d.last_event_at){
+        let when=d.last_event_at;
+        try{when=new Date(d.last_event_at).toLocaleString()}catch(e){}
+        st.textContent='Connected. The mail service sends its problem reports here — the most recent arrived '+when+'. A hard-bounced or complained address joins the list above by itself.';
+      }else{
+        st.textContent='Connected, waiting for its first report. When a message hard-bounces or a recipient marks it as spam, the mail service tells this workspace and the address joins the list above. There is nothing to set up.';
+      }
+    }
     const b=c.querySelector('#dnm_hook_copy');
     if(b)b.onclick=async()=>{
       const m=c.querySelector('#dnm_hook_msg');
