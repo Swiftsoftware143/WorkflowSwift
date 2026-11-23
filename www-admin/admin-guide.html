@@ -1152,6 +1152,20 @@ when it is set.</p>
       sends, under the same heading. They are never invented: an empty box means every surface behaves exactly as it did
       before, and clearing the box and saving puts it back. An ordinary help request never carries them, because it is a
       different receipt, so a customer who wrote in about a password does not receive bank details.</p>
+      <h3 id="raising-the-invoice">Raising the invoice &mdash; and the customer's copy of it</h3>
+      <p>With no card provider connected, the plan request only gets the customer as far as asking. The
+      <strong>Invoices</strong> card on <strong>Plans &amp; Billing</strong> is where the bill is actually raised: pick the
+      workspace, pick the plan it is buying, type the amount (it fills from the plan's own price the moment you choose it,
+      and stays editable for a pro-rata or a one-off), set an optional due date, and press <strong>Raise invoice</strong>.
+      The card keeps the book: what is outstanding, what has been collected, and every row with its plan, amount, due date
+      and status. <strong>Mark paid</strong> stamps the day the money arrived, <strong>Void</strong> cancels a row that was
+      sent in error (the customer still sees it, marked cancelled), and <strong>Reopen</strong> puts one back to awaiting
+      payment. The amount is not editable after it is raised &mdash; an invoice that has been sent can be settled or
+      cancelled, never silently re-priced.</p>
+      <p>The customer sees the same rows on their own <strong>Plan &amp; Billing</strong> screen, under
+      <strong>Invoices</strong>: raised date, plan, amount, due date and whether it is awaiting payment, paid (with the day)
+      or cancelled. Nothing is emailed by raising an invoice, so send the bill yourself by whatever rail your
+      <em>How to pay now</em> words describe; the row is the record both sides can point at.</p>
       <h2 id="mcp-connect-your-ai-tools">MCP &mdash; connect your AI tools</h2>
       <p>Every account can hand its own data to an AI client (Claude Code, Cursor, Hermes or your own agent) over the
       Model Context Protocol. The <strong>MCP</strong> entry sits directly above <strong>Profile</strong> in the console

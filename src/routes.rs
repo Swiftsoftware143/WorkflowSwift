@@ -744,6 +744,21 @@ pub fn create_router(state: AppState) -> Router {
             put(handlers::credit_handler::admin_update_credit_package)
                 .delete(handlers::credit_handler::admin_deactivate_credit_package),
         )
+        // The operator's invoice ledger (2026-11-23). `invoices` and the customer's read door have
+        // existed since migration 010, but nothing could RAISE a row, so a workspace that asked to
+        // buy could not be billed at all while card payments are off. ADASwift (migration 036) and
+        // FunnelSwift (migration 140) already carry this rail; this is the WorkflowSwift side.
+        // Nested under `/api/v1/admin`, so a workspace token is refused like every other admin
+        // route, and each handler states the predicate itself.
+        .route(
+            "/invoices",
+            get(handlers::invoice_handler::admin_list_invoices)
+                .post(handlers::invoice_handler::admin_create_invoice),
+        )
+        .route(
+            "/invoices/{id}",
+            put(handlers::invoice_handler::admin_update_invoice),
+        )
         // Usage dashboard
         .route(
             "/usage",

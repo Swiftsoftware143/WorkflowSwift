@@ -227,7 +227,7 @@ window.appGuidePages = {
   // guide's round "?" silently disappeared on Plan & Billing and on MCP (the same defect
   // earlier passes fixed for lists, calendar, team and branding elsewhere in the fleet).
   // Keys must match the NAV ids in `const NAV` above, which is what the widget matches on.
-  plan:          { title: "Plan & Billing", desc: "Your current plan, what this workspace is using, and the plans this installation offers. Every figure here is the server's own count, read fresh each visit. When card payment is not switched on for the installation, a plan button records your request for our team instead of opening a payment page \u2014 nothing is ever charged from this screen.", actions: ["Check which plan this workspace is on", "Read your usage counts against the plan's allowance", "Press a plan to request it, or open its payment page when one is set", "See every payment this workspace attempted in Payment history"] },
+  plan:          { title: "Plan & Billing", desc: "Your current plan, what this workspace is using, and the plans this installation offers. Every figure here is the server's own count, read fresh each visit. When card payment is not switched on for the installation, a plan button records your request for our team instead of opening a payment page \u2014 nothing is ever charged from this screen.", actions: ["Check which plan this workspace is on", "Read your usage counts against the plan's allowance", "Press a plan to request it, or open its payment page when one is set", "See every payment this workspace attempted in Payment history", "Read the invoices our team has raised for this workspace, and which of them are paid"] },
   mcp:           { title: "MCP", desc: "Connects an AI tool \u2014 Claude Code, Cursor or your own agent \u2014 to read this workspace. Read-only: the tool can look, not change. The server accepts this workspace's API key as its token, so the key on this screen is the same one the API Keys screen shows.", actions: ["Copy the endpoint into your AI tool's MCP settings", "Create a key on API Keys if this workspace has none yet", "Press Reveal to see the key, or Regenerate to replace one you think leaked \u2014 any client still using the old key stops"] },
   dashboard:     { title: "Dashboard", desc: "Your workspace at a glance \u2014 workflows, leads and activity in one place.", actions: ["Scan recent activity", "Jump into a workflow"] },
   inbox:         { title: "Inbox", desc: "Your own addresses on your own domain and the newest mail that reached them. The Recent mail list has a search box that reads the subject, the sender and the opening text of every message; reading and answering happens in the mail client at inbox.workflowswift.com, which is the same account.", actions: ["Add your domain and press Show records", "Press Check again once the records are in DNS", "Create an address and mail to it", "Type in Search subject, sender or text to narrow the recent mail", "Open the mail client to read and answer"] },
@@ -451,6 +451,11 @@ const API = (() => {
     createCheckout: (b) => send(base + '/checkout/create', { method:'POST', headers: headers(), body: JSON.stringify(b) }).then(handle),
   checkoutStatus: () => send(base + '/checkout/status', { headers: headers() }).then(handle),
     listCheckoutSessions: () => send(base + '/checkout/sessions', { headers: headers() }).then(handle),
+    // GET /api/v1/invoices — what the OPERATOR has billed this workspace (2026-11-23). Card
+    // payment is off on this installation, so the invoice IS the bill: the operator raises it from
+    // the admin console after a plan request, and this is the customer's copy of the record. The
+    // handler scopes every row to the caller's own account, so it can only ever return our own.
+    listMyInvoices: () => send(base + '/invoices', { headers: headers() }).then(handle),
     rolloverCredits: () => send(base + '/credits/rollover', { method:'POST', headers: headers(), body: JSON.stringify({}) }).then(handle),
     removeAccountIndustry: (slug) => send(base + '/accounts/industry/' + encodeURIComponent(slug), { method:'DELETE', headers: headers() }).then(handle),
     // --- Prospecting surface: enrich (paid/mocked server-side) + the Hexomatic enrichment key ---
@@ -496,7 +501,7 @@ const API = (() => {
   };
 })();
 
-const S = { view:'login', sessionEnded:false, loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, accLoadFailed:false, accPromise:null, dataVer:0, apiKeys:null, userKeys:null, extBuild:null, hexKey:null, hexKeyInput:'', enrich:null, enriching:null, newApiKey:null, builder:null, steps:null, stepsWf:null, stepValidation:null, stepDraft:null, widgetCat:null, notifyChannels:null, notifyRecipients:null, rendSummary:null, renditions:null, rendWf:'', rendStatus:'active', rendSel:null, stitchName:'', modalErr:null, plans:null, plansTried:false, checkoutStatus:null, checkoutStatusTried:false, checkoutSessions:null, checkoutSessionsTried:false, checkoutMsg:null, checkoutBusy:false, requestForPlan:null, requestPlanBusy:false, requestPlanMsg:null, planReqs:null, planReqsTried:false, planReqWithdrawBusy:false, planReqMsg:null };
+const S = { view:'login', sessionEnded:false, loading:false, error:null, showRegister:false, current:'dashboard', toast:null, modal:null, industries:null, accIndustry:null, widgets:null, widgetsSlug:null, dashboardTabs:null, pickingIndustry:false, pendingView:'app', accLoaded:false, accLoadFailed:false, accPromise:null, dataVer:0, apiKeys:null, userKeys:null, extBuild:null, hexKey:null, hexKeyInput:'', enrich:null, enriching:null, newApiKey:null, builder:null, steps:null, stepsWf:null, stepValidation:null, stepDraft:null, widgetCat:null, notifyChannels:null, notifyRecipients:null, rendSummary:null, renditions:null, rendWf:'', rendStatus:'active', rendSel:null, stitchName:'', modalErr:null, plans:null, plansTried:false, checkoutStatus:null, checkoutStatusTried:false, checkoutSessions:null, checkoutSessionsTried:false, checkoutMsg:null, checkoutBusy:false, requestForPlan:null, requestPlanBusy:false, requestPlanMsg:null, planReqs:null, planReqsTried:false, planReqWithdrawBusy:false, planReqMsg:null, invoices:null, invoicesTried:false };
 
 // Views call their loaders from inside render (the house pattern: `if(!S.x) loadX();`), and
 // every loader calls renderApp() again — a *re-entrant* preact render. The inner render
@@ -1768,6 +1773,7 @@ const PlanView = () => {
   if (!S.planReqsTried) { S.planReqsTried = true; loadPlanRequests(); }
   if (!S.checkoutStatusTried) { S.checkoutStatusTried = true; loadCheckoutStatus(); }
   if (!S.checkoutSessionsTried) { S.checkoutSessionsTried = true; loadCheckoutSessions(); }
+  if (!S.invoicesTried) { S.invoicesTried = true; loadInvoices(); }
   const tiers = (S.plans && (S.plans.plans || S.plans)) || [];
   const curSlug = (S.planCaps && S.planCaps.plan_slug) || '';
   const curName = (S.planCaps && S.planCaps.plan_name) || '';
@@ -1807,6 +1813,7 @@ const PlanView = () => {
       </div>` : ''}
       ${S.usageTried && !S.usage ? html`<div class="card" style="margin-bottom:16px"><p class="text-sm text-gray-600">Your usage figures could not be read just now.</p></div>` : ''}
       ${S.checkoutSessions ? PayHistory() : ''}
+      ${S.invoices ? Invoices() : ''}
       ${(S.checkoutStatus && S.checkoutStatus.can_purchase === false) ? html`<div class="card" id="billing-till-closed" style="margin-bottom:16px;border-left:4px solid #f59e0b"><p class="text-sm text-gray-700"><strong>Card payment is not switched on for this installation yet.</strong> Nothing can be charged here, so the buttons below ask our team to switch your workspace instead of opening a payment page.</p></div>` : ''}
       ${(S.checkoutStatus && String(S.checkoutStatus.payment_instructions || '').trim()) ? html`<div class="card" id="billing-how-to-pay" data-how-to-pay="1" style="margin-bottom:16px;border-left:4px solid #2563eb">
         <h3 class="font-semibold text-gray-800 mb-1">How to pay now</h3>
@@ -1920,6 +1927,43 @@ const PayHistory = () => {
 const loadCheckoutSessions = async () => {
   try { S.checkoutSessions = await API.listCheckoutSessions(); }
   catch (e) { S.checkoutSessions = null; }
+  renderApp();
+};
+// ── INVOICES (2026-11-23) ───────────────────────────────────────────────────────────────────────
+// The customer's own copy of what the operator has billed. Card payment is off on this install, so
+// an invoice IS the bill: the operator raises one from the admin console after a plan request and
+// marks it paid when the money arrives. Nothing is computed here — the amount, the plan name, the
+// due date and the paid date are the row's own values — and a FAILED read paints NOTHING, so an
+// error is never dressed up as "no invoices yet".
+const INV_STATE = { pending: 'Awaiting payment', paid: 'Paid', void: 'Cancelled' };
+const invState = (r) => {
+  const st = String((r && r.status) || '').trim().toLowerCase();
+  const w = INV_STATE[st] || (st ? st.replace(/_/g, ' ') : '—');
+  return (st === 'paid' && r && r.paid_at) ? (w + ' on ' + planReqDate(r.paid_at)) : w;
+};
+const Invoices = () => {
+  const rows = (S.invoices && Array.isArray(S.invoices.invoices)) ? S.invoices.invoices : [];
+  return html`<div class="card" id="my-invoices" data-my-invoices="1" style="margin-bottom:16px">
+    <h3 class="font-semibold text-gray-800 mb-1">Invoices</h3>
+    ${rows.length === 0
+      ? html`<p class="text-sm text-gray-600">No invoices yet. When you ask to switch plans, our team raises the bill here so you have a record of what you owe and what you have paid.</p>`
+      : html`<p class="text-sm text-gray-600">What this workspace has been billed. Newest first.</p>
+        <div style="overflow-x:auto"><table class="mt-3" style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>
+          ${['Raised', 'Plan', 'Amount', 'Due', 'Status'].map(c => html`<th style="text-align:left;padding:6px 8px;border-bottom:1px solid #e2e8f0;color:var(--ink);font-weight:600">${c}</th>`)}
+        </tr></thead><tbody>
+          ${rows.map(r => html`<tr data-invoice-row=${String(r.id || '')}>
+            <td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${planReqDate(r.created_at)}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${String(r.plan_name || 'Plan')}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${payMoney(r)}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${r.due_date ? planReqDate(r.due_date) : '—'}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid #f1f5f9">${invState(r)}</td>
+          </tr>`)}
+        </tbody></table></div>`}
+  </div>`;
+};
+const loadInvoices = async () => {
+  try { S.invoices = await API.listMyInvoices(); }
+  catch (e) { S.invoices = null; }
   renderApp();
 };
 const loadPlans = async () => {
