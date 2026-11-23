@@ -2078,7 +2078,11 @@ function renderPaymentProviders(c){
     :(sealed===true?'<span style="background:#dcfce7;color:#166534;padding:2px 8px;border-radius:9999px;font-size:12px" data-pp="sealed">encrypted</span>'
     :sealed===false?'<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:9999px;font-size:12px" data-pp="plain">in the clear</span>'
     :'<span class="text-gray-400" data-pp="unknown">unknown</span>');
-const PSLOTS=[['stripe','Stripe'],['paypal','PayPal'],['square','Square'],['paddle','Paddle']];
+// ONLY the arms this install can actually charge with (2026-11-23). Square and Paddle were offered
+// here and accepted by the API, sealed, and armable — while `create_checkout_session` matches only
+// `stripe` and `paypal`, so the panel could read "connected" above a till that only ever refused.
+// The server refuses them at the door now; the picker must not offer what the till cannot honour.
+const PSLOTS=[['stripe','Stripe'],['paypal','PayPal']];
   const pname=(p)=>{const i=PSLOTS.findIndex(s=>s[0]===p);return i>=0?PSLOTS[i][1]:(p||'')};
   c.innerHTML='<div class="card"><div class="flex items-center justify-between mb-2"><h2 class="text-xl font-bold">Payment Providers</h2>'
     +'<button class="btn btn-primary btn-sm" id="pp_add">+ Add provider</button></div>'

@@ -125,15 +125,28 @@ pub async fn upsert_payment_provider(
     let provider_type = req
         .get("provider_type")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            AppError::BadRequest(
-                "provider_type is required (stripe, paypal, square, paddle)".into(),
-            )
-        })?;
+        .ok_or_else(|| AppError::BadRequest("provider_type is required (stripe, paypal)".into()))?;
 
-    if !["stripe", "paypal", "square", "paddle"].contains(&provider_type) {
+    // ONLY the arms checkout can actually CHARGE with. Measured live 2026-11-23: `square` and
+    // `paddle` were accepted here, sealed, and could be armed (`is_active = true`) — while
+    // `create_checkout_session` below matches only `stripe` and `paypal`, and the operator's own key
+    // test answers 501 `checkout_not_implemented` for anything else. So the panel read "connected"
+    // above a till that could never take a payment: the operator would paste a real Square key and a
+    // buyer would still be turned away. Refuse at the DOOR, by name, so the reason arrives where the
+    // key is being typed instead of weeks later from a customer.
+    if ["square", "paddle"].contains(&provider_type) {
+        return Err(AppError::BadRequest(format!(
+            "{provider_type} cannot take a payment in WorkflowSwift: checkout has a Stripe arm and a \
+             PayPal arm only, so a {provider_type} key saved here would look connected and still be \
+             refused at the till. Add a Stripe or a PayPal key."
+        )));
+    }
+
+    if !["stripe", "paypal"].contains(&provider_type) {
         return Err(AppError::BadRequest(
-            "Invalid provider_type. Must be stripe, paypal, square, or paddle".into(),
+            "Invalid provider_type. Must be stripe or paypal. A provider this app cannot charge \
+             through is refused here rather than stored as a dead arm."
+                .into(),
         ));
     }
 
