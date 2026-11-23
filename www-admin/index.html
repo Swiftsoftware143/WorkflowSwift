@@ -679,7 +679,7 @@ function content(){
     // a button the API refuses is worse than no button, this file's own rule.
     else if(s==='team')renderCRUD(c,'team','Team Member',['name','email','role','last_login_at'],{list:'/users',create:'/users/invite',del:'/users'},false,{label:'Change role',fn:'teamRoleChange',show:function(it){const r=String((it&&it.role)||'').toLowerCase();if(r!=='team_member'&&r!=='company_admin')return false;if(ME&&ME.id&&String(it.id)===String(ME.id))return false;return true;}});
     else if(s==='plans-credits')renderPlansCredits(c);
-    else if(s==='invoices')renderList(c,'invoices','Invoice','/invoices');
+    else if(s==='invoices')renderInvoicesAdmin(c);
     else if(s==='payments')renderPaymentProviders(c);
     else if(s==='checkout-sessions')renderCheckoutSessions(c);
   }else if(t==='comms'){
@@ -3152,119 +3152,128 @@ async function renderPlansCredits(c){
     };
     drawPacks();
 
-    // ── Invoices (2026-11-23) ────────────────────────────────────────────────────────────────
-    // The operator's invoice ledger. `invoices` and the customer's read door have existed since
-    // migration 010, but nothing in this console could raise a row — so a workspace that asked to
-    // buy could not be billed while card payments are off. Left aligned with ADASwift (036) and
-    // FunnelSwift (140): the operator picks a workspace, a plan and an amount; the customer sees
-    // the row on their own screen; marking it paid stamps the day the money arrived.
-    const invCard=c.querySelector('#invadmin');
-    const invHost=c.querySelector('#invadminhost');
-    if(invCard)invCard.style.display='';
-    const invInput='border rounded px-2 py-1 text-sm';
-    const money=v=>'$'+Number(v||0).toFixed(2);
-    const drawInvoices=async()=>{
-      if(!invHost)return;
-      invHost.innerHTML='<p class="text-gray-400 text-sm">Loading...</p>';
-      const [book,accs,cat2]=await Promise.all([api('/admin/invoices'),api('/admin/accounts'),api('/plans')]);
-      if(!book||!Array.isArray(book.invoices)){
-        invHost.innerHTML='<p class="text-red-400 text-sm">Could not load the invoices'+(LAST_ERR?': '+escHtml(LAST_ERR):'')+'</p>';
-        return;
-      }
-      const rows=book.invoices;
-      const accounts=(accs&&Array.isArray(accs.accounts))?accs.accounts:[];
-      const plans=(cat2&&Array.isArray(cat2.plans))?cat2.plans:[];
-      const due=rows.filter(r=>r.status==='pending').reduce((s,r)=>s+Number(r.amount||0),0);
-      const paid=rows.filter(r=>r.status==='paid').reduce((s,r)=>s+Number(r.amount||0),0);
-      const badge=r=>r.status==='paid'?'<span class="badge badge-green">Paid</span>'
-        :(r.status==='void'?'<span class="badge" style="background:#fee2e2;color:#991b1b">Void</span>'
-        :'<span class="badge">Pending</span>');
-      const day=v=>v?String(v).slice(0,10):'—';
-      let html='<div class="text-sm text-gray-600 mb-3">Outstanding <strong>'+money(due)+'</strong> · collected <strong>'+money(paid)+'</strong> · '+rows.length+' invoice'+(rows.length===1?'':'s')+'</div>';
-      if(!rows.length){
-        html+='<p class="text-gray-400 text-sm">No invoices yet. Raise one below for a workspace that asked to buy.</p>';
-      }else{
-        html+='<table class="table"><thead><tr><th>Workspace</th><th>Plan</th><th>Amount</th><th>Status</th><th>Due</th><th>Raised</th><th></th></tr></thead><tbody>'
-          +rows.map(r=>'<tr data-inv="'+escHtml(r.id)+'">'
-            +'<td>'+escHtml(r.account_name||'—')+'</td>'
-            +'<td>'+escHtml(r.plan_name||'—')+'</td>'
-            +'<td class="font-semibold">'+money(r.amount)+'</td>'
-            +'<td>'+badge(r)+(r.paid_at?'<span class="text-xs text-gray-500 ml-2">'+day(r.paid_at)+'</span>':'')+'</td>'
-            +'<td>'+day(r.due_date)+'</td>'
-            +'<td class="text-xs text-gray-500">'+day(r.created_at)+'</td>'
-            +'<td class="text-right whitespace-nowrap">'
-              +(r.status!=='paid'?'<button class="btn btn-sm btn-primary" data-invpaid="'+escHtml(r.id)+'">Mark paid</button> ':'')
-              +(r.status!=='void'?'<button class="btn btn-sm" data-invvoid="'+escHtml(r.id)+'">Void</button> ':'')
-              +(r.status!=='pending'?'<button class="btn btn-sm" data-invreopen="'+escHtml(r.id)+'">Reopen</button>':'')
-            +'</td></tr>').join('')
-          +'</tbody></table>';
-      }
-      html+='<div class="flex flex-wrap items-end gap-3 mt-4 pt-4 border-t">'
-        +'<div><label class="block text-xs text-gray-500 mb-1">Workspace</label><select id="inv_new_account" class="'+invInput+'" style="min-width:220px">'
-          +'<option value="">Choose a workspace…</option>'
-          +accounts.map(a=>'<option value="'+escHtml(a.id)+'">'+escHtml(a.name||a.id)+'</option>').join('')
-        +'</select></div>'
-        +'<div><label class="block text-xs text-gray-500 mb-1">Plan</label><select id="inv_new_plan" class="'+invInput+'" style="min-width:180px">'
-          +'<option value="">Choose a plan…</option>'
-          +plans.map(p=>'<option value="'+escHtml(p.id)+'" data-price="'+escHtml(String(p.price_monthly!=null?p.price_monthly:p.price||0))+'">'+escHtml(p.name||'')+' — '+money(p.price_monthly!=null?p.price_monthly:p.price)+'</option>').join('')
-        +'</select></div>'
-        +'<div><label class="block text-xs text-gray-500 mb-1">Amount ($)</label><input id="inv_new_amount" class="'+invInput+'" type="number" min="0.01" step="0.01" style="width:120px"></div>'
-        +'<div><label class="block text-xs text-gray-500 mb-1">Due date</label><input id="inv_new_due" class="'+invInput+'" type="date"></div>'
-        +'<button class="btn btn-primary btn-sm" id="inv_add">Raise invoice</button>'
-      +'</div>';
-      invHost.innerHTML=html;
-      invHost.querySelectorAll('button[data-invpaid]').forEach(b=>{
-        b.onclick=async()=>{
-          b.disabled=true; b.textContent='Saving…';
-          const r=await api('/admin/invoices/'+encodeURIComponent(b.getAttribute('data-invpaid')),{method:'PUT',body:JSON.stringify({status:'paid'})});
-          if(r){showMsg('Invoice marked paid','success');drawInvoices();}
-          else{showMsg('Could not save: '+(LAST_ERR||'unknown error'),'error');b.disabled=false;b.textContent='Mark paid';}
-        };
-      });
-      invHost.querySelectorAll('button[data-invvoid]').forEach(b=>{
-        b.onclick=async()=>{
-          if(!confirm('Void this invoice? The customer still sees the row, marked void.'))return;
-          b.disabled=true; b.textContent='Voiding…';
-          const r=await api('/admin/invoices/'+encodeURIComponent(b.getAttribute('data-invvoid')),{method:'PUT',body:JSON.stringify({status:'void'})});
-          if(r){showMsg('Invoice voided','success');drawInvoices();}
-          else{showMsg('Could not void: '+(LAST_ERR||'unknown error'),'error');b.disabled=false;b.textContent='Void';}
-        };
-      });
-      invHost.querySelectorAll('button[data-invreopen]').forEach(b=>{
-        b.onclick=async()=>{
-          b.disabled=true; b.textContent='Reopening…';
-          const r=await api('/admin/invoices/'+encodeURIComponent(b.getAttribute('data-invreopen')),{method:'PUT',body:JSON.stringify({status:'pending'})});
-          if(r){showMsg('Invoice reopened','success');drawInvoices();}
-          else{showMsg('Could not reopen: '+(LAST_ERR||'unknown error'),'error');b.disabled=false;b.textContent='Reopen';}
-        };
-      });
-      const planSel=invHost.querySelector('#inv_new_plan');
-      const amtEl=invHost.querySelector('#inv_new_amount');
-      if(planSel&&amtEl)planSel.onchange=()=>{
-        const opt=planSel.options[planSel.selectedIndex];
-        const p=opt?String(opt.getAttribute('data-price')||''):'';
-        if(p&&!(Number(amtEl.value)>0))amtEl.value=Number(p).toFixed(2);
-      };
-      const addBtn=invHost.querySelector('#inv_add');
-      if(addBtn)addBtn.onclick=async()=>{
-        const account=(invHost.querySelector('#inv_new_account').value||'').trim();
-        const plan=(planSel?planSel.value:'').trim();
-        const amount=(amtEl?amtEl.value:'').trim();
-        const dueV=(invHost.querySelector('#inv_new_due').value||'').trim();
-        if(!account){showMsg('Choose the workspace this invoice is for','error');return;}
-        if(!plan){showMsg('Choose the plan this invoice covers','error');return;}
-        if(!(Number(amount)>0)){showMsg('Enter an amount above zero','error');return;}
-        addBtn.disabled=true; addBtn.textContent='Raising…';
-        const r=await api('/admin/invoices',{method:'POST',body:JSON.stringify({account_id:account,plan_id:plan,amount:amount,due_date:dueV})});
-        if(r){showMsg('Invoice raised — the customer sees it on their Plan screen','success');drawInvoices();}
-        else{showMsg('Could not raise it: '+(LAST_ERR||'unknown error'),'error');addBtn.disabled=false;addBtn.textContent='Raise invoice';}
-      };
-    };
-    drawInvoices();
   }
 
   const cr=await api('/credits/balance');
   c.querySelector('#crdata').innerHTML='<div class="text-center py-4"><div class="text-4xl font-bold text-blue-600">'+escHtml((cr&&cr.balance)||0)+'</div><div class="text-xs text-gray-500 mt-1">credits remaining</div></div>';
+}
+
+// INVOICES — the operator's ledger, on its own screen (2026-11-23). The nav has carried an
+// `Invoices` item under Profile & Account since the console shipped, wired to the TENANT-scoped
+// `/invoices` through the generic list renderer: it showed the operator's OWN account (empty)
+// and each row as a truncated JSON blob. Card payment is off on this install, so the operator's
+// ledger IS the till — it belongs on the screen the nav already names.
+function renderInvoicesAdmin(c){
+  c.innerHTML=`<div class="card"><h2 class="text-xl font-bold mb-1">Invoices</h2><p class="text-sm text-gray-500 mb-4">What a customer owes while card payments are off. Raise one here for a workspace that asked to buy; the customer sees it on their own Plan screen, and marking it paid records the day the money arrived.</p><div id="invadminhost"><p class="text-gray-400 text-sm">Loading...</p></div></div>`;
+  // ── Invoices (2026-11-23) ────────────────────────────────────────────────────────────────
+  // The operator's invoice ledger. `invoices` and the customer's read door have existed since
+  // migration 010, but nothing in this console could raise a row — so a workspace that asked to
+  // buy could not be billed while card payments are off. Left aligned with ADASwift (036) and
+  // FunnelSwift (140): the operator picks a workspace, a plan and an amount; the customer sees
+  // the row on their own screen; marking it paid stamps the day the money arrived.
+  const invCard=c.querySelector('#invadmin');
+  const invHost=c.querySelector('#invadminhost');
+  if(invCard)invCard.style.display='';
+  const invInput='border rounded px-2 py-1 text-sm';
+  const money=v=>'$'+Number(v||0).toFixed(2);
+  const drawInvoices=async()=>{
+    if(!invHost)return;
+    invHost.innerHTML='<p class="text-gray-400 text-sm">Loading...</p>';
+    const [book,accs,cat2]=await Promise.all([api('/admin/invoices'),api('/admin/accounts'),api('/plans')]);
+    if(!book||!Array.isArray(book.invoices)){
+      invHost.innerHTML='<p class="text-red-400 text-sm">Could not load the invoices'+(LAST_ERR?': '+escHtml(LAST_ERR):'')+'</p>';
+      return;
+    }
+    const rows=book.invoices;
+    const accounts=(accs&&Array.isArray(accs.accounts))?accs.accounts:[];
+    const plans=(cat2&&Array.isArray(cat2.plans))?cat2.plans:[];
+    const due=rows.filter(r=>r.status==='pending').reduce((s,r)=>s+Number(r.amount||0),0);
+    const paid=rows.filter(r=>r.status==='paid').reduce((s,r)=>s+Number(r.amount||0),0);
+    const badge=r=>r.status==='paid'?'<span class="badge badge-green">Paid</span>'
+      :(r.status==='void'?'<span class="badge" style="background:#fee2e2;color:#991b1b">Void</span>'
+      :'<span class="badge">Pending</span>');
+    const day=v=>v?String(v).slice(0,10):'—';
+    let html='<div class="text-sm text-gray-600 mb-3">Outstanding <strong>'+money(due)+'</strong> · collected <strong>'+money(paid)+'</strong> · '+rows.length+' invoice'+(rows.length===1?'':'s')+'</div>';
+    if(!rows.length){
+      html+='<p class="text-gray-400 text-sm">No invoices yet. Raise one below for a workspace that asked to buy.</p>';
+    }else{
+      html+='<table class="table"><thead><tr><th>Workspace</th><th>Plan</th><th>Amount</th><th>Status</th><th>Due</th><th>Raised</th><th></th></tr></thead><tbody>'
+        +rows.map(r=>'<tr data-inv="'+escHtml(r.id)+'">'
+          +'<td>'+escHtml(r.account_name||'—')+'</td>'
+          +'<td>'+escHtml(r.plan_name||'—')+'</td>'
+          +'<td class="font-semibold">'+money(r.amount)+'</td>'
+          +'<td>'+badge(r)+(r.paid_at?'<span class="text-xs text-gray-500 ml-2">'+day(r.paid_at)+'</span>':'')+'</td>'
+          +'<td>'+day(r.due_date)+'</td>'
+          +'<td class="text-xs text-gray-500">'+day(r.created_at)+'</td>'
+          +'<td class="text-right whitespace-nowrap">'
+            +(r.status!=='paid'?'<button class="btn btn-sm btn-primary" data-invpaid="'+escHtml(r.id)+'">Mark paid</button> ':'')
+            +(r.status!=='void'?'<button class="btn btn-sm" data-invvoid="'+escHtml(r.id)+'">Void</button> ':'')
+            +(r.status!=='pending'?'<button class="btn btn-sm" data-invreopen="'+escHtml(r.id)+'">Reopen</button>':'')
+          +'</td></tr>').join('')
+        +'</tbody></table>';
+    }
+    html+='<div class="flex flex-wrap items-end gap-3 mt-4 pt-4 border-t">'
+      +'<div><label class="block text-xs text-gray-500 mb-1">Workspace</label><select id="inv_new_account" class="'+invInput+'" style="min-width:220px">'
+        +'<option value="">Choose a workspace…</option>'
+        +accounts.map(a=>'<option value="'+escHtml(a.id)+'">'+escHtml(a.name||a.id)+'</option>').join('')
+      +'</select></div>'
+      +'<div><label class="block text-xs text-gray-500 mb-1">Plan</label><select id="inv_new_plan" class="'+invInput+'" style="min-width:180px">'
+        +'<option value="">Choose a plan…</option>'
+        +plans.map(p=>'<option value="'+escHtml(p.id)+'" data-price="'+escHtml(String(p.price_monthly!=null?p.price_monthly:p.price||0))+'">'+escHtml(p.name||'')+' — '+money(p.price_monthly!=null?p.price_monthly:p.price)+'</option>').join('')
+      +'</select></div>'
+      +'<div><label class="block text-xs text-gray-500 mb-1">Amount ($)</label><input id="inv_new_amount" class="'+invInput+'" type="number" min="0.01" step="0.01" style="width:120px"></div>'
+      +'<div><label class="block text-xs text-gray-500 mb-1">Due date</label><input id="inv_new_due" class="'+invInput+'" type="date"></div>'
+      +'<button class="btn btn-primary btn-sm" id="inv_add">Raise invoice</button>'
+    +'</div>';
+    invHost.innerHTML=html;
+    invHost.querySelectorAll('button[data-invpaid]').forEach(b=>{
+      b.onclick=async()=>{
+        b.disabled=true; b.textContent='Saving…';
+        const r=await api('/admin/invoices/'+encodeURIComponent(b.getAttribute('data-invpaid')),{method:'PUT',body:JSON.stringify({status:'paid'})});
+        if(r){showMsg('Invoice marked paid','success');drawInvoices();}
+        else{showMsg('Could not save: '+(LAST_ERR||'unknown error'),'error');b.disabled=false;b.textContent='Mark paid';}
+      };
+    });
+    invHost.querySelectorAll('button[data-invvoid]').forEach(b=>{
+      b.onclick=async()=>{
+        if(!confirm('Void this invoice? The customer still sees the row, marked void.'))return;
+        b.disabled=true; b.textContent='Voiding…';
+        const r=await api('/admin/invoices/'+encodeURIComponent(b.getAttribute('data-invvoid')),{method:'PUT',body:JSON.stringify({status:'void'})});
+        if(r){showMsg('Invoice voided','success');drawInvoices();}
+        else{showMsg('Could not void: '+(LAST_ERR||'unknown error'),'error');b.disabled=false;b.textContent='Void';}
+      };
+    });
+    invHost.querySelectorAll('button[data-invreopen]').forEach(b=>{
+      b.onclick=async()=>{
+        b.disabled=true; b.textContent='Reopening…';
+        const r=await api('/admin/invoices/'+encodeURIComponent(b.getAttribute('data-invreopen')),{method:'PUT',body:JSON.stringify({status:'pending'})});
+        if(r){showMsg('Invoice reopened','success');drawInvoices();}
+        else{showMsg('Could not reopen: '+(LAST_ERR||'unknown error'),'error');b.disabled=false;b.textContent='Reopen';}
+      };
+    });
+    const planSel=invHost.querySelector('#inv_new_plan');
+    const amtEl=invHost.querySelector('#inv_new_amount');
+    if(planSel&&amtEl)planSel.onchange=()=>{
+      const opt=planSel.options[planSel.selectedIndex];
+      const p=opt?String(opt.getAttribute('data-price')||''):'';
+      if(p&&!(Number(amtEl.value)>0))amtEl.value=Number(p).toFixed(2);
+    };
+    const addBtn=invHost.querySelector('#inv_add');
+    if(addBtn)addBtn.onclick=async()=>{
+      const account=(invHost.querySelector('#inv_new_account').value||'').trim();
+      const plan=(planSel?planSel.value:'').trim();
+      const amount=(amtEl?amtEl.value:'').trim();
+      const dueV=(invHost.querySelector('#inv_new_due').value||'').trim();
+      if(!account){showMsg('Choose the workspace this invoice is for','error');return;}
+      if(!plan){showMsg('Choose the plan this invoice covers','error');return;}
+      if(!(Number(amount)>0)){showMsg('Enter an amount above zero','error');return;}
+      addBtn.disabled=true; addBtn.textContent='Raising…';
+      const r=await api('/admin/invoices',{method:'POST',body:JSON.stringify({account_id:account,plan_id:plan,amount:amount,due_date:dueV})});
+      if(r){showMsg('Invoice raised — the customer sees it on their Plan screen','success');drawInvoices();}
+      else{showMsg('Could not raise it: '+(LAST_ERR||'unknown error'),'error');addBtn.disabled=false;addBtn.textContent='Raise invoice';}
+    };
+  };
+  drawInvoices();
 }
 
 function renderList(c,key,label,ep){
