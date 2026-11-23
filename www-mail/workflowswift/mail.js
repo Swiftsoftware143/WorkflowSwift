@@ -279,7 +279,7 @@
       + '<div class="card"><h3>5. Create your mailboxes</h3>'
       + '<p style="color:var(--muted);margin-top:0">An address people can write to. Your 30 free days start at the first mailbox you create — not at signup, so the days you spend waiting on DNS cost you nothing:</p>'
       + '<ul style="margin:0 0 10px 18px;color:var(--muted)"><li><strong>info@</strong> — enquiries from the public</li>'
-      + '<li><strong>support@</strong> — customers who need help (this one also opens a ticket in your CRM)</li>'
+      + '<li><strong>support@</strong> — customers who need help</li>'
       + '<li>a personal one, such as your own name</li></ul>'
       + (signedIn && S.boxes.length
         ? '<div>' + S.boxes.map(function (b) {
@@ -718,10 +718,12 @@
       + (S.counts.ai_summary ? '<button class="btn btn-ghost" data-act="summarize">Summarise</button>' : '')
       + '<select id="mAssign" style="width:auto">' + assignOpts + '</select>'
       + '</div>'
+      // No "Turn into a ticket" button here: this reader has no per-message ticket route
+      // (src/private_email/mod.rs serves none), so the button POSTed a URL the server has never
+      // answered and every press was a 404. The badge still reports a ticket when a message has one.
       + (m.is_ticket
         ? '<div class="badge ticket"><span>In your CRM work queue as a ticket.</span></div>'
-        : '<div class="badge open"><span>In the inbox only — nobody is working this yet.</span>'
-          + '<button class="btn" data-act="ticket">Turn into a ticket</button></div>')
+        : '<div class="badge open"><span>In the inbox only — nobody is working this yet.</span></div>')
       + '<div id="mSummary"></div>'
       + '<div style="margin:6px 0 10px"><div style="font-size:11px;color:var(--muted);margin-bottom:4px">Labels</div><div id="mLabelBox"></div></div>'
       + '<div class="body">' + esc(m.body_plain || '(no text)') + '</div>'
