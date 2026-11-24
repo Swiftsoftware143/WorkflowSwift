@@ -1178,6 +1178,10 @@ when it is set.</p>
       <strong>Invoices</strong>: raised date, plan, amount, due date and whether it is awaiting payment, paid (with the day)
       or cancelled. Nothing is emailed by raising an invoice, so send the bill yourself by whatever rail your
       <em>How to pay now</em> words describe; the row is the record both sides can point at.</p>
+      <p>An invoice is never deleted. When a workspace is erased its invoices are kept for tax purposes and
+      detached from it, so the row stays in your book with its plan, amount, dates and status, and the Workspace
+      cell reads <strong>Workspace erased / invoice retained</strong> instead of a name. Marking such a row paid,
+      or voiding it, works exactly as it does for any other invoice.</p>
       <h2 id="mcp-connect-your-ai-tools">MCP &mdash; connect your AI tools</h2>
       <p>Every account can hand its own data to an AI client (Claude Code, Cursor, Hermes or your own agent) over the
       Model Context Protocol. The <strong>MCP</strong> entry sits directly above <strong>Profile</strong> in the console
