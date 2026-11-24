@@ -265,24 +265,17 @@ async fn owned_address(pool: &PgPool, address: &str) -> bool {
     .is_some()
 }
 
-/// GET /api/v1/settings/do-not-mail/webhook — the URL the operator pastes into the provider.
+/// GET /api/v1/settings/do-not-mail/webhook — where the provider's problem reports arrive.
+///
+/// The capability URL is OPERATOR-ONLY: a POST to it suppresses an address, so a workspace must
+/// never hold it. The STATUS is not operator business — the safety net that stops mail to a
+/// bounced address belongs to the workspace it protects — so any authenticated caller is told
+/// whether reports are arriving and only the address itself is withheld. Refusing the whole route
+/// to a non-operator made the console paint a red "could not be read, reload and try again" fault
+/// on the Do not mail card of a perfectly healthy workspace (measured 2026-11-24: a fresh signup
+/// got `403 only an operator can read the mail-events address`), which points a customer at a
+/// server fault that does not exist. Same shape as IncentiveSwift 7211d5eb and FunnelSwift 79c32e7.
 pub async fn webhook_url(State(state): State<AppState>, auth: AuthUser) -> Response {
-    if !auth.is_admin {
-        return refusal(
-            StatusCode::FORBIDDEN,
-            "only an operator can read the mail-events address",
-        );
-    }
-    let token = match token(&state.pool).await {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::error!("could not read the mail-events token: {e}");
-            return refusal(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "could not read the events token",
-            );
-        }
-    };
     // WHEN the provider last reported something. The console shows this instead of asking a customer
     // to paste the address into a provider they do not control — the provider is ours, and the fleet
     // registers these three event types per sending domain. A read failure answers `null`, which the
@@ -294,10 +287,29 @@ pub async fn webhook_url(State(state): State<AppState>, auth: AuthUser) -> Respo
     .await
     .ok()
     .flatten();
-    Json(json!({
-        "url": format!("{}/api/v1/webhooks/mailgun/events/{token}", crate::branding::APP_URL),
+    let mut body = json!({
+        "operator": auth.is_admin,
+        "url": Value::Null,
         "events": ["permanent_fail", "complained", "unsubscribed"],
         "last_event_at": last_event_at,
-    }))
-    .into_response()
+    });
+    // The token is minted/read ONLY for the caller allowed to see the address, so a member neither
+    // creates the secret nor learns whether one exists.
+    if auth.is_admin {
+        let token = match token(&state.pool).await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::error!("could not read the mail-events token: {e}");
+                return refusal(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "could not read the events token",
+                );
+            }
+        };
+        body["url"] = json!(format!(
+            "{}/api/v1/webhooks/mailgun/events/{token}",
+            crate::branding::APP_URL
+        ));
+    }
+    Json(body).into_response()
 }

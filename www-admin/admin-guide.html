@@ -584,6 +584,18 @@ when it is set.</p>
       comma cannot shift the columns. A read that fails answers an error &mdash; never an empty file,
       which would read as &ldquo;nobody has opted out&rdquo;. Super-admin only.</td>
       </tr>
+      <tr>
+      <td><code>/api/v1/settings/do-not-mail/webhook</code></td>
+      <td>GET</td>
+      <td>Whether the provider&rsquo;s bounce and complaint reports are actually arriving at this
+      installation, read by the <em>Bounces and complaints report themselves</em> line on the Do not mail
+      card. Any signed-in caller is answered
+      <code>{"operator", "url", "events", "last_event_at"}</code>, so a workspace member sees
+      <em>Connected</em> (or <em>waiting for its first report</em>) with no address row. The address itself
+      is a capability URL &mdash; a POST to it suppresses a customer&rsquo;s mail &mdash; so <code>url</code>
+      is filled in for a super admin only and is <code>null</code> for everyone else; a <code>null</code>
+      address is a policy answer, not a failed read.</td>
+      </tr>
       </tbody>
       </table>
       <p>A tenant (<code>accounts</code>) carries ONE identifier: <code>account_slug</code>, NOT NULL UNIQUE (<code>tenants_slug_key</code>),

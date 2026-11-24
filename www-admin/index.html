@@ -3482,7 +3482,10 @@ function renderAdminSettings(c){
    // screen for support only.
    +'<div class="mt-4 pt-3" style="border-top:1px solid #e5e7eb"><p class="text-xs font-medium text-gray-600 mb-1">Bounces and complaints report themselves</p>'
    +'<p class="text-xs text-gray-500 mb-2" id="dnm_hook_status">Checking whether the mail service has reported anything&hellip;</p>'
-   +'<div class="flex items-center gap-2 flex-wrap"><span class="text-xs text-gray-400">For support, the address the mail service posts to is</span><code id="dnm_hook" class="text-xs font-mono" style="word-break:break-all">Reading...</code>'
+   // The address row is the OWNER's line only: the handler answers the safety-net STATUS to every
+   // caller but withholds the capability URL from a non-operator, so this row is built by the
+   // renderer below instead of being painted unconditionally (2026-11-24).
+   +'<div class="flex items-center gap-2 flex-wrap" id="dnm_hook_row" style="display:none"><span class="text-xs text-gray-400" id="dnm_hook_note">For support, the address the mail service posts to is</span><code id="dnm_hook" class="text-xs font-mono" style="word-break:break-all"></code>'
    +'<button class="btn btn-sm btn-ghost" id="dnm_hook_copy" aria-label="Copy the delivery-events address">Copy</button><span id="dnm_hook_msg" class="text-xs"></span></div></div></div>';
 
   // Tag → free account (design §3.3): the master toggle + the in-app entry-plan picker. Both keys
@@ -3630,12 +3633,21 @@ function renderAdminSettings(c){
   // The provider's reports arrive on their own (2026-11-23). This line says whether they HAVE: a
   // verified POST writes `mail_events_last`, and `last_event_at` carries its date back here. Nobody
   // pastes anything — the fleet registers the three event types per sending domain.
+  // A 200 WITHOUT `url` is a legitimate answer, not a failed read (2026-11-24): the handler tells
+  // every caller whether reports are arriving and withholds only the capability address from a
+  // non-operator. Measured live: this card painted 'the address could not be read just now' in red
+  // on a healthy workspace for the app's own signup, pointing a customer at a server fault that
+  // does not exist. The red sentence is now reserved for a read that actually failed.
   api('/settings/do-not-mail/webhook').then(d=>{
     const el=c.querySelector('#dnm_hook'), st=c.querySelector('#dnm_hook_status');
     if(!el)return;
-    if(!d||!d.url){el.textContent='Could not read the address';el.style.color='#b91c1c';if(st){st.textContent='The delivery-events address could not be read just now. Reload this screen to try again.';st.style.color='#b91c1c'}return}
-    el.textContent=d.url;
-    el.style.color='';
+    const row=c.querySelector('#dnm_hook_row'), note=c.querySelector('#dnm_hook_note'), cp=c.querySelector('#dnm_hook_copy');
+    if(!d){
+      el.textContent='';
+      if(row)row.style.display='none';
+      if(st){st.textContent='The mail-report status could not be read just now. Reload this screen to try again — nothing has been changed.';st.style.color='#b91c1c'}
+      return;
+    }
     if(st){
       st.style.color='';
       if(d.last_event_at){
@@ -3646,12 +3658,25 @@ function renderAdminSettings(c){
         st.textContent='Connected, waiting for its first report. When a message hard-bounces or a recipient marks it as spam, the mail service tells this workspace and the address joins the list above. There is nothing to set up.';
       }
     }
-    const b=c.querySelector('#dnm_hook_copy');
-    if(b)b.onclick=async()=>{
-      const m=c.querySelector('#dnm_hook_msg');
-      try{await navigator.clipboard.writeText(d.url);if(m){m.textContent='Copied.';m.style.color='#166534'}}
-      catch(e){if(m){m.textContent='Select the address and copy it.';m.style.color='#64748b'}}
-    };
+    if(row)row.style.display='';
+    if(d.url){
+      el.textContent=d.url;
+      el.style.display='';
+      if(note)note.textContent='For support, the address the mail service posts to is';
+      if(cp)cp.style.display='';
+      if(cp)cp.onclick=async()=>{
+        const m=c.querySelector('#dnm_hook_msg');
+        try{await navigator.clipboard.writeText(d.url);if(m){m.textContent='Copied.';m.style.color='#166534'}}
+        catch(e){if(m){m.textContent='Select the address and copy it.';m.style.color='#64748b'}}
+      };
+    }else{
+      // Withheld on purpose: the address is a capability URL, so only the operator sees it. Say so
+      // in one sentence — never as an error.
+      el.textContent='';
+      el.style.display='none';
+      if(cp)cp.style.display='none';
+      if(note)note.textContent='The exact address the mail service posts to is shown to the platform operator only. Reports reach this list either way — there is nothing here to set up.';
+    }
   });
   const dnmAdd=c.querySelector('#dnm_add'), dnmAddr=c.querySelector('#dnm_addr'), dnmMsg=c.querySelector('#dnm_msg');
   if(dnmAdd)dnmAdd.onclick=async()=>{
