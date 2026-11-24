@@ -40,6 +40,13 @@ base64 = "0.22"
 aes-gcm = "0.10"
 async-trait = "0.1"
 serde_urlencoded = "0.7"
+# The shared MCP door (kanban t_6364d995): JSON-RPC transport, credential contract, tenancy,
+# 404-not-403, audit line, tool registry. PINNED to a rev — a door that changes under this product
+# between builds is not a contract. Do not edit the crate from here; move the rev deliberately.
+mcp-door = { git = "https://github.com/Swiftsoftware143/mcp-door", rev = "15aef65e324c804dc1f3cc6ebe112c0e537aaede" }
+# The door's request path returns an axum 0.7 response body and this app runs axum 0.8; both
+# implement `http_body::Body`, so the module collects the bytes with this and nothing else.
+http-body-util = "0.1"
 
 [dev-dependencies]
 # Tests only: `ServiceExt::oneshot` drives a real Router through the middleware stack. The

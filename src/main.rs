@@ -29,6 +29,8 @@ mod image_store;
 // across sibling apps; the per-app config is `SCHEMA` below).
 mod integration_schema;
 mod login_throttle;
+// The product's own MCP door (kanban t_6364d995) — POST /mcp, built on the shared `mcp-door` crate.
+mod mcp;
 mod models;
 mod n8n_converter;
 mod n8n_provision;

@@ -1453,7 +1453,15 @@ pub fn create_router(state: AppState) -> Router {
         // ── Mailgun inbound delivery (kanban t_473a6895) — the router built above ──────────────
         .merge(mailgun_router)
         .merge(sendgrid_router)
-        .with_state(state)
+        .with_state(state.clone())
+        // ── The product's own MCP door (kanban t_6364d995) — POST /mcp ─────────────────────────
+        // Merged AFTER `with_state` because the door carries its OWN state (the built door, which
+        // holds the tool registry and the audit sink): an already-stated `Router<()>` cannot be
+        // merged with a `Router<AppState>`. The door authenticates with the app's own `api_keys`
+        // resolver on every call and lives outside `/api/v1`, so the default-deny credential
+        // boundary (`auth::route_policy::is_guarded_path`) does not cover it by construction —
+        // which is exactly why the door must answer `401 / -32001` itself, not the boundary.
+        .merge(crate::mcp::router(&state))
 }
 
 // Rewritten 2026-10-22 (cron): this returned a CONSTANT 200 `{"status":"ok"}` - no state,
