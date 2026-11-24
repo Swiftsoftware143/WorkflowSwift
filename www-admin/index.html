@@ -3199,7 +3199,7 @@ function renderInvoicesAdmin(c){
     }else{
       html+='<table class="table"><thead><tr><th>Workspace</th><th>Plan</th><th>Amount</th><th>Status</th><th>Due</th><th>Raised</th><th></th></tr></thead><tbody>'
         +rows.map(r=>'<tr data-inv="'+escHtml(r.id)+'">'
-          +'<td>'+escHtml(r.account_name||'—')+'</td>'
+          +'<td>'+escHtml(r.account_name||(r.aid?'—':'Workspace erased / invoice retained'))+'</td>'
           +'<td>'+escHtml(r.plan_name||'—')+'</td>'
           +'<td class="font-semibold">'+money(r.amount)+'</td>'
           +'<td>'+badge(r)+(r.paid_at?'<span class="text-xs text-gray-500 ml-2">'+day(r.paid_at)+'</span>':'')+'</td>'

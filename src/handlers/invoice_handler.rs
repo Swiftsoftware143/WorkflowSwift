@@ -43,7 +43,14 @@ use crate::AppState;
 #[derive(Debug, Clone, serde::Serialize, FromRow)]
 pub struct InvoiceRow {
     pub id: Uuid,
-    pub aid: Uuid,
+    /// `invoices.aid` is NULLABLE since migration 134 (`account_erasure.sql:61` drops NOT NULL): an
+    /// erasure DETACHES a workspace's invoices and keeps them for tax purposes (`aid -> NULL`), and
+    /// migration 034 renamed the column from `tenant_id`. Decoding it into a bare `Uuid` made the
+    /// operator's whole invoice book answer 500 (`ColumnDecode { index: "aid", source:
+    /// UnexpectedNullError }`) on the 3 rows that hold NULL — the same defect ADASwift's book had
+    /// (fixed there in 7b77860) and the shape gate rule 5g now judges. `None` means the workspace
+    /// was erased and the invoice was retained: the row is still a record, it just has no workspace.
+    pub aid: Option<Uuid>,
     pub plan_id: Uuid,
     /// Joined in on every read. A catalogue may stop listing the plan an old invoice names, and a
     /// row that falls back to "Plan" tells the customer nothing.
