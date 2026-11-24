@@ -82,6 +82,10 @@ pub fn create_router(state: AppState) -> Router {
         // and the handler re-checks the password and the typed word CLOSE itself. Its twin gates
         // are in `login`, `forgot_password` and `reset_password`, which all refuse a closed account.
         .route("/close-account", post(auth::close_account))
+        // The customer's own irreversible erasure (2026-11-24, migration 134). Private like its
+        // neighbours: the account comes from the caller's own token, and the handler re-checks the
+        // password, the typed word DELETE, and refuses a durable API key on this door too.
+        .route("/erase-data", post(auth::erase_data))
         .route("/profile", put(auth::update_profile))
         // Ask to move the caller's OWN sign-in address. The row it writes is `email_changes`
         // (pending), never `users.email` — the address moves only when the NEW mailbox confirms.

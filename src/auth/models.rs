@@ -23,6 +23,12 @@ pub struct Claims {
     /// the switcher shipped, or on an impersonation/API-key token. Switching re-mints with this set.
     #[serde(default)]
     pub wsid: Option<String>,
+    /// TRUE only when the bearer was resolved as an issued API key (`auth::api_key_auth::authenticate`),
+    /// never a session JWT. The erasure and close handlers refuse it, because a durable key that can
+    /// end or wipe an account is exactly the door the fleet standard §4 closes. `#[serde(default)]`
+    /// keeps tokens issued before this field existed decodable — they are all session tokens.
+    #[serde(default)]
+    pub via_api_key: bool,
 }
 
 /// Body of `POST /api/v1/auth/initial-password` — the password a customer whose credentials mail

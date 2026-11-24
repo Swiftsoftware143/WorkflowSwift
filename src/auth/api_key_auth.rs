@@ -338,6 +338,8 @@ pub async fn authenticate(
         iat: now,
         perm_is_super_admin: Some(false),
         wsid: None,
+        // Least privilege, and the flag the destructive doors read: a key is NEVER a session.
+        via_api_key: true,
     })
 }
 

@@ -299,6 +299,10 @@ const API = (() => {
   // sign-in and register calls (no token) still surface the API's own sentence on a 401 — a wrong
   // password must never be read as an expired session.
   const sessionEnded = () => {
+    // The erase/close landing owns this moment (window.__dzDone is set BEFORE the destructive
+    // fetch and kept on success): stay quiet instead of bouncing the customer to the sign-in
+    // screen while the landing is already being drawn.
+    if (window.__dzDone) return;
     token = null; user = null;
     try { sessionStorage.removeItem('wf_token'); sessionStorage.removeItem('wf_user'); } catch (e) { /* storage can be blocked; the in-memory clear still signs the console out */ }
     try { localStorage.removeItem('ws_fs_token'); localStorage.removeItem('token'); localStorage.removeItem('access_token'); } catch (e) {}
@@ -634,6 +638,7 @@ const LoginView = () => {
           <div><label class="label">Email</label><input type="email" class="input" value=${f.email} onInput=${e=>f.email=e.target.value} placeholder="you@company.com" autocomplete="email" required /></div>
           <div><label class="label">Password</label><input type="password" class="input" value=${f.password} onInput=${e=>f.password=e.target.value} placeholder="••••••••" autocomplete="current-password" required /></div>
           ${S.sessionEnded && html`<div class="bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg p-3">Your session ended, so you were signed out. Sign in again to carry on.</div>`}
+          ${S.dzDone && html`<div class="bg-green-50 border border-green-200 text-green-800 text-sm rounded-lg p-3 flex items-center gap-2"><span>✓</span> ${S.dzDone}</div>`}
           ${S.error && html`<div class="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3 flex items-center gap-2"><span>⚠️</span> ${S.error}</div>`}
           <button type="submit" class="btn w-full" disabled=${S.loading}>${S.loading?'Signing in...':'Sign In'}</button>
         </form>
@@ -3263,7 +3268,7 @@ const ProfileView = () => {
     if (!ca.pw) { ca.ok = false; ca.msg = 'Enter your password.'; renderApp(); return; }
     if (String(ca.word || '').trim().toUpperCase() !== 'CLOSE') { ca.ok = false; ca.msg = 'Type CLOSE in the box to confirm.'; renderApp(); return; }
     if (!window.confirm('Close this account? You will be signed out and will not be able to sign in again.')) return;
-    ca.busy = true; ca.msg = ''; ca.ok = false; renderApp();
+    ca.busy = true; ca.msg = ''; ca.ok = false; window.__dzDone = true; renderApp();
     try {
       const r = await fetch('/api/v1/auth/close-account', {
         method: 'POST',
@@ -3282,10 +3287,49 @@ const ProfileView = () => {
       setTimeout(() => { window.location.reload(); }, 1600);
       return;
     } catch (err) {
+      window.__dzDone = false;
       ca.ok = false;
       ca.msg = err.message || 'Could not close the account.';
     }
     ca.busy = false; renderApp();
+  };
+
+  // Delete account and data (2026-11-24, migration 134) — the customer's own IRREVERSIBLE erasure.
+  // The typed word and the password are re-checked by the SERVER; the browser only checks presence,
+  // so a bare API call cannot skip either. Posted with fetch, not API.send, because API.send's
+  // shared 401 arm ends the session — and a successful erase destroys the user row, so the 401 that
+  // follows must not bounce the customer off the landing. `window.__dzDone` is set BEFORE the fetch
+  // and kept on success; the shared 401 arm (sessionEnded) stays quiet while it is set, and the
+  // landing clears the token WITHOUT a <meta http-equiv=refresh> (which cannot be cancelled).
+  const dz = viewState('profile_danger', { armed:false, busy:false, msg:'', ok:false, pw:'', word:'' });
+  const eraseAccount = async () => {
+    if (!dz.pw) { dz.ok = false; dz.msg = 'Enter your password.'; renderApp(); return; }
+    if (String(dz.word || '').trim().toUpperCase() !== 'DELETE') { dz.ok = false; dz.msg = 'Type DELETE in the box to confirm.'; renderApp(); return; }
+    dz.busy = true; dz.msg = ''; dz.ok = false; window.__dzDone = true; renderApp();
+    try {
+      const r = await fetch('/api/v1/auth/erase-data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + API.token },
+        body: JSON.stringify({ password: dz.pw, confirm: String(dz.word || '').trim() })
+      });
+      const t = await r.text(); let d = null; try { d = JSON.parse(t); } catch (_) {}
+      if (!r.ok) throw new Error((d && (d.message || d.error)) || ('Request failed (' + r.status + ')'));
+      dz.busy = false; dz.ok = true;
+      // The user row is gone, so this session is dead. Clear the token WITHOUT a redirect or a
+      // <meta http-equiv=refresh> (it cannot be cancelled), and state what happened on a plain
+      // landing. `window.__dzDone` stays set so no straggler 401 can bounce the landing.
+      API.logout();
+      S.sessionEnded = false;
+      S.dzDone = 'Your account and its data were deleted on ' + new Date().toLocaleString() + '. Billing documents kept for tax were retained. You cannot sign in with this address again.';
+      S.view = 'login'; S.showRegister = false; S.error = null;
+      renderApp();
+      return;
+    } catch (err) {
+      window.__dzDone = false;   // a real refusal still signs the session out normally
+      dz.ok = false;
+      dz.msg = err.message || 'Could not delete the account.';
+    }
+    dz.busy = false; renderApp();
   };
 
   // Ask for a NEW sign-in address (cron 2026-10-18). Nothing on `users` moves here: the server
@@ -3438,19 +3482,44 @@ const ProfileView = () => {
         ${dl.msg ? html`<div id="profile-data-msg" role="status" aria-live="polite" style=${'margin-top:10px;padding:10px 12px;border-radius:10px;font-size:13px;' + (dl.ok ? 'background:#ecfdf5;border:1px solid #a7f3d0;color:var(--ok)' : 'background:#fef2f2;border:1px solid #fecaca;color:var(--danger)')}>${dl.msg}</div>` : ''}
       </div>
 
-      <div class="card" id="profile-close-card">
-        <h2 class="text-base font-bold text-gray-900 mb-1">🚪 Close My Account</h2>
-        <p class="text-sm text-gray-500 mb-4">This ends your sign-in and every API key on the account, and you will not be able to sign in again. Your workflows, runs and history are kept on record and are not deleted, so support can help you if you close it by mistake.</p>
-        ${!ca.armed ? html`<button class="btn-outline text-sm" id="profile-close-arm" style="color:var(--danger);border-color:#fca5a5" onClick=${()=>{ ca.armed = true; ca.msg=''; ca.ok=false; renderApp(); }} disabled=${ca.busy || S.loading}>Close my account</button>` : html`
+      <div class="card" id="profile-danger-zone" style="border:1.5px solid #dc2626;background:rgba(220,38,38,.05)">
+        <h2 class="text-base font-bold mb-1" style="color:#dc2626;display:flex;align-items:center;gap:8px"><span aria-hidden="true">⚠️</span> Danger zone</h2>
+        <p class="text-sm text-gray-500 mb-4">These actions affect this whole account and everyone who signs in to it. Read each one before you press it.</p>
+
+        ${(!ca.armed && !dz.armed) ? html`
+        <div class="flex gap-2 flex-wrap">
+          <button class="btn-outline text-sm" id="danger-cancel-plan" onClick=${()=>{ ca.armed=true; dz.armed=false; ca.msg=''; ca.ok=false; renderApp(); }} disabled=${ca.busy || dz.busy || S.loading}>Cancel plan</button>
+          <button class="btn text-sm" id="danger-erase" style="background:#dc2626;color:#fff;border-color:#dc2626" onClick=${()=>{ dz.armed=true; ca.armed=false; dz.msg=''; dz.ok=false; renderApp(); }} disabled=${ca.busy || dz.busy || S.loading}>Delete account and data</button>
+        </div>
+        <p class="text-xs text-gray-500 mt-3"><strong>Cancel plan</strong> ends your sign-in, every API key and billing, and keeps your data on record so support can restore you. <strong>Delete account and data</strong> destroys the workspace and its data and cannot be undone.</p>
+        ` : ''}
+
+        ${ca.armed ? html`
         <div class="space-y-3">
+          <p class="text-sm text-gray-600">This ends your sign-in, every API key on the account and billing. <strong>Your data is kept</strong> — workflows, runs and history stay on record, so support can help if you close it by mistake.</p>
           <div><label class="label" for="profile-close-password">Your password (proves it is you)</label><input type="password" class="input" id="profile-close-password" autocomplete="current-password" value=${ca.pw} onInput=${e=>{ca.pw=e.target.value; if (ca.msg) { ca.msg=''; ca.ok=false; }}} /></div>
           <div><label class="label" for="profile-close-word">Type CLOSE to confirm</label><input type="text" class="input" id="profile-close-word" autocomplete="off" placeholder="CLOSE" value=${ca.word} onInput=${e=>{ca.word=e.target.value; if (ca.msg) { ca.msg=''; ca.ok=false; }}} /></div>
           <div class="flex gap-2 flex-wrap">
-            <button class="btn text-sm" id="profile-close-do" style="background:#b91c1c;color:#fff" onClick=${closeAccount} disabled=${ca.busy || S.loading}>${ca.busy ? 'Closing your account…' : 'Close my account permanently'}</button>
+            <button class="btn-outline text-sm" id="profile-close-do" onClick=${closeAccount} disabled=${ca.busy || S.loading}>${ca.busy ? 'Cancelling plan…' : 'Cancel plan'}</button>
             <button class="btn-outline text-sm" id="profile-close-cancel" onClick=${()=>{ ca.armed=false; ca.pw=''; ca.word=''; ca.msg=''; ca.ok=false; renderApp(); }} disabled=${ca.busy}>Never mind</button>
           </div>
-        </div>`}
+        </div>` : ''}
+
+        ${dz.armed ? html`
+        <div class="space-y-3">
+          <p class="text-sm text-gray-600">This permanently deletes this workspace and everything in it. <strong>It cannot be undone</strong> and there is no restore.</p>
+          <p class="text-sm text-gray-600"><strong>Deleted:</strong> the workspace, every person who signs in to it, contacts, workflows and their run history, sessions, API keys and uploads.</p>
+          <p class="text-sm text-gray-600"><strong>Kept:</strong> only the billing documents we must keep for tax (your invoices). They are detached from your account; nothing else survives.</p>
+          <div><label class="label" for="danger-password">Your password (proves it is you)</label><input type="password" class="input" id="danger-password" autocomplete="current-password" value=${dz.pw} onInput=${e=>{dz.pw=e.target.value; if (dz.msg) { dz.msg=''; dz.ok=false; }}} /></div>
+          <div><label class="label" for="danger-word">Type DELETE to confirm</label><input type="text" class="input" id="danger-word" autocomplete="off" placeholder="DELETE" value=${dz.word} onInput=${e=>{dz.word=e.target.value; if (dz.msg) { dz.msg=''; dz.ok=false; }}} /></div>
+          <div class="flex gap-2 flex-wrap">
+            <button class="btn text-sm" id="danger-delete" style="background:#dc2626;color:#fff;border-color:#dc2626" onClick=${eraseAccount} disabled=${dz.busy || S.loading || !(dz.pw && String(dz.word || '').trim().toUpperCase() === 'DELETE')}>${dz.busy ? 'Deleting…' : 'Delete permanently'}</button>
+            <button class="btn-outline text-sm" id="danger-cancel" onClick=${()=>{ dz.armed=false; dz.pw=''; dz.word=''; dz.msg=''; dz.ok=false; renderApp(); }} disabled=${dz.busy}>Cancel</button>
+          </div>
+        </div>` : ''}
+
         ${ca.msg ? html`<div id="profile-close-msg" role="status" aria-live="polite" style=${'margin-top:10px;padding:10px 12px;border-radius:10px;font-size:13px;' + (ca.ok ? 'background:#ecfdf5;border:1px solid #a7f3d0;color:var(--ok)' : 'background:#fef2f2;border:1px solid #fecaca;color:var(--danger)')}>${ca.msg}</div>` : ''}
+        ${dz.msg ? html`<div id="danger-msg" role="status" aria-live="polite" style=${'margin-top:10px;padding:10px 12px;border-radius:10px;font-size:13px;' + (dz.ok ? 'background:#ecfdf5;border:1px solid #a7f3d0;color:var(--ok)' : 'background:#fef2f2;border:1px solid #fecaca;color:var(--danger)')}>${dz.msg}</div>` : ''}
       </div>
 
       <div class="card flex gap-2">

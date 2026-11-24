@@ -259,6 +259,7 @@ pub async fn register(
         iat: now_ts,
         perm_is_super_admin: Some(false),
         wsid: None,
+        via_api_key: false,
     };
     let token = create_token(&claims, &state.config.jwt_secret)?;
 
@@ -273,6 +274,7 @@ pub async fn register(
         iat: now_ts,
         perm_is_super_admin: Some(false),
         wsid: None,
+        via_api_key: false,
     };
     let refresh_token = create_token(&refresh_claims, &state.config.jwt_secret)?;
 
@@ -469,6 +471,7 @@ pub async fn login(
         iat: now_ts,
         perm_is_super_admin: Some(user.perm_is_super_admin),
         wsid: None,
+        via_api_key: false,
     };
     let token = create_token(&claims, &state.config.jwt_secret)?;
 
@@ -482,6 +485,7 @@ pub async fn login(
         iat: now_ts,
         perm_is_super_admin: Some(user.perm_is_super_admin),
         wsid: None,
+        via_api_key: false,
     };
     let refresh_token = create_token(&refresh_claims, &state.config.jwt_secret)?;
 
@@ -735,6 +739,7 @@ pub async fn change_password(
         iat: now_ts,
         perm_is_super_admin: Some(user.perm_is_super_admin),
         wsid: None,
+        via_api_key: false,
     };
     let token = create_token(&fresh, &state.config.jwt_secret)?;
 
@@ -800,6 +805,7 @@ pub async fn logout_all(
         iat: now_ts,
         perm_is_super_admin: Some(user.perm_is_super_admin),
         wsid: None,
+        via_api_key: false,
     };
     let token = create_token(&claims, &state.config.jwt_secret)?;
 
@@ -1484,6 +1490,11 @@ pub async fn close_account(
         ));
     }
 
+    // A durable API key is never a session: the fleet standard §4 refuses a key on BOTH doors.
+    if claims.via_api_key {
+        return Err(AppError::Unauthorized);
+    }
+
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
 
     let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = $1 AND is_active = true")
@@ -1590,6 +1601,124 @@ pub async fn close_account(
             "message": "Your account is closed. Every session and API key on it has been ended.",
         })),
     ))
+}
+
+/// The body of `POST /api/v1/auth/erase-data` — the owner's own irreversible decision.
+#[derive(Debug, serde::Deserialize)]
+pub struct EraseDataRequest {
+    pub password: String,
+    /// The word the console asks them to type. Judged HERE as well as in the browser, so a bare API
+    /// call cannot erase an account with one careless request.
+    pub confirm: String,
+}
+
+/// `POST /api/v1/auth/erase-data` — the signed-in owner destroys their account and its data
+/// (2026-11-24, migration 134, fleet standard docs/account-closure-erasure-standard-2026-11-24.md).
+///
+/// `close_account` above records a STATE: the rows stay and support can reopen. Erasure is the other
+/// half and is irreversible. Four proofs are demanded, in order: the typed word DELETE, a SESSION
+/// (never a durable API key — a key must be refused on BOTH doors), the password re-verified against
+/// the stored hash, and ownership (the owner role, or the sole active user). The destruction itself
+/// is delegated to the ONE SQL writer `erase_tenant`, which detaches the billing documents, deletes
+/// child-first, deletes the account row (ending this session and every API key), censuses that
+/// nothing remains, and writes one `account_erasures` audit row.
+pub async fn erase_data(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Json(req): Json<EraseDataRequest>,
+) -> ApiResult<impl IntoResponse> {
+    if !req.confirm.trim().eq_ignore_ascii_case("DELETE") {
+        return Err(AppError::BadRequest(
+            "Type DELETE to confirm erasing the account and its data".to_string(),
+        ));
+    }
+
+    // A durable API key is never a session (fleet standard §4): no issued key may wipe an account.
+    if claims.via_api_key {
+        return Err(AppError::Unauthorized);
+    }
+
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+
+    let user = sqlx::query_as::<_, User>("SELECT * FROM users WHERE id = $1 AND is_active = true")
+        .bind(user_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(AppError::Unauthorized)?;
+
+    // The session's `aid` and the user's own account must agree: a token minted for another account
+    // (impersonation-class credentials) must never be able to erase this person's data.
+    let session_aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    if session_aid != user.aid {
+        return Err(AppError::Forbidden(
+            "This session is not signed in to the account this user belongs to.".to_string(),
+        ));
+    }
+
+    // A platform operator account closes or erases accounts; it is not a customer, and erasing the
+    // install's own account from a dashboard button would take the console away from whoever runs it.
+    if user.role == "admin" || user.role == "super_admin" || user.perm_is_super_admin {
+        return Err(AppError::Forbidden(
+            "A platform operator account cannot be erased from this screen.".to_string(),
+        ));
+    }
+
+    // Ownership: the caller must hold the owner role, OR be the ONLY active user of the account (a
+    // sole non-owner who was never promoted still owns the account in practice).
+    let is_owner = user.role == "company_admin";
+    if !is_owner {
+        let active_users: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE aid = $1 AND is_active = true")
+                .bind(user.aid)
+                .fetch_one(&state.db)
+                .await?;
+        if active_users != 1 {
+            return Err(AppError::Forbidden(
+                "Only the account owner can erase this account.".to_string(),
+            ));
+        }
+    }
+
+    // A stored hash that is not a usable PHC string can verify no password at all: that is the
+    // ordinary refusal, never a 500 naming the internal reason (same rule `change_password` states).
+    if !is_usable_hash(&user.password_hash)
+        || !argon2_verify_result(user.password_hash.clone(), Arc::from(req.password.as_str()))
+            .await?
+    {
+        return Err(AppError::UnauthorizedReason(
+            "Your password is incorrect".to_string(),
+        ));
+    }
+
+    // Irreversible from here. The ONE writer detaches the billing documents, deletes every child,
+    // deletes the account row, censuses that nothing remains, and writes one audit row.
+    let report_text: String = sqlx::query_scalar("SELECT erase_tenant($1, $2, $3)::text")
+        .bind(user.aid)
+        .bind(user_id)
+        .bind(&user.email)
+        .fetch_one(&state.db)
+        .await?;
+    let report: serde_json::Value = serde_json::from_str(&report_text)
+        .map_err(|e| AppError::Internal(format!("erasure report parse: {e}")))?;
+
+    let audit_id = report
+        .get("audit_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_default();
+    let records = report
+        .get("records")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    tracing::info!(
+        user = %user_id,
+        account = %user.aid,
+        audit = %audit_id,
+        records = %records,
+        "account erased: account and its data destroyed, billing documents retained"
+    );
+
+    Ok(Json(report))
 }
 
 pub async fn get_usage(

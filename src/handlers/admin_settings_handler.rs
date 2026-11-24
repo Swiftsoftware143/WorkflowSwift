@@ -2923,6 +2923,7 @@ pub async fn admin_impersonate(
         iat: now,
         perm_is_super_admin: Some(false),
         wsid: None,
+        via_api_key: false,
     };
 
     let token = jsonwebtoken::encode(

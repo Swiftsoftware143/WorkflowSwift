@@ -722,4 +722,99 @@ mod tests {
             34
         );
     }
+
+    /// The customer's erasure door (2026-11-24, migration 134): mounted, and PRIVATE in both
+    /// directions — the account comes from the caller's own token, so an anonymous caller must be
+    /// refused at the boundary, and it must never be treated as an internal door.
+    #[test]
+    fn the_erase_data_route_is_mounted_and_private() {
+        assert!(
+            mounted("/api/v1/auth/erase-data").is_some(),
+            "the erase-data route is not mounted in src/routes.rs"
+        );
+        assert!(!is_public_route("/api/v1/auth/erase-data"));
+        assert!(!is_internal_route("/api/v1/auth/erase-data"));
+    }
+
+    /// Source-level census over the erase handler: every lock the fleet standard §4 demands must be
+    /// present in the handler body, so a future edit that drops one (the typed word, the API-key
+    /// refusal, the admin refusal, the ownership refusal, the password verify, the SQL purge) fails
+    /// this build instead of shipping an erasure door missing a guard.
+    #[test]
+    fn the_erasure_handler_carries_every_lock() {
+        let src = include_str!("handlers.rs");
+        for needle in [
+            "eq_ignore_ascii_case(\"DELETE\")",
+            "via_api_key",
+            "super_admin",
+            "company_admin",
+            "argon2_verify_result",
+            "erase_tenant(",
+        ] {
+            assert!(
+                src.contains(needle),
+                "the erase handler must carry the lock: {needle}"
+            );
+        }
+    }
+
+    /// Source-level census over the migration: the two retention tables must exist, invoices must
+    /// be DETACHED (NOT NULL dropped) rather than deleted, and the census must RAISE on a partial
+    /// purge so success is never reported on a half-erasure.
+    #[test]
+    fn the_erasure_migration_keeps_billing_and_raises() {
+        let src = include_str!("../../migrations/134_account_erasure.sql");
+        for needle in [
+            "erasure_billing_retention",
+            "account_erasures",
+            "DROP NOT NULL",
+            "RAISE EXCEPTION",
+        ] {
+            assert!(src.contains(needle), "the migration must keep: {needle}");
+        }
+        assert!(
+            !src.contains("DELETE FROM invoices"),
+            "invoices are retained (detached), never deleted"
+        );
+    }
+
+    /// This app declares no MCP/API-key tool registry in its source (the fleet MCP server lives
+    /// outside this repo), so no tool name can reach close/erase. The census walks every `.rs` file;
+    /// if a tool registry is ever added, its marker shows up here and the test fails until the
+    /// registry is pinned as not exposing a destructive tool.
+    #[test]
+    fn no_fleet_tool_can_erase() {
+        fn rs_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("read src dir") {
+                let path = entry.expect("dir entry").path();
+                if path.is_dir() {
+                    rs_files(&path, out);
+                } else if path.extension().map(|e| e == "rs").unwrap_or(false) {
+                    out.push(path);
+                }
+            }
+        }
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        rs_files(&src, &mut files);
+        assert!(files.len() > 50, "the census must see a real source tree");
+        let mut offenders = Vec::new();
+        for file in files {
+            // This file is where the marker vocabulary itself lives; it is not a tool registry.
+            if file.to_string_lossy().ends_with("auth/route_policy.rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&file).expect("read source file");
+            for marker in ["register_tool", "tool_registry", "mcp_tools", "MCP_TOOLS"] {
+                if text.contains(marker) {
+                    offenders.push(format!("{}: {}", file.display(), marker));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "this app declares no MCP tool registry; found tool-registry markers at: {}",
+            offenders.join(", ")
+        );
+    }
 }

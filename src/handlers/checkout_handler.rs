@@ -3551,6 +3551,7 @@ mod payment_provider_role_tests {
             iat: 1_799_999_400,
             perm_is_super_admin: perm,
             wsid: None,
+            via_api_key: false,
         }
     }
 

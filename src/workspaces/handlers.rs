@@ -474,6 +474,7 @@ pub async fn switch_workspace(
         perm_is_super_admin: claims.perm_is_super_admin,
         pwd_minted: false,
         wsid: Some(id.to_string()),
+        via_api_key: false,
     };
     let access_token = create_token(&access_claims, &state.config.jwt_secret)?;
 
@@ -486,6 +487,7 @@ pub async fn switch_workspace(
         perm_is_super_admin: claims.perm_is_super_admin,
         pwd_minted: false,
         wsid: Some(id.to_string()),
+        via_api_key: false,
     };
     let refresh_token = create_token(&refresh_claims, &state.config.jwt_secret)?;
 
