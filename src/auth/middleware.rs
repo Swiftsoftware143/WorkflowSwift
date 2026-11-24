@@ -118,11 +118,20 @@ pub async fn auth_middleware(
     Ok(next.run(req).await)
 }
 
-/// Is `aid` a live account?
+/// Is `aid` a live account — present AND not suspended?
 ///
-/// `false` means the credential names a tenant that no longer exists, which is an
-/// authentication failure, not a missing resource: callers must be refused 401, never
-/// allowed to reach a handler that would bind the id into SQL and surface a 500.
+/// Two failures mean the same thing to a caller and must both be refused 401, never allowed to
+/// reach a handler that would bind the id into SQL and surface a 500:
+///
+///   * the tenant row is GONE — the credential names nobody;
+///   * the tenant row is SUSPENDED (`accounts.is_active = false`, the operator's switch written by
+///     `PUT /api/v1/admin/accounts/{id}/active`).
+///
+/// The row-exists-only version of this check made `accounts.is_active` a dead column: signup wrote
+/// it once, nothing read it, and the admin console painted an Active/Inactive badge from a flag no
+/// code could act on (kanban t_7f53bd68, measured by the fleet security sweep). A suspended account
+/// now fails at the ONE boundary every JWT request passes, so the switch takes effect on the very
+/// next request rather than when the customer's token happens to expire.
 ///
 /// `aid` arrives as a string from the token. An unparseable value is treated the same
 /// as a deleted account — either way there is no tenant behind it.
@@ -131,13 +140,12 @@ async fn account_is_live(db: &sqlx::PgPool, aid: &str) -> Result<bool, AppError>
         return Ok(false);
     };
 
-    let exists =
-        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM accounts WHERE id = $1)")
-            .bind(aid)
-            .fetch_one(db)
-            .await?;
+    let active: Option<bool> = sqlx::query_scalar("SELECT is_active FROM accounts WHERE id = $1")
+        .bind(aid)
+        .fetch_optional(db)
+        .await?;
 
-    Ok(exists)
+    Ok(active == Some(true))
 }
 
 /// Does a token's super-admin CLAIM exceed the authority its `users` row still grants?

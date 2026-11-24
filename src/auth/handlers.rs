@@ -448,6 +448,27 @@ pub async fn login(
         ));
     }
 
+    // A SUSPENDED ACCOUNT must not sign in either (kanban t_7f53bd68). `accounts.is_active` is the
+    // operator's suspension switch; the credential boundary refuses that account's sessions and API
+    // keys 401 on the very next request, so letting sign-in succeed would only hand the customer a
+    // token that fails immediately and read as a bug. The password was already proved above, so
+    // naming the state leaks nothing that a correct credential did not already establish.
+    let account_active: Option<bool> =
+        sqlx::query_scalar("SELECT is_active FROM accounts WHERE id = $1")
+            .bind(user.aid)
+            .fetch_optional(&state.db)
+            .await?;
+    if account_active != Some(true) {
+        tracing::warn!(
+            user_id = %user.id,
+            aid = %user.aid,
+            "login refused: account suspended or missing"
+        );
+        return Err(AppError::Forbidden(
+            "This account is suspended. Contact support if you need it reactivated.".to_string(),
+        ));
+    }
+
     // A correct password clears this address's failures, so a customer who mistyped twice
     // inside the window is not left counting down.
     state.login_throttle.clear(&throttle_key);

@@ -1724,6 +1724,103 @@ pub async fn admin_delete_account(
     ))
 }
 
+/// PUT /api/v1/admin/accounts/:id/active — the operator's SUSPENSION switch (kanban t_7f53bd68).
+///
+/// `accounts.is_active` used to be written exactly once (signup) and read by NOTHING: the console
+/// painted an Active/Inactive badge from a flag no credential path consulted, so "suspending" an
+/// account was not an action this app could perform at all. Both credential paths now read the
+/// column — `auth::middleware::account_is_live` for a session and
+/// `auth::api_key_auth::authenticate` for an API key (which is also the MCP door's resolver) — and
+/// `execution_worker` stops advancing queued steps for a suspended account. This route is the one
+/// writer that makes the switch real.
+///
+/// Refused by rule, mirroring the delete arm's refusals because a suspension can break the platform
+/// just as quietly:
+///   * the account you are signed in as (a self-lockout this console could not undo);
+///   * a portfolio company (the operator's own business — suspending it would break its own
+///     sync/tooling across the fleet);
+///   * this app's own workspace (`account_slug = 'workflowswift'`).
+///
+/// Suspending deletes and retains NOTHING, and it does not need to bump
+/// `users.sessions_valid_from`: every request re-reads the account row, so the next call from a live
+/// session or a live API key is refused 401. Reactivating is the same write with `true`; both
+/// directions are idempotent.
+pub async fn admin_set_account_active(
+    State(state): State<AppState>,
+    Extension(claims): Extension<Claims>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<serde_json::Value>,
+) -> ApiResult<impl IntoResponse> {
+    require_admin(&claims)?;
+
+    let want = req
+        .get("is_active")
+        .and_then(|v| v.as_bool())
+        .ok_or_else(|| {
+            AppError::BadRequest(
+                "is_active must be true (reactivate) or false (suspend)".to_string(),
+            )
+        })?;
+
+    if !want && Some(id) == Uuid::parse_str(claims.aid.trim()).ok() {
+        return Err(AppError::Forbidden(
+            "refusing to suspend the account you are signed in as".to_string(),
+        ));
+    }
+
+    let row: Option<(String, String)> =
+        sqlx::query_as("SELECT name, account_slug FROM accounts WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?;
+
+    let (name, slug) = row.ok_or_else(|| AppError::NotFound("Account not found".to_string()))?;
+
+    if !want {
+        let hay = format!("{} {}", name, slug).to_lowercase();
+        if let Some(hit) = PORTFOLIO_ACCOUNT_MARKERS.iter().find(|m| hay.contains(*m)) {
+            return Err(AppError::Forbidden(format!(
+                "refusing to suspend a portfolio company ({})",
+                hit
+            )));
+        }
+        if slug.trim().eq_ignore_ascii_case(PLATFORM_ACCOUNT_SLUG) {
+            return Err(AppError::Forbidden(format!(
+                "refusing to suspend this app's own workspace ({})",
+                PLATFORM_ACCOUNT_SLUG
+            )));
+        }
+    }
+
+    let now_active: bool = sqlx::query_scalar(
+        "UPDATE accounts SET is_active = $2, updated_at = NOW() WHERE id = $1 RETURNING is_active",
+    )
+    .bind(id)
+    .bind(want)
+    .fetch_one(&state.db)
+    .await?;
+
+    tracing::warn!(
+        admin = %claims.sub,
+        account_id = %id,
+        account_slug = %slug,
+        is_active = now_active,
+        "admin changed an account's active flag"
+    );
+
+    Ok(Json(json!({
+        "id": id.to_string(),
+        "name": name,
+        "account_slug": slug,
+        "is_active": now_active,
+        "message": if now_active {
+            "Account reactivated — its users and API keys work again."
+        } else {
+            "Account suspended — every session and API key for it is refused 401, and its queued workflow steps stop advancing."
+        },
+    })))
+}
+
 /// The portfolio accounts are kept by rule (never deleted from any panel): SwiftImpact, ZaarHub
 /// and Giraudy Capital each hold an account in EVERY app, plus whatever the platform itself flags.
 ///

@@ -496,6 +496,22 @@ when it is set.</p>
       press <em>Set plan</em> is the tier's slug, which is what that route takes.</td>
       </tr>
       <tr>
+      <td><code>/api/v1/admin/accounts/{id}/active</code></td>
+      <td>PUT</td>
+      <td><strong>Suspend or reactivate one account.</strong> Body <code>{"is_active":false}</code> suspends,
+      <code>{"is_active":true}</code> reactivates; both are idempotent and nothing is deleted. A suspended
+      account is refused on the very next request wherever it presents a credential: a signed-in user is
+      answered <strong>401</strong> on every route, an API key is answered <strong>401</strong> (so the
+      MCP door answers 401 too, with no tool list), and signing in is refused with <em>&ldquo;This account
+      is suspended&rdquo;</em> rather than handing out a token that would fail immediately. Its queued
+      <em>delay</em>/<em>wait</em> workflow steps stop advancing until it is reactivated (the rows stay
+      pending, not failed, so reactivation resumes the queue). The <strong>Active</strong> column on the
+      Accounts table shows the state and the row&rsquo;s <strong>Suspend</strong>/<strong>Reactivate</strong>
+      button is the control. Refused with <strong>403</strong> for the account you are signed in as, a
+      portfolio company, and this app&rsquo;s own workspace &mdash; the same three the delete arm keeps.
+      Super-admin only.</td>
+      </tr>
+      <tr>
       <td><code>/api/v1/admin/accounts/{id}/resend-credentials</code></td>
       <td>POST</td>
       <td><strong>&ldquo;I never got the email and I can&rsquo;t sign in.&rdquo;</strong> When a signup mints an

@@ -923,6 +923,15 @@ pub fn create_router(state: AppState) -> Router {
             "/accounts/{id}/plan",
             put(handlers::admin_settings_handler::admin_assign_plan),
         )
+        // The operator's SUSPENSION switch (kanban t_7f53bd68). `accounts.is_active` was written by
+        // signup and read by nothing, so the console's Active/Inactive badge described a flag no
+        // credential path consulted; both credential paths enforce it now, and this is the only
+        // writer. PUT because it sets a state (idempotent either direction), not because it mints
+        // anything.
+        .route(
+            "/accounts/{id}/active",
+            put(handlers::admin_settings_handler::admin_set_account_active),
+        )
         // Email templates (admin-only CRUD)
         .route(
             "/email-templates",

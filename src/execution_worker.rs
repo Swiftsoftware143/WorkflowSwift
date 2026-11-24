@@ -81,11 +81,19 @@ async fn tick(state: &AppState, reported: &mut HashSet<Uuid>) -> Result<usize, A
         r#"SELECT s.id, s.instance_id
            FROM workflow_instance_steps s
            JOIN workflow_instances i ON i.id = s.instance_id
+           -- A SUSPENDED ACCOUNT'S QUEUE STOPS (kanban t_7f53bd68). `accounts.is_active` is the
+           -- operator's suspension switch (`PUT /api/v1/admin/accounts/{id}/active`); the
+           -- credential paths refuse a suspended account 401, and this join is the same rule for
+           -- work that was already queued — otherwise a delay step due hours after the suspension
+           -- would still send the customer's mail. The row is left pending (not failed): reactivate
+           -- the account and the queue resumes where it was.
+           JOIN accounts a ON a.id = i.aid
            WHERE s.status = 'pending'
              AND s.step_type IN ('delay', 'wait')
              AND s.due_date IS NOT NULL
              AND s.due_date <= NOW()
              AND i.status NOT IN ('completed', 'failed')
+             AND a.is_active
            ORDER BY s.due_date ASC
            LIMIT $1"#,
     )

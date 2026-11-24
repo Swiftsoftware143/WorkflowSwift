@@ -313,6 +313,23 @@ pub async fn authenticate(
         return Err(AppError::Unauthorized);
     }
 
+    // The OWNING ACCOUNT must not be suspended (kanban t_7f53bd68). `accounts.is_active` is the
+    // operator's suspension switch (`PUT /api/v1/admin/accounts/{id}/active`); the JWT boundary
+    // reads it in `auth::middleware::account_is_live`, and this is the API-key twin so a durable
+    // integration credential cannot keep working while every session for the same workspace is
+    // refused. Both check the SAME column, so the two doors cannot disagree. This resolver is also
+    // the MCP door's credential check (`src/mcp/mod.rs`), so a suspended account loses its tools
+    // on the next call — before this line the door never read `accounts` at all.
+    let account_active: Option<bool> =
+        sqlx::query_scalar("SELECT is_active FROM accounts WHERE id = $1")
+            .bind(aid)
+            .fetch_optional(&state.db)
+            .await?;
+    if account_active != Some(true) {
+        tracing::warn!(key_id = %key_id, %aid, "api key rejected: account suspended or missing");
+        return Err(AppError::Unauthorized);
+    }
+
     // Plan gate: `api_access` off means the account may not use API keys at all.
     features::enforce_plan_flag(&state.db, aid, "api_access", "API access").await?;
 

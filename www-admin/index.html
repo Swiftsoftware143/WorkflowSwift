@@ -4060,7 +4060,7 @@ function renderAdminAccounts(c){
         '<td><span class="badge '+(i.is_active?'bg-green-100 text-green-700':'bg-red-100 text-red-700')+'">'+(i.is_active?'Active':'Inactive')+'</span></td>'+
         '<td class="text-xs">'+lastSignInHtml(i)+'</td>'+
         '<td class="text-xs text-gray-400">'+((i.created_at||'').slice(0,10))+'</td>'+
-        '<td class="text-right">'+(i.user_count===0 && aid ? '<button class="btn btn-sm btn-primary acc-owner" data-acc="'+aid+'" data-name="'+escHtml(String(i.name||''))+'" title="Create the first login for this account and email the details to its owner">Create login</button> ' : '')+(i.owner_credentials_undelivered && aid ? '<button class="btn btn-sm btn-primary acc-resend" data-acc="'+aid+'" data-email="'+escHtml(String(i.owner_email||i.email||''))+'" title="Mint a brand-new password for this account\'s owner and email it">Send login</button> ' : '')+'<button class="btn btn-sm btn-ghost" onclick="event.preventDefault();startImpersonation(\''+aid+'\')">Impersonate</button></td>'+
+        '<td class="text-right">'+(i.user_count===0 && aid ? '<button class="btn btn-sm btn-primary acc-owner" data-acc="'+aid+'" data-name="'+escHtml(String(i.name||''))+'" title="Create the first login for this account and email the details to its owner">Create login</button> ' : '')+(i.owner_credentials_undelivered && aid ? '<button class="btn btn-sm btn-primary acc-resend" data-acc="'+aid+'" data-email="'+escHtml(String(i.owner_email||i.email||''))+'" title="Mint a brand-new password for this account\'s owner and email it">Send login</button> ' : '')+(aid && !i.is_portfolio ? '<button class="btn btn-sm btn-ghost acc-active" data-acc="'+aid+'" data-activate="'+(i.is_active?'0':'1')+'" title="'+(i.is_active?'Suspend this account: every session and every API key for it is refused until you reactivate it. Nothing is deleted and its queued workflow steps stop advancing.':'Reactivate this account: its users and API keys work again, and its queued workflow steps resume.')+'">'+(i.is_active?'Suspend':'Reactivate')+'</button> ' : '')+'<button class="btn btn-sm btn-ghost" onclick="event.preventDefault();startImpersonation(\''+aid+'\')">Impersonate</button></td>'+
       '</tr>'}).join('')+'</tbody></table>';
     const a=el.querySelector('#accAll');
     if(a)a.addEventListener('change',()=>{box().forEach(b=>{b.checked=a.checked});sync()});
@@ -4173,6 +4173,23 @@ function renderAdminAccounts(c){
         if(grey)grey.textContent=mail;
       }
       if(cell)cell.appendChild(note);
+    }));
+    // THE OPERATOR'S SUSPENSION SWITCH (kanban t_7f53bd68). PUT /admin/accounts/{id}/active sets
+    // `accounts.is_active`, the ONE column both credential paths now read: a suspended account's
+    // sessions and API keys are refused 401 on the very next request, and its queued workflow steps
+    // stop advancing. Nothing is deleted, so Reactivate is the exact undo. A portfolio row carries no
+    // button (the backend refuses those by rule) and the button is only rendered when the API gave a
+    // real id.
+    el.querySelectorAll('button.acc-active').forEach(b=>b.addEventListener('click', async ()=>{
+      const aid=b.getAttribute('data-acc'); if(!aid) return;
+      const activate=b.getAttribute('data-activate')==='1';
+      if(!activate && !confirm('Suspend this account? Every signed-in user and every API key for it is refused on the next request. Nothing is deleted, and Reactivate undoes it.')) return;
+      const label=b.textContent; b.disabled=true; b.textContent=activate?'reactivating...':'suspending...';
+      const r=await api('/admin/accounts/'+encodeURIComponent(aid)+'/active',{method:'PUT',body:JSON.stringify({is_active:activate})});
+      b.disabled=false; b.textContent=label;
+      if(!r){ showMsg('Could not change the account: '+(LAST_ERR||'the request failed'),'error'); return; }
+      showMsg(r.message||(activate?'Account reactivated.':'Account suspended.'),'success');
+      load();
     }));
     // The picker: count the probe rows the list actually holds, then tick exactly them.
     const pb=c.querySelector('#accProbes');
