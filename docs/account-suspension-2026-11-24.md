@@ -40,7 +40,7 @@ Sessions do not need a `sessions_valid_from` bump: every request re-reads the ac
 
 ## Live proof (both ways)
 
-`scratch/suspension-proof-t_7f53bd68.py` — **30/30** against https://app.workflowswift.com on a probe
+`scratch/suspension-proof-t_7f53bd68.py` — **32/32** against https://app.workflowswift.com on a probe
 account with a real Argon2 password, a real sha256 API key and a real session JWT:
 
 * active: login 200, `/auth/me` 200, MCP `tools/list` 200 with 10 tools;
@@ -48,7 +48,9 @@ account with a real Argon2 password, a real sha256 API key and a real session JW
 * suspend → 200 `is_active=false` (read back from the column);
 * suspended: MCP → **401**, a JWT minted BEFORE the suspension → **401**, `/workflows` → **401**, login → **403** "suspended", while the key row is still `is_active = true` (the refusal is the account, not revocation), and the operator's own session still 200;
 * reactivate → 200; MCP 200/10 tools, session 200, login 200;
-* other door checks untouched: revoked key 401, expired key 401, deactivated owning user 401, all restored → 200;
+* other door checks untouched: revoked key 401, expired key 401, deactivated owning user 401, a plan
+  without `api_access` still **402** on the REST door (not confused with the suspension's 401; the MCP
+  door deliberately collapses every credential refusal to its own JSON-RPC -32001/401), all restored → 200;
 * served console carries the control and the served guide documents it;
 * cleanup: 0 probe accounts/users, 12/12 real accounts active.
 
