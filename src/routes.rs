@@ -1397,6 +1397,19 @@ pub fn create_router(state: AppState) -> Router {
     // Combine: public + protected merged
     let api_v1 = Router::new().merge(public_routes).merge(protected_routes);
 
+    // The fleet-standard mint surface (P1c, card t_29efde4c) — `/api/personal-api-keys`. The five
+    // routes delegate to the SAME handlers the `/api/v1/api-keys` surface uses (one credential
+    // implementation, two paths). The protected router is nested at `/api/v1`, so this canonical
+    // path is mounted on the ROOT router below and carries the SAME `auth_middleware` layer the
+    // protected router carries — without it the handlers have no `Claims` extension and every call
+    // 500s. It is NOT under `/api/v1`, so `auth::route_policy::is_guarded_path` does not cover it;
+    // this layer is the boundary for it (anonymous -> 401 before any handler runs).
+    let personal_api_keys_routes =
+        crate::personal_api_keys::router().layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::auth::middleware::auth_middleware,
+        ));
+
     // ── Mailgun inbound delivery (kanban t_473a6895, ported from CoreSwift) ────────────────────
     // ANONYMOUS BY NECESSITY: the provider posts here with no session; the credential is the
     // per-domain signing key the handler verifies against `timestamp` + `token`. Mounted on the
@@ -1446,6 +1459,11 @@ pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/", get(health_check))
         .nest("/api/v1", api_v1)
+        // The fleet-standard mint surface (P1c, card t_29efde4c). Mounted on the ROOT router (the
+        // protected router lives under `/api/v1`) with the app's own auth middleware already applied
+        // to the sub-router above, so the five handlers below run with a `Claims` extension exactly
+        // like their `/api/v1/api-keys` twins.
+        .nest("/api/personal-api-keys", personal_api_keys_routes)
         // A malformed BODY answers this app's JSON with a sentence a customer can act on
         // (measured live 2026-10-26: `/api/v1/auth/{register,login,forgot-password}` answered
         // `text/plain` carrying "Failed to deserialize the JSON body into the target type:

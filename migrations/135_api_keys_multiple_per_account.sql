@@ -1,0 +1,14 @@
+-- 135 — CoreSwift's multi-key rule: several live keys per account (precedent: CoreSwift migration 207).
+--
+-- `api_keys_one_active_per_aid` (migration 111) enforced ONE active key per account IN THE
+-- DATABASE: a partial unique index on (aid) WHERE is_active refused a second active row before the
+-- handler's friendly pre-check could even answer. CoreSwift instead allows several live keys per
+-- account (cap 10) so a second consumer can hold its own labelled key without rotating — and
+-- killing — the account's working one. The cap now lives in code, in
+-- `handlers::api_key_handler::create_api_key` (count live rows, refuse at 10); this migration only
+-- removes the index that made the database stricter than that rule.
+--
+-- Idempotent: this app re-runs any migration file not yet recorded in `_migrations`, so the DROP
+-- must converge a database where the index still exists without failing one where it is already
+-- gone. `IF EXISTS` is the whole idempotence.
+DROP INDEX IF EXISTS api_keys_one_active_per_aid;

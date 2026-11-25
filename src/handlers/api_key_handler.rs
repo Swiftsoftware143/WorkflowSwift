@@ -19,17 +19,20 @@ pub async fn create_api_key(
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    // ONE active key per account, also enforced by the DB partial unique index (aid WHERE
-    // is_active). This is the friendly pre-check so the customer gets an instruction
-    // ("use Regenerate") instead of a generic 402 upgrade prompt or a 500 from the index.
-    let existing: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM api_keys WHERE aid = $1 AND is_active = true LIMIT 1")
+    // CoreSwift's multi-key rule (migration 135, precedent CoreSwift 207): an account may hold up
+    // to 10 LIVE keys so a second consumer can keep its own labelled key without rotating — and
+    // killing — the account's working one. The DB partial unique index that used to enforce ONE
+    // active key per account is dropped by 135; the cap now lives HERE, in code. Count live rows
+    // (`is_active = true`) and refuse at 10, mirroring CoreSwift's sentence.
+    let active_keys: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM api_keys WHERE aid = $1 AND is_active = true")
             .bind(aid)
-            .fetch_optional(&state.db)
+            .fetch_one(&state.db)
             .await?;
-    if existing.is_some() {
+    if active_keys >= 10 {
         return Err(AppError::Conflict(
-            "you already have a key — use Regenerate".to_string(),
+            "This account already has 10 active API keys. Revoke one before minting another."
+                .to_string(),
         ));
     }
     features::enforce_feature_limit(&state.db, aid, "max_api_keys", "Api Keys").await?;

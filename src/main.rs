@@ -36,6 +36,10 @@ mod n8n_converter;
 mod n8n_provision;
 mod notify;
 mod path_rejection;
+// Fleet-standard mint surface `/api/personal-api-keys` (P1c, card t_29efde4c): thin wrappers over
+// `handlers::api_key_handler`, mounted on the root router (outside the `/api/v1` nest) with the app's
+// own auth middleware.
+mod personal_api_keys;
 // Private inbox + workspaces, ported from CoreSwift/ADASwift (kanban t_473a6895).
 mod module_registry;
 mod private_email;
