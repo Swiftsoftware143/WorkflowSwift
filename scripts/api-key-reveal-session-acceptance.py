@@ -136,13 +136,24 @@ def register_probe(tag, letter):
     if s not in (200, 201):
         raise SystemExit(f"probe signup failed: {s} {b}")
     b = b if isinstance(b, dict) else {}
-    return {
+    account = {
         "email": email,
         "password": password,
         "token": b.get("access_token"),
         "aid": (b.get("account") or {}).get("id"),
         "uid": (b.get("user") or {}).get("id"),
     }
+    # A key is REFUSED by the middleware with 402 unless the account's plan carries `api_access`
+    # (`api_key_auth::authenticate` enforces it before any handler runs), so put the probe on the
+    # cheapest tier that has it — the same premise the P1c harness uses.
+    if account["aid"]:
+        plan = scalar("SELECT id FROM plan_tiers WHERE has_api_access = true AND is_active = true "
+                      "ORDER BY COALESCE(price_monthly,0) ASC LIMIT 1")
+        if plan:
+            sql(f"UPDATE accounts SET plan_id = '{plan}' WHERE id = '{account['aid']}';"
+                # An ACTIVE account_plans row outranks accounts.plan_id in features::resolve_plan_id.
+                f"DELETE FROM account_plans WHERE aid = '{account['aid']}' AND status = 'active';")
+    return account
 
 
 def list_keys(p):

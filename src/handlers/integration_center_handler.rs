@@ -463,53 +463,31 @@ pub async fn generate_user_key(
 
     let label = req.get("label").and_then(|v| v.as_str()).unwrap_or("");
 
-    // Generate the key
-    let random_part: String = (0..32)
-        .map(|_| {
-            let idx = rand::thread_rng().gen_range(0..36);
-            "0123456789abcdefghijklmnopqrstuvwxyz"[idx..idx + 1].to_string()
-        })
-        .collect();
-
-    let prefix = match key_type {
-        "primary" => "wf_swift_",
-        "webhook_secret" => "whsec_",
-        "surface_token" => "sf_",
-        _ => "key_",
-    };
-
-    let raw_key = format!("{}{}", prefix, random_part);
-
-    // Hash for storage
-    // Off the reactor, under the shared Argon2 semaphore (auth::api_key_auth::argon2_hash) —
-    // this route is authenticated, but the hash is the same 19 MiB job as everywhere else.
-    let key_hash = crate::auth::api_key_auth::argon2_hash(raw_key.clone()).await?;
-
-    let id = Uuid::new_v4();
-    let prefix_display = &raw_key[..raw_key.len().min(12)];
-
-    sqlx::query(
-        "INSERT INTO user_api_keys (id, user_id, aid, key_type, key_hash, key_prefix, label)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    // ONE writer: `mint_user_key_on` is the only code that mints a `user_api_keys` row, and it
+    // writes the SEALED copy as well as the hash. This handler used to INSERT by hand without
+    // `key_encrypted`, so every integration key minted from the console could never be viewed — the
+    // reveal answered 400 "created before keys were stored recoverably" — which defeats View being
+    // one click (plan §6.2/§8, card t_18a8fa3c). The plaintext never leaves this response and the
+    // sealed copy; it is never logged.
+    let mut conn = state.db.acquire().await?;
+    let minted = mint_user_key_on(
+        &mut conn,
+        user_id,
+        aid,
+        key_type,
+        if label.is_empty() { None } else { Some(label) },
     )
-    .bind(id)
-    .bind(user_id)
-    .bind(aid)
-    .bind(key_type)
-    .bind(&key_hash)
-    .bind(prefix_display)
-    .bind(if label.is_empty() { None } else { Some(label) })
-    .execute(&state.db)
     .await?;
+    drop(conn);
 
     Ok((
         StatusCode::CREATED,
         Json(json!({
-            "id": id.to_string(),
-            "key": raw_key,
-            "prefix": prefix_display,
-            "key_type": key_type,
-            "message": "Save this key — it will not be shown again"
+            "id": minted.id.to_string(),
+            "key": minted.raw_key,
+            "prefix": minted.prefix,
+            "key_type": minted.key_type,
+            "message": "This key stays retrievable — press Copy or View on this screen whenever you need it again"
         })),
     ))
 }
