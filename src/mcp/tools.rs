@@ -1,11 +1,13 @@
-//! The ten read tools WorkflowSwift's door serves (kanban t_6364d995).
+//! The tools WorkflowSwift's door serves: ten reads (kanban t_6364d995) plus fifteen writes
+//! (kanban t_bb4d4d33).
 //!
 //! Every tool is one FIXED statement. Two rules shape that choice:
 //!
 //! 1. **The tenant filter lives inside the statement.** The caller's `aid` list is bound as a text
 //!    array and compared with `= any($n::text[])`, so an account with no workspaces matches no row
 //!    and there is no path that widens to "all". A foreign id answers `not_found` because the
-//!    scoped `WHERE` never returns it — the same answer a missing id gets.
+//!    scoped `WHERE` never returns it — the same answer a missing id gets. The same predicate sits
+//!    inside every UPDATE, so a foreign id is a zero-row update, never a foreign row.
 //! 2. **No statement is built at run time.** The fleet's pre-build gate (rule 5d) refuses SQL
 //!    assembled with `format!`/`push_str`, and rightly so: a fixed statement plus bound parameters
 //!    cannot be made to carry an injected clause. There is not one `format!` here.
@@ -14,6 +16,12 @@
 //! Rust structs. That keeps a nullable column from becoming a decode panic (gate rule 5e) and makes
 //! the payload shape one readable literal. `count` is always present so the door's audit line
 //! records how many rows a call touched.
+//!
+//! **The write tools** follow the card's contract: `ToolSpec::write` with `min_role Workspace`,
+//! so a read-only key never sees them in `tools/list` and the transport refuses a direct call.
+//! Archive is always soft (`is_active = false`); nothing here hard-deletes, and no tool closes or
+//! erases an account. The scope predicate is inside every statement, so a foreign id is
+//! `not_found`, never `forbidden`.
 //!
 //! **Never projected:** `api_keys`, `user_api_keys`, `n8n_account_config`, `provider_keys`,
 //! `webhooks`, `integration_targets.api_key` / `.webhook_url`, `private_email_api_keys`,
@@ -56,6 +64,85 @@ fn id_schema() -> Value {
         "required": ["id"],
         "additionalProperties": false
     })
+}
+
+/// An object schema for a WRITE tool: exactly the fields it owns, nothing else accepted.
+fn write_schema(props: Value, required: &[&str]) -> Value {
+    json!({
+        "type": "object",
+        "properties": props,
+        "required": required,
+        "additionalProperties": false
+    })
+}
+
+/// One typed property entry for a write schema.
+fn prop(ty: &str, desc: &str) -> Value {
+    json!({ "type": ty, "description": desc })
+}
+
+/// A schema that takes `id` plus the given fields (the shape of every update/archive tool).
+fn id_plus_schema(props: Value) -> Value {
+    let mut full = props.as_object().cloned().unwrap_or_default();
+    full.insert(
+        "id".into(),
+        prop("string", "The row's uuid, owned by this account."),
+    );
+    json!({
+        "type": "object",
+        "properties": full,
+        "required": ["id"],
+        "additionalProperties": false
+    })
+}
+
+/// The caller's single account id for an INSERT. A WorkflowSwift key resolves to exactly one `aid`
+/// (the account the key belongs to), so the scope list is that one id. The transport already
+/// refuses a caller with no workspace (`Caller::validate`), so this is defensive only.
+fn scope_id(ctx: &Ctx) -> Result<Uuid, ToolError> {
+    ctx.scope
+        .ids()
+        .first()
+        .copied()
+        .ok_or_else(|| ToolError::Forbidden("this credential owns no workspace".into()))
+}
+
+/// An optional trimmed string argument (absent or blank reads as "not provided").
+fn opt_str(args: &Value, key: &str) -> Option<String> {
+    args.get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// A required trimmed string argument (the column is NOT NULL).
+fn req_str(args: &Value, key: &str) -> Result<String, ToolError> {
+    opt_str(args, key).ok_or_else(|| ToolError::Invalid(format!("`{key}` is required")))
+}
+
+/// An optional uuid argument, validated when present.
+fn opt_uuid(args: &Value, key: &str) -> Result<Option<Uuid>, ToolError> {
+    match opt_str(args, key) {
+        Some(raw) => Uuid::parse_str(&raw)
+            .map(Some)
+            .map_err(|_| ToolError::Invalid(format!("`{key}` is not a uuid"))),
+        None => Ok(None),
+    }
+}
+
+/// An optional integer argument.
+fn opt_i64(args: &Value, key: &str) -> Option<i64> {
+    args.get(key).and_then(|v| v.as_i64())
+}
+
+/// An optional boolean argument.
+fn opt_bool(args: &Value, key: &str) -> Option<bool> {
+    args.get(key).and_then(|v| v.as_bool())
+}
+
+/// An optional JSON argument (the jsonb columns: tags, trigger_config, layout).
+fn opt_json(args: &Value, key: &str) -> Option<Value> {
+    args.get(key).cloned()
 }
 
 /// Register the ten reads. The registry is validated by the crate at startup.
@@ -591,6 +678,678 @@ pub fn registry(pool: PgPool) -> Registry {
         },
     );
 
+    // ── WRITE TOOLS (kanban t_bb4d4d33) ────────────────────────────────────────────────────────
+    //
+    // Five entities, three verbs each (create/update/archive): workflows, templates, dashboards,
+    // clients, tags. Every verb is `ToolSpec::write` with `min_role Workspace`, so a read-only key
+    // never sees them in `tools/list` and the transport refuses a direct call. The tenancy filter
+    // lives INSIDE every statement (`aid::text = any($2::text[])`), so a foreign id is a zero-row
+    // update -> `not_found`, never `forbidden`, and never a foreign row. Archive is soft
+    // (`is_active = false`); nothing here hard-deletes.
+
+    // ── workflows ───────────────────────────────────────────────────────────────────────────────
+    let p = pool.clone();
+    reg = reg.with_fn(
+        ToolSpec::write(
+            "workflowswift_create_workflow",
+            "Create ONE workflow in this account's own workspace. `name` is required; `description`, \
+             `category`, `trigger_type`, `trigger_config` (JSON), `surface_id`, `lifecycle_summary`, \
+             `tags` (JSON array) and `sort_order` are optional. Returns { id, count }. The account \
+             is this credential's — no account argument is taken and another account is never \
+             reachable.",
+        )
+        .min_role(Role::Workspace)
+        .schema(write_schema(
+            json!({
+                "name": prop("string", "Display name (required)."),
+                "description": prop("string", "Optional free-text description."),
+                "category": prop("string", "Optional category label."),
+                "trigger_type": prop("string", "Optional trigger type (defaults to manual)."),
+                "trigger_config": prop("object", "Optional trigger configuration JSON."),
+                "surface_id": prop("string", "Optional surface uuid."),
+                "lifecycle_summary": prop("string", "Optional lifecycle summary text."),
+                "tags": prop("array", "Optional JSON array of tag names."),
+                "portfolio_company_id": prop("string", "Optional portfolio company uuid."),
+                "sort_order": prop("integer", "Optional sort position (default 0)."),
+            }),
+            &["name"],
+        )),
+        move |ctx, args| {
+            let pool = p.clone();
+            Box::pin(async move {
+                let name = req_str(&args, "name")?;
+                let aid = scope_id(&ctx)?;
+                let id: Uuid = sqlx::query_scalar(
+                    "insert into workflows \
+                       (id, aid, name, description, category, trigger_type, trigger_config, \
+                        surface_id, lifecycle_summary, tags, portfolio_company_id, sort_order, is_active) \
+                     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, true) \
+                     returning id",
+                )
+                .bind(Uuid::new_v4())
+                .bind(aid)
+                .bind(name)
+                .bind(opt_str(&args, "description"))
+                .bind(opt_str(&args, "category"))
+                .bind(opt_str(&args, "trigger_type").unwrap_or_else(|| "manual".into()))
+                .bind(opt_json(&args, "trigger_config").unwrap_or_else(|| json!({})))
+                .bind(opt_uuid(&args, "surface_id")?)
+                .bind(opt_str(&args, "lifecycle_summary"))
+                .bind(opt_json(&args, "tags").unwrap_or_else(|| json!([])))
+                .bind(opt_uuid(&args, "portfolio_company_id")?)
+                .bind(opt_i64(&args, "sort_order").unwrap_or(0))
+                .fetch_one(&pool)
+                .await
+                .map_err(|e| ToolError::Internal(format!("create_workflow: {e}")))?;
+                Ok(json!({ "id": id.to_string(), "count": 1 }))
+            })
+        },
+    );
+
+    let p = pool.clone();
+    reg = reg.with_fn(
+        ToolSpec::write(
+            "workflowswift_update_workflow",
+            "Update ONE of this account's OWN workflows by id. Every field is optional; omitted \
+             fields keep their stored value. Returns { id, count }. An id owned by another account \
+             answers not_found, exactly like a missing id — this tool never reaches another \
+             account's rows.",
+        )
+        .min_role(Role::Workspace)
+        .schema(id_plus_schema(json!({
+            "name": prop("string", "Display name."),
+            "description": prop("string", "Free-text description."),
+            "category": prop("string", "Category label."),
+            "trigger_type": prop("string", "Trigger type."),
+            "trigger_config": prop("object", "Trigger configuration JSON."),
+            "surface_id": prop("string", "Surface uuid."),
+            "lifecycle_summary": prop("string", "Lifecycle summary text."),
+            "tags": prop("array", "JSON array of tag names."),
+            "portfolio_company_id": prop("string", "Portfolio company uuid."),
+            "sort_order": prop("integer", "Sort position."),
+        }))),
+        move |ctx, args| {
+            let pool = p.clone();
+            Box::pin(async move {
+                let id = ctx.uuid_arg(&args, "id")?;
+                let updated: Option<Uuid> = sqlx::query_scalar(
+                    "update workflows set \
+                       name = coalesce($3, name), \
+                       description = coalesce($4, description), \
+                       category = coalesce($5, category), \
+                       trigger_type = coalesce($6, trigger_type), \
+                       trigger_config = coalesce($7, trigger_config), \
+                       surface_id = coalesce($8, surface_id), \
+                       lifecycle_summary = coalesce($9, lifecycle_summary), \
+                       tags = coalesce($10, tags), \
+                       portfolio_company_id = coalesce($11, portfolio_company_id), \
+                       sort_order = coalesce($12, sort_order), \
+                       updated_at = now() \
+                     where id = $1 and aid::text = any($2::text[]) \
+                     returning id",
+                )
+                .bind(id)
+                .bind(scope_ids(&ctx))
+                .bind(opt_str(&args, "name"))
+                .bind(opt_str(&args, "description"))
+                .bind(opt_str(&args, "category"))
+                .bind(opt_str(&args, "trigger_type"))
+                .bind(opt_json(&args, "trigger_config"))
+                .bind(opt_uuid(&args, "surface_id")?)
+                .bind(opt_str(&args, "lifecycle_summary"))
+                .bind(opt_json(&args, "tags"))
+                .bind(opt_uuid(&args, "portfolio_company_id")?)
+                .bind(opt_i64(&args, "sort_order"))
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| ToolError::Internal(format!("update_workflow: {e}")))?;
+                let id = updated.ok_or(ToolError::NotFound)?;
+                Ok(json!({ "id": id.to_string(), "count": 1 }))
+            })
+        },
+    );
+
+    let p = pool.clone();
+    reg = reg.with_fn(
+        ToolSpec::write(
+            "workflowswift_archive_workflow",
+            "Archive ONE of this account's OWN workflows by id: sets is_active = false (soft — the \
+             row is kept, its runs stay readable). Returns { id, count }. A foreign or missing id \
+             answers not_found. This is the only delete-like verb; nothing here hard-deletes.",
+        )
+        .min_role(Role::Workspace)
+        .schema(id_schema()),
+        move |ctx, args| {
+            let pool = p.clone();
+            Box::pin(async move {
+                let id = ctx.uuid_arg(&args, "id")?;
+                let archived: Option<Uuid> = sqlx::query_scalar(
+                    "update workflows set is_active = false, updated_at = now() \
+                     where id = $1 and aid::text = any($2::text[]) \
+                     returning id",
+                )
+                .bind(id)
+                .bind(scope_ids(&ctx))
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| ToolError::Internal(format!("archive_workflow: {e}")))?;
+                let id = archived.ok_or(ToolError::NotFound)?;
+                Ok(json!({ "id": id.to_string(), "count": 1 }))
+            })
+        },
+    );
+
+    // ── templates ──────────────────────────────────────────────────────────────────────────────
+    let p = pool.clone();
+    reg = reg.with_fn(
+        ToolSpec::write(
+            "workflowswift_create_template",
+            "Create ONE workflow template owned by this account. `name` and `category` are required; \
+             `description`, `tags` (JSON array), `icon`, `is_public`, `surface_id`, `category_id` \
+             and `sort_order` are optional. Returns { id, count }. The platform catalogue (aid NULL) \
+             is never written.",
+        )
+        .min_role(Role::Workspace)
+        .schema(write_schema(
+            json!({
+                "name": prop("string", "Template name (required)."),
+                "category": prop("string", "Category label (required)."),
+                "description": prop("string", "Optional description."),
+                "tags": prop("array", "Optional JSON array of tag names."),
+                "icon": prop("string", "Optional icon name."),
+                "is_public": prop("boolean", "Optional public flag (default true)."),
+                "surface_id": prop("string", "Optional surface uuid."),
+                "category_id": prop("string", "Optional template-category uuid."),
+                "sort_order": prop("integer", "Optional sort position (default 0)."),
+            }),
+            &["name", "category"],
+        )),
+        move |ctx, args| {
+            let pool = p.clone();
+            Box::pin(async move {
+                let name = req_str(&args, "name")?;
+                let category = req_str(&args, "category")?;
+                let aid = scope_id(&ctx)?;
+                let id: Uuid = sqlx::query_scalar(
+                    "insert into workflow_templates \
+                       (id, name, description, category, tags, is_public, aid, category_id, \
+                        is_active, icon, surface_id, sort_order) \
+                     values ($1, $2, $3, $4, $5, $6, $7, $8, true, $9, $10, $11) \
+                     returning id",
+                )
+                .bind(Uuid::new_v4())
+                .bind(name)
+                .bind(opt_str(&args, "description"))
+                .bind(category)
+                .bind(opt_json(&args, "tags").unwrap_or_else(|| json!([])))
+                .bind(opt_bool(&args, "is_public").unwrap_or(true))
+                .bind(aid)
+                .bind(opt_uuid(&args, "category_id")?)
+                .bind(opt_str(&args, "icon"))
+                .bind(opt_uuid(&args, "surface_id")?)
+                .bind(opt_i64(&args, "sort_order").unwrap_or(0))
+                .fetch_one(&pool)
+                .await
+                .map_err(|e| ToolError::Internal(format!("create_template: {e}")))?;
+                Ok(json!({ "id": id.to_string(), "count": 1 }))
+            })
+        },
+    );
+
+    let p = pool.clone();
+    reg = reg.with_fn(
+        ToolSpec::write(
+            "workflowswift_update_template",
+            "Update ONE template this account OWNS by id; every field is optional and omitted fields \
+             keep their value. Returns { id, count }. A platform template (not owned by this account) \
+             or another account's template answers not_found.",
+        )
+        .min_role(Role::Workspace)
+        .schema(id_plus_schema(json!({
+            "name": prop("string", "Template name."),
+            "category": prop("string", "Category label."),
+            "description": prop("string", "Description."),
+            "tags": prop("array", "JSON array of tag names."),
+            "icon": prop("string", "Icon name."),
+            "is_public": prop("boolean", "Public flag."),
+            "surface_id": prop("string", "Surface uuid."),
+            "category_id": prop("string", "Template-category uuid."),
+            "sort_order": prop("integer", "Sort position."),
+        }))),
+        move |ctx, args| {
+            let pool = p.clone();
+            Box::pin(async move {
+                let id = ctx.uuid_arg(&args, "id")?;
+                let updated: Option<Uuid> = sqlx::query_scalar(
+                    "update workflow_templates set \
+                       name = coalesce($3, name), \
+                       description = coalesce($4, description), \
+                       category = coalesce($5, category), \
+                       tags = coalesce($6, tags), \
+                       icon = coalesce($7, icon), \
+                       is_public = coalesce($8, is_public), \
+                       surface_id = coalesce($9, surface_id), \
+                       category_id = coalesce($10, category_id), \
+                       sort_order = coalesce($11, sort_order) \
+                     where id = $1 and aid::text = any($2::text[]) \
+                     returning id",
+                )
+                .bind(id)
+                .bind(scope_ids(&ctx))
+                .bind(opt_str(&args, "name"))
+                .bind(opt_str(&args, "description"))
+                .bind(opt_str(&args, "category"))
+                .bind(opt_json(&args, "tags"))
+                .bind(opt_str(&args, "icon"))
+                .bind(opt_bool(&args, "is_public"))
+                .bind(opt_uuid(&args, "surface_id")?)
+                .bind(opt_uuid(&args, "category_id")?)
+                .bind(opt_i64(&args, "sort_order"))
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| ToolError::Internal(format!("update_template: {e}")))?;
+                let id = updated.ok_or(ToolError::NotFound)?;
+                Ok(json!({ "id": id.to_string(), "count": 1 }))
+            })
+        },
+    );
+
+    let p = pool.clone();
+    reg = reg.with_fn(
+        ToolSpec::write(
+            "workflowswift_archive_template",
+            "Archive ONE template this account OWNS by id: sets is_active = false. Returns \
+             { id, count }. A platform template or another account's template answers not_found.",
+        )
+        .min_role(Role::Workspace)
+        .schema(id_schema()),
+        move |ctx, args| {
+            let pool = p.clone();
+            Box::pin(async move {
+                let id = ctx.uuid_arg(&args, "id")?;
+                let archived: Option<Uuid> = sqlx::query_scalar(
+                    "update workflow_templates set is_active = false \
+                     where id = $1 and aid::text = any($2::text[]) \
+                     returning id",
+                )
+                .bind(id)
+                .bind(scope_ids(&ctx))
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| ToolError::Internal(format!("archive_template: {e}")))?;
+                let id = archived.ok_or(ToolError::NotFound)?;
+                Ok(json!({ "id": id.to_string(), "count": 1 }))
+            })
+        },
+    );
+
+    // ── dashboards ─────────────────────────────────────────────────────────────────────────────
+    let p = pool.clone();
+    reg = reg.with_fn(
+        ToolSpec::write(
+            "workflowswift_create_dashboard",
+            "Create ONE dashboard in this account's own workspace. `name` is required; `description`, \
+             `layout` (JSON) and `sort_order` are optional. Returns { id, count }. The account is \
+             this credential's; another account is never reachable.",
+        )
+        .min_role(Role::Workspace)
+        .schema(write_schema(
+            json!({
+                "name": prop("string", "Dashboard name (required)."),
+                "description": prop("string", "Optional description."),
+                "layout": prop("object", "Optional layout JSON."),
+                "sort_order": prop("integer", "Optional sort position (default 0)."),
+            }),
+            &["name"],
+        )),
+        move |ctx, args| {
+            let pool = p.clone();
+            Box::pin(async move {
+                let name = req_str(&args, "name")?;
+                let aid = scope_id(&ctx)?;
+                let id: Uuid = sqlx::query_scalar(
+                    "insert into dashboards (id, aid, name, description, layout, sort_order, is_active) \
+                     values ($1, $2, $3, $4, $5, $6, true) \
+                     returning id",
+                )
+                .bind(Uuid::new_v4())
+                .bind(aid)
+                .bind(name)
+                .bind(opt_str(&args, "description"))
+                .bind(opt_json(&args, "layout").unwrap_or_else(|| json!({})))
+                .bind(opt_i64(&args, "sort_order").unwrap_or(0))
+                .fetch_one(&pool)
+                .await
+                .map_err(|e| ToolError::Internal(format!("create_dashboard: {e}")))?;
+                Ok(json!({ "id": id.to_string(), "count": 1 }))
+            })
+        },
+    );
+
+    let p = pool.clone();
+    reg = reg.with_fn(
+        ToolSpec::write(
+            "workflowswift_update_dashboard",
+            "Update ONE of this account's OWN dashboards by id; every field is optional and omitted \
+             fields keep their value. Returns { id, count }. A foreign or missing id answers \
+             not_found.",
+        )
+        .min_role(Role::Workspace)
+        .schema(id_plus_schema(json!({
+            "name": prop("string", "Dashboard name."),
+            "description": prop("string", "Description."),
+            "layout": prop("object", "Layout JSON."),
+            "sort_order": prop("integer", "Sort position."),
+        }))),
+        move |ctx, args| {
+            let pool = p.clone();
+            Box::pin(async move {
+                let id = ctx.uuid_arg(&args, "id")?;
+                let updated: Option<Uuid> = sqlx::query_scalar(
+                    "update dashboards set \
+                       name = coalesce($3, name), \
+                       description = coalesce($4, description), \
+                       layout = coalesce($5, layout), \
+                       sort_order = coalesce($6, sort_order), \
+                       updated_at = now() \
+                     where id = $1 and aid::text = any($2::text[]) \
+                     returning id",
+                )
+                .bind(id)
+                .bind(scope_ids(&ctx))
+                .bind(opt_str(&args, "name"))
+                .bind(opt_str(&args, "description"))
+                .bind(opt_json(&args, "layout"))
+                .bind(opt_i64(&args, "sort_order"))
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| ToolError::Internal(format!("update_dashboard: {e}")))?;
+                let id = updated.ok_or(ToolError::NotFound)?;
+                Ok(json!({ "id": id.to_string(), "count": 1 }))
+            })
+        },
+    );
+
+    let p = pool.clone();
+    reg = reg.with_fn(
+        ToolSpec::write(
+            "workflowswift_archive_dashboard",
+            "Archive ONE of this account's OWN dashboards by id: sets is_active = false. Returns \
+             { id, count }. A foreign or missing id answers not_found. Nothing here hard-deletes.",
+        )
+        .min_role(Role::Workspace)
+        .schema(id_schema()),
+        move |ctx, args| {
+            let pool = p.clone();
+            Box::pin(async move {
+                let id = ctx.uuid_arg(&args, "id")?;
+                let archived: Option<Uuid> = sqlx::query_scalar(
+                    "update dashboards set is_active = false, updated_at = now() \
+                     where id = $1 and aid::text = any($2::text[]) \
+                     returning id",
+                )
+                .bind(id)
+                .bind(scope_ids(&ctx))
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| ToolError::Internal(format!("archive_dashboard: {e}")))?;
+                let id = archived.ok_or(ToolError::NotFound)?;
+                Ok(json!({ "id": id.to_string(), "count": 1 }))
+            })
+        },
+    );
+
+    // ── clients ────────────────────────────────────────────────────────────────────────────────
+    let p = pool.clone();
+    reg = reg.with_fn(
+        ToolSpec::write(
+            "workflowswift_create_client",
+            "Create ONE client (a business this account runs workflows for) in this account's own \
+             workspace. `name` is required; `email`, `phone`, `website`, `industry`, `notes`, \
+             `portfolio_company_id` and `sort_order` are optional. Returns { id, count }.",
+        )
+        .min_role(Role::Workspace)
+        .schema(write_schema(
+            json!({
+                "name": prop("string", "Client name (required)."),
+                "email": prop("string", "Optional contact email."),
+                "phone": prop("string", "Optional phone number."),
+                "website": prop("string", "Optional website."),
+                "industry": prop("string", "Optional industry label."),
+                "notes": prop("string", "Optional free-text notes."),
+                "portfolio_company_id": prop("string", "Optional portfolio company uuid."),
+                "sort_order": prop("integer", "Optional sort position (default 0)."),
+            }),
+            &["name"],
+        )),
+        move |ctx, args| {
+            let pool = p.clone();
+            Box::pin(async move {
+                let name = req_str(&args, "name")?;
+                let aid = scope_id(&ctx)?;
+                let id: Uuid = sqlx::query_scalar(
+                    "insert into clients \
+                       (id, aid, name, email, phone, website, industry, notes, is_active, \
+                        portfolio_company_id, sort_order) \
+                     values ($1, $2, $3, $4, $5, $6, $7, $8, true, $9, $10) \
+                     returning id",
+                )
+                .bind(Uuid::new_v4())
+                .bind(aid)
+                .bind(name)
+                .bind(opt_str(&args, "email"))
+                .bind(opt_str(&args, "phone"))
+                .bind(opt_str(&args, "website"))
+                .bind(opt_str(&args, "industry"))
+                .bind(opt_str(&args, "notes"))
+                .bind(opt_uuid(&args, "portfolio_company_id")?)
+                .bind(opt_i64(&args, "sort_order").unwrap_or(0))
+                .fetch_one(&pool)
+                .await
+                .map_err(|e| ToolError::Internal(format!("create_client: {e}")))?;
+                Ok(json!({ "id": id.to_string(), "count": 1 }))
+            })
+        },
+    );
+
+    let p = pool.clone();
+    reg = reg.with_fn(
+        ToolSpec::write(
+            "workflowswift_update_client",
+            "Update ONE of this account's OWN clients by id; every field is optional and omitted \
+             fields keep their value. Returns { id, count }. A foreign or missing id answers \
+             not_found.",
+        )
+        .min_role(Role::Workspace)
+        .schema(id_plus_schema(json!({
+            "name": prop("string", "Client name."),
+            "email": prop("string", "Contact email."),
+            "phone": prop("string", "Phone number."),
+            "website": prop("string", "Website."),
+            "industry": prop("string", "Industry label."),
+            "notes": prop("string", "Free-text notes."),
+            "portfolio_company_id": prop("string", "Portfolio company uuid."),
+            "sort_order": prop("integer", "Sort position."),
+        }))),
+        move |ctx, args| {
+            let pool = p.clone();
+            Box::pin(async move {
+                let id = ctx.uuid_arg(&args, "id")?;
+                let updated: Option<Uuid> = sqlx::query_scalar(
+                    "update clients set \
+                       name = coalesce($3, name), \
+                       email = coalesce($4, email), \
+                       phone = coalesce($5, phone), \
+                       website = coalesce($6, website), \
+                       industry = coalesce($7, industry), \
+                       notes = coalesce($8, notes), \
+                       portfolio_company_id = coalesce($9, portfolio_company_id), \
+                       sort_order = coalesce($10, sort_order), \
+                       updated_at = now() \
+                     where id = $1 and aid::text = any($2::text[]) \
+                     returning id",
+                )
+                .bind(id)
+                .bind(scope_ids(&ctx))
+                .bind(opt_str(&args, "name"))
+                .bind(opt_str(&args, "email"))
+                .bind(opt_str(&args, "phone"))
+                .bind(opt_str(&args, "website"))
+                .bind(opt_str(&args, "industry"))
+                .bind(opt_str(&args, "notes"))
+                .bind(opt_uuid(&args, "portfolio_company_id")?)
+                .bind(opt_i64(&args, "sort_order"))
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| ToolError::Internal(format!("update_client: {e}")))?;
+                let id = updated.ok_or(ToolError::NotFound)?;
+                Ok(json!({ "id": id.to_string(), "count": 1 }))
+            })
+        },
+    );
+
+    let p = pool.clone();
+    reg = reg.with_fn(
+        ToolSpec::write(
+            "workflowswift_archive_client",
+            "Archive ONE of this account's OWN clients by id: sets is_active = false. Returns \
+             { id, count }. A foreign or missing id answers not_found. Nothing here hard-deletes.",
+        )
+        .min_role(Role::Workspace)
+        .schema(id_schema()),
+        move |ctx, args| {
+            let pool = p.clone();
+            Box::pin(async move {
+                let id = ctx.uuid_arg(&args, "id")?;
+                let archived: Option<Uuid> = sqlx::query_scalar(
+                    "update clients set is_active = false, updated_at = now() \
+                     where id = $1 and aid::text = any($2::text[]) \
+                     returning id",
+                )
+                .bind(id)
+                .bind(scope_ids(&ctx))
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| ToolError::Internal(format!("archive_client: {e}")))?;
+                let id = archived.ok_or(ToolError::NotFound)?;
+                Ok(json!({ "id": id.to_string(), "count": 1 }))
+            })
+        },
+    );
+
+    // ── tags ───────────────────────────────────────────────────────────────────────────────────
+    let p = pool.clone();
+    reg = reg.with_fn(
+        ToolSpec::write(
+            "workflowswift_create_tag",
+            "Create ONE tag in this account's own workspace. `name` is required and unique per \
+             account; `color` (a #RRGGBB string) and `sort_order` are optional. Returns { id, count }. \
+             A duplicate name answers invalid, never a silent overwrite.",
+        )
+        .min_role(Role::Workspace)
+        .schema(write_schema(
+            json!({
+                "name": prop("string", "Tag name (required, unique per account)."),
+                "color": prop("string", "Optional #RRGGBB colour."),
+                "sort_order": prop("integer", "Optional sort position (default 0)."),
+            }),
+            &["name"],
+        )),
+        move |ctx, args| {
+            let pool = p.clone();
+            Box::pin(async move {
+                let name = req_str(&args, "name")?;
+                let aid = scope_id(&ctx)?;
+                let id: Option<Uuid> = sqlx::query_scalar(
+                    "insert into tags (id, aid, name, color, sort_order, is_active) \
+                     values ($1, $2, $3, $4, $5, true) \
+                     on conflict (aid, name) do nothing \
+                     returning id",
+                )
+                .bind(Uuid::new_v4())
+                .bind(aid)
+                .bind(name)
+                .bind(opt_str(&args, "color"))
+                .bind(opt_i64(&args, "sort_order").unwrap_or(0))
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| ToolError::Internal(format!("create_tag: {e}")))?;
+                let id = id.ok_or_else(|| {
+                    ToolError::Invalid("a tag with this name already exists in this account".into())
+                })?;
+                Ok(json!({ "id": id.to_string(), "count": 1 }))
+            })
+        },
+    );
+
+    let p = pool.clone();
+    reg = reg.with_fn(
+        ToolSpec::write(
+            "workflowswift_update_tag",
+            "Update ONE of this account's OWN tags by id; every field is optional and omitted fields \
+             keep their value. Returns { id, count }. A foreign or missing id answers not_found.",
+        )
+        .min_role(Role::Workspace)
+        .schema(id_plus_schema(json!({
+            "name": prop("string", "Tag name."),
+            "color": prop("string", "#RRGGBB colour."),
+            "sort_order": prop("integer", "Sort position."),
+        }))),
+        move |ctx, args| {
+            let pool = p.clone();
+            Box::pin(async move {
+                let id = ctx.uuid_arg(&args, "id")?;
+                let updated: Option<Uuid> = sqlx::query_scalar(
+                    "update tags set \
+                       name = coalesce($3, name), \
+                       color = coalesce($4, color), \
+                       sort_order = coalesce($5, sort_order) \
+                     where id = $1 and aid::text = any($2::text[]) \
+                     returning id",
+                )
+                .bind(id)
+                .bind(scope_ids(&ctx))
+                .bind(opt_str(&args, "name"))
+                .bind(opt_str(&args, "color"))
+                .bind(opt_i64(&args, "sort_order"))
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| ToolError::Internal(format!("update_tag: {e}")))?;
+                let id = updated.ok_or(ToolError::NotFound)?;
+                Ok(json!({ "id": id.to_string(), "count": 1 }))
+            })
+        },
+    );
+
+    let p = pool.clone();
+    reg = reg.with_fn(
+        ToolSpec::write(
+            "workflowswift_archive_tag",
+            "Archive ONE of this account's OWN tags by id: sets is_active = false. Returns \
+             { id, count }. A foreign or missing id answers not_found. Nothing here hard-deletes.",
+        )
+        .min_role(Role::Workspace)
+        .schema(id_schema()),
+        move |ctx, args| {
+            let pool = p.clone();
+            Box::pin(async move {
+                let id = ctx.uuid_arg(&args, "id")?;
+                let archived: Option<Uuid> = sqlx::query_scalar(
+                    "update tags set is_active = false \
+                     where id = $1 and aid::text = any($2::text[]) \
+                     returning id",
+                )
+                .bind(id)
+                .bind(scope_ids(&ctx))
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| ToolError::Internal(format!("archive_tag: {e}")))?;
+                let id = archived.ok_or(ToolError::NotFound)?;
+                Ok(json!({ "id": id.to_string(), "count": 1 }))
+            })
+        },
+    );
+
     reg
 }
 
@@ -604,34 +1363,55 @@ mod tests {
     /// `#[tokio::test]` because a lazy pool is created inside a Tokio context, and every tool
     /// captures one even though this test never touches the database.
     #[tokio::test]
-    async fn the_registry_is_ten_reads() {
+    async fn the_registry_is_ten_reads_plus_fifteen_writes() {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://nobody:nobody@127.0.0.1:1/nothing")
             .expect("lazy pool");
         let reg = registry(pool);
         let mut names = reg.names();
         names.sort();
-        assert_eq!(
-            names,
-            vec![
-                "workflowswift_get_run",
-                "workflowswift_get_workflow",
-                "workflowswift_list_clients",
-                "workflowswift_list_dashboards",
-                "workflowswift_list_integrations",
-                "workflowswift_list_invoices",
-                "workflowswift_list_runs",
-                "workflowswift_list_templates",
-                "workflowswift_list_triggers",
-                "workflowswift_list_workflows",
-            ]
-        );
+
+        let reads: Vec<&str> = vec![
+            "workflowswift_get_run",
+            "workflowswift_get_workflow",
+            "workflowswift_list_clients",
+            "workflowswift_list_dashboards",
+            "workflowswift_list_integrations",
+            "workflowswift_list_invoices",
+            "workflowswift_list_runs",
+            "workflowswift_list_templates",
+            "workflowswift_list_triggers",
+            "workflowswift_list_workflows",
+        ];
+        let writes: Vec<&str> = vec![
+            "workflowswift_archive_client",
+            "workflowswift_archive_dashboard",
+            "workflowswift_archive_tag",
+            "workflowswift_archive_template",
+            "workflowswift_archive_workflow",
+            "workflowswift_create_client",
+            "workflowswift_create_dashboard",
+            "workflowswift_create_tag",
+            "workflowswift_create_template",
+            "workflowswift_create_workflow",
+            "workflowswift_update_client",
+            "workflowswift_update_dashboard",
+            "workflowswift_update_tag",
+            "workflowswift_update_template",
+            "workflowswift_update_workflow",
+        ];
+        let mut expected: Vec<&str> = reads.iter().chain(writes.iter()).copied().collect();
+        expected.sort();
+        assert_eq!(names, expected);
+
         assert!(
             reg.validate().is_empty(),
             "registry must validate at startup"
         );
-        for name in names {
-            let tool = reg.get(&name).expect("registered");
+
+        // The ten reads stay read-only and reachable by a read-only key.
+        for name in &reads {
+            let tool = reg.get(name).expect("registered");
             let spec = tool.spec();
             assert!(spec.annotations.read_only, "{name} must be read-only");
             assert!(
@@ -642,6 +1422,31 @@ mod tests {
                 spec.min_role,
                 Role::ReadOnly,
                 "{name} must allow a read-only key"
+            );
+            assert_eq!(spec.input_schema["type"], "object");
+            assert!(
+                spec.description.len() > 20,
+                "{name} needs a real description"
+            );
+        }
+
+        // Every write tool is non-read-only, non-destructive (archive is soft), and requires a
+        // workspace key — a read-only key must never see it in `tools/list`.
+        for name in &writes {
+            let tool = reg.get(name).expect("registered");
+            let spec = tool.spec();
+            assert!(
+                !spec.annotations.read_only,
+                "{name} must not be annotated read-only"
+            );
+            assert!(
+                !spec.annotations.destructive,
+                "{name} archives, it does not destroy"
+            );
+            assert_eq!(
+                spec.min_role,
+                Role::Workspace,
+                "{name} must require a workspace key"
             );
             assert_eq!(spec.input_schema["type"], "object");
             assert!(

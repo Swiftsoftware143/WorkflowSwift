@@ -43,7 +43,11 @@ serde_urlencoded = "0.7"
 # The shared MCP door (kanban t_6364d995): JSON-RPC transport, credential contract, tenancy,
 # 404-not-403, audit line, tool registry. PINNED to a rev — a door that changes under this product
 # between builds is not a contract. Do not edit the crate from here; move the rev deliberately.
-mcp-door = { git = "https://github.com/Swiftsoftware143/mcp-door", rev = "15aef65e324c804dc1f3cc6ebe112c0e537aaede" }
+#
+# Moved 15aef65 -> 7950337 (0.1.2 on the axum 0.7 line) for kanban t_bb4d4d33: that rev adds
+# role-filtered `tools/list`, so a read-only key is not OFFERED the write tools it will be refused
+# (`Registry::page(role, …)`). Same code as 0.4.0 apart from the axum generation.
+mcp-door = { git = "https://github.com/Swiftsoftware143/mcp-door", rev = "795033790d27c98d74f0e9bdf2ca7ef3b12e5d61" }
 # The door's request path returns an axum 0.7 response body and this app runs axum 0.8; both
 # implement `http_body::Body`, so the module collects the bytes with this and nothing else.
 http-body-util = "0.1"

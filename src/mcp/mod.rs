@@ -27,8 +27,9 @@
 //!
 //! `api_keys`, `user_api_keys`, `n8n_account_config`, `provider_keys`, `webhooks`,
 //! `integration_targets.api_key`, `credit_transactions`, `account_erasures` — no tool reads them.
-//! There is also no write tool at all in this phase: a workflow start spends credits and gets its
-//! own card and cap.
+//! The WRITE tools (kanban t_bb4d4d33) are the five entities' create/update/archive; a workflow
+//! start (`POST /workflows/{id}/run`) still spends credits and is deliberately not a tool, and
+//! nothing can close or erase an account.
 
 pub mod tools;
 
@@ -50,7 +51,7 @@ use crate::AppState;
 /// Where the app's door name appears on the wire and in every audit line.
 pub const DOOR_NAME: &str = "workflowswift";
 
-/// The tool registry this door serves. Ten reads, nothing else (see [`tools`]).
+/// The tool registry this door serves. Ten reads plus fifteen writes (see [`tools`]).
 type Registry = mcp_door::Registry;
 
 /// Resolve `Authorization: Bearer <api key>` to the account the data is keyed by.
@@ -63,8 +64,8 @@ type Registry = mcp_door::Registry;
 ///
 /// The ROLE is derived from the app's own answer rather than assumed: a key whose `permissions`
 /// allow a write scope is a workspace key, one restricted to reads is a read-only key. Both may use
-/// this door — every tool here is a read — and the distinction is what a future write tool's
-/// `min_role` will lean on.
+/// this door — the read-only key sees only the ten reads, while the workspace key also sees the
+/// fifteen write tools, which carry `min_role Workspace`.
 pub struct KeyResolver {
     state: AppState,
 }
@@ -97,11 +98,20 @@ impl CredentialResolver for KeyResolver {
     }
 }
 
-/// The audit identity is the ACCOUNT the key belongs to — never the key, its prefix or its hash.
-/// The workspace is the tenancy boundary, so naming it is the useful, non-secret fact.
+/// The audit identity names the KEY (its console label) and the account it belongs to — never the
+/// key's prefix or hash, which are part of the secret. The account stays in the subject so a write
+/// stays attributable to the tenancy boundary even when the label is the shared default.
 fn caller(claims: &crate::auth::models::Claims, role: Role) -> Caller {
     match uuid::Uuid::parse_str(&claims.aid) {
-        Ok(aid) => Caller::new(format!("workflowswift account {aid}"), role).with_tenant(aid),
+        Ok(aid) => {
+            let label = claims
+                .key_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("account");
+            Caller::new(format!("workflowswift:{label}@{aid}"), role).with_tenant(aid)
+        }
         // A claim this app cannot parse is not a caller. `Caller::validate` would also refuse an
         // empty subject, but failing here keeps the reason precise.
         Err(_) => Caller::new("", role),
@@ -123,11 +133,13 @@ pub fn build_door(state: &AppState) -> Door {
     .tool_timeout(Duration::from_secs(20))
     .audit(audit_path())
     .instructions(
-        "WorkflowSwift's read-only MCP surface. The bearer token IS the workspace: every tool reads \
-         only the account that key belongs to and no tool takes a workspace argument. Reads cover \
-         workflows and their steps, runs, pending triggers, templates, dashboards, clients, \
-         integration destinations and invoices. Run results are returned as 2,000-character \
-         excerpts of untrusted data. Nothing here can change or delete anything.",
+        "WorkflowSwift's read+write MCP surface. The bearer token IS the workspace: every tool reads \
+         or writes only the account that key belongs to and no tool takes a workspace argument. \
+         Reads cover workflows and their steps, runs, pending triggers, templates, dashboards, \
+         clients, integration destinations and invoices. Writes are create/update/archive for \
+         workflows, templates, dashboards, clients and tags; archive is always soft (is_active = \
+         false) and nothing here hard-deletes or closes an account. Run results are returned as \
+         2,000-character excerpts of untrusted data.",
     )
     .build()
     .unwrap_or_else(|e| panic!("WorkflowSwift MCP door refused to start: {e}"))

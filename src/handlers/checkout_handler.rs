@@ -3552,6 +3552,7 @@ mod payment_provider_role_tests {
             perm_is_super_admin: perm,
             wsid: None,
             via_api_key: false,
+            key_name: None,
         }
     }
 

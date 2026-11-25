@@ -260,6 +260,7 @@ pub async fn register(
         perm_is_super_admin: Some(false),
         wsid: None,
         via_api_key: false,
+        key_name: None,
     };
     let token = create_token(&claims, &state.config.jwt_secret)?;
 
@@ -275,6 +276,7 @@ pub async fn register(
         perm_is_super_admin: Some(false),
         wsid: None,
         via_api_key: false,
+        key_name: None,
     };
     let refresh_token = create_token(&refresh_claims, &state.config.jwt_secret)?;
 
@@ -493,6 +495,7 @@ pub async fn login(
         perm_is_super_admin: Some(user.perm_is_super_admin),
         wsid: None,
         via_api_key: false,
+        key_name: None,
     };
     let token = create_token(&claims, &state.config.jwt_secret)?;
 
@@ -507,6 +510,7 @@ pub async fn login(
         perm_is_super_admin: Some(user.perm_is_super_admin),
         wsid: None,
         via_api_key: false,
+        key_name: None,
     };
     let refresh_token = create_token(&refresh_claims, &state.config.jwt_secret)?;
 
@@ -761,6 +765,7 @@ pub async fn change_password(
         perm_is_super_admin: Some(user.perm_is_super_admin),
         wsid: None,
         via_api_key: false,
+        key_name: None,
     };
     let token = create_token(&fresh, &state.config.jwt_secret)?;
 
@@ -827,6 +832,7 @@ pub async fn logout_all(
         perm_is_super_admin: Some(user.perm_is_super_admin),
         wsid: None,
         via_api_key: false,
+        key_name: None,
     };
     let token = create_token(&claims, &state.config.jwt_secret)?;
 

@@ -260,6 +260,7 @@ pub async fn authenticate(
     let key_id: Uuid = row.try_get("id")?;
     let aid: Uuid = row.try_get("aid")?;
     let user_id: Uuid = row.try_get("user_id")?;
+    let key_name: Option<String> = row.try_get("name").ok().flatten();
     let is_active: bool = row.try_get("is_active").unwrap_or(false);
     let expires_at: Option<DateTime<Utc>> = row.try_get("expires_at").ok().flatten();
     let permissions: serde_json::Value = row
@@ -357,6 +358,8 @@ pub async fn authenticate(
         wsid: None,
         // Least privilege, and the flag the destructive doors read: a key is NEVER a session.
         via_api_key: true,
+        // The console label of this key, for the MCP door's audit subject (never bytes of the key).
+        key_name,
     })
 }
 
@@ -371,7 +374,7 @@ async fn verify_candidates(
     token: &str,
 ) -> Result<Option<sqlx::postgres::PgRow>, AppError> {
     let rows = sqlx::query(
-        "SELECT id, aid, user_id, key_hash, permissions, is_active, expires_at \
+        "SELECT id, aid, user_id, name, key_hash, permissions, is_active, expires_at \
          FROM api_keys WHERE prefix = $1",
     )
     .bind(prefix)

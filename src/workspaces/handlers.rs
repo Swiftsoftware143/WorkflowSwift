@@ -475,6 +475,7 @@ pub async fn switch_workspace(
         pwd_minted: false,
         wsid: Some(id.to_string()),
         via_api_key: false,
+        key_name: None,
     };
     let access_token = create_token(&access_claims, &state.config.jwt_secret)?;
 
@@ -488,6 +489,7 @@ pub async fn switch_workspace(
         pwd_minted: false,
         wsid: Some(id.to_string()),
         via_api_key: false,
+        key_name: None,
     };
     let refresh_token = create_token(&refresh_claims, &state.config.jwt_secret)?;
 

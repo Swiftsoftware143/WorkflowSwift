@@ -29,6 +29,11 @@ pub struct Claims {
     /// keeps tokens issued before this field existed decodable — they are all session tokens.
     #[serde(default)]
     pub via_api_key: bool,
+    /// The API key's own `name` (its console label) when the bearer was an API key — the MCP door
+    /// uses it as the audit subject so a write is attributable to the KEY, never to bytes of it.
+    /// `None` on a session JWT and on tokens minted before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_name: Option<String>,
 }
 
 /// Body of `POST /api/v1/auth/initial-password` — the password a customer whose credentials mail
