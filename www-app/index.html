@@ -228,7 +228,7 @@ window.appGuidePages = {
   // earlier passes fixed for lists, calendar, team and branding elsewhere in the fleet).
   // Keys must match the NAV ids in `const NAV` above, which is what the widget matches on.
   plan:          { title: "Plan & Billing", desc: "Your current plan, what this workspace is using, and the plans this installation offers. Every figure here is the server's own count, read fresh each visit. When card payment is not switched on for the installation, a plan button records your request for our team instead of opening a payment page \u2014 nothing is ever charged from this screen.", actions: ["Check which plan this workspace is on", "Read your usage counts against the plan's allowance", "Press a plan to request it, or open its payment page when one is set", "See every payment this workspace attempted in Payment history", "Read the invoices our team has raised for this workspace, and which of them are paid"] },
-  mcp:           { title: "MCP", desc: "Connects an AI tool \u2014 Claude Code, Cursor or your own agent \u2014 to read this workspace. Read-only: the tool can look, not change. The server accepts this workspace's API key as its token, so the key on this screen is the same one the API Keys screen shows.", actions: ["Copy the endpoint into your AI tool's MCP settings", "Create a key on API Keys if this workspace has none yet", "Press Reveal to see the key, or Regenerate to replace one you think leaked \u2014 any client still using the old key stops"] },
+  mcp:           { title: "MCP", desc: "Connects an AI tool \u2014 Claude Code, Cursor or your own agent \u2014 to read this workspace. Read-only: the tool can look, not change. The server accepts this workspace's API key as its token, so the key on this screen is the same one the API Keys screen shows.", actions: ["Copy the endpoint into your AI tool's MCP settings", "Create a key on API Keys if this workspace has none yet", "Press View to see the key, or Copy to put it on your clipboard without showing it \u2014 to replace a key you think leaked, press Regenerate on the API Keys screen"] },
   dashboard:     { title: "Dashboard", desc: "Your workspace at a glance \u2014 workflows, leads and activity in one place.", actions: ["Scan recent activity", "Jump into a workflow"] },
   inbox:         { title: "Inbox", desc: "Your own addresses on your own domain and the newest mail that reached them. The Recent mail list has a search box that reads the subject, the sender and the opening text of every message; reading and answering happens in the mail client at inbox.workflowswift.com, which is the same account.", actions: ["Add your domain and press Show records", "Press Check again once the records are in DNS", "Create an address and mail to it", "Type in Search subject, sender or text to narrow the recent mail", "Open the mail client to read and answer"] },
   workflows:     { title: "Workflows", desc: "The automations you have built. Each one is a multi-step flow that takes a lead from first contact to a result.", actions: ["Create a workflow", "Open one to edit it"] },
@@ -2484,21 +2484,13 @@ const copyApiKey = async () => { const t = S.newApiKey || ''; try { await naviga
 // ===== MCP (fleet slot directly above the account/settings entry; docs/fleet-mcp-nav-convention.md) =====
 // One nav entry, one panel, same slot relative to Settings in every app. The token is THIS
 // workspace's own API key — the same row a `Authorization: Bearer` call authenticates with — and
-// Reveal / Regenerate reuse the EXACT endpoints the API Keys screen uses, so the two surfaces can
-// never disagree about what a key is or which one is live.
+// View / Copy reuse the EXACT reveal endpoint the API Keys screen uses, so the two surfaces can
+// never disagree about what a key is or which one is live. Rotation stays on the API Keys screen
+// (plan §6.4): the MCP page shows View + Copy only.
 const MCP_ENDPOINT = 'https://hooks.swiftsoftware.net/mcp';
 const mcpActiveKey = () => { const l = (S.apiKeys || []).filter(k => k.is_active); return l[0] || null; };
-const mcpReveal = async (id) => {
-  try { const r = await API.revealApiKey(id); S.mcpShown = { id, key: r.key }; renderApp(); }
-  catch (e) { toast('Could not show the key: ' + e.message, 'err'); }
-};
-const mcpRegenerate = async (id) => {
-  if (!confirm('Regenerate this API key? The current key stops working immediately — any MCP client or API call already using it stops until you paste the new key in.')) return;
-  try { const r = await API.regenerateApiKey(id); S.mcpShown = { id: r.id, key: r.key }; S.apiKeys = null; renderApp(); loadApiKeys(); }
-  catch (e) { toast('Could not regenerate the key: ' + e.message, 'err'); }
-};
 const mcpCopy = async (text, elId) => {
-  if (!text) return toast('Reveal the key first', 'err');
+  if (!text) return toast('View the key first', 'err');
   try { await navigator.clipboard.writeText(text); toast('Copied to clipboard'); return; }
   catch (e) {}
   const el = elId ? document.getElementById(elId) : null;
@@ -2645,13 +2637,6 @@ const McpView = () => {
       st.revealedId = id; st.revealed = r.key; renderApp();
     } catch (e) { toast('Could not show the key: ' + ((e && e.message) || 'unknown error'), 'err'); }
   };
-  const regen = async (id) => {
-    if (!confirm('Regenerate this key? The current key stops working immediately, so anything already wired up with it — including any connected MCP client — stops until you paste the new one in.')) return;
-    try {
-      const r = await API.regenerateApiKey(id);
-      st.revealedId = r.id; st.revealed = r.key; S.apiKeys = null; loadApiKeys();
-    } catch (e) { toast('Could not regenerate the key: ' + ((e && e.message) || 'unknown error'), 'err'); }
-  };
   const k = activeKey();
   const email = (API.user && API.user.email) || 'this account';
 
@@ -2681,15 +2666,15 @@ const McpView = () => {
     ? html`
       ${step(1, 'Open Claude on the web, on a computer', 'Settings → Connectors → Add custom connector. The Claude phone app cannot add one.')}
       ${step(2, html`Name it <b>WorkflowSwift</b> and paste the address below`, addressRow)}
-      ${step(3, 'Choose to authenticate with a token, and paste your API key', 'The key is on the card below. Claude sends it as a bearer token on every request.')}
-      ${step(4, 'Save it, then ask a question', 'Try “Show me my workflows.” If no tools appear, the key is the thing to replace.')}`
+      ${step(3, 'Choose to authenticate with a token, and paste your API key', 'The key is on the card above. Claude sends it as a bearer token on every request.')}
+      ${step(4, 'Save it, then ask a question', 'Try “Show me my workflows.” If no tools appear, the key is the thing to replace — regenerate it on the API Keys screen.')}`
     : html`
       ${step(1, 'Open chatgpt.com on a computer, not your phone', 'This cannot be set up in the ChatGPT phone app.')}
       ${step(2, 'Switch on developer mode in ChatGPT settings', 'On a Plus or Pro account it is under Security and login. On a Business, Enterprise or Education account it is under Apps → Advanced settings, and an administrator may have to allow it first.')}
       ${step(3, html`Open Apps and press the <b>+</b> to add one. Call it <b>WorkflowSwift</b>`, 'Some accounts call these Plugins or Connectors instead.')}
       ${step(4, 'Paste this address into the address box', addressRow)}
-      ${step(5, 'Where it asks how to sign in, choose API key (Bearer token)', 'There is no OAuth approval here. Paste the key from the card below into the token field.')}
-      ${step(6, 'Press Create, then ask it a question', 'Try “Which workflow instances ran this week?” If no tools appear, the key was rejected — regenerate it and paste the new one.')}`;
+      ${step(5, 'Where it asks how to sign in, choose API key (Bearer token)', 'There is no OAuth approval here. Paste the key from the card above into the token field.')}
+      ${step(6, 'Press Create, then ask it a question', 'Try “Which workflow instances ran this week?” If no tools appear, the key was rejected — regenerate it on the API Keys screen and paste the new one.')}`;
 
   const checkServer = async () => {
     st.checkBusy = true; st.checkMsg = 'Checking…'; renderApp();
@@ -2700,7 +2685,7 @@ const McpView = () => {
       });
       st.checkMsg = (r.status === 401)
         ? 'The server answered and asked for a key — that is the right state. Paste your key into the client.'
-        : 'The server answered with status ' + r.status + '. If your client reports nothing, regenerate the key.';
+        : 'The server answered with status ' + r.status + '. If your client reports nothing, regenerate the key on the API Keys screen.';
     } catch (e) {
       st.checkMsg = 'This browser could not reach the server (it may be blocked on your network). The service itself is up — check from the client.';
     }
@@ -2728,8 +2713,8 @@ const McpView = () => {
         ${p(html`Your AI app (Claude, ChatGPT, Cursor, an agent) connects to <code>${MCP_ENDPOINT}</code> and authenticates with this account's API key. Every request is scoped to <b>your</b> workspace — another account's rows are refused at the database, not by instruction.`)}
         ${p('The connection is read-only: the service can read your leads, clients, workflows, instances, templates, dashboards, instance steps, widgets, renditions, credit transactions, industries, portfolio companies and plan. It cannot change anything.')}`;
       case 1: return html`
-        ${p('The key is this workspace\u2019s API key, shown by prefix on the card above. Reveal shows it in one click (the view is recorded), Copy puts it on your clipboard without showing it, and Regenerate replaces the key and stops every client using the old one. Treat it like a password — anyone holding it can read this workspace.')}
-        ${p('If your client lists no tools at all, the key is almost always the cause: regenerate it and paste the new one.')}`;
+        ${p('The key is this workspace\u2019s API key, shown by prefix on the card above. View shows it in one click (the view is recorded) and Copy puts it on your clipboard without showing it. To replace the key — and stop every client using the old one — press Regenerate on the API Keys screen. Treat it like a password — anyone holding it can read this workspace.')}
+        ${p('If your client lists no tools at all, the key is almost always the cause: regenerate it on the API Keys screen and paste the new one.')}`;
       case 2: return html`
         ${p('Add the server to Claude Code, then replace the key:')}
         ${codeBlock('claude mcp add workflowswift --url ' + MCP_ENDPOINT + ' --header "Authorization: Bearer YOUR_API_KEY"')}`;
@@ -2737,7 +2722,7 @@ const McpView = () => {
         ${p('Paste this into the client\u2019s MCP config (' + devTabs[i] + '), replacing YOUR_API_KEY with this workspace\u2019s key:')}
         ${codeBlock(MCP_UI_CONFIG_TEXT)}`;
       case 6: return html`
-        ${p('No tools listed → the key was rejected; regenerate it and paste the new one.')}
+        ${p('No tools listed → the key was rejected; regenerate it on the API Keys screen and paste the new one.')}
         ${p('A 403 before any sign-in → the edge filtered the request; use the unfiltered address https://mcp.swiftsoftware.net/mcp.')}
         ${p('A 401 → the client is not sending the key as a Bearer token; check the Authorization header.')}`;
       default: return html`
@@ -2752,6 +2737,25 @@ const McpView = () => {
     <h2 class="text-xl font-bold mb-1">Connect AI with WorkflowSwift</h2>
     <p class="text-sm text-gray-500 mb-5">Ask Claude or ChatGPT about your workflows, runs, clients and credits — and have it do the reading for you.</p>
 
+    ${card('Your API key', html`
+      <p class="text-xs text-gray-500 mb-3">The MCP server accepts this workspace's API key as a Bearer token. It is listed by prefix only — the secret is never shown on load. <b>View</b> shows it in one click and records that you did; <b>Copy</b> puts it on your clipboard without showing it. To replace a key you think leaked, press <b>Regenerate</b> on the API Keys screen. Treat it like a password: anyone holding it can read this workspace.</p>
+      ${(!S.apiKeys && !S.loading) ? html`<p class="text-sm text-gray-400">Loading your key…</p>`
+        : (!k ? html`<p class="text-sm text-gray-500">No active API key on this account. Create one on the <a href="javascript:void 0" onClick=${() => setView('api-keys')} style="color:#2563eb">API Keys</a> screen, then come back to connect an MCP client.</p>`
+        : html`<div>
+          <div class="flex items-center justify-between gap-2 flex-wrap" style="padding:6px 0">
+            <span class="text-sm"><strong>${k.name || 'API key'}</strong> <code class="font-mono" style="font-size:11px;color:var(--accent)">${k.prefix || ''}${k.prefix ? '…' : ''}</code><br/><span class="text-xs text-gray-400">${k.created_at ? 'Created ' + new Date(k.created_at).toLocaleDateString() : ''}</span></span>
+            <span style="white-space:nowrap">
+              <button class="btn-outline text-sm" onClick=${() => reveal(k.id, false)}>View</button>
+              <button class="btn-outline text-sm" style="margin-left:6px" onClick=${() => reveal(k.id, true)}>Copy</button>
+            </span>
+          </div>
+          ${(st.revealed && st.revealedId === k.id) ? html`<div class="flex items-center gap-2 flex-wrap" style="background:var(--accent-soft);border:1px solid #bfdbfe;border-radius:6px;padding:8px;margin-top:6px">
+            <input class="font-mono" aria-label="Your revealed API key" style="flex:1;min-width:220px;font-size:12px;border:1px solid var(--line);border-radius:6px;padding:6px 10px" readonly value=${st.revealed} onFocus=${e => e.target.select()} />
+            <button class="btn text-sm" onClick=${() => mcpCopy(st.revealed)}>Copy</button>
+          </div>` : null}
+        </div>`)}
+    `)}
+
     ${card('', html`
       ${label('CONNECT WITH YOUR API KEY')}
       <p style="color:var(--ink);margin-bottom:14px;max-width:70ch">For ChatGPT and Claude on the web. There is no app to install: you give your AI client this workspace\u2019s API key so every answer is scoped to <strong>your</strong> data and nobody else\u2019s.</p>
@@ -2762,28 +2766,8 @@ const McpView = () => {
       ${stepsFor(st.clientTab)}
     `)}
 
-    ${card('Your API key', html`
-      <p class="text-xs text-gray-500 mb-3">The MCP server accepts this workspace's API key as a Bearer token. It is listed by prefix only — the secret is never shown on load. <b>Reveal</b> shows it in one click and records that you did; <b>Copy</b> puts it on your clipboard without showing it. Treat it like a password: anyone holding it can read this workspace.</p>
-      ${(!S.apiKeys && !S.loading) ? html`<p class="text-sm text-gray-400">Loading your key…</p>`
-        : (!k ? html`<p class="text-sm text-gray-500">No active API key on this account. Create one on the <a href="javascript:void 0" onClick=${() => setView('api-keys')} style="color:#2563eb">API Keys</a> screen, then come back to connect an MCP client.</p>`
-        : html`<div>
-          <div class="flex items-center justify-between gap-2 flex-wrap" style="padding:6px 0">
-            <span class="text-sm"><strong>${k.name || 'API key'}</strong> <code class="font-mono" style="font-size:11px;color:var(--accent)">${k.prefix || ''}${k.prefix ? '…' : ''}</code><br/><span class="text-xs text-gray-400">${k.created_at ? 'Created ' + new Date(k.created_at).toLocaleDateString() : ''}</span></span>
-            <span style="white-space:nowrap">
-              <button class="btn-outline text-sm" onClick=${() => reveal(k.id, false)}>Reveal</button>
-              <button class="btn-outline text-sm" style="margin-left:6px" onClick=${() => reveal(k.id, true)}>Copy</button>
-              <button class="btn-outline text-sm" style="margin-left:6px;color:var(--warn)" onClick=${() => regen(k.id)}>Regenerate</button>
-            </span>
-          </div>
-          ${(st.revealed && st.revealedId === k.id) ? html`<div class="flex items-center gap-2 flex-wrap" style="background:var(--accent-soft);border:1px solid #bfdbfe;border-radius:6px;padding:8px;margin-top:6px">
-            <input class="font-mono" aria-label="Your revealed API key" style="flex:1;min-width:220px;font-size:12px;border:1px solid var(--line);border-radius:6px;padding:6px 10px" readonly value=${st.revealed} onFocus=${e => e.target.select()} />
-            <button class="btn text-sm" onClick=${() => mcpCopy(st.revealed)}>Copy</button>
-          </div>` : null}
-        </div>`)}
-    `)}
-
     ${card('How the connection works', html`
-      <p style="color:var(--ink);font-size:13px;margin:0;max-width:70ch">We do not keep a list of the apps you have connected — your key is the connection. That means one action disconnects everything at once: regenerate the key above and every client using the old one stops working immediately.</p>
+      <p style="color:var(--ink);font-size:13px;margin:0;max-width:70ch">We do not keep a list of the apps you have connected — your key is the connection. That means one action disconnects everything at once: regenerate the key on the API Keys screen and every client using the old one stops working immediately.</p>
     `)}
 
     ${card('', html`
@@ -2868,7 +2852,7 @@ const McpView = () => {
     `)}
 
     ${card('Need help getting connected?', html`
-      <p style="color:var(--ink);font-size:13px;margin:0">Copy your setup with the button above and paste it to us, or read the step-by-step in the guide. If your client lists no tools at all, the key is the thing to replace first — that is almost always the cause.</p>
+      <p style="color:var(--ink);font-size:13px;margin:0">Copy your setup with the button above and paste it to us, or read the step-by-step in the guide. If your client lists no tools at all, the key is the thing to replace first — regenerate it on the API Keys screen; that is almost always the cause.</p>
     `)}
   </div>`;
 };

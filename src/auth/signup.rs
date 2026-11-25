@@ -531,7 +531,7 @@ pub async fn create_account(
         &mut tx,
         user_id,
         account_id,
-        "auto-provisioned",
+        &format!("MCP — {}", account_name),
         "",
     )
     .await?;
