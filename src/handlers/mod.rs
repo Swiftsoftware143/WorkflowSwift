@@ -1,5 +1,7 @@
 pub mod account_export;
 pub mod account_handler;
+// REST twins for the entities the MCP door writes (kanban t_bb4d4d33): clients, dashboards.
+pub mod agent_entities_handler;
 pub mod api_key_handler;
 pub mod automation_handler;
 pub mod credit_handler;

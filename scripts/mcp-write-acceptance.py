@@ -404,6 +404,59 @@ def main() -> int:
         check(f"{e['slug']} foreign id -> not_found",
               is_err and payload.get("error") == "not_found", f"{payload}")
 
+    # ── 4b. REST parity: the SAME key, the same scoping (kanban t_bb4d4d33) ──────────────────
+    # Clients and dashboards had NO REST write path before this card; tags had create only.
+    REST_ENTITIES = [
+        ("workflow", "workflows", "/api/v1/workflows", {"description": "probe rest"},
+         {"description": "probe rest updated"}),
+        ("template", "workflow_templates", "/api/v1/templates",
+         {"category": "probe", "description": "probe rest", "steps": []},
+         {"description": "probe rest updated"}),
+        ("dashboard", "dashboards", "/api/v1/dashboards", {"description": "probe rest"},
+         {"description": "probe rest updated"}),
+        ("client", "clients", "/api/v1/clients", {"email": "probe_t_bb4d4d33@example.invalid"},
+         {"email": "probe_t_bb4d4d33+u@example.invalid"}),
+        ("tag", "tags", "/api/v1/tags", {"color": "#10b981"}, {"color": "#0ea5e9"}),
+    ]
+    for slug, table, collection, extra_create, extra_update in REST_ENTITIES:
+        rest_name = f"{MARKER}-rest-{slug}-{secrets.token_hex(2)}"
+        s, b = http("POST", collection, {"name": rest_name, **extra_create}, api_key=owner_key)
+        rest_id = (b or {}).get("id") if isinstance(b, dict) else None
+        if not rest_id and isinstance(b, dict):
+            for key in ("tag", "client", "dashboard", "workflow", "template"):
+                inner = b.get(key)
+                if isinstance(inner, dict) and inner.get("id"):
+                    rest_id = inner["id"]
+                    break
+        check(f"REST {slug} create -> 201 + id", s == 201 and bool(rest_id), f"HTTP {s} {b}")
+        if not rest_id:
+            continue
+        # read back: tags have no GET /{id} route, so the collection is the read there
+        read_path = collection if slug == "tag" else f"{collection}/{rest_id}"
+        s, b = http("GET", read_path, api_key=owner_key)
+        check(f"REST {slug} read back", s == 200 and rest_id in json.dumps(b), f"HTTP {s}")
+        s, b = http("PUT", f"{collection}/{rest_id}", extra_update, api_key=owner_key)
+        check(f"REST {slug} update",
+              s == 200 and (rest_id in json.dumps(b) or "updated" in json.dumps(b).lower()),
+              f"HTTP {s} {b}")
+        s, b = http("DELETE", f"{collection}/{rest_id}", api_key=owner_key)
+        check(f"REST {slug} delete -> 200", s == 200, f"HTTP {s} {b}")
+        archived = scalar(
+            f"SELECT coalesce(is_active, false) FROM {table} WHERE id = '{rest_id}' AND aid = '{owner_aid}'"
+        )
+        # workflows/clients/dashboards/tags archive (is_active=false); the console's template Delete
+        # is its own legacy hard delete, so an empty result there is the documented behaviour — the
+        # MCP tool is the surface that archives.
+        check(f"REST {slug} delete is archive (or the console's documented hard delete)",
+              archived in ("f", ""), f"is_active={archived!r}")
+        fid = foreign_ids.get(slug)
+        if fid:
+            fread = collection if slug == "tag" else f"{collection}/{fid}"
+            s, b = http("GET", fread, api_key=owner_key)
+            leaked = s == 200 and fid in json.dumps(b)
+            check(f"REST {slug} foreign id not visible", (s == 404) or (s == 200 and not leaked),
+                  f"HTTP {s} leaked={leaked}")
+
     # ── 5. platform-admin refusal ──────────────────────────────────────────────────────────────
     s, b = http("PUT", f"/api/v1/admin/accounts/{second['aid']}/active",
                 {"is_active": True}, api_key=owner_key)

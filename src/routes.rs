@@ -202,8 +202,41 @@ pub fn create_router(state: AppState) -> Router {
             "/",
             get(handlers::tag_handler::list_tags).post(handlers::tag_handler::create_tag),
         )
+        .route(
+            "/{id}",
+            axum::routing::put(handlers::tag_handler::update_tag)
+                .delete(handlers::tag_handler::delete_tag),
+        )
         .route("/assign", post(handlers::tag_handler::assign_tag))
         .route("/unassign", post(handlers::tag_handler::unassign_tag));
+
+    // Clients and dashboards had a read tool on the MCP door and no REST write path at all
+    // (kanban t_bb4d4d33). Same credential, same tenant scoping, archive rather than delete.
+    let client_routes = Router::new()
+        .route(
+            "/",
+            get(handlers::agent_entities_handler::list_clients)
+                .post(handlers::agent_entities_handler::create_client),
+        )
+        .route(
+            "/{id}",
+            get(handlers::agent_entities_handler::get_client)
+                .put(handlers::agent_entities_handler::update_client)
+                .delete(handlers::agent_entities_handler::delete_client),
+        );
+
+    let dashboard_entity_routes = Router::new()
+        .route(
+            "/",
+            get(handlers::agent_entities_handler::list_dashboards)
+                .post(handlers::agent_entities_handler::create_dashboard),
+        )
+        .route(
+            "/{id}",
+            get(handlers::agent_entities_handler::get_dashboard)
+                .put(handlers::agent_entities_handler::update_dashboard)
+                .delete(handlers::agent_entities_handler::delete_dashboard),
+        );
 
     let plan_routes = Router::new()
         .route(
@@ -984,6 +1017,8 @@ pub fn create_router(state: AppState) -> Router {
         .nest("/workflows", workflow_routes)
         .nest("/instances", instance_routes)
         .nest("/tags", tag_routes)
+        .nest("/clients", client_routes)
+        .nest("/dashboards", dashboard_entity_routes)
         .nest("/plans", plan_routes)
         .nest("/credits", credit_routes)
         .nest("/workspaces", workspace_routes)
