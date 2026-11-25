@@ -16,6 +16,7 @@ Two handlers are proved, because the app has two key tables and two reveal route
 
 Checks (one PASS/FAIL line each, exit 1 on any FAIL):
   1.  signup probe A minted exactly ONE key; the list is prefix-only (no plaintext)
+  1b. the integration key signup itself provisioned reveals in one click (minted sealed)
   2.  programmatic reveal with the session and NO BODY AT ALL      -> 200 + the full key
   3.  the legacy {"password": "…"} body still answers              -> 200 (old clients keep working)
   4.  every programmatic reveal wrote an `api_key_reveals` row (>= 2 by now)
@@ -186,6 +187,19 @@ def main():
           f"HTTP {s} keys={len(keys_a)} prefix={key.get('prefix') if key else None}")
     if not key:
         raise SystemExit("no key to reveal — cannot continue")
+
+    # ── 1b. the keys signup itself provisioned are readable too (each is minted sealed) ─────────
+    s, ulist = http("GET", "/api/v1/user-keys", token=a["token"])
+    ukeys = (ulist.get("keys") or []) if isinstance(ulist, dict) else []
+    prov = next((k for k in ukeys
+                 if isinstance(k, dict) and str(k.get("prefix", "")).startswith("whsec_")), None)
+    s2, ubody = (http("POST", f"/api/v1/user-keys/{prov['id']}/reveal", token=a["token"], raw_body=True)
+                 if prov else (0, {}))
+    ubody = ubody if isinstance(ubody, dict) else {}
+    check("1b signup's own integration key is revealable in one click",
+          s == 200 and prov is not None and s2 == 200
+          and str(ubody.get("key", "")).startswith("whsec_"),
+          f"list HTTP {s} keys={len(ukeys)} reveal {s2}")
 
     # ── 2. one click: session + NO BODY ─────────────────────────────────────────────────────────
     s, body = http("POST", f"/api/personal-api-keys/{key['id']}/reveal", token=a["token"], raw_body=True)

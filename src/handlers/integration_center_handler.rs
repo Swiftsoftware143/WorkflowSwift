@@ -519,47 +519,24 @@ pub async fn revoke_user_key(
 // Auto-generate keys on registration
 // ──────────────────────────────────────────────
 
-/// Called after user registration to create initial keys
+/// Called after user registration to create the initial keys.
+///
+/// Every row goes through [`mint_user_key_on`] — the ONE writer — so each of these keys carries a
+/// SEALED copy and can be read back with View/Copy (plan §6.2/§8, card t_18a8fa3c). The hand
+/// `INSERT` that used to live here left `key_encrypted` NULL, so all three keys of every new account
+/// answered the reveal with 400 "created before keys were stored recoverably" — View was never one
+/// click for a single key a customer could see on the API Keys screen.
 pub async fn seed_user_keys(
     db: &sqlx::PgPool,
     user_id: Uuid,
     aid: Uuid,
 ) -> Result<(), sqlx::Error> {
-    let key_types = ["primary", "webhook_secret", "surface_token"];
-    let prefixes = ["wf_swift_", "whsec_", "sf_"];
-
-    for (i, key_type) in key_types.iter().enumerate() {
-        let random_part: String = (0..32)
-            .map(|_| {
-                let idx = rand::thread_rng().gen_range(0..36);
-                "0123456789abcdefghijklmnopqrstuvwxyz"[idx..idx + 1].to_string()
-            })
-            .collect();
-
-        let raw_key = format!("{}{}", prefixes[i], random_part);
-        // Three 19 MiB Argon2 hashes per call, and the only caller is `register` — an
-        // UNAUTHENTICATED route. They run off the reactor under the shared Argon2 semaphore
-        // (auth::api_key_auth::argon2_hash) like every other hash site, so a registration
-        // flood queues in the scheduler instead of occupying the tokio worker threads.
-        let key_hash = crate::auth::api_key_auth::argon2_hash(raw_key.clone())
+    for key_type in ["primary", "webhook_secret", "surface_token"] {
+        let mut conn = db.acquire().await?;
+        mint_user_key_on(&mut conn, user_id, aid, key_type, None)
             .await
             .map_err(|e| sqlx::Error::Protocol(e.to_string()))?;
-        let prefix_display = &raw_key[..raw_key.len().min(12)];
-
-        sqlx::query(
-            "INSERT INTO user_api_keys (id, user_id, aid, key_type, key_hash, key_prefix)
-             VALUES ($1, $2, $3, $4, $5, $6)",
-        )
-        .bind(Uuid::new_v4())
-        .bind(user_id)
-        .bind(aid)
-        .bind(key_type)
-        .bind(&key_hash)
-        .bind(prefix_display)
-        .execute(db)
-        .await?;
     }
-
     Ok(())
 }
 
