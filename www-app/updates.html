@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WorkflowSwift — What&rsquo;s new</title>
+<meta name="description" content="Everything that has recently shipped in WorkflowSwift.">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg"><link rel="alternate icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.svg">
+<style>
+  :root{--indigo:#4f46e5;--indigo-light:#a5b4fc;--bg-dark:#0E0F12;--bg-card:#16181D;--border:#2A2D38;--text-primary:#F1F5F9;--text-secondary:#CBD5E1;--text-muted:#94A3B8;--success:#22C55E}
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;background:var(--bg-dark);color:var(--text-primary);line-height:1.6;min-height:100vh}
+  a{color:var(--indigo-light)}
+  .wrap{max-width:860px;margin:0 auto;padding:56px 24px 72px}
+  .top{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:28px}
+  .brand{display:flex;align-items:center;gap:12px;text-decoration:none;color:var(--text-primary)}
+  .brand .icon{width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,var(--indigo),#8B5CF6);display:flex;align-items:center;justify-content:center;font-size:20px}
+  .brand b{font-size:17px}
+  .top nav{display:flex;gap:18px;font-size:14px}
+  .top nav a{color:var(--text-secondary);text-decoration:none}
+  .top nav a:hover,.top nav a.on{color:var(--indigo-light)}
+  h1{font-size:2rem;font-weight:700;margin-bottom:6px}
+  .sub{color:var(--text-muted);font-size:15px;margin-bottom:30px;max-width:720px}
+  .day{background:var(--bg-card);border:1px solid var(--border);border-radius:14px;padding:20px 22px;margin-bottom:14px}
+  .day h2{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--success);font-weight:700;margin-bottom:10px}
+  .day ul{list-style:none}
+  .day li{padding:7px 0;border-top:1px solid var(--border);font-size:14px;color:var(--text-secondary)}
+  .day li:first-child{border-top:none}
+  .day li b{color:var(--text-primary);font-weight:600}
+  footer{margin-top:40px;padding-top:20px;border-top:1px solid var(--border);font-size:13px;color:var(--text-muted);display:flex;gap:18px;flex-wrap:wrap}
+  footer a{color:var(--text-muted);text-decoration:none}
+  footer a:hover{color:var(--indigo-light)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <a class="brand" href="/"><span class="icon">⚡</span><b>WorkflowSwift</b></a>
+    <nav>
+      <a href="/guide.html">Guide</a>
+      <a href="/roadmap.html">Roadmap</a>
+      <a class="on" href="/updates.html">What&rsquo;s new</a>
+      <a href="/integrations.html">Integrations</a>
+    </nav>
+  </div>
+
+  <h1>What&rsquo;s new</h1>
+  <p class="sub">Every change below is live in your console. Newest first.</p>
+
+  <div class="day">
+    <h2>20 November 2026</h2>
+    <ul>
+      <li><b>Mail that reaches people who want it.</b> A workflow notification now carries a working way out, and an opt-out is honoured &mdash; an address that opted out is reported as suppressed instead of looking sent.</li>
+      <li><b>The inbox opens without a second sign-in.</b> Pressing the mail-client door on the Inbox card carries your session through.</li>
+      <li><b>Credit packs in the admin console.</b> List, create, re-price and retire credit packs, with the same card on the customer's screen.</li>
+      <li><b>The MCP screen is documented.</b> The guide now shows the endpoint, your key, the tools the server answers and the connect block to paste into your assistant.</li>
+      <li><b>The &ldquo;running now&rdquo; panel loads.</b> The workspace dashboard call it needed is defined, so the panel paints instead of spinning.</li>
+    </ul>
+  </div>
+
+  <div class="day">
+    <h2>19 November 2026</h2>
+    <ul>
+      <li><b>Honest request copy.</b> The &ldquo;a receipt is on its way&rdquo; sentence only appears when the server actually queued the receipt.</li>
+      <li><b>Closing a plan request cannot downgrade you.</b> A request closed after you moved higher leaves your plan alone.</li>
+      <li><b>Reset links are stored hashed.</b> A password-reset token is kept as a digest, never as the value that was mailed.</li>
+      <li><b>Checkout refusals no longer lose the sale.</b> When a payment provider refuses the session, the request reaches our team instead of vanishing.</li>
+      <li><b>Cross-app destinations work.</b> FunnelSwift and IncentiveSwift destinations now resolve and parse.</li>
+    </ul>
+  </div>
+
+  <div class="day">
+    <h2>18 November 2026</h2>
+    <ul>
+      <li><b>Quieter operator alerts.</b> Test addresses on the brand domain no longer page the operator.</li>
+      <li><b>Your words reach the public pricing page.</b> Anything you write about payment on your account appears where buyers read it.</li>
+    </ul>
+  </div>
+
+  <footer>
+    <a href="/">Home</a>
+    <a href="/guide.html">User guide</a>
+    <a href="/roadmap.html">Roadmap</a>
+    <a href="https://swiftsoftware.net/workflowswift-roadmap">Vote on the roadmap</a>
+    <span>&copy; 2026 WorkflowSwift</span>
+  </footer>
+</div>
+</body>
+</html>
