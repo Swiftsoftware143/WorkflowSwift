@@ -3022,6 +3022,7 @@ pub async fn admin_impersonate(
         wsid: None,
         via_api_key: false,
         key_name: None,
+        key_id: None,
     };
 
     let token = jsonwebtoken::encode(

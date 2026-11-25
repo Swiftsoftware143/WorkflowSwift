@@ -3553,6 +3553,7 @@ mod payment_provider_role_tests {
             wsid: None,
             via_api_key: false,
             key_name: None,
+            key_id: None,
         }
     }
 

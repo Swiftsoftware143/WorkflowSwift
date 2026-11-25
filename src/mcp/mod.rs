@@ -110,7 +110,13 @@ fn caller(claims: &crate::auth::models::Claims, role: Role) -> Caller {
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .unwrap_or("account");
-            Caller::new(format!("workflowswift:{label}@{aid}"), role).with_tenant(aid)
+            // `#<key row id>` is the stable actor id the card asks for: a label can be reused and
+            // a key's VALUE can be rotated, but the row id identifies the credential throughout.
+            let actor = match claims.key_id {
+                Some(kid) => format!("workflowswift:{label}#{kid}@{aid}"),
+                None => format!("workflowswift:{label}@{aid}"),
+            };
+            Caller::new(actor, role).with_tenant(aid)
         }
         // A claim this app cannot parse is not a caller. `Caller::validate` would also refuse an
         // empty subject, but failing here keeps the reason precise.

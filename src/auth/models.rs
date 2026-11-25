@@ -34,6 +34,11 @@ pub struct Claims {
     /// `None` on a session JWT and on tokens minted before the field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_name: Option<String>,
+    /// The API key ROW id (`api_keys.id`) when the bearer was an API key — the audit subject's
+    /// stable actor id (kanban t_bb4d4d33). A label can repeat; an id survives a rotation of the
+    /// key's value. `None` on a session JWT and on tokens minted before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_id: Option<Uuid>,
 }
 
 /// Body of `POST /api/v1/auth/initial-password` — the password a customer whose credentials mail

@@ -261,6 +261,7 @@ pub async fn register(
         wsid: None,
         via_api_key: false,
         key_name: None,
+        key_id: None,
     };
     let token = create_token(&claims, &state.config.jwt_secret)?;
 
@@ -277,6 +278,7 @@ pub async fn register(
         wsid: None,
         via_api_key: false,
         key_name: None,
+        key_id: None,
     };
     let refresh_token = create_token(&refresh_claims, &state.config.jwt_secret)?;
 
@@ -496,6 +498,7 @@ pub async fn login(
         wsid: None,
         via_api_key: false,
         key_name: None,
+        key_id: None,
     };
     let token = create_token(&claims, &state.config.jwt_secret)?;
 
@@ -511,6 +514,7 @@ pub async fn login(
         wsid: None,
         via_api_key: false,
         key_name: None,
+        key_id: None,
     };
     let refresh_token = create_token(&refresh_claims, &state.config.jwt_secret)?;
 
@@ -766,6 +770,7 @@ pub async fn change_password(
         wsid: None,
         via_api_key: false,
         key_name: None,
+        key_id: None,
     };
     let token = create_token(&fresh, &state.config.jwt_secret)?;
 
@@ -833,6 +838,7 @@ pub async fn logout_all(
         wsid: None,
         via_api_key: false,
         key_name: None,
+        key_id: None,
     };
     let token = create_token(&claims, &state.config.jwt_secret)?;
 

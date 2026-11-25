@@ -360,6 +360,8 @@ pub async fn authenticate(
         via_api_key: true,
         // The console label of this key, for the MCP door's audit subject (never bytes of the key).
         key_name,
+        // The key ROW id: the subject's stable actor id (kanban t_bb4d4d33).
+        key_id: Some(key_id),
     })
 }
 
