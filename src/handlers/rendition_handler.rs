@@ -154,7 +154,21 @@ pub async fn create_rendition(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(create_rendition_as(&state, aid, user_id, req).await?),
+    ))
+}
 
+/// The ONE rendition-record path, shared by the REST route and the MCP `workflowswift_create_rendition`
+/// tool (kind "rendition"): the same provider-category lookup, the same retention math and the same
+/// `account_renditions` insert. The account is the caller's, so there is no target id to spoof.
+pub(crate) async fn create_rendition_as(
+    state: &AppState,
+    aid: Uuid,
+    user_id: Uuid,
+    req: CreateRenditionRequest,
+) -> Result<serde_json::Value, AppError> {
     // Look up provider category for the given provider
     let provider_category: Option<String> =
         sqlx::query_scalar("SELECT category FROM available_providers WHERE key = $1")
@@ -201,7 +215,7 @@ pub async fn create_rendition(
     .fetch_one(&state.db)
     .await?;
 
-    Ok((StatusCode::CREATED, Json(json!({"rendition": rendition}))))
+    Ok(json!({ "rendition": rendition }))
 }
 
 // Gate rule 5d / class 14 (kanban t_15a04e9d): the completed statement for every possible
@@ -575,7 +589,20 @@ pub async fn create_stitch_group(
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(create_stitch_group_as(&state, aid, user_id, req).await?),
+    ))
+}
 
+/// The ONE stitch-group path, shared by the REST route and the MCP `workflowswift_create_rendition`
+/// tool (kind "stitch"): a parent rendition grouping the caller's own child renditions.
+pub(crate) async fn create_stitch_group_as(
+    state: &AppState,
+    aid: Uuid,
+    user_id: Uuid,
+    req: serde_json::Value,
+) -> Result<serde_json::Value, AppError> {
     let name = req
         .get("name")
         .and_then(|v| v.as_str())
@@ -627,7 +654,7 @@ pub async fn create_stitch_group(
             .fetch_one(&state.db)
             .await?;
 
-    Ok((StatusCode::CREATED, Json(json!({"rendition": parent}))))
+    Ok(json!({ "rendition": parent }))
 }
 
 #[cfg(test)]

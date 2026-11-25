@@ -35,15 +35,15 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 /// Excerpt cap for customer-written text. Chosen so one call can never dump a whole run log.
-const EXCERPT: i32 = 2000;
+pub(crate) const EXCERPT: i32 = 2000;
 
 /// The caller's workspace ids as the text array every statement binds.
-fn scope_ids(ctx: &Ctx) -> Vec<String> {
+pub(crate) fn scope_ids(ctx: &Ctx) -> Vec<String> {
     ctx.scope.as_text_array()
 }
 
 /// An `{"type":"object"}` schema with the paging argument every list tool accepts.
-fn list_schema(extra: Value) -> Value {
+pub(crate) fn list_schema(extra: Value) -> Value {
     let mut props = serde_json::Map::new();
     props.insert(
         "limit".into(),
@@ -57,7 +57,7 @@ fn list_schema(extra: Value) -> Value {
     json!({ "type": "object", "properties": props, "additionalProperties": false })
 }
 
-fn id_schema() -> Value {
+pub(crate) fn id_schema() -> Value {
     json!({
         "type": "object",
         "properties": { "id": { "type": "string", "description": "The row's uuid." } },
@@ -67,7 +67,7 @@ fn id_schema() -> Value {
 }
 
 /// An object schema for a WRITE tool: exactly the fields it owns, nothing else accepted.
-fn write_schema(props: Value, required: &[&str]) -> Value {
+pub(crate) fn write_schema(props: Value, required: &[&str]) -> Value {
     json!({
         "type": "object",
         "properties": props,
@@ -77,12 +77,12 @@ fn write_schema(props: Value, required: &[&str]) -> Value {
 }
 
 /// One typed property entry for a write schema.
-fn prop(ty: &str, desc: &str) -> Value {
+pub(crate) fn prop(ty: &str, desc: &str) -> Value {
     json!({ "type": ty, "description": desc })
 }
 
 /// A schema that takes `id` plus the given fields (the shape of every update/archive tool).
-fn id_plus_schema(props: Value) -> Value {
+pub(crate) fn id_plus_schema(props: Value) -> Value {
     let mut full = props.as_object().cloned().unwrap_or_default();
     full.insert(
         "id".into(),
@@ -99,7 +99,7 @@ fn id_plus_schema(props: Value) -> Value {
 /// The caller's single account id for an INSERT. A WorkflowSwift key resolves to exactly one `aid`
 /// (the account the key belongs to), so the scope list is that one id. The transport already
 /// refuses a caller with no workspace (`Caller::validate`), so this is defensive only.
-fn scope_id(ctx: &Ctx) -> Result<Uuid, ToolError> {
+pub(crate) fn scope_id(ctx: &Ctx) -> Result<Uuid, ToolError> {
     ctx.scope
         .ids()
         .first()
@@ -108,7 +108,7 @@ fn scope_id(ctx: &Ctx) -> Result<Uuid, ToolError> {
 }
 
 /// An optional trimmed string argument (absent or blank reads as "not provided").
-fn opt_str(args: &Value, key: &str) -> Option<String> {
+pub(crate) fn opt_str(args: &Value, key: &str) -> Option<String> {
     args.get(key)
         .and_then(|v| v.as_str())
         .map(|s| s.trim().to_string())
@@ -116,12 +116,12 @@ fn opt_str(args: &Value, key: &str) -> Option<String> {
 }
 
 /// A required trimmed string argument (the column is NOT NULL).
-fn req_str(args: &Value, key: &str) -> Result<String, ToolError> {
+pub(crate) fn req_str(args: &Value, key: &str) -> Result<String, ToolError> {
     opt_str(args, key).ok_or_else(|| ToolError::Invalid(format!("`{key}` is required")))
 }
 
 /// An optional uuid argument, validated when present.
-fn opt_uuid(args: &Value, key: &str) -> Result<Option<Uuid>, ToolError> {
+pub(crate) fn opt_uuid(args: &Value, key: &str) -> Result<Option<Uuid>, ToolError> {
     match opt_str(args, key) {
         Some(raw) => Uuid::parse_str(&raw)
             .map(Some)
@@ -131,17 +131,17 @@ fn opt_uuid(args: &Value, key: &str) -> Result<Option<Uuid>, ToolError> {
 }
 
 /// An optional integer argument.
-fn opt_i64(args: &Value, key: &str) -> Option<i64> {
+pub(crate) fn opt_i64(args: &Value, key: &str) -> Option<i64> {
     args.get(key).and_then(|v| v.as_i64())
 }
 
 /// An optional boolean argument.
-fn opt_bool(args: &Value, key: &str) -> Option<bool> {
+pub(crate) fn opt_bool(args: &Value, key: &str) -> Option<bool> {
     args.get(key).and_then(|v| v.as_bool())
 }
 
 /// An optional JSON argument (the jsonb columns: tags, trigger_config, layout).
-fn opt_json(args: &Value, key: &str) -> Option<Value> {
+pub(crate) fn opt_json(args: &Value, key: &str) -> Option<Value> {
     args.get(key).cloned()
 }
 

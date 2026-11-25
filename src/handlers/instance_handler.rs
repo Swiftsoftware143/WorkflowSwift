@@ -339,7 +339,24 @@ pub async fn decide_instance_step(
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let actor = format!("user:{}", claims.sub);
+    Ok(Json(
+        decide_step_as(&state, aid, id, step_id, req, &actor).await?,
+    ))
+}
 
+/// The ONE decision path, shared by the REST route and the MCP `workflowswift_decide_run_step`
+/// tool: the same tenant-scoped step lookup (the step must belong to an instance of the caller's
+/// account, anything else answers NotFound), the same vocabulary, the same atomic claim and the
+/// same `resume_instance` advance. It does not bill — the run was charged once at trigger time.
+pub(crate) async fn decide_step_as(
+    state: &AppState,
+    aid: Uuid,
+    id: Uuid,
+    step_id: Uuid,
+    req: serde_json::Value,
+    actor: &str,
+) -> Result<serde_json::Value, AppError> {
     let raw = req
         .get("decision")
         .and_then(|v| v.as_str())
@@ -415,13 +432,12 @@ pub async fn decide_instance_step(
         ));
     }
 
-    let actor = format!("user:{}", claims.sub);
     let advance = crate::execution::AdvanceRequest {
         step_instance_id: step_id,
         decision,
     };
 
-    let outcome = match crate::execution::resume_instance(&state, id, Some(advance), &actor).await {
+    let outcome = match crate::execution::resume_instance(state, id, Some(advance), actor).await {
         Ok(o) => o,
         Err(e) => {
             // Hand the step back so the caller can retry; do not leave it stranded
@@ -447,7 +463,7 @@ pub async fn decide_instance_step(
         "instance step decided"
     );
 
-    Ok(Json(json!({
+    Ok(json!({
         "instance_id": id.to_string(),
         "step_id": step_id.to_string(),
         "decision": raw,
@@ -456,7 +472,7 @@ pub async fn decide_instance_step(
         "failed_steps": outcome.failed_steps,
         "steps": outcome.steps,
         "warnings": warnings,
-    })))
+    }))
 }
 
 /// POST /api/v1/n8n/run-outcome

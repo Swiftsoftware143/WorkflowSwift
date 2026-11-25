@@ -90,13 +90,30 @@ pub async fn run_automation(
     Path(id): Path<Uuid>,
     Json(req): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let _aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    Ok(Json(run_automation_as(&state, aid, id, req).await?))
+}
 
-    let _automation = sqlx::query_as::<_, Automation>("SELECT * FROM automations WHERE id = $1")
-        .bind(id)
-        .fetch_optional(&state.db)
-        .await?
-        .ok_or(AppError::NotFound("Automation not found".to_string()))?;
+/// The ONE automation-run path, shared by the REST route and the MCP `workflowswift_run_automation`
+/// tool. The automation is looked up in the caller's OWN account (`id = $1 AND aid = $2`), so a
+/// foreign id answers NotFound and can never trigger another tenant's automation — before this the
+/// route read `WHERE id = $1` with the caller's `aid` parsed and then unused, so any authenticated
+/// key could run any account's automation (a foreign-row leak).
+pub(crate) async fn run_automation_as(
+    state: &AppState,
+    aid: Uuid,
+    id: Uuid,
+    trigger_data: serde_json::Value,
+) -> Result<serde_json::Value, AppError> {
+    let owned: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM automations WHERE id = $1 AND aid = $2")
+            .bind(id)
+            .bind(aid)
+            .fetch_optional(&state.db)
+            .await?;
+    if owned.is_none() {
+        return Err(AppError::NotFound("Automation not found".to_string()));
+    }
 
     let run_id = Uuid::new_v4();
     sqlx::query(
@@ -105,13 +122,13 @@ pub async fn run_automation(
     )
     .bind(run_id)
     .bind(id)
-    .bind(&req)
+    .bind(&trigger_data)
     .execute(&state.db)
     .await?;
 
-    Ok(Json(json!({
+    Ok(json!({
         "run_id": run_id.to_string(),
         "status": "running",
         "message": "Automation triggered"
-    })))
+    }))
 }

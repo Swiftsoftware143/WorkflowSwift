@@ -805,11 +805,26 @@ pub async fn import_template(
     Json(req): Json<CreateTemplateRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(import_template_as(&state, aid, req).await?),
+    ))
+}
+
+/// The ONE template-import path, shared by the REST route and the MCP `workflowswift_import_template`
+/// tool: the same feature limit, the same step validation (`assert_template_step_runnable` +
+/// `assert_template_opens_with_data_card`) and the same account-private insert (is_public = false).
+/// The account is the caller's, so there is no target id to spoof.
+pub(crate) async fn import_template_as(
+    state: &AppState,
+    aid: Uuid,
+    req: CreateTemplateRequest,
+) -> Result<serde_json::Value, AppError> {
     features::enforce_feature_limit(&state.db, aid, "max_templates", "Templates").await?;
 
     // Same guard as create_template, and for the same reason: this is the other door a template can
     // come in through, and install copies its steps verbatim into a workflow (kanban t_27a15474).
-    let template_notify_senders = crate::notify::load_senders(&state).await;
+    let template_notify_senders = crate::notify::load_senders(state).await;
     for step in &req.steps {
         assert_template_step_runnable(
             &template_notify_senders,
@@ -861,10 +876,7 @@ pub async fn import_template(
         .await?;
     }
 
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({"template": template, "imported": true})),
-    ))
+    Ok(json!({ "template": template, "imported": true }))
 }
 
 #[cfg(test)]

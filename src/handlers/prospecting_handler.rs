@@ -210,23 +210,37 @@ pub async fn search_businesses(
         .trim()
         .to_string();
 
-    if query.is_empty() {
-        return Err(AppError::Validation("query is required".to_string()));
-    }
-
     let limit = req
         .get("limit")
         .and_then(|v| v.as_i64())
         .unwrap_or(10)
         .clamp(1, 20);
 
-    let cred = credential(&state, aid)
+    Ok(Json(
+        search_businesses_as(&state, aid, &query, limit).await?,
+    ))
+}
+
+/// The ONE business-search path, shared by the REST route and the MCP `workflowswift_prospect_search`
+/// tool: the same per-account provider credential, the same provider round-trip and the same honest
+/// refusal when no provider key is connected (never an invented result).
+pub(crate) async fn search_businesses_as(
+    state: &AppState,
+    aid: Uuid,
+    query: &str,
+    limit: i64,
+) -> Result<serde_json::Value, AppError> {
+    if query.is_empty() {
+        return Err(AppError::Validation("query is required".to_string()));
+    }
+
+    let cred = credential(state, aid)
         .await?
         .ok_or_else(|| AppError::UpstreamRefused(SEARCH_NOT_CONNECTED.to_string()))?;
 
-    let results = search_places(&cred, &query, limit).await?;
+    let results = search_places(&cred, query, limit).await?;
 
-    Ok(Json(json!({
+    Ok(json!({
         "results": results,
         "total": results.len(),
         "query": query,
@@ -234,7 +248,7 @@ pub async fn search_businesses(
         // Kept so an older console cannot mistake a real answer for the retired demo: this is a
         // provider answer or a refusal, never sample data.
         "sample_data": false,
-    })))
+    }))
 }
 
 pub async fn enrich_business(
@@ -251,26 +265,40 @@ pub async fn enrich_business(
         .trim()
         .to_string();
 
-    if business_name.is_empty() {
-        return Err(AppError::Validation(
-            "business_name is required".to_string(),
-        ));
-    }
-
     let website = req
         .get("website")
         .and_then(|v| v.as_str())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
 
-    let cred = credential(&state, aid)
+    Ok(Json(
+        enrich_business_as(&state, aid, &business_name, website).await?,
+    ))
+}
+
+/// The ONE enrichment path, shared by the REST route and the MCP `workflowswift_enrich_lead` tool:
+/// the same per-account provider credential, the same provider round-trip and the same honest
+/// refusal (not connected -> 424-shaped, no match -> not_found, never an invented contact).
+pub(crate) async fn enrich_business_as(
+    state: &AppState,
+    aid: Uuid,
+    business_name: &str,
+    website: Option<String>,
+) -> Result<serde_json::Value, AppError> {
+    if business_name.is_empty() {
+        return Err(AppError::Validation(
+            "business_name is required".to_string(),
+        ));
+    }
+
+    let cred = credential(state, aid)
         .await?
         .ok_or_else(|| AppError::UpstreamRefused(ENRICH_NOT_CONNECTED.to_string()))?;
 
     // Enrichment is the provider's answer for THIS business, not a new invention: we ask for the
     // business by name and take the first real hit. Every field below comes from that hit, so an
     // empty field means the provider did not know it — never that we filled it in.
-    let hits = search_places(&cred, &business_name, 5).await?;
+    let hits = search_places(&cred, business_name, 5).await?;
     let wanted = business_name.to_lowercase();
     let hit = hits
         .into_iter()
@@ -300,9 +328,9 @@ pub async fn enrich_business(
         insights: Vec::new(),
     };
 
-    Ok(Json(json!({
+    Ok(json!({
         "enriched_business": enriched,
         "provider": PROVIDER,
         "sample_data": false,
-    })))
+    }))
 }

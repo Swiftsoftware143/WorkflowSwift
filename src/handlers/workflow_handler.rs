@@ -1409,11 +1409,27 @@ pub async fn run_workflow(
     body: Option<Json<serde_json::Value>>,
 ) -> ApiResult<impl IntoResponse> {
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    features::enforce_feature_limit(&state.db, aid, "max_instances", "Instances").await?;
-
     // The shipped SPA posts with no body at all; treat that as an empty object
     // rather than rejecting the request.
     let req = body.map(|Json(v)| v).unwrap_or_else(|| json!({}));
+    Ok(Json(
+        run_workflow_as(&state, aid, id, req, &claims.sub).await?,
+    ))
+}
+
+/// The ONE run path, shared by the REST route and the MCP `workflowswift_run_workflow` tool so
+/// neither can drift from the other: the same feature limit, the same tenant-scoped workflow load
+/// (`id = $1 AND aid = $2 AND is_active = true`, so a foreign id answers NotFound), the same client
+/// resolution and the same in-process execution that spends one credit. A run always leaves a
+/// `workflow_instances` row; a 200 without one is not a run.
+pub(crate) async fn run_workflow_as(
+    state: &AppState,
+    aid: Uuid,
+    id: Uuid,
+    req: serde_json::Value,
+    triggered_by: &str,
+) -> Result<serde_json::Value, AppError> {
+    features::enforce_feature_limit(&state.db, aid, "max_instances", "Instances").await?;
 
     let workflow = sqlx::query_as::<_, Workflow>(
         "SELECT * FROM workflows WHERE id = $1 AND aid = $2 AND is_active = true",
@@ -1424,10 +1440,10 @@ pub async fn run_workflow(
     .await?
     .ok_or(AppError::NotFound("Workflow not found".to_string()))?;
 
-    let client_id = resolve_client_id(&state, aid, &req).await?;
-    let run = run_in_process(&state, aid, &workflow, client_id, &req, &claims.sub).await?;
+    let client_id = resolve_client_id(state, aid, &req).await?;
+    let run = run_in_process(state, aid, &workflow, client_id, &req, triggered_by).await?;
 
-    Ok(Json(json!({
+    Ok(json!({
         "status": run.status,
         "instance_id": run.instance_id.to_string(),
         "execution": "in_process",
@@ -1453,7 +1469,7 @@ pub async fn run_workflow(
                 run.steps.len()
             )
         }
-    })))
+    }))
 }
 
 /// POST /api/v1/workflows/validate-steps — validate a sequence of steps before deploy

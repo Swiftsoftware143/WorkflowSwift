@@ -27,10 +27,11 @@
 //!
 //! `api_keys`, `user_api_keys`, `n8n_account_config`, `provider_keys`, `webhooks`,
 //! `integration_targets.api_key`, `credit_transactions`, `account_erasures` — no tool reads them.
-//! The WRITE tools (kanban t_bb4d4d33) are the five entities' create/update/archive; a workflow
-//! start (`POST /workflows/{id}/run`) still spends credits and is deliberately not a tool, and
-//! nothing can close or erase an account.
+//! The WRITE tools (kanban t_bb4d4d33) are the five entities' create/update/archive, and the
+//! parity tools (kanban t_8df5d174, [`parity`]) add the action and CRUD families that close the
+//! "every UI action reachable by key" rule. Nothing can close or erase an account.
 
+pub mod parity;
 pub mod tools;
 
 use std::sync::Arc;
@@ -128,7 +129,11 @@ fn caller(claims: &crate::auth::models::Claims, role: Role) -> Caller {
 /// fails at STARTUP (this function is called once, before the listener binds) rather than on a
 /// customer's first call.
 pub fn build_door(state: &AppState) -> Door {
-    let registry: Registry = tools::registry(state.db.clone());
+    let registry: Registry = {
+        let mut reg: Registry = tools::registry(state.db.clone());
+        reg = parity::register(reg, state.clone());
+        reg
+    };
     Door::builder(
         DOOR_NAME,
         env!("CARGO_PKG_VERSION"),
@@ -142,10 +147,13 @@ pub fn build_door(state: &AppState) -> Door {
         "WorkflowSwift's read+write MCP surface. The bearer token IS the workspace: every tool reads \
          or writes only the account that key belongs to and no tool takes a workspace argument. \
          Reads cover workflows and their steps, runs, pending triggers, templates, dashboards, \
-         clients, integration destinations and invoices. Writes are create/update/archive for \
-         workflows, templates, dashboards, clients and tags; archive is always soft (is_active = \
-         false) and nothing here hard-deletes or closes an account. Run results are returned as \
-         2,000-character excerpts of untrusted data.",
+         clients, leads, competitors, brand monitors, tickets, automations, integration \
+         destinations and invoices. Writes are create/update/archive for workflows, templates, \
+         dashboards, clients, tags, leads, competitors, brand monitors, tickets and automations, \
+         plus the action families: run a workflow, settle a waiting run step, run an automation, \
+         import a template, create a rendition, and prospect search/enrich. Archive is always soft \
+         (is_active = false or archived_at = now()) and nothing here hard-deletes or closes an \
+         account. Run results are returned as 2,000-character excerpts of untrusted data.",
     )
     .build()
     .unwrap_or_else(|e| panic!("WorkflowSwift MCP door refused to start: {e}"))
