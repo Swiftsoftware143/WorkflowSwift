@@ -2238,12 +2238,13 @@ const PSLOTS=[['stripe','Stripe'],['paypal','PayPal']];
 // Stripped out of the generic renderCRUD for exactly the reason an API key is not a CRUD
 // row: the value is minted by the server, not typed by the operator. POST /api-keys answers
 // {key, prefix, message} and GET /api-keys only ever returns `prefix` — the account reads the
-// value back from API Keys in the app (View, behind its password; kanban t_6c39f2b6), so this
-// console hands it over once and keeps the prefix as the identifier that survives.
+// value back from API Keys in the app (View, one click behind the console session; kanban
+// t_6c39f2b6 + plan §6.2), so this console hands it over once and keeps the prefix as the
+// identifier that survives.
 function renderApiKeys(c){
   c.innerHTML='<div class="card"><h2 class="text-xl font-bold mb-2">API Keys</h2>'
     +'<p class="text-xs text-gray-400 mb-4">Bearer credentials for the WorkflowSwift API and the Swift Market Intel Chrome extension. '
-    +'The value is shown once at creation. You can show it again or rotate it on this screen — both ask for your password first.</p>'
+    +'The value is shown once at creation. You can show or copy it again, or rotate it, on this screen — a signed-in console session is the only credential that needs.</p>'
     +'<div class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end mb-5">'
     +'<div class="md:col-span-3"><label class="block text-xs font-medium text-gray-500 mb-1">Name</label>'
     +'<input id="ak_name" class="input" placeholder="what this key is for (e.g. market-intel-extension)"></div>'
@@ -2276,20 +2277,29 @@ function renderApiKeys(c){
         +'<td class="text-xs text-gray-500">'+String(k.created_at||'').slice(0,10)+'</td>'
         +'<td class="text-xs text-gray-500">'+(k.last_used_at?(()=>{const d=new Date(k.last_used_at);return isNaN(d.getTime())?String(k.last_used_at):d.toLocaleString()})():'never')+'</td>'
         +'<td>'+(k.is_active?'Yes':'No')+'</td>'
-        +'<td class="text-right" style="white-space:nowrap"><button class="btn btn-sm" data-view="'+escHtml(k.id)+'">Show</button> '
+        +'<td class="text-right" style="white-space:nowrap"><button class="btn btn-sm" data-copy="'+escHtml(k.id)+'">Copy</button> '
+        +'<button class="btn btn-sm" data-view="'+escHtml(k.id)+'">Show</button> '
         +'<button class="btn btn-sm" data-rot="'+escHtml(k.id)+'">Rotate</button> '
         +'<button class="btn btn-sm btn-danger" data-del="'+escHtml(k.id)+'">Delete</button></td></tr>').join('')
       +'</tbody></table>';
-    // Show / Rotate work on the caller's OWN key only: the endpoints are scoped by user AND
-    // account, and `reveal` requires the caller's password (it is audited). Without these two
-    // controls an operator who lost a key could only delete it and mint a new one, which silently
-    // breaks whatever held the old value (the Chrome extension / a customer's integration).
+    // Show / Copy / Rotate work on the caller's OWN key only: the endpoints are scoped by user AND
+    // account. Reveal is ONE CLICK (plan §6.2/§8, David 2026-11-25): a valid console session is the
+    // only credential — the view is audited server-side, so there is no password prompt here any
+    // more. Copy fetches the sealed value and writes it straight to the clipboard without painting
+    // it. Without these controls an operator who lost a key could only delete it and mint a new
+    // one, which silently breaks whatever held the old value (the Chrome extension / a customer's
+    // integration).
+    list.querySelectorAll('button[data-copy]').forEach(b=>b.onclick=async()=>{
+      const id=b.getAttribute('data-copy');
+      const r=await api('/api-keys/'+encodeURIComponent(id)+'/reveal',{method:'POST',body:JSON.stringify({})});
+      if(!r||!r.key){showMsg('Could not copy the key: '+(LAST_ERR||'request failed'),'error');return}
+      if(navigator.clipboard&&navigator.clipboard.writeText){
+        navigator.clipboard.writeText(r.key).then(function(){showMsg('API key copied')},function(){showMsg('Copy blocked — press Show to see the key','error')});
+      } else showMsg('Copy blocked — press Show to see the key','error');
+    });
     list.querySelectorAll('button[data-view]').forEach(b=>b.onclick=async()=>{
       const id=b.getAttribute('data-view');
-      const pw=prompt('Confirm your account password to show this key again:');
-      if(pw===null)return;
-      if(!pw){showMsg('A password is needed to show the key','error');return}
-      const r=await api('/api-keys/'+encodeURIComponent(id)+'/reveal',{method:'POST',body:JSON.stringify({password:pw})});
+      const r=await api('/api-keys/'+encodeURIComponent(id)+'/reveal',{method:'POST',body:JSON.stringify({})});
       if(!r||!r.key){showMsg('Could not show the key: '+(LAST_ERR||'request failed'),'error');return}
       showOnce(r,true);
     });
@@ -3338,7 +3348,7 @@ function renderMcp(c){
       box.innerHTML='<p class="text-sm text-gray-500">No active API key on this account yet. Create one under <b>Integrations &rarr; API Keys</b>, then come back to this screen — the MCP server accepts that key as a Bearer token.</p>';
       return;
     }
-    box.innerHTML='<p class="text-sm text-gray-600 mb-2">Use one of these keys as the Bearer token. Only the prefix is shown; open <b>Integrations &rarr; API Keys</b> and press Show to read the full value (it asks for your password).</p>'
+    box.innerHTML='<p class="text-sm text-gray-600 mb-2">Use one of these keys as the Bearer token. Only the prefix is shown; open <b>Integrations &rarr; API Keys</b> and press Show or Copy to read the full value (one click, no password).</p>'
       +'<table class="table"><thead><tr><th>Name</th><th>Prefix</th></tr></thead><tbody>'
       +items.map(function(k){return '<tr><td><strong>'+escHtml(k.name||'-')+'</strong></td><td class="text-xs text-gray-500">'+escHtml(k.prefix||'-')+'&#8230;</td></tr>'}).join('')
       +'</tbody></table>';

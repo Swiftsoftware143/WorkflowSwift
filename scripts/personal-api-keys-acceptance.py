@@ -13,7 +13,7 @@ the app's ONE credential implementation, and that an account may hold several li
   5.  DELETE /api/personal-api-keys/<minted>   fixture key        -> 200
   6.  POST   /mcp tools/list                   revoked key        -> 401
   7.  DELETE /api/personal-api-keys/<foreign>  fixture key        -> 404
-  8.  POST   /api/personal-api-keys/<id>/reveal wrong password    -> 401 (password gate holds)
+  8.  POST   /api/personal-api-keys/<id>/reveal an API KEY as bearer -> 403 (session only)
   10. teardown: probe rows deleted, residue = 0 for probe_harness = 't_29efde4c'
 
 Fixtures are written DIRECTLY into the database (a live mint would consume the app's key rule), each
@@ -209,10 +209,12 @@ def main() -> int:
     s, b = http("DELETE", f"/api/personal-api-keys/{account_b['key_id']}", api_key=key_a)
     check("7 foreign id DELETE -> 404", s == 404, f"HTTP {s} {str(b)[:100]}")
 
-    # ── 8. reveal with a wrong password holds the gate (do not seed a known password) ──────────
+    # ── 8. an API KEY can never reveal the account's key (plan §6.2/§8: session only) ───────────
+    # This route's middleware accepts an API key as well as a session, so the handler classifies the
+    # credential and refuses a key with 403 — a read-only key must never obtain the read+write key.
     s, b = http("POST", f"/api/personal-api-keys/{account_a['key_id']}/reveal",
-                {"password": "definitely-wrong"}, api_key=key_a)
-    check("8 reveal wrong password -> 401/400", s in (400, 401), f"HTTP {s} {str(b)[:100]}")
+                {}, api_key=key_a)
+    check("8 reveal with an API key -> 403 (session only)", s == 403, f"HTTP {s} {str(b)[:100]}")
 
     # ── 10. teardown: delete the probe accounts (cascade) and every non-cascaded audit row ─────
     # `api_key_events` and `api_key_reveals` carry no FK to accounts, so they are not cascade-deleted.

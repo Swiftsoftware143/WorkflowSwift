@@ -373,27 +373,34 @@ async fn record_api_key_event(
     Ok(())
 }
 
-/// POST /api/v1/api-keys/{id}/reveal — show the key again (repeatable, audited, password-gated).
+/// POST /api/v1/api-keys/{id}/reveal — show the key again (repeatable, audited, session only).
 ///
-/// Re-authentication is the account PASSWORD, checked with the same bounded off-reactor Argon2 the
-/// login path uses: a stolen session must not be enough to read a credential out of the database.
-/// The audit row carries the key PREFIX only — never the secret.
+/// David's ruling (2026-11-25, plan §6.2/§8 in
+/// docs/fleet-per-account-keys-and-mcp-2026-11-25.md): **View is one click.** The key is already
+/// private by default (only its prefix is ever listed) and every reveal is recorded, so a valid
+/// console session is enough — the same friction model as Stripe. No password re-prompt.
+///
+/// SESSION ONLY. The middleware covering this route also accepts this app's API keys, so a key
+/// credential is refused 403 here: a read-only key must never be able to obtain the account's
+/// read+write key. The classification is FREE — `Claims::via_api_key` is set by the ONE resolver
+/// (`auth::api_key_auth::authenticate`) and is false for every JWT — so no hash is paid per View.
+///
+/// A request body is not required; a legacy `{"password":"…"}` body is accepted and ignored, so an
+/// older console build does not break. The audit row carries the key PREFIX only — never the secret.
 pub async fn reveal_api_key(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     Path(id): Path<Uuid>,
-    Json(body): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
+    if claims.via_api_key {
+        return Err(AppError::Forbidden(
+            "This needs a console session. An API key cannot view keys — sign in to the console \
+             and press View."
+                .into(),
+        ));
+    }
     let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
     let aid = Uuid::parse_str(&claims.aid).map_err(|_| AppError::Unauthorized)?;
-    let password = body
-        .get("password")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-    if password.is_empty() {
-        return Err(AppError::BadRequest("password is required".into()));
-    }
 
     // Scoped by user AND account: this route can never reveal another tenant's key.
     let row = sqlx::query(
@@ -409,26 +416,6 @@ pub async fn reveal_api_key(
 
     let prefix: String = row.get("prefix");
     let sealed: Option<String> = row.get("key_encrypted");
-
-    // ── re-authenticate ───────────────────────────────────────────────────────────────────────
-    let stored: Option<String> =
-        sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1 AND is_active = true")
-            .bind(user_id)
-            .fetch_optional(&state.db)
-            .await?;
-    let stored = stored.ok_or(AppError::Unauthorized)?;
-    // An unparseable stored value is not a credential: answer 401, never a 500 about hashing.
-    if !crate::auth::api_key_auth::is_usable_hash(&stored) {
-        return Err(AppError::Unauthorized);
-    }
-    let matched = crate::auth::api_key_auth::argon2_verify_result(
-        stored,
-        std::sync::Arc::from(password.as_str()),
-    )
-    .await?;
-    if !matched {
-        return Err(AppError::Unauthorized);
-    }
 
     let sealed = sealed.ok_or_else(|| {
         AppError::BadRequest(

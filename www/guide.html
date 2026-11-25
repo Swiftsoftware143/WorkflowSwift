@@ -453,8 +453,8 @@ html[data-theme="light"] a.section-title:hover{background:rgba(0,0,0,0.04)}
         field deletes it; an empty field means no key.</li>
       <li><strong>API keys authenticate.</strong> Send the raw key (<code>workflowswift_&#8230;</code>) as the
         <code>Authorization: Bearer</code> header value (the same header the login JWT uses). Press
-        <strong>View</strong> on the API Keys screen, re-enter your password, and copy the same key again at any
-        time — every view is recorded. <strong>Regenerate</strong> replaces it in one action and the previous key
+        <strong>View</strong> or <strong>Copy</strong> on the API Keys screen — one click, no password, and every
+        view is recorded — to get the same key again at any time. <strong>Regenerate</strong> replaces it in one action and the previous key
         stops working immediately. The <em>Integration keys</em> listed under it (webhook secrets, surface
         tokens) are records for webhooks and embeds — no API call authenticates with them.</li>
       <li>A key honours the row it was minted with: <code>is_active = false</code> or an <code>expires_at</code> in the past is

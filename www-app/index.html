@@ -388,12 +388,14 @@ const API = (() => {
     listApiKeys: () => send(base + '/api-keys', { headers: headers() }).then(handle),
     createApiKey: (name) => send(base + '/api-keys', { method:'POST', headers: headers(), body: JSON.stringify({ name }) }).then(handle),
     revokeApiKey: (id) => send(base + '/api-keys/' + encodeURIComponent(id), { method:'DELETE', headers: headers() }).then(handle),
-    revealApiKey: (id, password) => send(base + '/api-keys/' + encodeURIComponent(id) + '/reveal', { method:'POST', headers: headers(), body: JSON.stringify({ password }) }).then(handle),
+    // Reveal is ONE CLICK (plan §6.2/§8): a console session is the only credential. No body is
+    // needed; we send `{}` so the request is a well-formed empty JSON object for older proxies.
+    revealApiKey: (id) => send(base + '/api-keys/' + encodeURIComponent(id) + '/reveal', { method:'POST', headers: headers(), body: JSON.stringify({}) }).then(handle),
     regenerateApiKey: (id) => send(base + '/api-keys/' + encodeURIComponent(id) + '/regenerate', { method:'POST', headers: headers(), body: JSON.stringify({}) }).then(handle),
     listUserKeys: () => send(base + '/user-keys', { headers: headers() }).then(handle),
     createUserKey: (key_type, label) => send(base + '/user-keys/generate', { method:'POST', headers: headers(), body: JSON.stringify({ key_type, label }) }).then(handle),
     revokeUserKey: (id) => send(base + '/user-keys/' + encodeURIComponent(id), { method:'DELETE', headers: headers() }).then(handle),
-    revealUserKey: (id, password) => send(base + '/user-keys/' + encodeURIComponent(id) + '/reveal', { method:'POST', headers: headers(), body: JSON.stringify({ password }) }).then(handle),
+    revealUserKey: (id) => send(base + '/user-keys/' + encodeURIComponent(id) + '/reveal', { method:'POST', headers: headers(), body: JSON.stringify({}) }).then(handle),
     regenerateUserKey: (id) => send(base + '/user-keys/' + encodeURIComponent(id) + '/regenerate', { method:'POST', headers: headers(), body: JSON.stringify({}) }).then(handle),
     // --- Provider keys (the platform's third-party credentials, per account). The API
     // masks on read (`api_key` comes back as `sk-...xyz`) and encrypts at rest; the value
@@ -2408,10 +2410,10 @@ const ApiKeysView = () => {
       </div>` : ''}
       <div class="card" style="margin-bottom:18px">
         <h3 class="font-semibold text-gray-800 mb-1">API keys — what the extension and your API calls use</h3>
-        <p class="text-sm text-gray-500 mb-3">This is the credential a <code>Authorization: Bearer</code> request is checked against. <b>View</b> shows the same key again (you re-enter your password and the view is recorded); <b>Regenerate</b> replaces it — the old key stops working the moment you do.</p>
+        <p class="text-sm text-gray-500 mb-3">This is the credential a <code>Authorization: Bearer</code> request is checked against. <b>View</b> shows the same key again in one click (the view is recorded); <b>Copy</b> puts it on your clipboard without showing it; <b>Regenerate</b> replaces it — the old key stops working the moment you do.</p>
         ${list.length === 0 ? html`<div class="empty">No API key yet. Press “+ New API Key” to make one.</div>` : html`
         <div style="overflow:auto"><table class="table"><thead><tr><th>Name</th><th>Key</th><th>Status</th><th>Created</th><th>Last used</th><th></th></tr></thead><tbody>
-          ${list.map(k => html`<tr key=${k.id}><td class="font-semibold">${k.name || '—'}<div style="font-family:ui-monospace,monospace;font-size:11px;color:var(--muted);font-weight:400">id ${k.prefix || '—'}</div></td><td style="font-family:ui-monospace,monospace;font-size:12px;color:var(--muted)">${maskProgrammatic()}</td><td>${statusBadge(k.is_active?'active':'paused')}</td><td>${fmtDate(k.created_at)}</td><td>${k.last_used_at ? fmtDate(k.last_used_at) : 'never'}</td><td class="text-right">${k.revealable ? html`<button class="btn-outline text-xs" onClick=${()=>viewApiKey(k.id)}>View</button> ` : ''}<button class="btn-outline text-xs" onClick=${()=>regenApiKey(k.id)}>Regenerate</button> <button class="btn-red text-xs" onClick=${()=>revokeApiKey(k.id)}>Revoke</button></td></tr>`)}
+          ${list.map(k => html`<tr key=${k.id}><td class="font-semibold">${k.name || '—'}<div style="font-family:ui-monospace,monospace;font-size:11px;color:var(--muted);font-weight:400">id ${k.prefix || '—'}</div></td><td style="font-family:ui-monospace,monospace;font-size:12px;color:var(--muted)">${maskProgrammatic()}</td><td>${statusBadge(k.is_active?'active':'paused')}</td><td>${fmtDate(k.created_at)}</td><td>${k.last_used_at ? fmtDate(k.last_used_at) : 'never'}</td><td class="text-right">${k.revealable ? html`<button class="btn-outline text-xs" onClick=${()=>copyKeySecret(k.id)}>Copy</button> <button class="btn-outline text-xs" onClick=${()=>viewApiKey(k.id)}>View</button> ` : ''}<button class="btn-outline text-xs" onClick=${()=>regenApiKey(k.id)}>Regenerate</button> <button class="btn-red text-xs" onClick=${()=>revokeApiKey(k.id)}>Revoke</button></td></tr>`)}
         </tbody></table></div>`}
         <p class="text-xs text-gray-500 mt-2">Only a hash is used to authenticate. A key minted before the sealed copy existed carries no <b>View</b> button — <b>Regenerate</b> replaces it with one you can read back.</p>
       </div>
@@ -2420,9 +2422,9 @@ const ApiKeysView = () => {
         <p class="text-sm text-gray-500 mb-3">The secrets this workspace hands to webhooks and embedded widgets. They are records: nothing accepts them as a sign-in to the API — the keys above are what a call authenticates with.</p>
         ${ulist.length === 0 ? html`<div class="empty">No integration keys yet.</div>` : html`
         <div style="overflow:auto"><table class="table"><thead><tr><th>Kind</th><th>Label</th><th>Prefix</th><th>Status</th><th>Created</th><th>Last used</th><th></th></tr></thead><tbody>
-          ${ulist.map(k => html`<tr key=${k.id}><td class="font-semibold">${USER_KEY_KINDS[k.key_type] || k.key_type || '—'}</td><td>${k.label || '—'}</td><td style="font-family:ui-monospace,monospace;font-size:12px;color:var(--muted)">${maskKey(k)}</td><td>${statusBadge(k.is_active?'active':'paused')}</td><td>${fmtDate(k.created_at)}</td><td>${k.last_used_at ? fmtDate(k.last_used_at) : 'never'}</td><td class="text-right"><button class="btn-outline text-xs" onClick=${()=>viewUserKey(k.id)}>View</button> <button class="btn-outline text-xs" onClick=${()=>regenUserKey(k.id)}>Regenerate</button> <button class="btn-red text-xs" onClick=${()=>revokeUserKey(k.id)}>Revoke</button></td></tr>`)}
+          ${ulist.map(k => html`<tr key=${k.id}><td class="font-semibold">${USER_KEY_KINDS[k.key_type] || k.key_type || '—'}</td><td>${k.label || '—'}</td><td style="font-family:ui-monospace,monospace;font-size:12px;color:var(--muted)">${maskKey(k)}</td><td>${statusBadge(k.is_active?'active':'paused')}</td><td>${fmtDate(k.created_at)}</td><td>${k.last_used_at ? fmtDate(k.last_used_at) : 'never'}</td><td class="text-right"><button class="btn-outline text-xs" onClick=${()=>copyKeySecret(k.id,'user')}>Copy</button> <button class="btn-outline text-xs" onClick=${()=>viewUserKey(k.id)}>View</button> <button class="btn-outline text-xs" onClick=${()=>regenUserKey(k.id)}>Regenerate</button> <button class="btn-red text-xs" onClick=${()=>revokeUserKey(k.id)}>Revoke</button></td></tr>`)}
         </tbody></table></div>`}
-        <p class="text-xs text-gray-500 mt-2">A sealed copy exists so <b>View</b> can read a key back; every view is recorded.</p>
+        <p class="text-xs text-gray-500 mt-2">A sealed copy exists so <b>View</b> and <b>Copy</b> can read a key back; every view is recorded.</p>
       </div>
     </div>`;
 };
@@ -2431,12 +2433,23 @@ const loadApiKeys = async () => { if(S.loading)return; S.loading=true; renderApp
   try { const u = await API.listUserKeys(); S.userKeys = (u && (u.keys || u.api_keys)) || []; } catch(e){ S.userKeys=[]; }
   S.loading=false; renderApp(); };
 
-// View = re-authenticate, then show the SAME stored key again (repeatable, audited).
+// View = ONE CLICK (plan §6.2/§8, David 2026-11-25): a valid console session is the only
+// credential needed. The key is private by default (only its prefix is ever listed) and the server
+// records every reveal, so there is no password step to gather here.
 const viewApiKey = async (id) => {
-  const pw = prompt('Enter YOUR account password to show this API key. Every view is recorded.');
-  if (!pw) return;
-  try { const r = await API.revealApiKey(id, pw); S.newApiKey = r.key; renderApp(); }
+  try { const r = await API.revealApiKey(id); S.newApiKey = r.key; renderApp(); }
   catch(e) { toast('Could not show the key: ' + e.message, 'err'); }
+};
+// Copy = the normal path: fetch the sealed value and put it straight on the clipboard WITHOUT
+// rendering it on screen. The reveal is audited server-side exactly like View.
+const copyKeySecret = async (id, kind) => {
+  try {
+    const r = kind === 'user' ? await API.revealUserKey(id) : await API.revealApiKey(id);
+    const t = (r && r.key) || '';
+    if (!t) return toast('Could not copy the key', 'err');
+    try { await navigator.clipboard.writeText(t); toast('Copied to clipboard'); }
+    catch(e) { toast('Clipboard blocked by the browser — press View to see the key', 'err'); }
+  } catch(e) { toast('Could not copy the key: ' + e.message, 'err'); }
 };
 // Regenerate = revoke the old key and issue a new one in ONE atomic action.
 const regenApiKey = async (id) => {
@@ -2448,9 +2461,7 @@ const revokeApiKey = async (id) => { if(!confirm('Revoke this API key? Anything 
 
 // The integration-key actions keep their own endpoints: same shape, different table.
 const viewUserKey = async (id) => {
-  const pw = prompt('Enter YOUR account password to show this key. Every view is recorded.');
-  if (!pw) return;
-  try { const r = await API.revealUserKey(id, pw); S.newApiKey = r.key; renderApp(); }
+  try { const r = await API.revealUserKey(id); S.newApiKey = r.key; renderApp(); }
   catch(e) { toast('Could not show the key: ' + e.message, 'err'); }
 };
 const regenUserKey = async (id) => {
@@ -2478,9 +2489,7 @@ const copyApiKey = async () => { const t = S.newApiKey || ''; try { await naviga
 const MCP_ENDPOINT = 'https://hooks.swiftsoftware.net/mcp';
 const mcpActiveKey = () => { const l = (S.apiKeys || []).filter(k => k.is_active); return l[0] || null; };
 const mcpReveal = async (id) => {
-  const pw = prompt('Enter YOUR account password to show this key. Every view is recorded.');
-  if (!pw) return;
-  try { const r = await API.revealApiKey(id, pw); S.mcpShown = { id, key: r.key }; renderApp(); }
+  try { const r = await API.revealApiKey(id); S.mcpShown = { id, key: r.key }; renderApp(); }
   catch (e) { toast('Could not show the key: ' + e.message, 'err'); }
 };
 const mcpRegenerate = async (id) => {
@@ -2628,10 +2637,10 @@ const McpView = () => {
   if (!S.apiKeys && !S.loading) loadApiKeys();
   const activeKey = () => ((S.apiKeys || []).filter(k => k.is_active !== false && k.is_active !== 0) || [])[0] || null;
   const reveal = async (id, copyOnly) => {
-    const pw = prompt('Enter YOUR account password to show this key. Every view is recorded.');
-    if (pw === null || pw === '') return;
+    // One click, no password step (plan §6.2/§8): the session is the credential, the server audits
+    // every reveal. `copyOnly` puts the value on the clipboard without rendering it.
     try {
-      const r = await API.revealApiKey(id, pw);
+      const r = await API.revealApiKey(id);
       if (copyOnly) { mcpCopy(r.key); return; }
       st.revealedId = id; st.revealed = r.key; renderApp();
     } catch (e) { toast('Could not show the key: ' + ((e && e.message) || 'unknown error'), 'err'); }
@@ -2719,7 +2728,7 @@ const McpView = () => {
         ${p(html`Your AI app (Claude, ChatGPT, Cursor, an agent) connects to <code>${MCP_ENDPOINT}</code> and authenticates with this account's API key. Every request is scoped to <b>your</b> workspace — another account's rows are refused at the database, not by instruction.`)}
         ${p('The connection is read-only: the service can read your leads, clients, workflows, instances, templates, dashboards, instance steps, widgets, renditions, credit transactions, industries, portfolio companies and plan. It cannot change anything.')}`;
       case 1: return html`
-        ${p('The key is this workspace\u2019s API key, shown by prefix on the card above. Reveal asks for your account password; Regenerate replaces the key and stops every client using the old one. Treat it like a password — anyone holding it can read this workspace.')}
+        ${p('The key is this workspace\u2019s API key, shown by prefix on the card above. Reveal shows it in one click (the view is recorded), Copy puts it on your clipboard without showing it, and Regenerate replaces the key and stops every client using the old one. Treat it like a password — anyone holding it can read this workspace.')}
         ${p('If your client lists no tools at all, the key is almost always the cause: regenerate it and paste the new one.')}`;
       case 2: return html`
         ${p('Add the server to Claude Code, then replace the key:')}
@@ -2754,7 +2763,7 @@ const McpView = () => {
     `)}
 
     ${card('Your API key', html`
-      <p class="text-xs text-gray-500 mb-3">The MCP server accepts this workspace's API key as a Bearer token. It is listed by prefix only — the secret is never shown until you Reveal it, which asks for your account password. Treat it like a password: anyone holding it can read this workspace.</p>
+      <p class="text-xs text-gray-500 mb-3">The MCP server accepts this workspace's API key as a Bearer token. It is listed by prefix only — the secret is never shown on load. <b>Reveal</b> shows it in one click and records that you did; <b>Copy</b> puts it on your clipboard without showing it. Treat it like a password: anyone holding it can read this workspace.</p>
       ${(!S.apiKeys && !S.loading) ? html`<p class="text-sm text-gray-400">Loading your key…</p>`
         : (!k ? html`<p class="text-sm text-gray-500">No active API key on this account. Create one on the <a href="javascript:void 0" onClick=${() => setView('api-keys')} style="color:#2563eb">API Keys</a> screen, then come back to connect an MCP client.</p>`
         : html`<div>
@@ -3589,7 +3598,7 @@ const ApiKeyModal = () => {
     S.loading=false; renderApp(); };
   return html`<${ModalShell} title="New API Key" onClose=${closeModal}>
     <div class="mb-4"><label class="label">Name</label><input class="input" value=${f.name} onInput=${e=>f.name=e.target.value} placeholder="e.g. Chrome extension" /></div>
-    <p class="text-xs text-gray-500 mb-4">A name is just for your reference — use it to say which tool uses this key. The key is generated for you and stays retrievable: press View on this screen, enter your password, and copy it again whenever you need it.</p>
+    <p class="text-xs text-gray-500 mb-4">A name is just for your reference — use it to say which tool uses this key. The key is generated for you and stays retrievable: press Copy or View on this screen, in one click, whenever you need it again.</p>
     ${S.modalErr && html`<div style="background:#fef2f2;border:1px solid #fecaca;color:var(--danger);padding:12px;border-radius:10px;font-size:13px;margin-bottom:16px">${S.modalErr}</div>`}
     <button class="btn w-full" onClick=${save} disabled=${S.loading}>${S.loading?spinner():'Create API Key'}</button>
   <//>`; };

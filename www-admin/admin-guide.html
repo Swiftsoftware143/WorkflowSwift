@@ -1207,9 +1207,11 @@ when it is set.</p>
         <tr><th>Block</th><th>What it does</th></tr>
         <tr><td>Endpoint</td><td><code>https://hooks.swiftsoftware.net/mcp</code> &mdash; one address for the whole
         fleet; the key you present decides which account you are reading.</td></tr>
-        <tr><td>Your token</td><td>This account's own API key. Only the prefix is listed: <strong>Reveal</strong> asks
-        for your sign-in password before it shows the key (and records that it did), and <strong>Regenerate</strong>
-        retires the old key and mints a replacement in one step, so anything already wired to it stops immediately.</td></tr>
+        <tr><td>Your token</td><td>This account's own API key. Only the prefix is listed: <strong>Reveal</strong>
+        shows the full value on one click &mdash; your sign-in session is the only credential it needs, and every
+        reveal is recorded &mdash; while <strong>Copy</strong> puts the key on your clipboard without showing it.
+        <strong>Regenerate</strong> retires the old key and mints a replacement in one step, so anything already
+        wired to it stops immediately.</td></tr>
         <tr><td>Tools</td><td>Read-only. Each entity answers a <code>&lt;key&gt;_summary</code> (how many exist) and a
         <code>&lt;key&gt;_search</code> (text filter, newest first, at most 200 rows): leads, clients, workflows,
         instances, templates, dashboards, instance steps, widgets, renditions, credit transactions, industries,

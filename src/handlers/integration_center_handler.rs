@@ -657,22 +657,27 @@ pub async fn mint_user_key_on(
     })
 }
 
-/// POST /api/v1/user-keys/{id}/reveal — show the key again (repeatable).
+/// POST /api/v1/user-keys/{id}/reveal — show the key again (repeatable, audited, session only).
+///
+/// David's ruling (2026-11-25, plan §6.2/§8): View is ONE CLICK — a valid console session is
+/// enough, no password re-prompt, because the key is private by default and every reveal is
+/// recorded. SESSION ONLY: this route's middleware also accepts this app's API keys, so a key
+/// credential is refused 403 (a read-only key must never obtain a read+write key). The
+/// classification is `Claims::via_api_key`, which the ONE resolver sets — no hashing per View.
+/// A body is not required; a legacy `{"password":"…"}` body is accepted and ignored.
 pub async fn reveal_user_key(
     State(state): State<AppState>,
     Extension(claims): Extension<Claims>,
     axum::extract::Path(id): axum::extract::Path<Uuid>,
-    Json(body): Json<serde_json::Value>,
 ) -> ApiResult<impl IntoResponse> {
-    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
-    let password = body
-        .get("password")
-        .and_then(|v| v.as_str())
-        .unwrap_or_default()
-        .to_string();
-    if password.is_empty() {
-        return Err(AppError::BadRequest("password is required".into()));
+    if claims.via_api_key {
+        return Err(AppError::Forbidden(
+            "This needs a console session. An API key cannot view keys — sign in to the console \
+             and press View."
+                .into(),
+        ));
     }
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::Unauthorized)?;
 
     let row = sqlx::query(
         "SELECT key_prefix, key_encrypted FROM user_api_keys
@@ -686,29 +691,6 @@ pub async fn reveal_user_key(
 
     let prefix: String = row.get("key_prefix");
     let sealed: Option<String> = row.get("key_encrypted");
-
-    // ── re-authenticate ───────────────────────────────────────────────────────────────────────
-    let stored: Option<String> =
-        sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1 AND is_active = true")
-            .bind(user_id)
-            .fetch_optional(&state.db)
-            .await?;
-    let stored = stored.ok_or(AppError::Unauthorized)?;
-    // An unusable stored value is not a credential — answer 401, never a 500 about hashing — and the
-    // verification itself runs through the shared off-reactor Argon2 helper (kanban t_6c39f2b6):
-    // this path used to construct the hasher inline in an async handler, which both parks a tokio
-    // worker for the whole hash and violates the crate's "Argon2 only in auth::api_key_auth" test.
-    if !crate::auth::api_key_auth::is_usable_hash(&stored) {
-        return Err(AppError::Unauthorized);
-    }
-    let matched = crate::auth::api_key_auth::argon2_verify_result(
-        stored,
-        std::sync::Arc::from(password.as_str()),
-    )
-    .await?;
-    if !matched {
-        return Err(AppError::Unauthorized);
-    }
 
     let sealed = sealed.ok_or_else(|| {
         AppError::BadRequest(
