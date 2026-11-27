@@ -753,12 +753,31 @@ pub struct AdminStatusInput {
 }
 
 fn require_super_admin(claims: &Claims) -> Result<(), AppError> {
-    if claims.perm_is_super_admin.unwrap_or(false) {
+    // A plain platform-admin VA seat (`role = 'admin'`) must see the queue too, not only the
+    // `perm_is_super_admin` flag: David or one of his VAs reads plan requests, so accepting the
+    // role aligns this door with the rest of the app (src/auth/handlers.rs treats `admin` and
+    // `super_admin` alike).
+    if claims.perm_is_super_admin.unwrap_or(false) || claims.role == "admin" {
         Ok(())
     } else {
         Err(AppError::Forbidden(
             "Only the platform operator can read every workspace's tickets".to_string(),
         ))
+    }
+}
+
+/// The canonical three-state value the operator queue reads for a plan request
+/// (2026-11-27). One-directional and total: `open` and anything unrecognised read `open` so
+/// nothing hides from the queue, `pending`/`in_progress`/`contacted` mean a person has spoken to
+/// the customer, and the finished values read `closed`.
+fn queue_status_of(stored: Option<&str>) -> &'static str {
+    match stored {
+        Some(s) => match s.trim().to_lowercase().as_str() {
+            "pending" | "in_progress" | "contacted" => "contacted",
+            "closed" | "resolved" | "done" | "solved" | "declined" | "withdrawn" => "closed",
+            _ => "open",
+        },
+        None => "open",
     }
 }
 
@@ -805,8 +824,25 @@ pub async fn list_all(
     .fetch_one(&state.db)
     .await?;
 
+    // Add the canonical `queue_status` to each row (2026-11-27). The raw `status` is kept so the
+    // console and existing callers still see the stored vocabulary; the operator queue renders the
+    // three-state value on top of it.
+    let items: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| {
+            let mut v = serde_json::to_value(row).unwrap_or(serde_json::Value::Null);
+            if let serde_json::Value::Object(map) = &mut v {
+                map.insert(
+                    "queue_status".to_string(),
+                    serde_json::Value::String(queue_status_of(row.status.as_deref()).to_string()),
+                );
+            }
+            v
+        })
+        .collect();
+
     Ok(Json(json!({
-        "items": rows,
+        "items": items,
         "count": count,
         "open_count": open_count,
     })))
@@ -825,11 +861,21 @@ pub async fn admin_update_status(
 ) -> ApiResult<impl IntoResponse> {
     require_super_admin(&claims)?;
     let status = b.status.trim().to_lowercase();
-    if !matches!(status.as_str(), "open" | "pending" | "closed" | "resolved") {
+    if !matches!(
+        status.as_str(),
+        "open" | "pending" | "closed" | "resolved" | "contacted"
+    ) {
         return Err(AppError::Validation(
-            "status must be one of: open, pending, closed, resolved".to_string(),
+            "status must be one of: open, pending, closed, resolved, contacted".to_string(),
         ));
     }
+    // The operator queue speaks the canonical three states (open → contacted → closed); this app
+    // stores `contacted` under its own `pending` vocabulary, so the customer's own Tickets screen
+    // keeps its existing meaning. Raw stored values pass through unchanged for compatibility.
+    let status = match status.as_str() {
+        "contacted" => "pending".to_string(),
+        other => other.to_string(),
+    };
     // The status BEFORE this call (2026-10-19). The customer is told only when something actually
     // moved: a console that re-sends the value it already shows, or an operator double-clicking
     // "Mark handled", must not mail the same person twice about the same non-event.

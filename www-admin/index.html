@@ -1332,14 +1332,24 @@ function renderPlanRequests(c){
       if(seen[r.id]) return false;
       seen[r.id]=1; return true;
     }).sort((x,y)=>String(y.created_at||'').localeCompare(String(x.created_at||'')));
-    const isOpen=r=>!/^(closed|resolved|done)$/i.test(String((r&&r.status)||'open'));
+    // Canonical three-state queue value (2026-11-27): the server sends `queue_status`
+    // (open|contacted|closed) on every admin row; fall back to the raw stored status when it is
+    // absent. Anything unrecognised still reads `open` so nothing hides from the queue.
+    const qs=r=>{
+      const s=String((r&&r.queue_status)||(r&&r.status)||'open').trim().toLowerCase();
+      if(s==='contacted'||s==='pending'||s==='in_progress') return 'contacted';
+      if(/^(closed|resolved|done|solved|declined|withdrawn)$/.test(s)) return 'closed';
+      return 'open';
+    };
+    const QSLABEL={open:'Open',contacted:'Contacted',closed:'Closed'};
+    const QSBADGE={open:'badge-yellow',contacted:'badge-blue',closed:'badge-green'};
     // A TEST-HARNESS ROW IS NOT A CUSTOMER ASK. The workspace that filed it carries
     // `accounts.probe_harness` (e.g. `auto-example.invalid`), served here as `account_probe`.
     // Measured live before this: BOTH open "Upgrade request: Professional plan" rows in this queue
     // came from harness accounts, and the screen made them read as customers waiting on an answer.
     const isProbe=r=>!!String((r&&r.account_probe)||'').trim();
     const probeCount=rows.filter(isProbe).length;
-    const open=rows.filter(isOpen).length;
+    const open=rows.filter(r=>qs(r)==='open').length;
     note.textContent=rows.length+' request(s) — '+open+' still open'
       +(probeCount?' — '+probeCount+' from a test harness':'');
     if(!rows.length){
@@ -1373,39 +1383,55 @@ function renderPlanRequests(c){
       if(r.plan_applied_at) planCell.title='Already switched on '+String(r.plan_applied_at).slice(0,10);
       tr.appendChild(planCell);
       tr.appendChild(h('td',{className:'text-xs'}, r.subject||''));
-      tr.appendChild(h('td',{},h('span',{className:'badge '+(isOpen(r)?'badge-yellow':'badge-green')},
-        String(r.status||'open'))));
+      tr.appendChild(h('td',{},h('span',{className:'badge '+QSBADGE[qs(r)]},
+        QSLABEL[qs(r)])));
       tr.appendChild(h('td',{className:'text-xs text-gray-500'},String(r.created_at||'').slice(0,10)));
       const td=h('td',{});
-      if(isOpen(r)){
-        const b=h('button',{className:'btn btn-sm btn-outline',onClick:async()=>{
-          b.disabled=true; b.textContent='Saving…';
-          const ok=await api('/admin/tickets/'+r.id,{method:'PUT',body:JSON.stringify({status:'closed'})});
-          if(ok===null){
-            b.disabled=false; b.textContent='Mark handled';
-            body.appendChild(h('div',{className:'text-sm text-red-600 mt-2'},
-              'Could not update that request: '+(LAST_ERR||'request failed')));
-            return;
+      // The queue speaks exactly three states (open → contacted → closed). Each button PUTs the
+      // canonical value; the server maps `contacted` onto its own stored vocabulary. Only `closed`
+      // triggers the plan/credit switch, so its feedback below is unchanged (cron 2026-10-20).
+      const moveTo=(target)=>{
+        const isCur=target===qs(r);
+        // `h()` sets every prop via setAttribute, so a literal `disabled:false` would still read as
+        // disabled (the string "false" is truthy). Only attach the attribute when it is actually true.
+        const btnProps={
+          className:'btn btn-sm '+(isCur?'btn':'btn-outline'),
+          onClick:async()=>{
+            b.disabled=true; b.textContent='Saving…';
+            const ok=await api('/admin/tickets/'+r.id,{method:'PUT',body:JSON.stringify({status:target})});
+            if(ok===null){
+              b.disabled=false; b.textContent=QSLABEL[target];
+              body.appendChild(h('div',{className:'text-sm text-red-600 mt-2'},
+                'Could not update that request: '+(LAST_ERR||'request failed')));
+              return;
+            }
+            if(target==='closed'){
+              // The resolve now MOVES the workspace onto the tier it asked for, so the operator is
+              // told what actually happened instead of just "saved" (cron 2026-10-20).
+              const applied=!!(ok&&ok.plan_applied);
+              const name=(ok&&ok.plan_name)||r.plan_name||r.plan_slug||'';
+              // A pack request is fulfilled by the SAME resolve now (cron 2026-10-24): say how many
+              // credits landed instead of "Marked handled", which reads as if nothing happened.
+              const granted=(ok&&ok.credits_applied)||0;
+              showMsg(granted
+                ? ('Marked handled \u2014 '+granted+' credits added to the account'
+                    +(ok.credits_balance!=null?(' (balance '+ok.credits_balance+')'):''))
+                : applied
+                ? ('Marked handled \u2014 the account is now on '+(name||'the requested plan'))
+                : (name
+                    ? ('Marked handled \u2014 that request\u2019s plan was not switched automatically; set it on the account')
+                    : 'Marked handled'));
+            } else {
+              showMsg(target==='contacted' ? 'Marked contacted' : 'Marked open');
+            }
+            load();
           }
-          // The resolve now MOVES the workspace onto the tier it asked for, so the operator is told
-          // what actually happened instead of just "saved" (cron 2026-10-20).
-          const applied=!!(ok&&ok.plan_applied);
-          const name=(ok&&ok.plan_name)||r.plan_name||r.plan_slug||'';
-          // A pack request is fulfilled by the SAME resolve now (cron 2026-10-24): say how many
-          // credits landed instead of "Marked handled", which reads as if nothing happened.
-          const granted=(ok&&ok.credits_applied)||0;
-          showMsg(granted
-            ? ('Marked handled \u2014 '+granted+' credits added to the account'
-                +(ok.credits_balance!=null?(' (balance '+ok.credits_balance+')'):''))
-            : applied
-            ? ('Marked handled \u2014 the account is now on '+(name||'the requested plan'))
-            : (name
-                ? ('Marked handled \u2014 that request\u2019s plan was not switched automatically; set it on the account')
-                : 'Marked handled'));
-          load();
-        }},'Mark handled');
+        };
+        if(isCur) btnProps.disabled=true;
+        const b=h('button',btnProps,QSLABEL[target]);
         td.appendChild(b);
-      }
+      };
+      ['open','contacted','closed'].forEach(moveTo);
       tr.appendChild(td);
       tb.appendChild(tr);
     });
